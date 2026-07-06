@@ -52,6 +52,112 @@ func (rimeDivergentSentenceTokenizer) Stream(string) tokenize.SentenceStream {
 	}, 1, 1)
 }
 
+type rimeNextOnlySentenceTokenizer struct{}
+
+func (rimeNextOnlySentenceTokenizer) Tokenize(string, string) []string {
+	return []string{"tokenize packet"}
+}
+
+func (rimeNextOnlySentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return &rimeNextOnlySentenceStream{}
+}
+
+type rimeNextOnlySentenceStream struct {
+	once   sync.Once
+	mu     sync.Mutex
+	cond   *sync.Cond
+	text   string
+	tokens []*tokenize.TokenData
+	closed bool
+}
+
+func (s *rimeNextOnlySentenceStream) PushText(text string) error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	s.text += text
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) Flush() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.text != "" {
+		s.tokens = append(s.tokens, &tokenize.TokenData{Token: "next-only packet"})
+		s.text = ""
+		s.cond.Signal()
+	}
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) EndInput() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.text != "" {
+		s.tokens = append(s.tokens, &tokenize.TokenData{Token: "next-only packet"})
+		s.text = ""
+	}
+	s.closed = true
+	s.cond.Broadcast()
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) AClose() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.text = ""
+	s.tokens = nil
+	s.closed = true
+	s.cond.Broadcast()
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) Close() error {
+	return s.EndInput()
+}
+
+func (s *rimeNextOnlySentenceStream) Next() (*tokenize.TokenData, error) {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tokens) == 0 {
+		for len(s.tokens) == 0 && !s.closed {
+			s.cond.Wait()
+		}
+	}
+	if len(s.tokens) == 0 && s.closed {
+		return nil, io.EOF
+	}
+	token := s.tokens[0]
+	s.tokens = s.tokens[1:]
+	return token, nil
+}
+
+func (s *rimeNextOnlySentenceStream) Closed() bool {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *rimeNextOnlySentenceStream) initCond() {
+	s.once.Do(func() {
+		s.cond = sync.NewCond(&s.mu)
+	})
+}
+
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
@@ -3435,6 +3541,34 @@ func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
 	assertRimePayload(t, writes[0], "text", "custom packet ")
 }
 
+func TestRimeTTSStreamAppendsReferencePacketSpace(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"custom packet "}}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one custom tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "custom packet  ")
+}
+
 func TestRimeTTSStreamUsesReferenceTokenizerStream(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeDivergentSentenceTokenizer{}))
 	var writes []map[string]any
@@ -3464,6 +3598,96 @@ func TestRimeTTSStreamUsesReferenceTokenizerStream(t *testing.T) {
 		t.Fatalf("writes after Flush = %d, want one stream token packet", len(writes))
 	}
 	assertRimePayload(t, writes[0], "text", "stream packet ")
+}
+
+func TestRimeTTSStreamEndInputDrainsNextOnlyReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeNextOnlySentenceTokenizer{}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		cancel:            func() {},
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d, want next-only stream buffered until EndInput", len(writes))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after EndInput = %d, want next-only tokenizer packet then provider flush", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "next-only packet ")
+	assertRimePayload(t, writes[1], "operation", "flush")
+}
+
+func TestRimeTTSStreamFlushDrainsNextOnlyReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeNextOnlySentenceTokenizer{}))
+	var writesMu sync.Mutex
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		cancel:            func() {},
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writesMu.Lock()
+			defer writesMu.Unlock()
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	writesLen := func() int {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		return len(writes)
+	}
+	writeAt := func(index int) map[string]any {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		return writes[index]
+	}
+
+	if err := stream.PushText("raw text"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if writesLen() != 0 {
+		t.Fatalf("writes after PushText = %d, want next-only stream buffered until Flush", writesLen())
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for writesLen() < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if writesLen() < 1 {
+		t.Fatalf("writes after Flush = %d, want next-only tokenizer packet", writesLen())
+	}
+	assertRimePayload(t, writeAt(0), "text", "next-only packet ")
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if writesLen() != 2 {
+		t.Fatalf("writes after EndInput = %d, want provider flush after text packet", writesLen())
+	}
+	assertRimePayload(t, writeAt(1), "operation", "flush")
 }
 
 func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {
@@ -5056,6 +5280,31 @@ func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T)
 		}
 		if audio != nil || done || transcript != "" {
 			t.Fatalf("noise %s = audio:%+v done:%v transcript:%q, want ignored empty chunk", payload, audio, done, transcript)
+		}
+	}
+}
+
+func TestRimeTTSAudioFromWebsocketDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQ=IDBA=="}`), 24000)
+	if err != nil {
+		t.Fatalf("noisy base64 audio error = %v, want decoded like reference", err)
+	}
+	if done || transcript != "" || audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("noisy base64 audio = audio:%+v done:%v transcript:%q, want decoded PCM", audio, done, transcript)
+	}
+}
+
+func TestRimeTTSAudioFromWebsocketIgnoresUnrepresentableReferenceTimestampTimes(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":"x","end":["0.2"]}}`),
+		[]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":{"x":1},"end":[0.2]}}`),
+	} {
+		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, 24000)
+		if err != nil {
+			t.Fatalf("timestamp times %s error = %v, want ignored like reference non-float TimedString metadata", payload, err)
+		}
+		if audio != nil || done || transcript != "" {
+			t.Fatalf("timestamp times %s = audio:%+v done:%v transcript:%q, want ignored", payload, audio, done, transcript)
 		}
 	}
 }

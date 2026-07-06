@@ -440,7 +440,11 @@ func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 
 func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	stream := &anthropicStream{
-		reader: bufio.NewReader(strings.NewReader(`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}` + "\n\n")),
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
 	}
 
 	chunk, err := stream.Next()
@@ -453,8 +457,49 @@ func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	if chunk.Usage == nil {
 		t.Fatal("Usage = nil, want usage metadata")
 	}
-	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
+	if chunk.Usage.PromptTokens != 19 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
 		t.Fatalf("Usage = %#v, want prompt and cache token counts", chunk.Usage)
+	}
+}
+
+func TestAnthropicStreamEmitsFinalUsageAfterText(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":7}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	text, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if text.ID != "msg_1" || text.Delta == nil || text.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want text delta with request ID", text)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.ID != "msg_1" {
+		t.Fatalf("usage ID = %q, want msg_1", usage.ID)
+	}
+	if usage.Usage == nil {
+		t.Fatal("Usage = nil, want final usage metadata")
+	}
+	if usage.Usage.PromptTokens != 19 || usage.Usage.CompletionTokens != 7 || usage.Usage.TotalTokens != 26 {
+		t.Fatalf("Usage = %#v, want accumulated prompt/completion/total tokens", usage.Usage)
+	}
+	if usage.Usage.CacheCreationTokens != 3 || usage.Usage.CacheReadTokens != 5 || usage.Usage.PromptCachedTokens != 5 {
+		t.Fatalf("cache Usage = %#v, want accumulated cache token counts", usage.Usage)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final Next() error = %v, want EOF", err)
 	}
 }
 
@@ -509,9 +554,6 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("message_start Next() error = %v", err)
-	}
 	chunk, err := stream.Next()
 	if err != nil {
 		t.Fatalf("visible text Next() error = %v", err)
@@ -533,9 +575,6 @@ func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
 		}, "\n"))),
 	}
 
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("message_start Next() error = %v", err)
-	}
 	chunk, err := stream.Next()
 	if err != nil {
 		t.Fatalf("text delta Next() error = %v", err)
@@ -673,6 +712,39 @@ func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatOmitsParallelToolChoiceFlagWhenUnset(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("required"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want map", transport.body["tool_choice"])
+	}
+	if choice["type"] != "any" {
+		t.Fatalf("tool_choice = %#v, want required mapped to any", choice)
+	}
+	if _, ok := choice["disable_parallel_tool_use"]; ok {
+		t.Fatalf("disable_parallel_tool_use = %#v, want omitted when parallel_tool_calls is unset", choice["disable_parallel_tool_use"])
+	}
+}
+
 func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -703,6 +775,55 @@ func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
 	}
 	if _, ok := transport.body["tool_choice"]; ok {
 		t.Fatalf("tool_choice = %#v, want omitted for tool_choice none", transport.body["tool_choice"])
+	}
+}
+
+func TestAnthropicChatAppendsTrailingUserForNoPrefillModels(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	messages, ok := transport.body["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages = %#v, want list", transport.body["messages"])
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want trailing user turn: %#v", len(messages), messages)
+	}
+	last, ok := messages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("last message = %#v, want map", messages[2])
+	}
+	if last["role"] != "user" {
+		t.Fatalf("last role = %#v, want user", last["role"])
+	}
+	content, ok := last["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("last content = %#v, want one text block", last["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("last content block = %#v, want map", content[0])
+	}
+	if block["type"] != "text" || block["text"] != " " {
+		t.Fatalf("last content block = %#v, want blank reference trailing user text", block)
 	}
 }
 
@@ -806,6 +927,50 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be fast"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		ctx,
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithExtraParams(map[string]any{"caching": "ephemeral"}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["system"], "system")
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	assertCacheControlMap(t, tools[0], "tool")
+
+	messages, ok := transport.body["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("messages = %#v, want user and assistant messages", transport.body["messages"])
+	}
+	user := messages[0].(map[string]any)
+	assistant := messages[1].(map[string]any)
+	assertCacheControlBlock(t, user["content"], "user content")
+	assertCacheControlBlock(t, assistant["content"], "assistant content")
+}
+
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -875,6 +1040,30 @@ func anthropicContentBlockToMap(t *testing.T, block anthropicContentBlock) map[s
 		t.Fatalf("unmarshal block: %v", err)
 	}
 	return out
+}
+
+func assertCacheControlBlock(t *testing.T, raw any, label string) {
+	t.Helper()
+	blocks, ok := raw.([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("%s = %#v, want non-empty block list", label, raw)
+	}
+	assertCacheControlMap(t, blocks[len(blocks)-1], label)
+}
+
+func assertCacheControlMap(t *testing.T, raw any, label string) {
+	t.Helper()
+	block, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want map", label, raw)
+	}
+	cacheControl, ok := block["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s cache_control = %#v, want map", label, block["cache_control"])
+	}
+	if cacheControl["type"] != "ephemeral" {
+		t.Fatalf("%s cache_control.type = %#v, want ephemeral", label, cacheControl["type"])
+	}
 }
 
 func assertAnthropicTextBlock(t *testing.T, blocks []anthropicContentBlock, index int, want string) {

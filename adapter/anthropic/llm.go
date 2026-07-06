@@ -33,6 +33,11 @@ const (
 	defaultAnthropicMode = "claude-sonnet-4-6"
 )
 
+var anthropicNoPrefillModelPrefixes = []string{
+	"claude-sonnet-4-6",
+	"claude-opus-4-6",
+}
+
 type AnthropicOption func(*AnthropicLLM)
 
 func WithAnthropicBaseURL(baseURL string) AnthropicOption {
@@ -82,15 +87,16 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
-	Source    map[string]any `json:"source,omitempty"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	Content   any            `json:"content,omitempty"`
-	IsError   bool           `json:"is_error,omitempty"`
+	Type         string         `json:"type"`
+	Text         string         `json:"text,omitempty"`
+	Source       map[string]any `json:"source,omitempty"`
+	ID           string         `json:"id,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Input        map[string]any `json:"input,omitempty"`
+	ToolUseID    string         `json:"tool_use_id,omitempty"`
+	Content      any            `json:"content,omitempty"`
+	IsError      bool           `json:"is_error,omitempty"`
+	CacheControl map[string]any `json:"cache_control,omitempty"`
 }
 
 func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
@@ -109,6 +115,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 
 	messages, system := buildAnthropicMessages(chatCtx)
+	if anthropicModelDisablesPrefill(l.model) {
+		messages = appendAnthropicTrailingUserMessage(messages)
+	}
+	cacheControl := anthropicEphemeralCacheControl(options.ExtraParams)
+	if cacheControl != nil {
+		applyAnthropicMessageCacheControl(messages, cacheControl)
+	}
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -117,7 +130,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"stream":     true,
 	}
 	if system != "" {
-		body["system"] = system
+		if cacheControl != nil {
+			body["system"] = []anthropicContentBlock{{Type: "text", Text: system, CacheControl: cacheControl}}
+		} else {
+			body["system"] = system
+		}
 	}
 	applyAnthropicExtraParams(body, options.ExtraParams)
 
@@ -136,12 +153,15 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				})
 			}
 		}
+		if cacheControl != nil && len(tools) > 0 {
+			tools[len(tools)-1]["cache_control"] = cacheControl
+		}
 		body["tools"] = tools
 	}
 	if anthropicToolChoiceNone(options.ToolChoice) {
 		body["tools"] = []map[string]interface{}{}
 	}
-	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls); toolChoice != nil {
+	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
 		body["tool_choice"] = toolChoice
 	}
 
@@ -260,6 +280,13 @@ func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	}
 }
 
+func anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+	if params["caching"] != "ephemeral" {
+		return nil
+	}
+	return map[string]any{"type": "ephemeral"}
+}
+
 func anthropicRequestID(header http.Header) string {
 	if requestID := header.Get("request-id"); requestID != "" {
 		return requestID
@@ -272,7 +299,7 @@ func anthropicRequestID(header http.Header) string {
 	return ""
 }
 
-func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map[string]any {
+func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool, parallelToolCallsSet bool) map[string]any {
 	var toolChoice map[string]any
 	switch tc := choice.(type) {
 	case string:
@@ -301,13 +328,59 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map
 	if toolChoice == nil {
 		return nil
 	}
-	toolChoice["disable_parallel_tool_use"] = !parallelToolCalls
+	if parallelToolCallsSet {
+		toolChoice["disable_parallel_tool_use"] = !parallelToolCalls
+	}
 	return toolChoice
 }
 
 func anthropicToolChoiceNone(choice llm.ToolChoice) bool {
 	tc, ok := choice.(string)
 	return ok && tc == "none"
+}
+
+func anthropicModelDisablesPrefill(model string) bool {
+	for _, prefix := range anthropicNoPrefillModelPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendAnthropicTrailingUserMessage(messages []anthropicMessage) []anthropicMessage {
+	if len(messages) == 0 || messages[len(messages)-1].Role != "assistant" {
+		return messages
+	}
+	return append(messages, anthropicMessage{
+		Role: "user",
+		Content: []anthropicContentBlock{
+			{Type: "text", Text: " "},
+		},
+	})
+}
+
+func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl map[string]any) {
+	seenAssistant := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		if len(messages[i].Content) == 0 {
+			continue
+		}
+		switch messages[i].Role {
+		case "assistant":
+			if !seenAssistant {
+				last := len(messages[i].Content) - 1
+				messages[i].Content[last].CacheControl = cacheControl
+				seenAssistant = true
+			}
+		case "user":
+			if seenAssistant {
+				last := len(messages[i].Content) - 1
+				messages[i].Content[last].CacheControl = cacheControl
+				return
+			}
+		}
+	}
 }
 
 type anthropicStream struct {
@@ -317,12 +390,16 @@ type anthropicStream struct {
 	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
-	toolCallID  string
-	toolName    string
-	toolArgs    string
-	requestID   string
-	hasTools    bool
-	ignoringCoT bool
+	toolCallID          string
+	toolName            string
+	toolArgs            string
+	requestID           string
+	inputTokens         int
+	outputTokens        int
+	cacheCreationTokens int
+	cacheReadTokens     int
+	hasTools            bool
+	ignoringCoT         bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -626,14 +703,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		switch event.Type {
 		case "message_start":
 			s.requestID = event.Message.ID
-			return &llm.ChatChunk{
-				ID: event.Message.ID,
-				Usage: &llm.CompletionUsage{
-					PromptTokens:        event.Message.Usage.InputTokens,
-					CacheCreationTokens: event.Message.Usage.CacheCreationInputTokens,
-					CacheReadTokens:     event.Message.Usage.CacheReadInputTokens,
-				},
-			}, nil
+			s.inputTokens = event.Message.Usage.InputTokens
+			s.outputTokens = event.Message.Usage.OutputTokens
+			s.cacheCreationTokens = event.Message.Usage.CacheCreationInputTokens
+			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
 
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
@@ -682,14 +755,21 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}
 
 		case "message_delta":
-			return &llm.ChatChunk{
-				Usage: &llm.CompletionUsage{
-					CompletionTokens: event.Usage.OutputTokens,
-				},
-			}, nil
+			s.outputTokens += event.Usage.OutputTokens
 
 		case "message_stop":
-			return nil, io.EOF
+			promptTokens := s.inputTokens + s.cacheCreationTokens + s.cacheReadTokens
+			return &llm.ChatChunk{
+				ID: s.requestID,
+				Usage: &llm.CompletionUsage{
+					PromptTokens:        promptTokens,
+					CompletionTokens:    s.outputTokens,
+					TotalTokens:         promptTokens + s.outputTokens,
+					PromptCachedTokens:  s.cacheReadTokens,
+					CacheCreationTokens: s.cacheCreationTokens,
+					CacheReadTokens:     s.cacheReadTokens,
+				},
+			}, nil
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
