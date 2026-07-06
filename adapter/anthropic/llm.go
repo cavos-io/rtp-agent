@@ -31,6 +31,8 @@ type AnthropicLLM struct {
 	tempSet      bool
 	topK         int
 	topKSet      bool
+	caching      string
+	cachingSet   bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -87,6 +89,13 @@ func WithAnthropicTopK(topK int) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.topK = topK
 		l.topKSet = true
+	}
+}
+
+func WithAnthropicCaching(caching string) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.caching = caching
+		l.cachingSet = true
 	}
 }
 
@@ -159,7 +168,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
-	cacheControl := anthropicEphemeralCacheControl(options.ExtraParams)
+	cacheControl := l.anthropicEphemeralCacheControl(options.ExtraParams)
 	if cacheControl != nil {
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
@@ -372,7 +381,10 @@ func validateAnthropicExtraParams(params map[string]any) error {
 	return nil
 }
 
-func anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+func (l *AnthropicLLM) anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+	if l.cachingSet && l.caching == "ephemeral" {
+		return map[string]any{"type": "ephemeral"}
+	}
 	if params["caching"] != "ephemeral" {
 		return nil
 	}

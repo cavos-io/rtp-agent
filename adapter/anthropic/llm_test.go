@@ -2768,6 +2768,36 @@ func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 	assertCacheControlBlock(t, assistant["content"], "assistant content")
 }
 
+func TestAnthropicChatUsesConfiguredEphemeralCachingLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be fast"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["system"], "system")
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	assertCacheControlMap(t, tools[0], "tool")
+}
+
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
