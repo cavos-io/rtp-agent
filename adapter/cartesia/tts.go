@@ -860,6 +860,13 @@ func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		select {
+		case audio, ok := <-s.audio:
+			if ok {
+				return audio, nil
+			}
+		default:
+		}
 		return nil, err
 	}
 }

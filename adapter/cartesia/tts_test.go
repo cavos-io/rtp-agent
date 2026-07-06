@@ -677,23 +677,56 @@ func TestCartesiaTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 
 func TestCartesiaTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	providerErr := errors.New("provider failed after audio")
-	for i := range 200 {
-		want := &tts.SynthesizedAudio{RequestID: "req-audio"}
-		stream := &cartesiaTTSStream{
-			audio: make(chan *tts.SynthesizedAudio, 1),
-			errCh: make(chan error, 1),
-		}
-		stream.audio <- want
-		stream.errCh <- providerErr
+	t.Run("already queued", func(t *testing.T) {
+		for i := range 200 {
+			want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+			stream := &cartesiaTTSStream{
+				audio: make(chan *tts.SynthesizedAudio, 1),
+				errCh: make(chan error, 1),
+			}
+			stream.audio <- want
+			stream.errCh <- providerErr
 
-		audio, err := stream.Next()
-		if err != nil {
-			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+			audio, err := stream.Next()
+			if err != nil {
+				t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+			}
+			if audio != want {
+				t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+			}
 		}
-		if audio != want {
-			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+	})
+	t.Run("ready while waiting", func(t *testing.T) {
+		for i := range 200 {
+			want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+			stream := &cartesiaTTSStream{
+				audio: make(chan *tts.SynthesizedAudio, 1),
+				errCh: make(chan error, 1),
+			}
+			result := make(chan struct {
+				audio *tts.SynthesizedAudio
+				err   error
+			}, 1)
+			go func() {
+				audio, err := stream.Next()
+				result <- struct {
+					audio *tts.SynthesizedAudio
+					err   error
+				}{audio: audio, err: err}
+			}()
+			time.Sleep(time.Millisecond)
+			stream.audio <- want
+			stream.errCh <- providerErr
+
+			got := receiveCartesiaTestValue(t, result, "Next result")
+			if got.err != nil {
+				t.Fatalf("trial %d Next error = %v, want audio before stream error", i, got.err)
+			}
+			if got.audio != want {
+				t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, got.audio, want)
+			}
 		}
-	}
+	})
 }
 
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
