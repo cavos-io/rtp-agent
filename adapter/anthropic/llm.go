@@ -409,6 +409,7 @@ type anthropicStream struct {
 	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
+	toolCallActive      bool
 	toolCallID          string
 	toolName            string
 	toolArgs            string
@@ -810,6 +811,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
+				s.toolCallActive = true
 				s.toolCallID = event.ContentBlock.ID
 				s.toolName = event.ContentBlock.Name
 				s.toolArgs = ""
@@ -829,14 +831,14 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					},
 				}), nil
 			} else if event.Delta.Type == "input_json_delta" {
-				if s.toolCallID == "" {
+				if !s.toolCallActive {
 					return nil, s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
 				}
 				s.toolArgs += event.Delta.PartialJson
 			}
 
 		case "content_block_stop":
-			if s.toolCallID != "" {
+			if s.toolCallActive {
 				chunk := &llm.ChatChunk{
 					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
@@ -851,6 +853,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 						},
 					},
 				}
+				s.toolCallActive = false
 				s.toolCallID = ""
 				s.toolName = ""
 				s.toolArgs = ""

@@ -841,6 +841,30 @@ func TestAnthropicStreamInputDeltaWithoutToolStartReturnsConnectionError(t *test
 	}
 }
 
+func TestAnthropicStreamKeepsEmptyToolCallIDActive(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"","name":"lookup"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"city\":\"Paris\"}"}}`,
+			`data: {"type":"content_block_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk Delta = %#v, want one tool call", chunk.Delta)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("tool call = %#v, want empty call ID with streamed arguments", call)
+	}
+}
+
 func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing.T) {
 	body := &anthropicReadErrorBody{
 		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
