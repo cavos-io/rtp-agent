@@ -269,6 +269,35 @@ func TestTelnyxTTSStreamFlushStartsReferenceSegmentWebsockets(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamSegmentWriteFailureClosesStream(t *testing.T) {
+	writeErr := errors.New("segment write failed")
+	segment := &fakeTelnyxEndInputTTSStream{endErr: writeErr}
+	provider := NewTelnyxTTS("test-key", "")
+	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
+		return segment, nil
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	err = stream.Flush()
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("Flush error = %v, want segment write failure", err)
+	}
+	if !segment.closed {
+		t.Fatal("failed segment was not closed")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after segment failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after segment failure error = %v, want EOF", err)
+	}
+}
+
 func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	var writes []string
 	stream := &telnyxTTSStream{
@@ -785,12 +814,15 @@ func (f *fakeTelnyxChunkedTTSProvider) Stream(context.Context) (tts.SynthesizeSt
 }
 
 type fakeTelnyxEndInputTTSStream struct {
-	calls []string
+	calls   []string
+	pushErr error
+	endErr  error
+	closed  bool
 }
 
 func (f *fakeTelnyxEndInputTTSStream) PushText(text string) error {
 	f.calls = append(f.calls, "PushText:"+text)
-	return nil
+	return f.pushErr
 }
 
 func (f *fakeTelnyxEndInputTTSStream) Flush() error {
@@ -800,11 +832,12 @@ func (f *fakeTelnyxEndInputTTSStream) Flush() error {
 
 func (f *fakeTelnyxEndInputTTSStream) EndInput() error {
 	f.calls = append(f.calls, "EndInput")
-	return nil
+	return f.endErr
 }
 
 func (f *fakeTelnyxEndInputTTSStream) Close() error {
 	f.calls = append(f.calls, "Close")
+	f.closed = true
 	return nil
 }
 

@@ -341,14 +341,17 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 
 	segment, err := s.provider.openSegmentStream(s.ctx)
 	if err != nil {
+		_ = s.Close()
 		return err
 	}
 	if err := segment.PushText(text); err != nil {
 		_ = segment.Close()
+		_ = s.Close()
 		return err
 	}
 	if err := tts.EndSynthesizeStreamInput(segment); err != nil {
 		_ = segment.Close()
+		_ = s.Close()
 		return err
 	}
 	s.mu.Lock()
