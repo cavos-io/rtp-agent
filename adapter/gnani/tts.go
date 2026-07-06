@@ -234,6 +234,13 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	data := stripWAVHeader(buf[:n])

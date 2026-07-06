@@ -35,6 +35,11 @@ func (b *gnaniTTSCloseErrorBody) Close() error {
 	return nil
 }
 
+type gnaniTTSTimeoutBody struct{}
+
+func (gnaniTTSTimeoutBody) Read([]byte) (int, error) { return 0, gnaniTTSTimeoutError{} }
+func (gnaniTTSTimeoutBody) Close() error             { return nil }
+
 type gnaniTTSTimeoutError struct{}
 
 func (gnaniTTSTimeoutError) Error() string   { return "gnani tts timeout" }
@@ -259,6 +264,34 @@ func TestGnaniTTSSynthesizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	http.DefaultClient = &http.Client{Transport: gnaniTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, gnaniTTSTimeoutError{}
+	})}
+
+	provider := NewTTS("test-key")
+
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGnaniTTSChunkedStreamReturnsAPITimeoutErrorOnReadTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       gnaniTTSTimeoutBody{},
+			Request:    r,
+		}, nil
 	})}
 
 	provider := NewTTS("test-key")
