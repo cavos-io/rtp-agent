@@ -1885,7 +1885,7 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		}
 		data, err := base64.StdEncoding.DecodeString(message.Data.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil
 		}
 		if len(data) == 0 {
 			return nil, false, nil
