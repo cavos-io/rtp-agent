@@ -156,6 +156,41 @@ func TestComputerToolAcceptsReferenceIntegerCoordinates(t *testing.T) {
 	}
 }
 
+func TestComputerToolAcceptsReferenceNumericStrings(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{"10", "20"},
+		"scroll_amount":    "4",
+		"scroll_direction": "up",
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for numeric strings", err)
+	}
+	_, err = toolset.Execute(context.Background(), "hold_key", map[string]interface{}{
+		"text":     "Shift",
+		"duration": "1.25",
+	})
+	if err != nil {
+		t.Fatalf("hold_key Execute error = %v, want nil for numeric duration string", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 3 {
+		t.Fatalf("events = %#v, want scroll move/wheel and hold_key", events)
+	}
+	if events[0].Type != "mouse_move" || events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("scroll move event = %#v, want mouse_move at 10,20", events[0])
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaY != 480 {
+		t.Fatalf("scroll wheel event = %#v, want up amount 4", events[1])
+	}
+	if events[2].Type != "hold_key" || events[2].Duration != 1.25 {
+		t.Fatalf("hold_key event = %#v, want duration 1.25", events[2])
+	}
+}
+
 func TestComputerToolPostActionDelayHonorsContextCancel(t *testing.T) {
 	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
 	ctx, cancel := context.WithCancel(context.Background())

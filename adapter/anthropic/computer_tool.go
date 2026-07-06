@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
@@ -201,6 +202,9 @@ func coordinateNumber(val interface{}) (int, bool) {
 		return v, true
 	case float64:
 		return int(v), true
+	case string:
+		n, err := strconv.Atoi(v)
+		return n, err == nil
 	default:
 		return 0, false
 	}
@@ -220,6 +224,12 @@ func requireFloat(val interface{}, key string) (float64, error) {
 		return v, nil
 	case int:
 		return float64(v), nil
+	case string:
+		num, err := strconv.ParseFloat(v, 64)
+		if err == nil {
+			return num, nil
+		}
+		return 0, fmt.Errorf("%s must be a number", key)
 	default:
 		return 0, fmt.Errorf("%s must be a number", key)
 	}
