@@ -37,6 +37,8 @@ const (
 	upliftAISocketIODialWait  = 10 * time.Second
 )
 
+var upliftAISocketIOAudioWait = 30 * time.Second
+
 type UpliftAITTS struct {
 	apiKey                    string
 	voice                     string
@@ -637,8 +639,13 @@ type upliftAISocketIOClient struct {
 	mu       sync.Mutex
 	conn     upliftAISocketIOConn
 	closed   bool
-	requests map[string]*io.PipeWriter
+	requests map[string]*upliftAISocketIORequest
 	seq      atomic.Uint64
+}
+
+type upliftAISocketIORequest struct {
+	pw    *io.PipeWriter
+	timer *time.Timer
 }
 
 type upliftAISocketIOEvent struct {
@@ -652,7 +659,7 @@ func newUpliftAISocketIOClient(baseURL string, apiKey string) *upliftAISocketIOC
 	return &upliftAISocketIOClient{
 		baseURL:  baseURL,
 		apiKey:   apiKey,
-		requests: make(map[string]*io.PipeWriter),
+		requests: make(map[string]*upliftAISocketIORequest),
 	}
 }
 
@@ -671,7 +678,10 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 		return nil, io.ErrClosedPipe
 	}
 	conn := c.conn
-	c.requests[requestID] = pw
+	c.requests[requestID] = &upliftAISocketIORequest{
+		pw:    pw,
+		timer: time.AfterFunc(upliftAISocketIOAudioWait, func() { c.finishRequest(requestID, nil) }),
+	}
 	c.mu.Unlock()
 
 	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
@@ -757,9 +767,9 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 		return
 	}
 	c.mu.Lock()
-	pw := c.requests[event.RequestID]
+	req := c.requests[event.RequestID]
 	c.mu.Unlock()
-	if pw == nil {
+	if req == nil {
 		return
 	}
 
@@ -771,28 +781,42 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 			return
 		}
 		if len(audio) > 0 {
-			if _, err := pw.Write(audio); err != nil {
+			if _, err := req.pw.Write(audio); err != nil {
 				c.finishRequest(event.RequestID, err)
+				return
 			}
+			c.resetRequestTimer(event.RequestID)
 		}
 	case "audio_end", "error":
 		c.finishRequest(event.RequestID, nil)
 	}
 }
 
+func (c *upliftAISocketIOClient) resetRequestTimer(requestID string) {
+	c.mu.Lock()
+	req := c.requests[requestID]
+	c.mu.Unlock()
+	if req != nil && req.timer != nil {
+		req.timer.Reset(upliftAISocketIOAudioWait)
+	}
+}
+
 func (c *upliftAISocketIOClient) finishRequest(requestID string, err error) {
 	c.mu.Lock()
-	pw := c.requests[requestID]
+	req := c.requests[requestID]
 	delete(c.requests, requestID)
 	c.mu.Unlock()
-	if pw == nil {
+	if req == nil {
 		return
+	}
+	if req.timer != nil {
+		req.timer.Stop()
 	}
 	if err != nil {
-		_ = pw.CloseWithError(err)
+		_ = req.pw.CloseWithError(err)
 		return
 	}
-	_ = pw.Close()
+	_ = req.pw.Close()
 }
 
 func (c *upliftAISocketIOClient) closeConn(conn upliftAISocketIOConn, err error) {
@@ -801,15 +825,18 @@ func (c *upliftAISocketIOClient) closeConn(conn upliftAISocketIOConn, err error)
 		c.conn = nil
 	}
 	requests := c.requests
-	c.requests = make(map[string]*io.PipeWriter)
+	c.requests = make(map[string]*upliftAISocketIORequest)
 	c.mu.Unlock()
 	_ = conn.Close()
-	for _, pw := range requests {
+	for _, req := range requests {
+		if req.timer != nil {
+			req.timer.Stop()
+		}
 		if err != nil {
-			_ = pw.CloseWithError(err)
+			_ = req.pw.CloseWithError(err)
 			continue
 		}
-		_ = pw.Close()
+		_ = req.pw.Close()
 	}
 }
 
@@ -823,11 +850,14 @@ func (c *upliftAISocketIOClient) Close() error {
 	conn := c.conn
 	c.conn = nil
 	requests := c.requests
-	c.requests = make(map[string]*io.PipeWriter)
+	c.requests = make(map[string]*upliftAISocketIORequest)
 	c.mu.Unlock()
 
-	for _, pw := range requests {
-		_ = pw.Close()
+	for _, req := range requests {
+		if req.timer != nil {
+			req.timer.Stop()
+		}
+		_ = req.pw.Close()
 	}
 	if conn != nil {
 		return conn.Close()

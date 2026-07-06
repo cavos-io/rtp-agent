@@ -986,6 +986,59 @@ func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOAudioWaitEmitsFinalMarker(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	conn.readTimeout = time.Second
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	oldAudioWait := upliftAISocketIOAudioWait
+	upliftAISocketIOAudioWait = 20 * time.Millisecond
+	t.Cleanup(func() {
+		upliftAISocketIODialContext = oldDial
+		upliftAISocketIOAudioWait = oldAudioWait
+	})
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+	stream, err := provider.Synthesize(context.Background(), "audio timeout")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	_ = receiveUpliftAITestString(t, conn.writes, "synthesize packet")
+
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	if result.err != nil {
+		t.Fatalf("Next error = %v, want reference clean final marker after audio wait timeout", result.err)
+	}
+	if result.audio == nil || !result.audio.IsFinal {
+		t.Fatalf("audio = %#v, want final marker after reference audio wait timeout", result.audio)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
