@@ -860,7 +860,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// message_delta fields
 			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
+				OutputTokens *int `json:"output_tokens"`
 			} `json:"usage"`
 
 			// content_block_start fields
@@ -1053,7 +1053,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			s.outputTokens += event.Usage.OutputTokens
+			if event.Usage.OutputTokens == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_delta missing output_tokens"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			s.outputTokens += *event.Usage.OutputTokens
 
 		case "message_stop":
 			if chunk := s.finalUsageChunk(); chunk != nil {
