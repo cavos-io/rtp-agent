@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -248,7 +249,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+		return nil, speechifyTTSReadError(err)
 	}
 	if len(data) == 0 {
 		s.finalSent = true
@@ -286,7 +287,7 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return speechifyTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -296,10 +297,32 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return fmt.Errorf("speechify tts returned non-audio data: %s", string(respBody))
+		return llm.NewAPIConnectionError(fmt.Sprintf("speechify tts returned non-audio data: %s", string(respBody)))
 	}
 	s.resp = resp
 	return nil
+}
+
+func speechifyTTSTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(err.Error())
+}
+
+func speechifyTTSReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {

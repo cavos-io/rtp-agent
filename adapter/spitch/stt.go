@@ -48,7 +48,7 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch STT request failed: %v", err))
+		return nil, spitchSTTTransportError(err)
 	}
 	defer resp.Body.Close()
 
@@ -63,6 +63,14 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	return spitchSTTResponseToEvent(result, language), nil
+}
+
+func spitchSTTTransportError(err error) error {
+	msg := fmt.Sprintf("Spitch STT request failed: %v", err)
+	if spitchIsTimeout(err) {
+		return llm.NewAPITimeoutError(msg)
+	}
+	return llm.NewAPIConnectionError(msg)
 }
 
 func (s *SpitchSTT) resolveLanguage(language string) string {

@@ -498,18 +498,34 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sarvamSTTTransportError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("sarvam stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError(
+			fmt.Sprintf("Sarvam API Error (%d): %s", resp.StatusCode, string(respBody)),
+			resp.StatusCode,
+			"",
+			string(respBody),
+		)
 	}
 	var result sarvamSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Sarvam STT response decode failed: %v", err))
 	}
 	return sarvamSTTSpeechEvent(resolveSarvamSTTLanguage(s, language), result), nil
+}
+
+func sarvamSTTTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Sarvam STT request failed: %v", err))
 }
 
 func buildSarvamSTTRecognizeRequest(ctx context.Context, s *SarvamSTT, audio []byte, language string) (*http.Request, error) {
@@ -1384,7 +1400,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sarvamTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -1392,6 +1408,17 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, llm.NewAPIStatusError("Sarvam TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, outputAudioCodec: t.outputAudioCodec}, nil
+}
+
+func sarvamTTSTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Sarvam TTS request failed: %v", err))
 }
 
 func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*http.Request, error) {
@@ -1632,6 +1659,9 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.loaded = true
 		s.requestID = result.RequestID
 		s.audios = result.Audios
+		if len(s.audios) == 0 {
+			return nil, llm.NewAPIConnectionError("Sarvam TTS API response invalid: no audio data")
+		}
 	}
 	if s.nextAudio < len(s.audios) {
 		data, err := decodeSarvamTTSBase64Audio(s.audios[s.nextAudio])

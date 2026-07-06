@@ -137,7 +137,7 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 
 	var result falSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Fal STT response decode failed: %v", err))
 	}
 
 	return falSTTResponseToEvent(result, resolvedLanguage), nil

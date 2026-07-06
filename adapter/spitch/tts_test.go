@@ -268,6 +268,27 @@ func TestSpitchSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTRecognizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, spitchTimeoutError{}
+	})}
+
+	provider := NewSpitchSTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpitchSTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -396,6 +417,27 @@ func TestSpitchTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpitchTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, spitchTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSpitchTTS("test-key", "", WithSpitchTTSBaseURL("https://spitch.example"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpitchTTSOptionsMatchReference(t *testing.T) {
 	provider := NewSpitchTTS("test-key", "",
 		WithSpitchTTSBaseURL("https://spitch.example/"),
@@ -506,6 +548,25 @@ func TestSpitchTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing
 	}
 	if connectionErr.Message == "" {
 		t.Fatal("connection error message empty, want decode failure context")
+	}
+}
+
+func TestSpitchTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: spitchTimeoutBody{}},
+		outputFormat: "mp3",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on provider read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -701,6 +762,26 @@ func (b *spitchCloseErrorBody) Close() error {
 		return errors.New("already closed")
 	}
 	return nil
+}
+
+type spitchTimeoutBody struct{}
+
+func (spitchTimeoutBody) Read([]byte) (int, error) {
+	return 0, spitchTimeoutError{}
+}
+
+func (spitchTimeoutBody) Close() error {
+	return nil
+}
+
+type spitchTimeoutError struct{}
+
+func (spitchTimeoutError) Error() string {
+	return "spitch timeout"
+}
+
+func (spitchTimeoutError) Timeout() bool {
+	return true
 }
 
 func spitchTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {

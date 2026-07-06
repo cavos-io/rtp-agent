@@ -234,6 +234,13 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	data := stripWAVHeader(buf[:n])
@@ -255,6 +262,13 @@ func (s *ttsChunkedStream) ensureResponse() error {
 	if err != nil {
 		s.closed = true
 		s.finalSent = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -387,6 +401,13 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani tts websocket: %v", err))
 	}
 	request, err := buildGnaniTTSWebsocketRequest(s.provider, fullText)
@@ -499,6 +520,13 @@ func gnaniTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
 		return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket closed: %v", err))
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket error: %v", err))
 }

@@ -225,6 +225,28 @@ func TestFalSTTRecognizeReturnsAPIConnectionErrorOnProviderStatus(t *testing.T) 
 	}
 }
 
+func TestFalSTTRecognizeReturnsAPIConnectionErrorOnMalformedProviderResponse(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: falRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"text":`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewFalSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIConnectionError", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestFalSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

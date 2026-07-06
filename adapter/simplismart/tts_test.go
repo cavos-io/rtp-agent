@@ -246,6 +246,28 @@ func TestSimplismartTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestSimplismartTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, simplismartTimeoutError{}
+	})}
+
+	provider := NewSimplismartTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSimplismartTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

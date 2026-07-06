@@ -30,6 +30,12 @@ type sarvamCloseErrorBody struct {
 	closed bool
 }
 
+type sarvamTimeoutError struct{}
+
+func (sarvamTimeoutError) Error() string   { return "sarvam timeout" }
+func (sarvamTimeoutError) Timeout() bool   { return true }
+func (sarvamTimeoutError) Temporary() bool { return true }
+
 func (b *sarvamCloseErrorBody) Read(_ []byte) (int, error) {
 	if b.closed {
 		return 0, errors.New("read after close")
@@ -172,6 +178,94 @@ func TestSarvamSTTSpeechEventMapsReferenceMetadata(t *testing.T) {
 	}
 	if alt.StartTime != 0.1 || alt.EndTime != 0.9 {
 		t.Fatalf("times = %.1f..%.1f, want 0.1..0.9", alt.StartTime, alt.EndTime)
+	}
+}
+
+func TestSarvamSTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"transcript":`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIConnectionError", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestSarvamSTTRecognizeStatusFailureReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIStatusError", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestSarvamSTTRecognizeTransportFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIConnectionError", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want non-timeout APIConnectionError", err, err)
+	}
+}
+
+func TestSarvamSTTRecognizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, sarvamTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APITimeoutError", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -775,6 +869,48 @@ func TestSarvamTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSSynthesizeTransportFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamTTS("test-key", "", WithSarvamTTSBaseURL("https://sarvam.example/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want non-timeout APIConnectionError", err, err)
+	}
+}
+
+func TestSarvamTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, sarvamTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamTTS("test-key", "", WithSarvamTTSBaseURL("https://sarvam.example/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSarvamTTSAdvancedOptionsBuildReferencePayloads(t *testing.T) {
 	cacheEnabled := true
 	v2Provider := NewSarvamTTS("test-key", "",
@@ -872,6 +1008,28 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("fourth Next error = %v, want EOF", err)
+	}
+}
+
+func TestSarvamTTSChunkedStreamEmptyAudiosReturnsAPIConnectionError(t *testing.T) {
+	stream := &sarvamTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(strings.NewReader(`{
+			"request_id":"req-empty",
+			"audios":[]
+		}`))},
+		sampleRate:       22050,
+		outputAudioCodec: "linear16",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	var apiConnErr *llm.APIConnectionError
+	if audio != nil || !errors.As(err, &apiConnErr) {
+		t.Fatalf("Next = (%#v, %T %v), want nil APIConnectionError", audio, err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio data") {
+		t.Fatalf("Next error = %q, want no audio data context", err)
 	}
 }
 

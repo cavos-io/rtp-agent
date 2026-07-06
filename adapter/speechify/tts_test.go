@@ -84,6 +84,10 @@ func TestSpeechifyTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 	defer stream.Close()
 	_, err = stream.Next()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Next error = %q, want non-audio guidance", err)
 	}
@@ -118,6 +122,28 @@ func TestSpeechifyTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
 		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestSpeechifyTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, speechifyTimeoutError{}
+	})}
+
+	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -366,6 +392,24 @@ func TestSpeechifyTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *test
 	}
 }
 
+func TestSpeechifyTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: speechifyTimeoutBody{}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpeechifyTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &speechifyCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &speechifyTTSChunkedStream{
@@ -417,6 +461,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+type speechifyTimeoutError struct{}
+
+func (speechifyTimeoutError) Error() string   { return "speechify timeout" }
+func (speechifyTimeoutError) Timeout() bool   { return true }
+func (speechifyTimeoutError) Temporary() bool { return true }
+
+type speechifyTimeoutBody struct{}
+
+func (speechifyTimeoutBody) Read([]byte) (int, error) { return 0, speechifyTimeoutError{} }
+func (speechifyTimeoutBody) Close() error             { return nil }
 
 type speechifyCloseCountBody struct {
 	*strings.Reader

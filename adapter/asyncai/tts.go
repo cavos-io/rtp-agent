@@ -191,6 +191,13 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial asyncai tts websocket: %v", err))
 	}
 	initPayload, err := buildAsyncAITTSInitMessage(t)
@@ -358,6 +365,13 @@ func asyncAITTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
 		return llm.NewAPIStatusError("Async connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Async websocket receive failed: %v", err))
 }
