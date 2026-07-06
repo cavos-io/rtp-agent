@@ -507,7 +507,7 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	var result sarvamSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Sarvam STT response decode failed: %v", err))
 	}
 	return sarvamSTTSpeechEvent(resolveSarvamSTTLanguage(s, language), result), nil
 }
