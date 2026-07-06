@@ -35,6 +35,12 @@ func (b *gnaniTTSCloseErrorBody) Close() error {
 	return nil
 }
 
+type gnaniTTSTimeoutError struct{}
+
+func (gnaniTTSTimeoutError) Error() string   { return "gnani tts timeout" }
+func (gnaniTTSTimeoutError) Timeout() bool   { return true }
+func (gnaniTTSTimeoutError) Temporary() bool { return true }
+
 func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewTTS("test-key")
 
@@ -142,6 +148,32 @@ func TestGnaniTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestGnaniTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, gnaniTTSTimeoutError{}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewTTS("test-key")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error before flush: %v", err)
+	}
+	if err := stream.PushText("namaste"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	err = stream.Flush()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
 	}
 }
 

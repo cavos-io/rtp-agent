@@ -387,6 +387,13 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani tts websocket: %v", err))
 	}
 	request, err := buildGnaniTTSWebsocketRequest(s.provider, fullText)
