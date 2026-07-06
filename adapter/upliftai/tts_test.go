@@ -2593,6 +2593,44 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamBuffersReferenceULawChunksBeforeFinal(t *testing.T) {
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp: &http.Response{Body: &upliftAIChunkReader{chunks: [][]byte{
+			{0x00, 0xff},
+			{0x7f, 0x80},
+		}}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded buffered mu-law frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(8000); got != want {
+		t.Fatalf("sample rate = %d, want ULAW_8000_8 rate %d", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(4); got != want {
+		t.Fatalf("samples per channel = %d, want buffered samples across provider chunks %d", got, want)
+	}
+	wantPCM := append(decodeUpliftAIMuLaw([]byte{0x00, 0xff}), decodeUpliftAIMuLaw([]byte{0x7f, 0x80})...)
+	if !bytes.Equal(audio.Frame.Data, wantPCM) {
+		t.Fatalf("audio data = %#v, want buffered decoded mu-law PCM %#v", audio.Frame.Data, wantPCM)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker after buffered mu-law tail", final)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
 	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
 	if err != nil {

@@ -641,7 +641,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return s.nextDecodedOGG()
 	}
 	if s.currentOutputFormat() == "ULAW_8000_8" {
-		return s.nextDecodedULaw()
+		return s.nextBufferedULaw()
 	}
 	return s.nextRawPCM()
 }
@@ -1544,31 +1544,46 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 	}
 }
 
-func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {
+func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
+	if len(s.pcmFrames) > 0 {
+		frame := s.pcmFrames[0]
+		s.pcmFrames = s.pcmFrames[1:]
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pcm == nil {
+		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
+			8000,
+			1,
+			8000*200/1000,
+			coreaudio.AudioByteStreamOptions{Progressive: true},
+		)
+	}
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
 		if n > 0 {
-			if err == io.EOF {
-				s.pendingFinal = true
+			decoded := decodeUpliftAIMuLaw(buf[:n])
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(decoded)...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
-			data := decodeUpliftAIMuLaw(buf[:n])
-			return &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              data,
-					SampleRate:        8000,
-					NumChannels:       1,
-					SamplesPerChannel: uint32(len(data) / 2),
-				},
-			}, nil
 		}
 		if err != nil {
 			if err == io.EOF {
+				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+				if len(s.pcmFrames) > 0 {
+					frame := s.pcmFrames[0]
+					s.pcmFrames = s.pcmFrames[1:]
+					s.pendingFinal = true
+					return &tts.SynthesizedAudio{Frame: frame}, nil
+				}
 				if !s.finalSent {
 					s.finalSent = true
 					return &tts.SynthesizedAudio{IsFinal: true}, nil
