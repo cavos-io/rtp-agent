@@ -385,6 +385,44 @@ func TestTelnyxTTSStreamNoAudioSegmentReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamSynthesizesReferenceFinalMarker(t *testing.T) {
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	provider := NewTelnyxTTS("test-key", "")
+	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
+		return &fakeTelnyxEndInputTTSStream{
+			events: []*tts.SynthesizedAudio{{Frame: frame}},
+		}, nil
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame != frame {
+		t.Fatalf("first audio = %+v, want segment frame", audio)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want reference final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %+v, want boundary-only final marker", final)
+	}
+}
+
 func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	var writes []string
 	stream := &telnyxTTSStream{
@@ -928,6 +966,7 @@ type fakeTelnyxEndInputTTSStream struct {
 	pushErr error
 	endErr  error
 	nextErr error
+	events  []*tts.SynthesizedAudio
 	closed  bool
 }
 
@@ -955,6 +994,11 @@ func (f *fakeTelnyxEndInputTTSStream) Close() error {
 func (f *fakeTelnyxEndInputTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if f.nextErr != nil {
 		return nil, f.nextErr
+	}
+	if len(f.events) > 0 {
+		event := f.events[0]
+		f.events = f.events[1:]
+		return event, nil
 	}
 	return nil, io.EOF
 }

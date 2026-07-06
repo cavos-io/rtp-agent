@@ -327,9 +327,10 @@ type telnyxTTSSegmentedStream struct {
 }
 
 type telnyxTTSSegment struct {
-	stream  tts.SynthesizeStream
-	text    string
-	emitted bool
+	stream    tts.SynthesizeStream
+	text      string
+	emitted   bool
+	finalized bool
 }
 
 func (s *telnyxTTSSegmentedStream) PushText(text string) error {
@@ -436,13 +437,17 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		audio, err := s.current.stream.Next()
 		if errors.Is(err, io.EOF) {
-			_ = s.current.stream.Close()
-			text := s.current.text
-			if strings.TrimSpace(text) != "" && !s.current.emitted {
+			current := s.current
+			_ = current.stream.Close()
+			text := current.text
+			s.current = nil
+			if strings.TrimSpace(text) != "" && !current.emitted {
 				_ = s.Close()
 				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
 			}
-			s.current = nil
+			if current.emitted && !current.finalized {
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			continue
 		}
 		if err != nil {
@@ -451,6 +456,9 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
 			s.current.emitted = true
+		}
+		if audio != nil && audio.IsFinal {
+			s.current.finalized = true
 		}
 		text := s.current.text
 		if audio != nil && audio.IsFinal && strings.TrimSpace(text) != "" && !s.current.emitted {
