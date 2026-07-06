@@ -684,7 +684,7 @@ func (s *telnyxTTSStream) decodeLoop() {
 				s.events <- &tts.SynthesizedAudio{IsFinal: true}
 				return
 			}
-			s.errCh <- err
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 			return
 		}
 		s.events <- &tts.SynthesizedAudio{Frame: frame}

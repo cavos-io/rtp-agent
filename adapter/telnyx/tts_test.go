@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -767,6 +768,29 @@ func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	decodeErr := errors.New("decode failed")
+	stream := &telnyxTTSStream{
+		ctx:     context.Background(),
+		events:  make(chan *tts.SynthesizedAudio, 1),
+		errCh:   make(chan error, 1),
+		decoder: &fakeTelnyxAudioDecoder{err: decodeErr},
+	}
+	go stream.decodeLoop()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %+v, want nil on decode failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("decode error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx TTS audio decode failed") {
+		t.Fatalf("decode error = %q, want decode context", err)
+	}
+}
+
 func TestTelnyxTTSStreamNoAudioCloseEndsWithoutDecoderError(t *testing.T) {
 	stream := &telnyxTTSStream{
 		ctx:    context.Background(),
@@ -879,4 +903,20 @@ func (f *fakeTelnyxEndInputTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, f.nextErr
 	}
 	return nil, io.EOF
+}
+
+type fakeTelnyxAudioDecoder struct {
+	err error
+}
+
+func (f *fakeTelnyxAudioDecoder) Push([]byte) {}
+
+func (f *fakeTelnyxAudioDecoder) EndInput() {}
+
+func (f *fakeTelnyxAudioDecoder) Next() (*model.AudioFrame, error) {
+	return nil, f.err
+}
+
+func (f *fakeTelnyxAudioDecoder) Close() error {
+	return nil
 }
