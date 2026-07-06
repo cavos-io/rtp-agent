@@ -466,6 +466,10 @@ func (s *fishaudioTTSChunkedStream) ensureResponse() error {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {

@@ -352,6 +352,26 @@ func TestFishAudioTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSSynthesizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fishAudioTTSTimeoutError{}
+	})}
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestFishAudioTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
