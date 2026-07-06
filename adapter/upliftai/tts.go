@@ -608,6 +608,8 @@ type upliftAITTSChunkedStream struct {
 	decodeMu      sync.Mutex
 	decodeReadErr error
 	wav           *upliftAIWAVStream
+	pcm           *coreaudio.AudioByteStream
+	pcmFrames     []*model.AudioFrame
 	outputFormat  string
 	started       bool
 	hasAudio      bool
@@ -641,39 +643,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.currentOutputFormat() == "ULAW_8000_8" {
 		return s.nextDecodedULaw()
 	}
-	if s.pendingFinal {
-		s.pendingFinal = false
-		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
-	}
-	buf := make([]byte, 4096)
-	for {
-		n, err := s.resp.Body.Read(buf)
-		if n > 0 {
-			if err == io.EOF {
-				s.pendingFinal = true
-			}
-			numChannels := s.currentNumChannels()
-			return &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              buf[:n],
-					SampleRate:        defaultUpliftAISampleRate,
-					NumChannels:       uint32(numChannels),
-					SamplesPerChannel: uint32(n / 2 / numChannels),
-				},
-			}, nil
-		}
-		if err != nil {
-			if err == io.EOF {
-				if !s.finalSent {
-					s.finalSent = true
-					return &tts.SynthesizedAudio{IsFinal: true}, nil
-				}
-				return nil, io.EOF
-			}
-			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
-		}
-	}
+	return s.nextRawPCM()
 }
 
 func (s *upliftAITTSChunkedStream) ensureResponse() error {
@@ -1514,6 +1484,57 @@ func discardUpliftAIWAVBytes(r io.Reader, n int64) error {
 		return fmt.Errorf("discard upliftai wav chunk: %w", err)
 	}
 	return nil
+}
+
+func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	if len(s.pcmFrames) > 0 {
+		frame := s.pcmFrames[0]
+		s.pcmFrames = s.pcmFrames[1:]
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pcm == nil {
+		numChannels := uint32(s.currentNumChannels())
+		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
+			defaultUpliftAISampleRate,
+			numChannels,
+			defaultUpliftAISampleRate*200/1000,
+			coreaudio.AudioByteStreamOptions{Progressive: true},
+		)
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(buf[:n])...)
+		}
+		if err != nil {
+			if err == io.EOF {
+				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+				if len(s.pcmFrames) > 0 {
+					frame := s.pcmFrames[0]
+					s.pcmFrames = s.pcmFrames[1:]
+					s.pendingFinal = true
+					return &tts.SynthesizedAudio{Frame: frame}, nil
+				}
+				if !s.finalSent {
+					s.finalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
+				return nil, io.EOF
+			}
+			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
+		}
+		if len(s.pcmFrames) > 0 {
+			frame := s.pcmFrames[0]
+			s.pcmFrames = s.pcmFrames[1:]
+			return &tts.SynthesizedAudio{Frame: frame}, nil
+		}
+	}
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {

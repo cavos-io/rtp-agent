@@ -53,6 +53,21 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+type upliftAIChunkReader struct {
+	chunks [][]byte
+}
+
+func (r *upliftAIChunkReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	return copy(p, chunk), nil
+}
+
+func (r *upliftAIChunkReader) Close() error { return nil }
+
 type upliftAIBlockingEOFBody struct {
 	data   []byte
 	offset int
@@ -378,7 +393,7 @@ func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("audio")),
+			Body:       io.NopCloser(strings.NewReader("\x01\x02\x03\x04")),
 		}, nil
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
@@ -1392,15 +1407,15 @@ func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T
 	requestID := upliftAITestSocketIORequestID(t, synthesize)
 	audioPayload := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
 	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"` + audioPayload + `"}]`
+	conn.readErrs <- io.EOF
 
 	result := receiveUpliftAITestSocketIOResult(t, resultCh)
 	if result.err != nil {
 		t.Fatalf("first Next error = %v", result.err)
 	}
 	if result.audio == nil || result.audio.Frame == nil {
-		t.Fatalf("first audio = %#v, want audio before disconnect", result.audio)
+		t.Fatalf("first audio = %#v, want flushed audio after disconnect", result.audio)
 	}
-	conn.readErrs <- io.EOF
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("second Next error = %v, want final marker after disconnect", err)
@@ -2583,6 +2598,38 @@ func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next() error = %v, want EOF", err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamBuffersReferencePCMChunksBeforeFinal(t *testing.T) {
+	body := &upliftAIChunkReader{chunks: [][]byte{{0x01, 0x02}, {0x03, 0x04}}}
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want buffered PCM frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}; !bytes.Equal(got, want) {
+		t.Fatalf("Frame.Data = %#v, want buffered PCM chunks %#v", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(2); got != want {
+		t.Fatalf("SamplesPerChannel = %d, want %d", got, want)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
 	}
 }
 
