@@ -943,6 +943,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "message_stop":
 			if chunk := s.finalUsageChunk(); chunk != nil {
+				s.closeResponseBody()
 				return markAnthropicStreamChunk(s, chunk), nil
 			}
 

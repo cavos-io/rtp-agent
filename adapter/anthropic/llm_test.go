@@ -1450,7 +1450,7 @@ func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestAnthropicStreamClosesBodyAfterEOFLikeReference(t *testing.T) {
+func TestAnthropicStreamClosesBodyBeforeFinalUsageLikeReference(t *testing.T) {
 	body := newAnthropicTrackedBody(strings.Join([]string{
 		`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
 		`data: {"type":"message_stop"}`,
@@ -1468,8 +1468,11 @@ func TestAnthropicStreamClosesBodyAfterEOFLikeReference(t *testing.T) {
 	if chunk.Usage == nil {
 		t.Fatalf("chunk = %#v, want final usage before EOF", chunk)
 	}
-	if body.closed {
-		t.Fatal("body closed before EOF, want close after stream drains")
+	if !body.closed {
+		t.Fatal("body closed = false, want provider stream body closed before final usage")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() after final usage error = %v, want nil", err)
 	}
 
 	_, err = stream.Next()
