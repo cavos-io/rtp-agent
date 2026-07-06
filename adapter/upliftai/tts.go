@@ -687,6 +687,9 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	if resp.StatusCode != http.StatusOK {
