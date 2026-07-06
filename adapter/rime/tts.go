@@ -2053,6 +2053,8 @@ func rimeDecodeBase64Chunk(data string) ([]byte, error) {
 	for i := 0; i < len(data); i++ {
 		b := data[i]
 		switch {
+		case b >= 0x80:
+			return nil, fmt.Errorf("string argument should contain only ASCII characters")
 		case b >= 'A' && b <= 'Z',
 			b >= 'a' && b <= 'z',
 			b >= '0' && b <= '9',
