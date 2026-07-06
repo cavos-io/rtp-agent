@@ -430,6 +430,7 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 	messages := make([]anthropicMessage, 0, len(chatCtx.Items))
 	systemMessages := make([]string, 0)
 	var currentRole string
+	instructionSeen := false
 	content := make([]anthropicContentBlock, 0)
 
 	flush := func() {
@@ -458,8 +459,16 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 			case *llm.ChatMessage:
 				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
 					if text := msg.TextContent(); text != "" {
-						systemMessages = append(systemMessages, text)
+						if !instructionSeen {
+							systemMessages = append(systemMessages, text)
+						} else {
+							appendBlocks("user", anthropicContentBlock{
+								Type: "text",
+								Text: inlineAnthropicInstructions(text),
+							})
+						}
 					}
+					instructionSeen = true
 					continue
 				}
 				role := "user"
@@ -498,6 +507,10 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 	}
 
 	return messages, systemMessages, nil
+}
+
+func inlineAnthropicInstructions(text string) string {
+	return "<instructions>\n" + text + "\n</instructions>"
 }
 
 func anthropicSystemBlocks(systemMessages []string, cacheControl map[string]any) []anthropicContentBlock {

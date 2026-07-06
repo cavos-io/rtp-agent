@@ -1319,11 +1319,24 @@ func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	_ = stream.Close()
 
 	system, ok := transport.body["system"].([]any)
-	if !ok || len(system) != 2 {
-		t.Fatalf("system = %#v, want two text blocks", transport.body["system"])
+	if !ok || len(system) != 1 {
+		t.Fatalf("system = %#v, want one base text block", transport.body["system"])
 	}
 	assertAnthropicRequestTextBlock(t, system[0], "base")
-	assertAnthropicRequestTextBlock(t, system[1], "dev")
+	messages, ok := transport.body["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages = %#v, want one user message", transport.body["messages"])
+	}
+	user, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %#v, want map", messages[0])
+	}
+	content, ok := user["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("content = %#v, want inline developer instructions and user text", user["content"])
+	}
+	assertAnthropicRequestTextBlock(t, content[0], "<instructions>\ndev\n</instructions>")
+	assertAnthropicRequestTextBlock(t, content[1], "hello")
 }
 
 func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
@@ -1380,13 +1393,60 @@ func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 
 	messages, system := buildAnthropicMessages(ctx)
 
-	if system != "base\ndev" {
-		t.Fatalf("system = %q, want base/dev", system)
+	if system != "base" {
+		t.Fatalf("system = %q, want base", system)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
-	assertAnthropicTextBlock(t, messages[0].Content, 0, "hello")
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "<instructions>\ndev\n</instructions>")
+	assertAnthropicTextBlock(t, messages[0].Content, 1, "hello")
+}
+
+func TestBuildAnthropicMessagesConvertsMidConversationInstructions(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "old-user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "old question"}}},
+		&llm.ChatMessage{ID: "old-assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "old answer"}}},
+		&llm.ChatMessage{ID: "turn-instructions", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "use short sentences"}}},
+		&llm.ChatMessage{ID: "new-user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "new question"}}},
+	}
+
+	messages, system := buildAnthropicMessages(ctx)
+
+	if system != "base" {
+		t.Fatalf("system = %q, want only base instructions", system)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want old user, assistant, inline instructions/new user: %#v", len(messages), messages)
+	}
+	if messages[2].Role != "user" {
+		t.Fatalf("messages[2].Role = %q, want user inline instructions", messages[2].Role)
+	}
+	assertAnthropicTextBlock(t, messages[2].Content, 0, "<instructions>\nuse short sentences\n</instructions>")
+	assertAnthropicTextBlock(t, messages[2].Content, 1, "new question")
+}
+
+func TestBuildAnthropicMessagesCountsEmptyLeadingInstruction(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "empty-system", Role: llm.ChatRoleSystem},
+		&llm.ChatMessage{ID: "turn-instructions", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "answer briefly"}}},
+	}
+
+	messages, system := buildAnthropicMessages(ctx)
+
+	if system != "" {
+		t.Fatalf("system = %q, want empty", system)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want inline instruction user message: %#v", len(messages), messages)
+	}
+	if messages[0].Role != "user" {
+		t.Fatalf("messages[0].Role = %q, want user", messages[0].Role)
+	}
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "<instructions>\nanswer briefly\n</instructions>")
 }
 
 func TestBuildAnthropicMessagesIncludesImageBlocks(t *testing.T) {
