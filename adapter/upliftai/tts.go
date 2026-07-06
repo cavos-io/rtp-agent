@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -28,8 +30,10 @@ const (
 	defaultUpliftAIVoiceID    = "v_meklc281"
 	defaultUpliftAISampleRate = 22050
 	defaultUpliftAIFormat     = "MP3_22050_32"
-	defaultUpliftAIBaseURL    = "https://api.upliftai.org/v1/tts"
+	defaultUpliftAIBaseURL    = "wss://api.upliftai.org"
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
+	upliftAISocketIOReadyWait = 5 * time.Second
+	upliftAISocketIODialWait  = 10 * time.Second
 )
 
 type UpliftAITTS struct {
@@ -50,6 +54,10 @@ type upliftAISocketIOConn interface {
 	ReadMessage() (int, []byte, error)
 	WriteMessage(messageType int, data []byte) error
 	Close() error
+}
+
+type upliftAISocketIODeadlineConn interface {
+	SetReadDeadline(t time.Time) error
 }
 
 var upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
@@ -601,6 +609,11 @@ func startUpliftAISocketIOSynthesis(ctx context.Context, baseURL string, apiKey 
 	if err != nil {
 		return nil, err
 	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, upliftAISocketIODialWait)
+		defer cancel()
+	}
 	conn, err := upliftAISocketIODialContext(ctx, socketURL)
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
@@ -634,12 +647,17 @@ func buildUpliftAISocketIOURL(baseURL string) (string, error) {
 }
 
 func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, apiKey string) error {
+	namespaceConnected := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if namespaceConnected && upliftAIIsTimeoutError(err) {
+				upliftAISetSocketIOReadDeadline(conn, time.Time{})
+				return nil
+			}
 			return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
 		}
 		packet := string(msg)
@@ -656,10 +674,47 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 			}
 			continue
 		}
+		if strings.HasPrefix(packet, "42"+upliftAISocketIONamespace+",") {
+			payload := strings.TrimPrefix(packet, "42"+upliftAISocketIONamespace+",")
+			if upliftAISocketIOMessageType(payload) == "ready" {
+				upliftAISetSocketIOReadDeadline(conn, time.Time{})
+				return nil
+			}
+			continue
+		}
 		if strings.HasPrefix(packet, "40"+upliftAISocketIONamespace) {
-			return nil
+			namespaceConnected = true
+			upliftAISetSocketIOReadDeadline(conn, time.Now().Add(upliftAISocketIOReadyWait))
 		}
 	}
+}
+
+func upliftAISetSocketIOReadDeadline(conn upliftAISocketIOConn, deadline time.Time) {
+	if deadlineConn, ok := conn.(upliftAISocketIODeadlineConn); ok {
+		_ = deadlineConn.SetReadDeadline(deadline)
+	}
+}
+
+func upliftAIIsTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func upliftAISocketIOMessageType(payload string) string {
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return ""
+	}
+	if len(event) != 2 || string(event[0]) != `"message"` {
+		return ""
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(event[1], &message); err != nil {
+		return ""
+	}
+	return message.Type
 }
 
 func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) error {
@@ -688,6 +743,10 @@ func readUpliftAISocketIOAudio(conn upliftAISocketIOConn, pw *io.PipeWriter, req
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+				_ = pw.Close()
+				return
+			}
 			_ = pw.CloseWithError(llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
 			return
 		}
