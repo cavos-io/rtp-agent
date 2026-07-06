@@ -4178,6 +4178,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("falsey timestamp words = audio:%+v done:%v transcript:%q, want ignored like reference", falseyWords, done, transcript)
 	}
 
+	falseyStarts, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":false,"end":[0.2]}}`), 24000)
+	if err != nil {
+		t.Fatalf("falsey timestamp starts message: %v", err)
+	}
+	if falseyStarts != nil || done || transcript != "" {
+		t.Fatalf("falsey timestamp starts = audio:%+v done:%v transcript:%q, want ignored like reference", falseyStarts, done, transcript)
+	}
+
 	finished, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"done"}`), 24000)
 	if err != nil {
 		t.Fatalf("done message: %v", err)

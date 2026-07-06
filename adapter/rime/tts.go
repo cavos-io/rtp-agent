@@ -1983,8 +1983,8 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		Message        json.RawMessage `json:"message"`
 		WordTimestamps struct {
 			Words json.RawMessage `json:"words"`
-			Start []float64       `json:"start"`
-			End   []float64       `json:"end"`
+			Start json.RawMessage `json:"start"`
+			End   json.RawMessage `json:"end"`
 		} `json:"word_timestamps"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -2011,7 +2011,15 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
 		}
-		timed := rimeTTSTimedTranscript(words, message.WordTimestamps.Start, message.WordTimestamps.End)
+		starts, err := rimeTTSTimestampTimes(message.WordTimestamps.Start)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		ends, err := rimeTTSTimestampTimes(message.WordTimestamps.End)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		timed := rimeTTSTimedTranscript(words, starts, ends)
 		if len(timed) == 0 {
 			return nil, false, "", nil
 		}
@@ -2110,11 +2118,23 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 	return words, nil
 }
 
+func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
+		return nil, nil
+	}
+	var times []float64
+	if err := json.Unmarshal(raw, &times); err != nil {
+		return nil, err
+	}
+	return times, nil
+}
+
 func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return bytes.Equal(trimmed, []byte("null")) ||
 		bytes.Equal(trimmed, []byte("false")) ||
-		bytes.Equal(trimmed, []byte("0"))
+		bytes.Equal(trimmed, []byte("0")) ||
+		bytes.Equal(trimmed, []byte(`""`))
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
