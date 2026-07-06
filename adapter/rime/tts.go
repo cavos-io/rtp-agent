@@ -1740,7 +1740,7 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 			if closeErr := s.closeConnection(); closeErr != nil {
 				return closeErr
 			}
-			return err
+			return nil
 		}
 		s.waitForEOSAckLocked()
 	}

@@ -3360,10 +3360,12 @@ func (rimeTimeoutError) Temporary() bool { return true }
 func TestRimeTTSProviderCloseClosesAfterReferenceEOSFailure(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
 	writeErr := errors.New("eos write failed")
+	writeCalls := 0
 	closeCalls := 0
 	stream := &rimeTTSSynthesizeStream{
 		cancel: func() {},
 		writeMessage: func(int, []byte) error {
+			writeCalls++
 			return writeErr
 		},
 		closeConn: func() error {
@@ -3374,8 +3376,11 @@ func TestRimeTTSProviderCloseClosesAfterReferenceEOSFailure(t *testing.T) {
 	provider.registerStream(stream)
 
 	err := provider.Close()
-	if !errors.Is(err, writeErr) {
-		t.Fatalf("Close error = %v, want eos write error", err)
+	if err != nil {
+		t.Fatalf("Close error = %v, want nil like reference eos cleanup", err)
+	}
+	if writeCalls != 1 {
+		t.Fatalf("eos write calls = %d, want 1", writeCalls)
 	}
 	if closeCalls != 1 {
 		t.Fatalf("close calls after eos failure = %d, want 1", closeCalls)
