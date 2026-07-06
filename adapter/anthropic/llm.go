@@ -216,6 +216,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if len(systemMessages) > 0 {
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
+	applyAnthropicSystemCacheControl(body, cacheControl)
 	if l.userSet {
 		body["user"] = l.user
 	}
@@ -408,6 +409,25 @@ func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 			continue
 		}
 		body[key] = value
+	}
+}
+
+func applyAnthropicSystemCacheControl(body map[string]any, cacheControl map[string]any) {
+	if cacheControl == nil {
+		return
+	}
+	switch system := body["system"].(type) {
+	case []map[string]any:
+		if len(system) > 0 {
+			system[len(system)-1]["cache_control"] = cacheControl
+		}
+	case []any:
+		if len(system) == 0 {
+			return
+		}
+		if block, ok := system[len(system)-1].(map[string]any); ok {
+			block["cache_control"] = cacheControl
+		}
 	}
 }
 
