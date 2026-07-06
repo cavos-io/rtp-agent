@@ -323,6 +323,7 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 			s.closeAfterWriteFailure()
 			return err
 		}
+		s.addSpeechDuration(chunk)
 	}
 	return nil
 }
@@ -340,6 +341,7 @@ func (s *cartesiaSTTStream) Flush() error {
 				s.closeAfterWriteFailure()
 				return err
 			}
+			s.addSpeechDuration(chunk)
 		}
 	}
 	if err := s.writeTextData([]byte("finalize")); err != nil {
@@ -364,6 +366,7 @@ func (s *cartesiaSTTStream) Close() error {
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				return err
 			}
+			s.addSpeechDuration(chunk)
 		}
 	}
 	closeMessage := `{"type":"close"}`
@@ -569,6 +572,13 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 	}
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *cartesiaSTTStream) addSpeechDuration(frame *model.AudioFrame) {
+	if s == nil || s.state == nil {
+		return
+	}
+	s.state.speechDuration += audio.CalculateFrameDuration(frame)
 }
 
 func cartesiaSTTUnexpectedCloseError(err error) error {
