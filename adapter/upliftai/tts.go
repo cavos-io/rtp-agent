@@ -1212,7 +1212,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 	}
 	if !s.started {
 		s.started = true
-		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, 1)
+		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, s.currentNumChannels())
 		s.decoder = decoder
 		if audio, done, err := s.startCompressedDecoder(decoder, "UpliftAI TTS OGG read failed"); done {
 			return audio, err

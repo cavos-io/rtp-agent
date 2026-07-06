@@ -2730,6 +2730,41 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
 	t.Fatalf("read %d decoded OGG frames without final marker", frames)
 }
 
+func TestUpliftAITTSChunkedStreamHonorsConfiguredChannelsForOGG(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+	provider := newUpliftAITestHTTPProvider(
+		"test-key",
+		"",
+		WithUpliftAIOutputFormat("OGG_22050_16"),
+		WithUpliftAINumChannels(2),
+	)
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(oggData))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded OGG frame", audio)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(2); got != want {
+		t.Fatalf("channels = %d, want configured reference channel count %d", got, want)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(defaultUpliftAISampleRate); got != want {
+		t.Fatalf("sample rate = %d, want %d", got, want)
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame data length = %d, want %d for stereo PCM16 frame", got, want)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamStreamsReferenceOGGBeforeEOF(t *testing.T) {
 	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
 	if err != nil {
