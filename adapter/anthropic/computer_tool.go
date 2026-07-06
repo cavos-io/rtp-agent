@@ -14,6 +14,7 @@ import (
 
 const (
 	postActionDelay    = 300 * time.Millisecond
+	dragActionDelay    = 100 * time.Millisecond
 	typeCharacterDelay = 10 * time.Millisecond
 	waitActionDelay    = time.Second
 )
@@ -94,6 +95,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, err
 		}
 		c.actions.LeftClickDrag(sx, sy, ex, ey)
+		if err := waitComputerToolDelay(ctx, dragActionDelay); err != nil {
+			return nil, err
+		}
 	case "left_mouse_down":
 		x, y, err := requireCoordinate(args, "coordinate")
 		if err != nil {
