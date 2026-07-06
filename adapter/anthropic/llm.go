@@ -87,15 +87,16 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
-	Source    map[string]any `json:"source,omitempty"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	Content   any            `json:"content,omitempty"`
-	IsError   bool           `json:"is_error,omitempty"`
+	Type         string         `json:"type"`
+	Text         string         `json:"text,omitempty"`
+	Source       map[string]any `json:"source,omitempty"`
+	ID           string         `json:"id,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Input        map[string]any `json:"input,omitempty"`
+	ToolUseID    string         `json:"tool_use_id,omitempty"`
+	Content      any            `json:"content,omitempty"`
+	IsError      bool           `json:"is_error,omitempty"`
+	CacheControl map[string]any `json:"cache_control,omitempty"`
 }
 
 func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
@@ -117,6 +118,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
+	cacheControl := anthropicEphemeralCacheControl(options.ExtraParams)
+	if cacheControl != nil {
+		applyAnthropicMessageCacheControl(messages, cacheControl)
+	}
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -125,7 +130,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"stream":     true,
 	}
 	if system != "" {
-		body["system"] = system
+		if cacheControl != nil {
+			body["system"] = []anthropicContentBlock{{Type: "text", Text: system, CacheControl: cacheControl}}
+		} else {
+			body["system"] = system
+		}
 	}
 	applyAnthropicExtraParams(body, options.ExtraParams)
 
@@ -143,6 +152,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 					"strict":       true,
 				})
 			}
+		}
+		if cacheControl != nil && len(tools) > 0 {
+			tools[len(tools)-1]["cache_control"] = cacheControl
 		}
 		body["tools"] = tools
 	}
@@ -268,6 +280,13 @@ func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	}
 }
 
+func anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+	if params["caching"] != "ephemeral" {
+		return nil
+	}
+	return map[string]any{"type": "ephemeral"}
+}
+
 func anthropicRequestID(header http.Header) string {
 	if requestID := header.Get("request-id"); requestID != "" {
 		return requestID
@@ -339,6 +358,29 @@ func appendAnthropicTrailingUserMessage(messages []anthropicMessage) []anthropic
 			{Type: "text", Text: " "},
 		},
 	})
+}
+
+func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl map[string]any) {
+	seenAssistant := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		if len(messages[i].Content) == 0 {
+			continue
+		}
+		switch messages[i].Role {
+		case "assistant":
+			if !seenAssistant {
+				last := len(messages[i].Content) - 1
+				messages[i].Content[last].CacheControl = cacheControl
+				seenAssistant = true
+			}
+		case "user":
+			if seenAssistant {
+				last := len(messages[i].Content) - 1
+				messages[i].Content[last].CacheControl = cacheControl
+				return
+			}
+		}
+	}
 }
 
 type anthropicStream struct {
