@@ -1962,7 +1962,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", fmt.Errorf("expected JSON object, got null"))
 	}
 	var message struct {
-		Type           string          `json:"type"`
+		Type           json.RawMessage `json:"type"`
 		Data           *string         `json:"data"`
 		Message        json.RawMessage `json:"message"`
 		WordTimestamps struct {
@@ -1974,7 +1974,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", err)
 	}
-	switch message.Type {
+	switch rimeTTSWebsocketMessageType(message.Type) {
 	case "chunk":
 		if message.Data == nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket chunk missing data", nil)
@@ -2040,6 +2040,14 @@ func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
 		return llm.NewAPIConnectionError(message)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+}
+
+func rimeTTSWebsocketMessageType(raw json.RawMessage) string {
+	var messageType string
+	if err := json.Unmarshal(raw, &messageType); err != nil {
+		return ""
+	}
+	return messageType
 }
 
 func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {

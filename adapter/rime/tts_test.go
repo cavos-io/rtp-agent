@@ -4100,6 +4100,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
 	}
 
+	ignored, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":123,"data":"AQIDBA=="}`), 24000)
+	if err != nil {
+		t.Fatalf("numeric message type: %v", err)
+	}
+	if ignored != nil || done || transcript != "" {
+		t.Fatalf("numeric message type = audio:%+v done:%v transcript:%q, want ignored", ignored, done, transcript)
+	}
+
 	timedAudio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi","there"],"start":[0.1,0.3],"end":[0.2,0.5]}}`), 24000)
 	if err != nil {
 		t.Fatalf("timestamps message: %v", err)
