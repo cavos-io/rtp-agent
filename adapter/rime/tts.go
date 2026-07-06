@@ -1981,11 +1981,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		Type           json.RawMessage `json:"type"`
 		Data           *string         `json:"data"`
 		Message        json.RawMessage `json:"message"`
-		WordTimestamps struct {
-			Words json.RawMessage `json:"words"`
-			Start json.RawMessage `json:"start"`
-			End   json.RawMessage `json:"end"`
-		} `json:"word_timestamps"`
+		WordTimestamps json.RawMessage `json:"word_timestamps"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", err)
@@ -2007,15 +2003,19 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		return rimeTTSAudioFrame(audio, sampleRate), false, "", nil
 	case "timestamps":
-		words, err := rimeTTSTimestampWords(message.WordTimestamps.Words)
+		wordTimestamps, err := rimeTTSWordTimestamps(message.WordTimestamps)
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
 		}
-		starts, err := rimeTTSTimestampTimes(message.WordTimestamps.Start)
+		words, err := rimeTTSTimestampWords(wordTimestamps.Words)
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
 		}
-		ends, err := rimeTTSTimestampTimes(message.WordTimestamps.End)
+		starts, err := rimeTTSTimestampTimes(wordTimestamps.Start)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		ends, err := rimeTTSTimestampTimes(wordTimestamps.End)
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
 		}
@@ -2097,6 +2097,23 @@ func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
 		return fmt.Sprint(value)
 	}
 	return string(raw)
+}
+
+type rimeTTSWordTimestampsPayload struct {
+	Words json.RawMessage `json:"words"`
+	Start json.RawMessage `json:"start"`
+	End   json.RawMessage `json:"end"`
+}
+
+func rimeTTSWordTimestamps(raw json.RawMessage) (rimeTTSWordTimestampsPayload, error) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
+		return rimeTTSWordTimestampsPayload{}, nil
+	}
+	var payload rimeTTSWordTimestampsPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return rimeTTSWordTimestampsPayload{}, err
+	}
+	return payload, nil
 }
 
 func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
