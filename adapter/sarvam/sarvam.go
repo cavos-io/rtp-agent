@@ -498,7 +498,7 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sarvamSTTTransportError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -515,6 +515,17 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Sarvam STT response decode failed: %v", err))
 	}
 	return sarvamSTTSpeechEvent(resolveSarvamSTTLanguage(s, language), result), nil
+}
+
+func sarvamSTTTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Sarvam STT request failed: %v", err))
 }
 
 func buildSarvamSTTRecognizeRequest(ctx context.Context, s *SarvamSTT, audio []byte, language string) (*http.Request, error) {

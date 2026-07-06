@@ -30,6 +30,12 @@ type sarvamCloseErrorBody struct {
 	closed bool
 }
 
+type sarvamTimeoutError struct{}
+
+func (sarvamTimeoutError) Error() string   { return "sarvam timeout" }
+func (sarvamTimeoutError) Timeout() bool   { return true }
+func (sarvamTimeoutError) Temporary() bool { return true }
+
 func (b *sarvamCloseErrorBody) Read(_ []byte) (int, error) {
 	if b.closed {
 		return 0, errors.New("read after close")
@@ -220,6 +226,46 @@ func TestSarvamSTTRecognizeStatusFailureReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.Body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestSarvamSTTRecognizeTransportFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIConnectionError", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want non-timeout APIConnectionError", err, err)
+	}
+}
+
+func TestSarvamSTTRecognizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, sarvamTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APITimeoutError", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
