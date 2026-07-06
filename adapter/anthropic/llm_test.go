@@ -331,6 +331,7 @@ func (t anthropicProviderTool) Parameters() map[string]any {
 func (t anthropicProviderTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
+func (t anthropicProviderTool) IsProviderTool() bool { return true }
 func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 	return map[string]interface{}{
 		"type": t.name,
@@ -338,6 +339,24 @@ func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 	}
 }
 func (t anthropicProviderTool) AnthropicBetaFlag() string { return t.betaFlag }
+
+type anthropicSpecOnlyTool struct{}
+
+func (anthropicSpecOnlyTool) ID() string          { return "lookup" }
+func (anthropicSpecOnlyTool) Name() string        { return "lookup" }
+func (anthropicSpecOnlyTool) Description() string { return "look up information" }
+func (anthropicSpecOnlyTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (anthropicSpecOnlyTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (anthropicSpecOnlyTool) AnthropicToolSpec() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "computer_20251124",
+		"name": "computer",
+	}
+}
 
 func TestAnthropicChatDoesNotApplyConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
@@ -2097,6 +2116,41 @@ func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	}
 	if _, ok := tool["input_schema"]; ok {
 		t.Fatalf("provider tool has input_schema = %#v, want provider-native schema", tool["input_schema"])
+	}
+}
+
+func TestAnthropicChatRequiresProviderToolMarkerForNativeSpec(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicSpecOnlyTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one function tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["name"] != "lookup" {
+		t.Fatalf("tool name = %#v, want function tool name lookup", tool["name"])
+	}
+	if _, ok := tool["input_schema"]; !ok {
+		t.Fatalf("tool = %#v, want function input_schema", tool)
+	}
+	if tool["type"] == "computer_20251124" {
+		t.Fatalf("tool = %#v, want non-provider tool serialized as function schema", tool)
 	}
 }
 

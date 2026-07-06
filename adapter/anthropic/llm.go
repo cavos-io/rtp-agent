@@ -233,13 +233,16 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
 		for _, tool := range options.Tools {
-			if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
-				tools = append(tools, providerTool.AnthropicToolSpec())
-				if betaTool, ok := tool.(anthropicBetaToolProvider); ok {
-					if flag := betaTool.AnthropicBetaFlag(); flag != "" {
-						betaFlag = flag
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
+					tools = append(tools, providerTool.AnthropicToolSpec())
+					if betaTool, ok := tool.(anthropicBetaToolProvider); ok {
+						if flag := betaTool.AnthropicBetaFlag(); flag != "" {
+							betaFlag = flag
+						}
 					}
 				}
+				continue
 			} else {
 				toolSpec := map[string]interface{}{
 					"name":         tool.Name(),
