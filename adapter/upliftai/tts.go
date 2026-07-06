@@ -895,7 +895,7 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 
 	switch event.Type {
 	case "audio":
-		audio, err := base64.StdEncoding.DecodeString(event.Audio)
+		audio, err := decodeUpliftAIBase64Audio(event.Audio)
 		if err != nil {
 			c.finishRequest(event.RequestID, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io audio decode failed: %v", err)))
 			return
@@ -910,6 +910,28 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 	case "audio_end", "error":
 		c.finishRequest(event.RequestID, nil)
 	}
+}
+
+func decodeUpliftAIBase64Audio(value string) ([]byte, error) {
+	audio, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return audio, nil
+	}
+	clean := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		b := value[i]
+		switch {
+		case b >= 'A' && b <= 'Z':
+			clean = append(clean, b)
+		case b >= 'a' && b <= 'z':
+			clean = append(clean, b)
+		case b >= '0' && b <= '9':
+			clean = append(clean, b)
+		case b == '+' || b == '/' || b == '=':
+			clean = append(clean, b)
+		}
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func (c *upliftAISocketIOClient) resetRequestTimer(requestID string) {
