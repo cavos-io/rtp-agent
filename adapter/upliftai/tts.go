@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 const (
@@ -260,6 +261,11 @@ func (s *upliftAITTSSynthesizeStream) Flush() error {
 	if text == "" {
 		return nil
 	}
+	text = s.formatSegmentText(text)
+	if text == "" {
+		s.buf.Reset()
+		return nil
+	}
 	s.buf.Reset()
 	select {
 	case s.inputCh <- text:
@@ -280,6 +286,12 @@ func (s *upliftAITTSSynthesizeStream) EndInput() error {
 	text := s.buf.String()
 	s.buf.Reset()
 	if text != "" {
+		text = s.formatSegmentText(text)
+		if text == "" {
+			s.inputDone = true
+			close(s.inputCh)
+			return nil
+		}
 		select {
 		case s.inputCh <- text:
 		case <-s.doneCh:
@@ -291,6 +303,18 @@ func (s *upliftAITTSSynthesizeStream) EndInput() error {
 	s.inputDone = true
 	close(s.inputCh)
 	return nil
+}
+
+func (s *upliftAITTSSynthesizeStream) formatSegmentText(text string) string {
+	wordTokens := tokenize.SplitWords(text, false, false, false)
+	words := make([]string, 0, len(wordTokens))
+	for _, word := range wordTokens {
+		words = append(words, word.Token)
+	}
+	if len(words) == 0 {
+		return ""
+	}
+	return strings.Join(words, " ")
 }
 
 func (s *upliftAITTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
