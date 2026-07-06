@@ -24,6 +24,9 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 	if tool.ID() != "computer" || tool.Name() != "computer" {
 		t.Fatalf("tool identity = %q/%q, want computer/computer", tool.ID(), tool.Name())
 	}
+	if _, ok := tool.(llm.ProviderTool); !ok {
+		t.Fatalf("tool type = %T, want llm.ProviderTool", tool)
+	}
 	if tool.Description() == "" {
 		t.Fatal("tool description is empty")
 	}
@@ -53,20 +56,18 @@ func TestComputerToolProviderNameExecutesReferenceToolCall(t *testing.T) {
 	tools := toolset.Tools()
 	toolCtx := llm.NewToolContext([]interface{}{tools[0]})
 
-	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
-		Name:      "computer",
-		CallID:    "call_computer",
-		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
-	}, toolCtx)
-
-	if result.RawError != nil {
-		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	providerTools := toolCtx.ProviderTools()
+	if len(providerTools) != 1 || providerTools[0].Name() != "computer" {
+		t.Fatalf("ProviderTools() = %#v, want executable provider-visible computer tool", providerTools)
 	}
-	if result.FncCallOut == nil || result.FncCallOut.IsError {
-		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	out, err := providerTools[0].Execute(context.Background(), `{"action":"left_click","coordinate":[10,20]}`)
+	if err != nil {
+		t.Fatalf("provider computer Execute error = %v, want nil", err)
 	}
-	events := actions.Events()
-	if len(events) != 3 {
+	if !strings.Contains(out, "(no frame available yet)") {
+		t.Fatalf("provider computer output = %q, want no-frame content", out)
+	}
+	if events := actions.Events(); len(events) != 3 {
 		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
 	}
 }
@@ -89,21 +90,22 @@ func TestComputerToolRegistersAsReferenceToolset(t *testing.T) {
 	if len(toolsets) != 1 || toolsets[0].ID() != "computer" {
 		t.Fatalf("Toolsets() = %#v, want Anthropic computer toolset", toolsets)
 	}
-
-	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
-		Name:      "computer",
-		CallID:    "call_computer",
-		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
-	}, toolCtx)
-
-	if result.RawError != nil {
-		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	providerTools := toolCtx.ProviderTools()
+	if len(providerTools) != 1 || providerTools[0].Name() != "computer" {
+		t.Fatalf("ProviderTools() = %#v, want provider-native computer tool", providerTools)
 	}
-	if result.FncCallOut == nil || result.FncCallOut.IsError {
-		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	if functionTools := toolCtx.FunctionTools(); len(functionTools) != 0 {
+		t.Fatalf("FunctionTools() = %#v, want provider-native computer tool excluded from function tools", functionTools)
 	}
-	events := actions.Events()
-	if len(events) != 3 {
+
+	out, err := providerTools[0].Execute(context.Background(), `{"action":"left_click","coordinate":[10,20]}`)
+	if err != nil {
+		t.Fatalf("provider computer Execute error = %v, want nil", err)
+	}
+	if !strings.Contains(out, "(no frame available yet)") {
+		t.Fatalf("provider computer output = %q, want no-frame content", out)
+	}
+	if events := actions.Events(); len(events) != 3 {
 		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
 	}
 }
