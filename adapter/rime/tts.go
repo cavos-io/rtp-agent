@@ -2183,7 +2183,7 @@ func rimeTTSPythonRepr(value any) string {
 	case nil:
 		return "None"
 	case string:
-		return "'" + typed + "'"
+		return rimeTTSPythonStringRepr(typed)
 	case bool:
 		if typed {
 			return "True"
@@ -2215,6 +2215,20 @@ func rimeTTSPythonRepr(value any) string {
 	default:
 		return fmt.Sprint(value)
 	}
+}
+
+func rimeTTSPythonStringRepr(value string) string {
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		return strconv.Quote(value)
+	}
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `\'`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return "'" + replacer.Replace(value) + "'"
 }
 
 type rimeTTSWordTimestampsPayload struct {
