@@ -211,6 +211,31 @@ func TestTelnyxSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamChunksWithConfiguredSampleRate(t *testing.T) {
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTSampleRate(8000))
+	var writes [][]byte
+	stream := &telnyxSTTStream{
+		provider: provider,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+
+	if len(writes) != 1 || len(writes[0]) != 800 {
+		t.Fatalf("writes = %s, want one 50ms chunk from configured 8k mono sample rate", telnyxWriteSizes(writes))
+	}
+}
+
 func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
