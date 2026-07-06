@@ -667,6 +667,25 @@ func groupAnthropicChatItems(items []llm.ChatItem) ([]*anthropicChatItemGroup, e
 		return group.add(item)
 	}
 
+	replaceGroup := func(groupID string, item llm.ChatItem) error {
+		group := &anthropicChatItemGroup{}
+		if err := group.add(item); err != nil {
+			return err
+		}
+		if existing := groupsByID[groupID]; existing != nil {
+			for i, candidate := range groups {
+				if candidate == existing {
+					groups[i] = group
+					break
+				}
+			}
+		} else {
+			groups = append(groups, group)
+		}
+		groupsByID[groupID] = group
+		return nil
+	}
+
 	for _, item := range items {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
@@ -675,7 +694,7 @@ func groupAnthropicChatItems(items []llm.ChatItem) ([]*anthropicChatItemGroup, e
 					return nil, err
 				}
 			} else {
-				if err := addToGroup(it.ID, it); err != nil {
+				if err := replaceGroup(it.ID, it); err != nil {
 					return nil, err
 				}
 			}

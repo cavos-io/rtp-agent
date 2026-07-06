@@ -798,6 +798,26 @@ func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_lookup", "second", false)
 }
 
+func TestBuildAnthropicMessagesReplacesDuplicateUserIDsLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "turn", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "old"}}},
+		&llm.ChatMessage{ID: "turn", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "new"}}},
+	}
+
+	messages, _, err := buildAnthropicMessagesE(ctx)
+	if err != nil {
+		t.Fatalf("buildAnthropicMessagesE() error = %v, want nil for duplicate user IDs", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one replaced user message: %#v", len(messages), messages)
+	}
+	if messages[0].Role != "user" {
+		t.Fatalf("role = %q, want user", messages[0].Role)
+	}
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "new")
+}
+
 func TestAnthropicChatSendsToolResultIsErrorFalseLikeReference(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
