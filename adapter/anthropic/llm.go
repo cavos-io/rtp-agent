@@ -851,7 +851,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			Message *struct {
 				ID    *string `json:"id"`
 				Usage *struct {
-					InputTokens              int `json:"input_tokens"`
+					InputTokens              *int `json:"input_tokens"`
 					OutputTokens             int `json:"output_tokens"`
 					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -908,8 +908,17 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
+			if event.Message.Usage.InputTokens == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_start missing input_tokens"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			s.requestID = *event.Message.ID
-			s.inputTokens = event.Message.Usage.InputTokens
+			s.inputTokens = *event.Message.Usage.InputTokens
 			s.outputTokens = event.Message.Usage.OutputTokens
 			s.cacheCreationTokens = event.Message.Usage.CacheCreationInputTokens
 			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
