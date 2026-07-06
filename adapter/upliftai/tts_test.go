@@ -1939,6 +1939,95 @@ func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *te
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSerializesReferenceSocketIOWrites(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	conn.writeBlockAfter = 1
+	conn.releaseWrites = make(chan struct{})
+
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	firstStream, err := provider.Synthesize(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("first Synthesize error = %v", err)
+	}
+	defer firstStream.Close()
+	secondStream, err := provider.Synthesize(context.Background(), "second")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	defer secondStream.Close()
+
+	firstResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := firstStream.Next()
+		firstResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	<-conn.writeEntered
+	if connect := receiveUpliftAITestString(t, conn.writes, "namespace connect packet"); connect != `40/text-to-speech/multi-stream,{"token":"test-key"}` {
+		t.Fatalf("connect packet = %q, want reference namespace auth packet", connect)
+	}
+	<-conn.writeEntered
+
+	secondResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := secondStream.Next()
+		secondResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	select {
+	case <-conn.writeEntered:
+		t.Fatal("second socket.io writer entered before first synthesize write finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(conn.releaseWrites)
+	firstSynthesize := receiveUpliftAITestString(t, conn.writes, "first synthesize packet")
+	firstRequestID := upliftAITestSocketIORequestID(t, firstSynthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + firstRequestID + `"}]`
+	firstResult := receiveUpliftAITestSocketIOResult(t, firstResultCh)
+	if firstResult.err != nil || firstResult.audio == nil || !firstResult.audio.IsFinal {
+		t.Fatalf("first Next = (%#v, %v), want final marker after serialized write", firstResult.audio, firstResult.err)
+	}
+
+	<-conn.writeEntered
+	secondSynthesize := receiveUpliftAITestString(t, conn.writes, "second synthesize packet")
+	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
+	secondResult := receiveUpliftAITestSocketIOResult(t, secondResultCh)
+	if secondResult.err != nil || secondResult.audio == nil || !secondResult.audio.IsFinal {
+		t.Fatalf("second Next = (%#v, %v), want final marker after serialized write", secondResult.audio, secondResult.err)
+	}
+	if got, want := conn.maxConcurrentWrites(), 1; got != want {
+		t.Fatalf("max concurrent socket.io writes = %d, want %d", got, want)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -2018,27 +2107,33 @@ func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
 }
 
 type upliftAITestSocketIOConn struct {
-	reads         chan string
-	readErrs      chan error
-	writes        chan string
-	closed        chan struct{}
-	deadlineCh    chan time.Time
-	deadlineMu    sync.Mutex
-	readDeadline  time.Time
-	readTimeout   time.Duration
-	writeErr      error
-	writeErrAfter int
-	writeCount    int
-	once          sync.Once
+	reads           chan string
+	readErrs        chan error
+	writes          chan string
+	closed          chan struct{}
+	deadlineCh      chan time.Time
+	deadlineMu      sync.Mutex
+	readDeadline    time.Time
+	readTimeout     time.Duration
+	writeErr        error
+	writeErrAfter   int
+	writeCount      int
+	writeBlockAfter int
+	releaseWrites   chan struct{}
+	writeEntered    chan struct{}
+	activeWrites    int
+	maxWrites       int
+	once            sync.Once
 }
 
 func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
 	return &upliftAITestSocketIOConn{
-		reads:      make(chan string, 10),
-		readErrs:   make(chan error, 10),
-		writes:     make(chan string, 10),
-		closed:     make(chan struct{}),
-		deadlineCh: make(chan time.Time, 10),
+		reads:        make(chan string, 10),
+		readErrs:     make(chan error, 10),
+		writes:       make(chan string, 10),
+		closed:       make(chan struct{}),
+		deadlineCh:   make(chan time.Time, 10),
+		writeEntered: make(chan struct{}, 10),
 	}
 }
 
@@ -2096,6 +2191,12 @@ func (c *upliftAITestSocketIOConn) hasReadDeadline() bool {
 	return !c.readDeadline.IsZero()
 }
 
+func (c *upliftAITestSocketIOConn) maxConcurrentWrites() int {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	return c.maxWrites
+}
+
 type upliftAITestTimeoutError struct{}
 
 func (upliftAITestTimeoutError) Error() string   { return "fake socket.io read timeout" }
@@ -2144,7 +2245,29 @@ func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
 	writeCount := c.writeCount
 	writeErrAfter := c.writeErrAfter
 	writeErr := c.writeErr
+	writeBlockAfter := c.writeBlockAfter
+	releaseWrites := c.releaseWrites
+	c.activeWrites++
+	if c.activeWrites > c.maxWrites {
+		c.maxWrites = c.activeWrites
+	}
 	c.deadlineMu.Unlock()
+	defer func() {
+		c.deadlineMu.Lock()
+		c.activeWrites--
+		c.deadlineMu.Unlock()
+	}()
+	select {
+	case c.writeEntered <- struct{}{}:
+	default:
+	}
+	if writeBlockAfter > 0 && writeCount > writeBlockAfter && releaseWrites != nil {
+		select {
+		case <-releaseWrites:
+		case <-c.closed:
+			return io.ErrClosedPipe
+		}
+	}
 	if writeErrAfter > 0 && writeCount > writeErrAfter {
 		if writeErr != nil {
 			return writeErr

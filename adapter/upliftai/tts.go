@@ -711,6 +711,7 @@ type upliftAISocketIOClient struct {
 	apiKey  string
 
 	mu       sync.Mutex
+	writeMu  sync.Mutex
 	conn     upliftAISocketIOConn
 	closed   bool
 	requests map[string]*upliftAISocketIORequest
@@ -758,7 +759,10 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 	}
 	c.mu.Unlock()
 
-	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
+	c.writeMu.Lock()
+	err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID)
+	c.writeMu.Unlock()
+	if err != nil {
 		c.finishRequest(requestID, err)
 		c.closeConn(conn, nil)
 		_ = pr.Close()
@@ -834,7 +838,10 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 		}
 		packet := string(msg)
 		if packet == "2" {
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+			c.writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			c.writeMu.Unlock()
+			if err != nil {
 				c.closeConn(conn, nil)
 				return
 			}
