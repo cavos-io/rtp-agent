@@ -1143,6 +1143,21 @@ func assertMurfPayload(t *testing.T, payload map[string]any, key string, want st
 	}
 }
 
+func TestMurfTTSAudioFromStreamIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"audio":"!!!!"}`),
+		[]byte(`{"audio":"==="}`),
+	} {
+		audio, done, err := murfAudioFromStreamMessage(payload, 24000)
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+}
+
 type finalReadMurfReader struct {
 	data []byte
 	done bool
