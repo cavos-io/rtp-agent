@@ -824,6 +824,28 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamDropsSameChunkThinkingCloseLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<thinking>hidden</thinking>visible answer"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final usage chunk", err)
+	}
+	if chunk.Delta != nil {
+		t.Fatalf("Delta = %#v, want no visible text from same-chunk thinking close", chunk.Delta)
+	}
+	if chunk.Usage == nil {
+		t.Fatal("Usage = nil, want final usage after suppressed thinking chunk")
+	}
+}
+
 func TestAnthropicStreamSuppressesReferenceThinkingTextWithoutTools(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{

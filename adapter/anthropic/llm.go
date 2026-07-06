@@ -881,6 +881,7 @@ func (s *anthropicStream) wrapReadError(err error) error {
 func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
 	if strings.HasPrefix(text, "<thinking>") {
 		s.ignoringCoT = true
+		return ""
 	}
 	if s.ignoringCoT {
 		if _, after, ok := strings.Cut(text, "</thinking>"); ok {
