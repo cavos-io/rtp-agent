@@ -233,6 +233,28 @@ func (anthropicRequestTestTool) Execute(context.Context, string) (string, error)
 	return "", nil
 }
 
+type anthropicProviderTool struct {
+	name     string
+	betaFlag string
+}
+
+func (t anthropicProviderTool) ID() string          { return t.name }
+func (t anthropicProviderTool) Name() string        { return t.name }
+func (t anthropicProviderTool) Description() string { return "provider tool" }
+func (t anthropicProviderTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (t anthropicProviderTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
+	return map[string]interface{}{
+		"type": t.name,
+		"name": t.name,
+	}
+}
+func (t anthropicProviderTool) AnthropicBetaFlag() string { return t.betaFlag }
+
 func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -1117,6 +1139,34 @@ func TestAnthropicChatAddsComputerToolBetaHeader(t *testing.T) {
 
 	if got := transport.headers.Get("anthropic-beta"); got != "computer-use-2025-11-24" {
 		t.Fatalf("anthropic-beta = %q, want computer-use-2025-11-24", got)
+	}
+}
+
+func TestAnthropicChatUsesLastProviderToolBetaHeaderLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{
+			anthropicProviderTool{name: "old_computer", betaFlag: "computer-use-2025-01-24"},
+			anthropicProviderTool{name: "new_computer", betaFlag: "computer-use-2025-11-24"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if got := transport.headers.Get("anthropic-beta"); got != "computer-use-2025-11-24" {
+		t.Fatalf("anthropic-beta = %q, want last provider tool beta flag", got)
 	}
 }
 

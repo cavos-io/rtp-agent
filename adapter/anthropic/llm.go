@@ -152,8 +152,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		for _, tool := range options.Tools {
 			if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
 				tools = append(tools, providerTool.AnthropicToolSpec())
-				if betaTool, ok := tool.(anthropicBetaToolProvider); ok && betaFlag == "" {
-					betaFlag = betaTool.AnthropicBetaFlag()
+				if betaTool, ok := tool.(anthropicBetaToolProvider); ok {
+					if flag := betaTool.AnthropicBetaFlag(); flag != "" {
+						betaFlag = flag
+					}
 				}
 			} else {
 				tools = append(tools, map[string]interface{}{
