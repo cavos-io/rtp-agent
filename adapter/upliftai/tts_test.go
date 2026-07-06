@@ -1184,6 +1184,47 @@ func TestUpliftAITTSChunkedStreamSocketIODialUsesReferenceTimeout(t *testing.T) 
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOConnectReadUsesReferenceTimeout(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.readTimeout = time.Second
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+	stream, err := provider.Synthesize(ctx, "connect read timeout")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+	select {
+	case err := <-resultCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T(%v), want reference APIConnectionError for connect read timeout", err, err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		_ = conn.Close()
+		t.Fatal("socket.io connect read ignored caller/reference timeout")
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

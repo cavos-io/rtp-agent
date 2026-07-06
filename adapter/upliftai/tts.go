@@ -996,6 +996,10 @@ func buildUpliftAISocketIOURL(baseURL string) (string, error) {
 }
 
 func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, apiKey string) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		upliftAISetSocketIOReadDeadline(conn, deadline)
+		defer upliftAISetSocketIOReadDeadline(conn, time.Time{})
+	}
 	namespaceConnected := false
 	for {
 		if err := ctx.Err(); err != nil {
