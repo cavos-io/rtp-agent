@@ -93,7 +93,7 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 		args    map[string]interface{}
 		wantErr string
 	}{
-		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "missing required argument"},
+		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "Missing required argument"},
 		{name: "invalid coordinate", action: "left_click", args: map[string]interface{}{"coordinate": "10,20"}, wantErr: "invalid coordinate"},
 		{name: "non numeric coordinate", action: "left_click", args: map[string]interface{}{"coordinate": []interface{}{"x", float64(20)}}, wantErr: "coordinates must be numbers"},
 		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument"},
@@ -121,6 +121,8 @@ func TestComputerToolUsesReferenceErrorText(t *testing.T) {
 		args    map[string]interface{}
 		wantErr string
 	}{
+		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "Missing required argument: 'coordinate'"},
+		{name: "missing start coordinate", action: "left_click_drag", args: map[string]interface{}{"coordinate": []interface{}{float64(10), float64(20)}}, wantErr: "Missing required argument: 'start_coordinate'"},
 		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument: 'text'"},
 		{name: "unknown action", action: "unknown", args: map[string]interface{}{}, wantErr: "Unknown computer_use action: 'unknown'"},
 	}

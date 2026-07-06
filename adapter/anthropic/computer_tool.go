@@ -166,7 +166,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 func requireCoordinate(args map[string]interface{}, key string) (int, int, error) {
 	val, ok := args[key]
 	if !ok {
-		return 0, 0, fmt.Errorf("missing required argument: %q", key)
+		return 0, 0, fmt.Errorf("Missing required argument: '%s'", key)
 	}
 	coords, ok := val.([]interface{})
 	if !ok || len(coords) < 2 {
