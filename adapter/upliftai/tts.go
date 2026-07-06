@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -508,7 +509,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, io.EOF
 			}
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS stream read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
 		}
 	}
 }
@@ -586,7 +587,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", err)
 		}
 		if len(data) == 0 {
 			s.finalSent = true
@@ -631,7 +632,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
 		}
 		if len(data) == 0 {
 			s.finalSent = true
@@ -742,9 +743,16 @@ func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, err
 				}
 				return nil, io.EOF
 			}
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS mu-law read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 		}
 	}
+}
+
+func upliftAITTSReadError(prefix string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
 }
 
 func decodeUpliftAIMuLaw(data []byte) []byte {

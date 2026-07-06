@@ -40,6 +40,13 @@ func (upliftAIErrorReader) Read([]byte) (int, error) {
 
 func (upliftAIErrorReader) Close() error { return nil }
 
+type upliftAIReadErrorBody struct {
+	err error
+}
+
+func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
+func (b upliftAIReadErrorBody) Close() error             { return nil }
+
 func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.upliftai", PluginTitle)
@@ -907,6 +914,22 @@ func TestUpliftAITTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: upliftAIReadErrorBody{err: context.DeadlineExceeded}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
