@@ -856,7 +856,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return nil, s.wrapReadError(err)
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+				continue
+			} else if retryErr != wrappedErr {
+				return nil, retryErr
+			}
+			return nil, wrappedErr
 		}
 
 		switch event.Type {
