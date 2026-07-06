@@ -307,7 +307,7 @@ func waitAnthropicRetryInterval(ctx context.Context, interval time.Duration) err
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	for key, value := range params {
-		if key == "caching" {
+		if key == "caching" || key == "max_tokens" {
 			continue
 		}
 		body[key] = value

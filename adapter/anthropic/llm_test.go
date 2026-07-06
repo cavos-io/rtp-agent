@@ -2114,7 +2114,6 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 			"user":        "participant-1",
 			"temperature": 0.7,
 			"top_k":       40,
-			"max_tokens":  2048,
 		}),
 	)
 	if err != nil {
@@ -2131,8 +2130,30 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	if transport.body["top_k"] != float64(40) {
 		t.Fatalf("top_k = %#v, want 40", transport.body["top_k"])
 	}
-	if transport.body["max_tokens"] != float64(2048) {
-		t.Fatalf("max_tokens = %#v, want 2048", transport.body["max_tokens"])
+}
+
+func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"max_tokens": 2048}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["max_tokens"] != float64(1024) {
+		t.Fatalf("max_tokens = %#v, want reference default 1024 over extra param", transport.body["max_tokens"])
 	}
 }
 
