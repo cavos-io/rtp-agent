@@ -376,7 +376,7 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if s.inputDone {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if text == "" {
 		return nil

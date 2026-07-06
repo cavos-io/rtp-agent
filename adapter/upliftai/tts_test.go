@@ -575,6 +575,35 @@ func TestUpliftAITTSProviderCloseClosesActiveSynthesizeStreams(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamPushTextAfterEndInputIsReferenceNoop(t *testing.T) {
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("UpliftAI stream does not implement EndInput")
+	}
+
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.PushText("ignored after end"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want reference no-op", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want idempotent no-op", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after empty EndInput = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	var httpCalls int
 	var requestBody map[string]string
