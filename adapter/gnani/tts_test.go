@@ -504,6 +504,26 @@ func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing
 	}
 }
 
+func TestGnaniTTSAudioFromWebsocketMessageDecodesReferenceNoisyBase64(t *testing.T) {
+	wav := gnaniTestWAV([]byte{0x01, 0x02, 0x03, 0x04})
+	noisy := base64.StdEncoding.EncodeToString(wav) + "!!!!"
+	message := []byte(`{"type":"complete","data":{"audio":"` + noisy + `"}}`)
+
+	audio, done, err := gnaniTTSAudioFromWebsocketMessage(message, 16000, 1)
+	if err != nil {
+		t.Fatalf("parse noisy complete message: %v", err)
+	}
+	if !done {
+		t.Fatal("done = false, want true for complete message")
+	}
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("audio=%+v, want final audio frame", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio data = %#v, want stripped WAV payload", audio.Frame.Data)
+	}
+}
+
 func TestGnaniTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &gnaniTTSSynthesizeStream{
