@@ -1032,6 +1032,27 @@ func TestDeepgramTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, deepgramTTSTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestDeepgramTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	var hasDeadline bool
 	var remaining time.Duration
@@ -1137,6 +1158,22 @@ func TestDeepgramTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
 func TestDeepgramTTSChunkedStreamReturnsAPITimeoutErrorOnReadFailure(t *testing.T) {
 	stream := &deepgramTTSChunkedStream{
 		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.DeadlineExceeded}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamReturnsAPITimeoutErrorOnReadTimeout(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: deepgramTTSTimeoutError{}}},
 		sampleRate: 24000,
 	}
 
@@ -1603,6 +1640,38 @@ func TestDeepgramTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	err = stream.Flush()
+	if err == nil {
+		t.Fatal("Flush error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams after failed dial = %d, want 0", len(provider.streams))
+	}
+}
+
+func TestDeepgramTTSStreamReturnsAPITimeoutErrorOnDialTimeout(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, deepgramTTSTimeoutError{}
 		},
 		Proxy: nil,
 	}
@@ -3392,6 +3461,22 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 func (r deepgramTTSReadCloser) Close() error {
 	return nil
 }
+
+type deepgramTTSTimeoutError struct{}
+
+func (deepgramTTSTimeoutError) Error() string {
+	return "read timeout"
+}
+
+func (deepgramTTSTimeoutError) Timeout() bool {
+	return true
+}
+
+func (deepgramTTSTimeoutError) Temporary() bool {
+	return false
+}
+
+var _ net.Error = deepgramTTSTimeoutError{}
 
 type deepgramTTSErrorAfterDataReadCloser struct {
 	data []byte

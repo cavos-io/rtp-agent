@@ -689,6 +689,53 @@ func TestBasetenSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	}
 }
 
+type basetenReadTimeoutError struct{}
+
+func (basetenReadTimeoutError) Error() string   { return "read timeout" }
+func (basetenReadTimeoutError) Timeout() bool   { return true }
+func (basetenReadTimeoutError) Temporary() bool { return true }
+
+func TestBasetenSTTReadTimeoutDoesNotAbortReferenceStream(t *testing.T) {
+	messages := [][]byte{
+		[]byte(`{"type":"transcription","transcript":"after timeout","is_final":true}`),
+	}
+	releaseRead := make(chan struct{})
+	reads := 0
+	stream := &basetenSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+		state:  &basetenSTTStreamState{language: "en"},
+		readMessage: func() (int, []byte, error) {
+			reads++
+			if reads == 1 {
+				return 0, nil, basetenReadTimeoutError{}
+			}
+			if reads-2 < len(messages) {
+				return websocket.TextMessage, messages[reads-2], nil
+			}
+			<-releaseRead
+			return 0, nil, io.EOF
+		},
+	}
+
+	go stream.readLoop(nil)
+	t.Cleanup(func() {
+		close(releaseRead)
+	})
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after timeout", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final transcript", event.Type)
+	}
+	if event.Alternatives[0].Text != "after timeout" {
+		t.Fatalf("text = %q, want transcript after timeout", event.Alternatives[0].Text)
+	}
+}
+
 func TestBasetenSTTStreamDialErrorReturnsFailure(t *testing.T) {
 	provider := mustNewBasetenSTT(t, "test-key", "",
 		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),

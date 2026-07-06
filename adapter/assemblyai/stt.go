@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -322,6 +323,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
+	stream.readMessage = stream.readWebsocketMessage
 	if !s.registerStream(stream) {
 		conn.Close()
 		return nil, io.ErrClosedPipe
@@ -509,6 +511,7 @@ type assemblyAISTTStream struct {
 	writeBinary func([]byte) error
 	writeJSON   func(any) error
 	closeConn   func() error
+	readMessage func() (int, []byte, error)
 	state       *assemblyAIStreamState
 	sampleRate  int
 	audioBuf    *audio.AudioByteStream
@@ -549,9 +552,13 @@ func (s *assemblyAISTTStream) readLoop() {
 		close(s.events)
 	}()
 	for {
-		_, message, err := s.conn.ReadMessage()
+		_, message, err := s.readMessageData()
 		if err != nil {
 			if !s.isClosed() {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					continue
+				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
 					s.errCh <- llm.NewAPIStatusError("AssemblyAI connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
@@ -580,6 +587,20 @@ func (s *assemblyAISTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *assemblyAISTTStream) readMessageData() (int, []byte, error) {
+	if s.readMessage != nil {
+		return s.readMessage()
+	}
+	return s.readWebsocketMessage()
+}
+
+func (s *assemblyAISTTStream) readWebsocketMessage() (int, []byte, error) {
+	if s.conn == nil {
+		return 0, nil, io.ErrClosedPipe
+	}
+	return s.conn.ReadMessage()
 }
 
 func (s *assemblyAISTTStream) isClosed() bool {

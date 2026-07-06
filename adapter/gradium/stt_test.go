@@ -500,6 +500,60 @@ func TestGradiumSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	}
 }
 
+type gradiumReadTimeoutError struct{}
+
+func (gradiumReadTimeoutError) Error() string   { return "read timeout" }
+func (gradiumReadTimeoutError) Timeout() bool   { return true }
+func (gradiumReadTimeoutError) Temporary() bool { return true }
+
+func TestGradiumSTTReadTimeoutDoesNotAbortReferenceStream(t *testing.T) {
+	messages := [][]byte{
+		[]byte(`{"type":"text","text":"after timeout","start_s":0.25}`),
+	}
+	releaseRead := make(chan struct{})
+	reads := 0
+	stream := &gradiumSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+		state:  &gradiumSTTMessageState{language: "en"},
+		readMessage: func() (int, []byte, error) {
+			reads++
+			if reads == 1 {
+				return 0, nil, gradiumReadTimeoutError{}
+			}
+			if reads-2 < len(messages) {
+				return websocket.TextMessage, messages[reads-2], nil
+			}
+			<-releaseRead
+			return 0, nil, io.EOF
+		},
+	}
+
+	go stream.readLoop()
+	t.Cleanup(func() {
+		close(releaseRead)
+	})
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start after timeout", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event.Type = %s, want start_of_speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("transcript Next error = %v, want transcript after timeout", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event.Type = %s, want interim transcript", event.Type)
+	}
+	if event.Alternatives[0].Text != "after timeout" {
+		t.Fatalf("text = %q, want transcript after timeout", event.Alternatives[0].Text)
+	}
+}
+
 func TestGradiumSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	closeNow := make(chan struct{})
 	closed := make(chan struct{})

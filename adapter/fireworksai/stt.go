@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -366,6 +367,7 @@ type fireworksStream struct {
 	audio  bytes.Buffer
 
 	pendingAudioDuration float64
+	readMessage          func() (int, []byte, error)
 }
 
 func (s *fireworksStream) readLoop(conn *websocket.Conn) {
@@ -379,7 +381,7 @@ func (s *fireworksStream) readLoop(conn *websocket.Conn) {
 		}
 	}()
 	for {
-		msgType, message, err := conn.ReadMessage()
+		msgType, message, err := s.readMessageData(conn)
 		if err != nil {
 			s.mu.Lock()
 			current := s.conn == conn
@@ -390,6 +392,10 @@ func (s *fireworksStream) readLoop(conn *websocket.Conn) {
 			}
 			s.mu.Unlock()
 			if current && !closed && !reconnecting {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					continue
+				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
 					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
@@ -411,6 +417,13 @@ func (s *fireworksStream) readLoop(conn *websocket.Conn) {
 			s.events <- speechEvent
 		}
 	}
+}
+
+func (s *fireworksStream) readMessageData(conn *websocket.Conn) (int, []byte, error) {
+	if s.readMessage != nil {
+		return s.readMessage()
+	}
+	return conn.ReadMessage()
 }
 
 func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, dialer fireworksSTTWebsocketDialer, language string) {

@@ -260,6 +260,10 @@ func (s *gradiumTTSWebsocketChunkedStream) ensureConnected() error {
 	if s.started {
 		return nil
 	}
+	if s.conn != nil {
+		s.started = true
+		return nil
+	}
 	s.started = true
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.modelEndpoint, s.headers)
 	if err != nil {

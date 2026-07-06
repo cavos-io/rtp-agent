@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -380,6 +381,7 @@ type basetenSTTStream struct {
 	cancel       context.CancelFunc
 	state        *basetenSTTStreamState
 	audio        bytes.Buffer
+	readMessage  func() (int, []byte, error)
 }
 
 func (s *basetenSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -573,7 +575,7 @@ func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
 		}
 	}()
 	for {
-		msgType, payload, err := conn.ReadMessage()
+		msgType, payload, err := s.readMessageData(conn)
 		if err != nil {
 			s.mu.Lock()
 			current := s.conn == conn
@@ -584,6 +586,10 @@ func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
 			}
 			s.mu.Unlock()
 			if current && !closed && !reconnecting {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					continue
+				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
 					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
@@ -606,6 +612,13 @@ func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
 			s.events <- event
 		}
 	}
+}
+
+func (s *basetenSTTStream) readMessageData(conn *websocket.Conn) (int, []byte, error) {
+	if s.readMessage != nil {
+		return s.readMessage()
+	}
+	return conn.ReadMessage()
 }
 
 type basetenSTTStreamState struct {

@@ -574,6 +574,10 @@ func deepgramTTSChunkedReadError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return llm.NewAPIConnectionError(err.Error())
 }
 
@@ -607,6 +611,10 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		return llm.NewAPIConnectionError(err.Error())
@@ -1322,6 +1330,10 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		if resp != nil && resp.StatusCode != 0 {

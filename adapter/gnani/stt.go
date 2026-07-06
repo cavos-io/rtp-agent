@@ -114,6 +114,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani stt websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -172,6 +179,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -183,6 +197,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	var result gnaniSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	return gnaniSpeechEventFromResponse(result, resolveSTTLanguage(s, language))

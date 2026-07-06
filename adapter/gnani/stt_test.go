@@ -115,6 +115,28 @@ func TestGnaniSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, gnaniSTTTimeoutError{}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSTT("test-key")
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on dial timeout", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestGnaniSTTRecognizeRequestUsesReferenceMultipart(t *testing.T) {
 	provider := NewSTT("test-key")
 
@@ -175,6 +197,66 @@ func TestGnaniSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+type gnaniSTTTimeoutError struct{}
+
+func (gnaniSTTTimeoutError) Error() string   { return "gnani timeout" }
+func (gnaniSTTTimeoutError) Timeout() bool   { return true }
+func (gnaniSTTTimeoutError) Temporary() bool { return true }
+
+type gnaniSTTReadCloser struct {
+	err error
+}
+
+func (r gnaniSTTReadCloser) Read(_ []byte) (int, error) {
+	return 0, r.err
+}
+
+func (r gnaniSTTReadCloser) Close() error {
+	return nil
+}
+
+func TestGnaniSTTRecognizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, gnaniSTTTimeoutError{}
+	})}
+
+	provider := NewSTT("test-key")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGnaniSTTRecognizeReturnsAPITimeoutErrorOnResponseReadTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       gnaniSTTReadCloser{err: gnaniSTTTimeoutError{}},
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSTT("test-key")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
