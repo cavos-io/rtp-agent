@@ -35,6 +35,24 @@ type AudioTurnDetector interface {
 	PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error)
 }
 
+type InterruptionDecision int
+
+const (
+	InterruptionIgnore            InterruptionDecision = iota
+	InterruptionContinueListening
+	InterruptionInterruptAgent
+	InterruptionAcceptUserTurn
+)
+
+type InterruptionGateResult struct {
+	Decision InterruptionDecision
+	Reason   string
+}
+
+type InterruptionGate interface {
+	Decide(agentSpeaking bool, speechMs int, transcript string) InterruptionGateResult
+}
+
 type AgentInterface interface {
 	OnEnter()
 	OnExit()
@@ -54,6 +72,7 @@ type Agent struct {
 	TurnDetection     TurnDetectionMode
 	TurnDetector      TurnDetector
 	AudioTurnDetector AudioTurnDetector
+	InterruptionGate  InterruptionGate
 	Avatar            AvatarProvider
 	STT               stt.STT
 	VAD               vad.VAD
