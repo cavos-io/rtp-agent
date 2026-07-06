@@ -765,6 +765,53 @@ func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_lookup", "second", false)
 }
 
+func TestAnthropicChatSendsToolResultIsErrorFalseLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris", IsError: false},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	messages, ok := transport.body["messages"].([]any)
+	if !ok || len(messages) != 3 {
+		t.Fatalf("messages = %#v, want dummy user, assistant tool, user result", transport.body["messages"])
+	}
+	userResult, ok := messages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("messages[2] = %#v, want map", messages[2])
+	}
+	content, ok := userResult["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("tool result content = %#v, want one block", userResult["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool result block = %#v, want map", content[0])
+	}
+	value, ok := block["is_error"]
+	if !ok {
+		t.Fatalf("tool result block = %#v, want explicit is_error false", block)
+	}
+	if value != false {
+		t.Fatalf("is_error = %#v, want false", value)
+	}
+}
+
 func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -2350,7 +2397,8 @@ func assertAnthropicToolResultBlock(t *testing.T, blocks []anthropicContentBlock
 	if len(blocks) <= index {
 		t.Fatalf("len(blocks) = %d, want index %d", len(blocks), index)
 	}
-	if blocks[index].Type != "tool_result" || blocks[index].ToolUseID != wantID || blocks[index].Content != wantContent || blocks[index].IsError != wantError {
+	gotError := blocks[index].IsError != nil && *blocks[index].IsError
+	if blocks[index].Type != "tool_result" || blocks[index].ToolUseID != wantID || blocks[index].Content != wantContent || gotError != wantError {
 		t.Fatalf("tool result block[%d] = %#v", index, blocks[index])
 	}
 }

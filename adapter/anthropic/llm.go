@@ -101,7 +101,7 @@ type anthropicContentBlock struct {
 	Input        map[string]any `json:"input,omitempty"`
 	ToolUseID    string         `json:"tool_use_id,omitempty"`
 	Content      any            `json:"content,omitempty"`
-	IsError      bool           `json:"is_error,omitempty"`
+	IsError      *bool          `json:"is_error,omitempty"`
 	CacheControl map[string]any `json:"cache_control,omitempty"`
 }
 
@@ -621,11 +621,12 @@ func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) 
 }
 
 func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock {
+	isError := fco.IsError
 	return anthropicContentBlock{
 		Type:      "tool_result",
 		ToolUseID: fco.CallID,
 		Content:   anthropicToolResultContent(fco.Output),
-		IsError:   fco.IsError,
+		IsError:   &isError,
 	}
 }
 
