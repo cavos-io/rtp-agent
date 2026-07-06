@@ -951,9 +951,14 @@ func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, 
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	t.mu.Lock()
-	if t.closed || !t.useWebsocket || t.prewarmConn != nil || t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+	if t.closed {
 		t.mu.Unlock()
 		_ = closeRimePrewarmedConn(conn)
+		return
+	}
+	if !t.useWebsocket || t.prewarmConn != nil || t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+		t.stalePrewarmConns = append(t.stalePrewarmConns, conn)
+		t.mu.Unlock()
 		return
 	}
 	t.prewarmConn = conn

@@ -2773,6 +2773,82 @@ func TestRimeTTSActiveWebsocketInvalidatedByReferenceUpdateIsNotReused(t *testin
 	_ = provider.Close()
 }
 
+func TestRimeTTSInvalidatedActiveWebsocketCloseDoesNotBlockFinalEOFLikeReference(t *testing.T) {
+	releaseDone := make(chan struct{})
+	eosSeen := make(chan struct{})
+	releaseEOS := make(chan struct{})
+	var releaseEOSOnce sync.Once
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocketReleaseThenBlockOnEOS(t, server, releaseDone, eosSeen, releaseEOS)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		releaseEOSOnce.Do(func() { close(releaseEOS) })
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSVoice("lyra")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	close(releaseDone)
+
+	audio, err := stream.Next()
+	if err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next audio = (%+v, %v), want provider audio before final", audio, err)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("Next final = (%+v, %v), want reference final marker", final, err)
+	}
+
+	eof := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			eof <- fmt.Errorf("Next after final audio = %+v, want nil", audio)
+			return
+		}
+		eof <- err
+	}()
+	select {
+	case err := <-eof:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after final error = %v, want EOF", err)
+		}
+	case <-eosSeen:
+		t.Fatal("stale websocket close started before final EOF; want reference put/drop behavior")
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for final EOF")
+	}
+	releaseEOSOnce.Do(func() { close(releaseEOS) })
+	_ = provider.Close()
+}
+
 func TestRimeTTSInflightPrewarmInvalidatedByReferenceUpdateIsNotReused(t *testing.T) {
 	var dials atomic.Int32
 	dialStarted := make(chan struct{})
@@ -2943,6 +3019,66 @@ func rimeTestServeReusableWebsocketBlockOnEOS(t *testing.T, conn net.Conn, eosSe
 			t.Errorf("second stream message = %v, want flush", message)
 			return
 		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+			return
+		}
+	}
+}
+
+func rimeTestServeReusableWebsocketReleaseThenBlockOnEOS(t *testing.T, conn net.Conn, releaseDone <-chan struct{}, eosSeen chan<- struct{}, releaseEOS <-chan struct{}) {
+	t.Helper()
+	defer conn.Close()
+	if err := rimeTestWebsocketHandshake(conn); err != nil {
+		t.Errorf("websocket handshake: %v", err)
+		return
+	}
+	for {
+		payload, err := rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode text message: %v", err)
+			return
+		}
+		if message["operation"] == "eos" {
+			close(eosSeen)
+			<-releaseEOS
+			return
+		}
+		if _, ok := message["text"]; !ok {
+			t.Errorf("first stream message = %v, want text", message)
+			return
+		}
+		payload, err = rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			t.Errorf("read flush message: %v", err)
+			return
+		}
+		message = map[string]any{}
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode flush message: %v", err)
+			return
+		}
+		if message["operation"] != "flush" {
+			t.Errorf("second stream message = %v, want flush", message)
+			return
+		}
+		<-releaseDone
 		chunk, err := json.Marshal(map[string]any{
 			"type": "chunk",
 			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
