@@ -2676,6 +2676,40 @@ func TestUpliftAITTSChunkedStreamBuffersReferenceULawChunksBeforeFinal(t *testin
 	}
 }
 
+func TestUpliftAITTSChunkedStreamHonorsConfiguredChannelsForULaw(t *testing.T) {
+	provider := newUpliftAITestHTTPProvider(
+		"test-key",
+		"",
+		WithUpliftAIOutputFormat("ULAW_8000_8"),
+		WithUpliftAINumChannels(2),
+	)
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp: &http.Response{Body: &upliftAIChunkReader{chunks: [][]byte{
+			{0x00, 0xff},
+			{0x7f, 0x80},
+		}}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded stereo mu-law frame", audio)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(2); got != want {
+		t.Fatalf("channels = %d, want configured reference channel count %d", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(4); got != want {
+		t.Fatalf("samples per channel = %d, want decoded sample count %d", got, want)
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame data length = %d, want %d for stereo PCM16 frame", got, want)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
 	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
 	if err != nil {

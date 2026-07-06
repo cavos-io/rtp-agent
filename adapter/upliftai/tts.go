@@ -1579,9 +1579,10 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 		return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 	}
 	if s.pcm == nil {
+		numChannels := uint32(s.currentNumChannels())
 		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
 			8000,
-			1,
+			numChannels,
 			8000*200/1000,
 			coreaudio.AudioByteStreamOptions{Progressive: true},
 		)
@@ -1591,6 +1592,7 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 		n, err := s.resp.Body.Read(buf)
 		if n > 0 {
 			decoded := decodeUpliftAIMuLaw(buf[:n])
+			decoded = upliftAIExpandPCM16Channels(decoded, s.currentNumChannels())
 			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(decoded)...)
 			if len(s.pcmFrames) > 0 {
 				frame := s.pcmFrames[0]
@@ -1648,6 +1650,25 @@ func decodeUpliftAIMuLaw(data []byte) []byte {
 		pcm[i*2+1] = byte(value >> 8)
 	}
 	return pcm
+}
+
+func upliftAIExpandPCM16Channels(mono []byte, numChannels int) []byte {
+	if numChannels <= 1 || len(mono) == 0 {
+		return mono
+	}
+	if len(mono)%2 != 0 {
+		return mono
+	}
+	expanded := make([]byte, len(mono)*numChannels)
+	out := 0
+	for in := 0; in+1 < len(mono); in += 2 {
+		for ch := 0; ch < numChannels; ch++ {
+			expanded[out] = mono[in]
+			expanded[out+1] = mono[in+1]
+			out += 2
+		}
+	}
+	return expanded
 }
 
 func upliftAINormalizeChannels(frame *model.AudioFrame, numChannels int) *model.AudioFrame {
