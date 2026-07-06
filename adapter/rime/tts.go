@@ -55,6 +55,7 @@ type RimeTTS struct {
 	prewarmDone              chan struct{}
 	prewarmSeq               uint64
 	poolGeneration           uint64
+	stalePrewarmConns        []*websocket.Conn
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -917,20 +918,24 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 		return nil
 	}
 	t.mu.Lock()
+	staleConns := t.stalePrewarmConns
+	t.stalePrewarmConns = nil
 	conn := t.prewarmConn
 	expired := conn != nil && time.Since(t.prewarmRefreshedAt) > rimeWebsocketMaxAge
 	if conn != nil && (expired || t.prewarmURL != buildRimeTTSWebsocketURL(t).String()) {
 		t.prewarmConn = nil
 		t.prewarmURL = ""
 		t.prewarmRefreshedAt = time.Time{}
+		t.stalePrewarmConns = append(t.stalePrewarmConns, conn)
 		t.mu.Unlock()
-		_ = closeRimePrewarmedConn(conn)
+		closeRimePrewarmedConnsAsync(staleConns)
 		return nil
 	}
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
 	t.mu.Unlock()
+	closeRimePrewarmedConnsAsync(staleConns)
 	return conn
 }
 
@@ -1006,12 +1011,14 @@ func (t *RimeTTS) Close() error {
 	prewarmConn := t.prewarmConn
 	prewarmCancel := t.prewarmCancel
 	prewarmDone := t.prewarmDone
+	stalePrewarmConns := t.stalePrewarmConns
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
 	t.prewarmInFlight = false
 	t.prewarmCancel = nil
 	t.prewarmDone = nil
+	t.stalePrewarmConns = nil
 	t.prewarmSeq++
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
@@ -1037,7 +1044,23 @@ func (t *RimeTTS) Close() error {
 			closeErr = err
 		}
 	}
+	for _, conn := range stalePrewarmConns {
+		if err := closeRimePrewarmedConn(conn); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
 	return closeErr
+}
+
+func closeRimePrewarmedConnsAsync(conns []*websocket.Conn) {
+	if len(conns) == 0 {
+		return
+	}
+	go func() {
+		for _, conn := range conns {
+			_ = closeRimePrewarmedConn(conn)
+		}
+	}()
 }
 
 func closeRimePrewarmedConn(conn *websocket.Conn) error {
