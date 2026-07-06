@@ -1512,6 +1512,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingTranscript     []tts.TimedString
 	segmentDone           bool
 	inputEnded            bool
+	inputClosed           bool
 
 	writeMessage func(int, []byte) error
 	readMessage  func() (int, []byte, error)
@@ -1524,7 +1525,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		return nil
 	}
 	if s.closed {
@@ -1548,7 +1549,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 func (s *rimeTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		return nil
 	}
 	if s.closed {
@@ -1559,7 +1560,7 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 
 func (s *rimeTTSSynthesizeStream) EndInput() error {
 	s.mu.Lock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1726,6 +1727,7 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 		return nil
 	}
 	s.closed = true
+	s.inputClosed = true
 	s.cancel()
 	defer func() {
 		if s.provider != nil {

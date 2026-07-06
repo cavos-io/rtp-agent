@@ -3256,11 +3256,14 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Errorf("PushText after provider Close error = %v, want nil like reference closed input", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.Flush(); err != nil {
+		t.Errorf("Flush after provider Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Errorf("EndInput after provider Close error = %v, want nil like reference closed input", err)
 	}
 }
 
@@ -3483,6 +3486,26 @@ func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %v, want EOF", err)
+	}
+}
+
+func TestRimeTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	stream := &rimeTTSSynthesizeStream{
+		cancel:    func() {},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want nil like reference closed input", err)
 	}
 }
 
