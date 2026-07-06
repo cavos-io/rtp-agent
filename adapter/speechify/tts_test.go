@@ -125,6 +125,28 @@ func TestSpeechifyTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, speechifyTimeoutError{}
+	})}
+
+	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpeechifyTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "")
 
@@ -421,6 +443,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+type speechifyTimeoutError struct{}
+
+func (speechifyTimeoutError) Error() string   { return "speechify timeout" }
+func (speechifyTimeoutError) Timeout() bool   { return true }
+func (speechifyTimeoutError) Temporary() bool { return true }
 
 type speechifyCloseCountBody struct {
 	*strings.Reader

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -286,7 +287,7 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return speechifyTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -300,6 +301,17 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	}
 	s.resp = resp
 	return nil
+}
+
+func speechifyTTSTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(err.Error())
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {
