@@ -7,15 +7,19 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 type upliftAIFinalEOFReader struct {
@@ -634,6 +638,101 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if parsed.Scheme != "ws" || parsed.Host != "upliftai.example" || parsed.Path != "/base/socket.io/" {
+			return nil, fmt.Errorf("endpoint = %q, want socket.io endpoint under configured base path", endpoint)
+		}
+		if parsed.Query().Get("EIO") != "4" || parsed.Query().Get("transport") != "websocket" || parsed.Query().Get("keep") != "1" {
+			return nil, fmt.Errorf("endpoint query = %s, want EIO=4&transport=websocket plus existing query", parsed.RawQuery)
+		}
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example/base?keep=1"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+		WithUpliftAIPhraseReplacementConfigID("phrases-1"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello socket")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	connect := receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	if connect != `40/text-to-speech/multi-stream,{"token":"test-key"}` {
+		t.Fatalf("connect packet = %q, want reference namespace auth packet", connect)
+	}
+	synthesize := receiveUpliftAITestString(t, conn.writes, "synthesize packet")
+	if !strings.HasPrefix(synthesize, `42/text-to-speech/multi-stream,`) {
+		t.Fatalf("synthesize packet = %q, want reference namespace event packet", synthesize)
+	}
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	audioPayload := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"` + audioPayload + `"}]`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + requestID + `"}]`
+
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	audio, err := result.audio, result.err
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want socket.io audio frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}; !bytes.Equal(got, want) {
+		t.Fatalf("audio data = %#v, want socket.io audio %#v", got, want)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(synthesize, `42/text-to-speech/multi-stream,`)), &event); err != nil {
+		t.Fatalf("decode synthesize event: %v", err)
+	}
+	if len(event) != 2 || string(event[0]) != `"synthesize"` {
+		t.Fatalf("synthesize event = %s, want synthesize event name and payload", synthesize)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(event[1], &payload); err != nil {
+		t.Fatalf("decode synthesize payload: %v", err)
+	}
+	if payload["type"] != "synthesize" || payload["text"] != "hello socket" ||
+		payload["voiceId"] != "voice-1" || payload["outputFormat"] != "PCM_22050_16" ||
+		payload["phraseReplacementConfigId"] != "phrases-1" || payload["requestId"] == "" {
+		t.Fatalf("synthesize payload = %#v, want reference fields", payload)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -644,6 +743,98 @@ func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) 
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", name)
+}
+
+func receiveUpliftAITestString(t *testing.T, ch <-chan string, name string) string {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+		return ""
+	}
+}
+
+func receiveUpliftAITestSocketIOResult(t *testing.T, ch <-chan struct {
+	audio *tts.SynthesizedAudio
+	err   error
+}) struct {
+	audio *tts.SynthesizedAudio
+	err   error
+} {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for socket.io audio result")
+		return struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{}
+	}
+}
+
+func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
+	t.Helper()
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(packet, `42/text-to-speech/multi-stream,`)), &event); err != nil {
+		t.Fatalf("decode socket.io event: %v", err)
+	}
+	if len(event) != 2 {
+		t.Fatalf("socket.io event = %s, want event name and payload", packet)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(event[1], &payload); err != nil {
+		t.Fatalf("decode socket.io payload: %v", err)
+	}
+	if payload["requestId"] == "" {
+		t.Fatalf("socket.io payload = %#v, want requestId", payload)
+	}
+	return payload["requestId"]
+}
+
+type upliftAITestSocketIOConn struct {
+	reads  chan string
+	writes chan string
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
+	return &upliftAITestSocketIOConn{
+		reads:  make(chan string, 10),
+		writes: make(chan string, 10),
+		closed: make(chan struct{}),
+	}
+}
+
+func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
+	select {
+	case msg := <-c.reads:
+		return 1, []byte(msg), nil
+	case <-c.closed:
+		return 0, nil, io.ErrClosedPipe
+	case <-time.After(2 * time.Second):
+		return 0, nil, errors.New("timed out waiting for fake socket.io read")
+	}
+}
+
+func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
+	select {
+	case c.writes <- string(data):
+		return nil
+	case <-c.closed:
+		return io.ErrClosedPipe
+	case <-time.After(2 * time.Second):
+		return errors.New("timed out writing fake socket.io packet")
+	}
+}
+
+func (c *upliftAITestSocketIOConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
 }
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {

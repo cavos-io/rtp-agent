@@ -3,12 +3,14 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -26,6 +29,7 @@ const (
 	defaultUpliftAISampleRate = 22050
 	defaultUpliftAIFormat     = "MP3_22050_32"
 	defaultUpliftAIBaseURL    = "https://api.upliftai.org/v1/tts"
+	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 )
 
 type UpliftAITTS struct {
@@ -41,6 +45,20 @@ type UpliftAITTS struct {
 
 type UpliftAITTSOption func(*UpliftAITTS)
 type UpliftAITTSUpdateOption func(*upliftAITTSUpdateOptions)
+
+type upliftAISocketIOConn interface {
+	ReadMessage() (int, []byte, error)
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
+var upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
 
 type upliftAITTSUpdateOptions struct {
 	voiceID      *string
@@ -526,6 +544,22 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
 		return llm.NewAPIConnectionError(err.Error())
 	}
+	if upliftAIUsesSocketIO(baseURL) {
+		body, err := startUpliftAISocketIOSynthesis(
+			s.ctx,
+			baseURL,
+			s.owner.apiKey,
+			s.text,
+			voiceID,
+			outputFormat,
+			phraseReplacementConfigID,
+		)
+		if err != nil {
+			return err
+		}
+		s.resp = &http.Response{Body: body}
+		return nil
+	}
 	reqBody := map[string]interface{}{
 		"text":         s.text,
 		"voiceId":      voiceID,
@@ -552,6 +586,177 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	}
 	s.resp = resp
 	return nil
+}
+
+func upliftAIUsesSocketIO(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "ws" || u.Scheme == "wss"
+}
+
+func startUpliftAISocketIOSynthesis(ctx context.Context, baseURL string, apiKey string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
+	socketURL, err := buildUpliftAISocketIOURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := upliftAISocketIODialContext(ctx, socketURL)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
+	}
+	if err := upliftAISocketIOConnect(ctx, conn, apiKey); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	requestID := fmt.Sprintf("upliftai-%p", conn)
+	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	pr, pw := io.Pipe()
+	body := &upliftAISocketIOBody{PipeReader: pr, conn: conn}
+	go readUpliftAISocketIOAudio(conn, pw, requestID)
+	return body, nil
+}
+
+func buildUpliftAISocketIOURL(baseURL string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/socket.io/"
+	q := u.Query()
+	q.Set("EIO", "4")
+	q.Set("transport", "websocket")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, apiKey string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
+		}
+		packet := string(msg)
+		if packet == "2" {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(packet, "0") {
+			payload, _ := json.Marshal(map[string]string{"token": apiKey})
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("40"+upliftAISocketIONamespace+","+string(payload))); err != nil {
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
+			}
+			continue
+		}
+		if strings.HasPrefix(packet, "40"+upliftAISocketIONamespace) {
+			return nil
+		}
+	}
+}
+
+func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) error {
+	payload := map[string]string{
+		"type":         "synthesize",
+		"requestId":    requestID,
+		"text":         text,
+		"voiceId":      voiceID,
+		"outputFormat": outputFormat,
+	}
+	if phraseReplacementConfigID != "" {
+		payload["phraseReplacementConfigId"] = phraseReplacementConfigID
+	}
+	event, err := json.Marshal([]interface{}{"synthesize", payload})
+	if err != nil {
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("42"+upliftAISocketIONamespace+","+string(event))); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
+	}
+	return nil
+}
+
+func readUpliftAISocketIOAudio(conn upliftAISocketIOConn, pw *io.PipeWriter, requestID string) {
+	defer conn.Close()
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			_ = pw.CloseWithError(llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
+			return
+		}
+		packet := string(msg)
+		if packet == "2" {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			continue
+		}
+		payload, ok := strings.CutPrefix(packet, "42"+upliftAISocketIONamespace+",")
+		if !ok {
+			continue
+		}
+		done, err := handleUpliftAISocketIOEvent(payload, pw, requestID)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if done {
+			_ = pw.Close()
+			return
+		}
+	}
+}
+
+func handleUpliftAISocketIOEvent(payload string, pw *io.PipeWriter, requestID string) (bool, error) {
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return false, nil
+	}
+	if len(event) != 2 || string(event[0]) != `"message"` {
+		return false, nil
+	}
+	var message struct {
+		Type      string `json:"type"`
+		RequestID string `json:"requestId"`
+		Audio     string `json:"audio"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(event[1], &message); err != nil {
+		return false, nil
+	}
+	if message.RequestID != "" && message.RequestID != requestID {
+		return false, nil
+	}
+	switch message.Type {
+	case "audio":
+		audio, err := base64.StdEncoding.DecodeString(message.Audio)
+		if err != nil {
+			return false, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io audio decode failed: %v", err))
+		}
+		if len(audio) > 0 {
+			if _, err := pw.Write(audio); err != nil {
+				return false, err
+			}
+		}
+	case "audio_end", "error":
+		return true, nil
+	}
+	return false, nil
+}
+
+type upliftAISocketIOBody struct {
+	*io.PipeReader
+	conn upliftAISocketIOConn
+}
+
+func (b *upliftAISocketIOBody) Close() error {
+	_ = b.conn.Close()
+	return b.PipeReader.Close()
 }
 
 func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
