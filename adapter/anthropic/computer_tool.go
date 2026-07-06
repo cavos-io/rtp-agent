@@ -5,13 +5,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
-const postActionDelay = 300 * time.Millisecond
+const (
+	postActionDelay    = 300 * time.Millisecond
+	dragActionDelay    = 100 * time.Millisecond
+	typeCharacterDelay = 10 * time.Millisecond
+	waitActionDelay    = time.Second
+)
 
 type ComputerTool struct {
 	actions *browser.PageActions
@@ -89,6 +95,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, err
 		}
 		c.actions.LeftClickDrag(sx, sy, ex, ey)
+		if err := waitComputerToolDelay(ctx, dragActionDelay); err != nil {
+			return nil, err
+		}
 	case "left_mouse_down":
 		x, y, err := requireCoordinate(args, "coordinate")
 		if err != nil {
@@ -125,6 +134,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.TypeText(text)
+		if err := waitComputerToolDelay(ctx, time.Duration(len([]rune(text)))*typeCharacterDelay); err != nil {
+			return nil, err
+		}
 	case "key":
 		text, ok := args["text"].(string)
 		if !ok {
@@ -145,13 +157,21 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			duration = parsedDuration
 		}
 		c.actions.HoldKey(text, duration)
+		if err := waitComputerToolDelay(ctx, time.Duration(duration*float64(time.Second))); err != nil {
+			return nil, err
+		}
 	case "wait":
+		if err := waitComputerToolDelay(ctx, waitActionDelay); err != nil {
+			return nil, err
+		}
 		c.actions.Wait()
 	default:
 		return nil, fmt.Errorf("Unknown computer_use action: '%s'", action)
 	}
 
-	time.Sleep(postActionDelay)
+	if err := waitComputerToolDelay(ctx, postActionDelay); err != nil {
+		return nil, err
+	}
 
 	frame := c.actions.LastFrame()
 	if frame == nil {
@@ -163,23 +183,75 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	return screenshotContent(frame), nil
 }
 
+func waitComputerToolDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func requireCoordinate(args map[string]interface{}, key string) (int, int, error) {
 	val, ok := args[key]
 	if !ok {
-		return 0, 0, fmt.Errorf("missing required argument: %q", key)
+		return 0, 0, fmt.Errorf("Missing required argument: '%s'", key)
 	}
-	coords, ok := val.([]interface{})
+	coords, ok := coordinateValues(val)
 	if !ok || len(coords) < 2 {
 		return 0, 0, fmt.Errorf("invalid coordinate format")
 	}
 
-	x, okX := coords[0].(float64)
-	y, okY := coords[1].(float64)
+	x, okX := coordinateNumber(coords[0])
+	y, okY := coordinateNumber(coords[1])
 	if !okX || !okY {
 		return 0, 0, fmt.Errorf("coordinates must be numbers")
 	}
 
-	return int(x), int(y), nil
+	return x, y, nil
+}
+
+func coordinateValues(val interface{}) ([]interface{}, bool) {
+	switch v := val.(type) {
+	case []interface{}:
+		return v, true
+	case []float64:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	case []int:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	case []string:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	default:
+		return nil, false
+	}
+}
+
+func coordinateNumber(val interface{}) (int, bool) {
+	switch v := val.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(v)
+		return n, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func requireInt(val interface{}, key string) (int, error) {
@@ -196,6 +268,12 @@ func requireFloat(val interface{}, key string) (float64, error) {
 		return v, nil
 	case int:
 		return float64(v), nil
+	case string:
+		num, err := strconv.ParseFloat(v, 64)
+		if err == nil {
+			return num, nil
+		}
+		return 0, fmt.Errorf("%s must be a number", key)
 	default:
 		return 0, fmt.Errorf("%s must be a number", key)
 	}

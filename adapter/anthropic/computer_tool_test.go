@@ -3,8 +3,10 @@ package anthropic
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 )
@@ -93,7 +95,7 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 		args    map[string]interface{}
 		wantErr string
 	}{
-		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "missing required argument"},
+		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "Missing required argument"},
 		{name: "invalid coordinate", action: "left_click", args: map[string]interface{}{"coordinate": "10,20"}, wantErr: "invalid coordinate"},
 		{name: "non numeric coordinate", action: "left_click", args: map[string]interface{}{"coordinate": []interface{}{"x", float64(20)}}, wantErr: "coordinates must be numbers"},
 		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument"},
@@ -121,6 +123,8 @@ func TestComputerToolUsesReferenceErrorText(t *testing.T) {
 		args    map[string]interface{}
 		wantErr string
 	}{
+		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "Missing required argument: 'coordinate'"},
+		{name: "missing start coordinate", action: "left_click_drag", args: map[string]interface{}{"coordinate": []interface{}{float64(10), float64(20)}}, wantErr: "Missing required argument: 'start_coordinate'"},
 		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument: 'text'"},
 		{name: "unknown action", action: "unknown", args: map[string]interface{}{}, wantErr: "Unknown computer_use action: 'unknown'"},
 	}
@@ -132,6 +136,189 @@ func TestComputerToolUsesReferenceErrorText(t *testing.T) {
 				t.Fatalf("Execute error = %v, want %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestComputerToolAcceptsReferenceIntegerCoordinates(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "left_click", map[string]interface{}{
+		"coordinate": []interface{}{10, 20},
+	})
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil for integer coordinates", err)
+	}
+
+	events := actions.Events()
+	if len(events) == 0 || events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("events = %#v, want first event at 10,20", events)
+	}
+}
+
+func TestComputerToolAcceptsReferenceNumericStrings(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{"10", "20"},
+		"scroll_amount":    "4",
+		"scroll_direction": "up",
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for numeric strings", err)
+	}
+	_, err = toolset.Execute(context.Background(), "hold_key", map[string]interface{}{
+		"text":     "Shift",
+		"duration": "1.25",
+	})
+	if err != nil {
+		t.Fatalf("hold_key Execute error = %v, want nil for numeric duration string", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 3 {
+		t.Fatalf("events = %#v, want scroll move/wheel and hold_key", events)
+	}
+	if events[0].Type != "mouse_move" || events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("scroll move event = %#v, want mouse_move at 10,20", events[0])
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaY != 480 {
+		t.Fatalf("scroll wheel event = %#v, want up amount 4", events[1])
+	}
+	if events[2].Type != "hold_key" || events[2].Duration != 1.25 {
+		t.Fatalf("hold_key event = %#v, want duration 1.25", events[2])
+	}
+}
+
+func TestComputerToolUnknownScrollDirectionMatchesReferenceNoopWheel(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{float64(10), float64(20)},
+		"scroll_amount":    float64(4),
+		"scroll_direction": "diagonal",
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for unknown scroll direction", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want mouse move and wheel", events)
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaX != 0 || events[1].DeltaY != 0 {
+		t.Fatalf("wheel event = %#v, want zero delta for unknown scroll direction", events[1])
+	}
+}
+
+func TestComputerToolAcceptsReferenceTypedCoordinateSlices(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "mouse_move", map[string]interface{}{
+		"coordinate": []float64{10, 20},
+	})
+	if err != nil {
+		t.Fatalf("float coordinate Execute error = %v, want nil", err)
+	}
+	_, err = toolset.Execute(context.Background(), "mouse_move", map[string]interface{}{
+		"coordinate": []string{"30", "40"},
+	})
+	if err != nil {
+		t.Fatalf("string coordinate Execute error = %v, want nil", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want two mouse moves", events)
+	}
+	if events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("event[0] = %#v, want 10,20", events[0])
+	}
+	if events[1].X != 30 || events[1].Y != 40 {
+		t.Fatalf("event[1] = %#v, want 30,40", events[1])
+	}
+}
+
+func TestComputerToolPostActionDelayHonorsContextCancel(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	_, err := toolset.Execute(ctx, "screenshot", map[string]interface{}{})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed >= postActionDelay {
+		t.Fatalf("Execute elapsed = %v, want return before post-action delay %v", elapsed, postActionDelay)
+	}
+}
+
+func TestComputerToolWaitActionUsesReferenceDelay(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "wait", map[string]interface{}{})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference wait before screenshot", elapsed)
+	}
+}
+
+func TestComputerToolHoldKeyUsesReferenceDuration(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "hold_key", map[string]interface{}{
+		"text":     "Shift",
+		"duration": float64(0.75),
+	})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 700*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference hold duration before screenshot", elapsed)
+	}
+}
+
+func TestComputerToolTypeTextUsesReferenceCharacterDelay(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "type", map[string]interface{}{
+		"text": "abcdefghijklmnopqrst",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 450*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference per-character type delay before screenshot", elapsed)
+	}
+}
+
+func TestComputerToolDragUsesReferenceSettlingDelay(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "left_click_drag", map[string]interface{}{
+		"start_coordinate": []interface{}{float64(1), float64(2)},
+		"coordinate":       []interface{}{float64(10), float64(20)},
+	})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference drag settling delay before screenshot", elapsed)
 	}
 }
 
