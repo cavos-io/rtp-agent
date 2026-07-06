@@ -348,12 +348,16 @@ type anthropicStream struct {
 	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
-	toolCallID  string
-	toolName    string
-	toolArgs    string
-	requestID   string
-	hasTools    bool
-	ignoringCoT bool
+	toolCallID          string
+	toolName            string
+	toolArgs            string
+	requestID           string
+	inputTokens         int
+	outputTokens        int
+	cacheCreationTokens int
+	cacheReadTokens     int
+	hasTools            bool
+	ignoringCoT         bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -657,14 +661,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		switch event.Type {
 		case "message_start":
 			s.requestID = event.Message.ID
-			return &llm.ChatChunk{
-				ID: event.Message.ID,
-				Usage: &llm.CompletionUsage{
-					PromptTokens:        event.Message.Usage.InputTokens,
-					CacheCreationTokens: event.Message.Usage.CacheCreationInputTokens,
-					CacheReadTokens:     event.Message.Usage.CacheReadInputTokens,
-				},
-			}, nil
+			s.inputTokens = event.Message.Usage.InputTokens
+			s.outputTokens = event.Message.Usage.OutputTokens
+			s.cacheCreationTokens = event.Message.Usage.CacheCreationInputTokens
+			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
 
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
@@ -713,14 +713,21 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}
 
 		case "message_delta":
-			return &llm.ChatChunk{
-				Usage: &llm.CompletionUsage{
-					CompletionTokens: event.Usage.OutputTokens,
-				},
-			}, nil
+			s.outputTokens += event.Usage.OutputTokens
 
 		case "message_stop":
-			return nil, io.EOF
+			promptTokens := s.inputTokens + s.cacheCreationTokens + s.cacheReadTokens
+			return &llm.ChatChunk{
+				ID: s.requestID,
+				Usage: &llm.CompletionUsage{
+					PromptTokens:        promptTokens,
+					CompletionTokens:    s.outputTokens,
+					TotalTokens:         promptTokens + s.outputTokens,
+					PromptCachedTokens:  s.cacheReadTokens,
+					CacheCreationTokens: s.cacheCreationTokens,
+					CacheReadTokens:     s.cacheReadTokens,
+				},
+			}, nil
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))

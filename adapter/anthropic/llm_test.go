@@ -440,7 +440,11 @@ func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 
 func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	stream := &anthropicStream{
-		reader: bufio.NewReader(strings.NewReader(`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}` + "\n\n")),
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
 	}
 
 	chunk, err := stream.Next()
@@ -453,8 +457,49 @@ func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	if chunk.Usage == nil {
 		t.Fatal("Usage = nil, want usage metadata")
 	}
-	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
+	if chunk.Usage.PromptTokens != 19 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
 		t.Fatalf("Usage = %#v, want prompt and cache token counts", chunk.Usage)
+	}
+}
+
+func TestAnthropicStreamEmitsFinalUsageAfterText(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":7}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	text, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if text.ID != "msg_1" || text.Delta == nil || text.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want text delta with request ID", text)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.ID != "msg_1" {
+		t.Fatalf("usage ID = %q, want msg_1", usage.ID)
+	}
+	if usage.Usage == nil {
+		t.Fatal("Usage = nil, want final usage metadata")
+	}
+	if usage.Usage.PromptTokens != 19 || usage.Usage.CompletionTokens != 7 || usage.Usage.TotalTokens != 26 {
+		t.Fatalf("Usage = %#v, want accumulated prompt/completion/total tokens", usage.Usage)
+	}
+	if usage.Usage.CacheCreationTokens != 3 || usage.Usage.CacheReadTokens != 5 || usage.Usage.PromptCachedTokens != 5 {
+		t.Fatalf("cache Usage = %#v, want accumulated cache token counts", usage.Usage)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final Next() error = %v, want EOF", err)
 	}
 }
 
@@ -509,9 +554,6 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("message_start Next() error = %v", err)
-	}
 	chunk, err := stream.Next()
 	if err != nil {
 		t.Fatalf("visible text Next() error = %v", err)
@@ -533,9 +575,6 @@ func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
 		}, "\n"))),
 	}
 
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("message_start Next() error = %v", err)
-	}
 	chunk, err := stream.Next()
 	if err != nil {
 		t.Fatalf("text delta Next() error = %v", err)
