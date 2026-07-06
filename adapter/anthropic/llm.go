@@ -416,6 +416,7 @@ type anthropicStream struct {
 	cacheReadTokens     int
 	ignoringCoT         bool
 	emittedChunk        bool
+	emittedFinalUsage   bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -689,7 +690,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		line, err := s.reader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF || s.closed {
+			if err == io.EOF {
+				if chunk := s.finalUsageChunk(); chunk != nil && !s.closed {
+					return markAnthropicStreamChunk(s, chunk), nil
+				}
+				return nil, io.EOF
+			}
+			if s.closed {
 				return nil, io.EOF
 			}
 			return nil, s.wrapReadError(err)
@@ -798,23 +805,33 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			s.outputTokens += event.Usage.OutputTokens
 
 		case "message_stop":
-			promptTokens := s.inputTokens + s.cacheCreationTokens + s.cacheReadTokens
-			return markAnthropicStreamChunk(s, &llm.ChatChunk{
-				ID: s.requestID,
-				Usage: &llm.CompletionUsage{
-					PromptTokens:        promptTokens,
-					CompletionTokens:    s.outputTokens,
-					TotalTokens:         promptTokens + s.outputTokens,
-					PromptCachedTokens:  s.cacheReadTokens,
-					CacheCreationTokens: s.cacheCreationTokens,
-					CacheReadTokens:     s.cacheReadTokens,
-				},
-			}), nil
+			if chunk := s.finalUsageChunk(); chunk != nil {
+				return markAnthropicStreamChunk(s, chunk), nil
+			}
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
 			return nil, llm.NewAPIError(message, body, true)
 		}
+	}
+}
+
+func (s *anthropicStream) finalUsageChunk() *llm.ChatChunk {
+	if s.emittedFinalUsage || s.requestID == "" {
+		return nil
+	}
+	s.emittedFinalUsage = true
+	promptTokens := s.inputTokens + s.cacheCreationTokens + s.cacheReadTokens
+	return &llm.ChatChunk{
+		ID: s.requestID,
+		Usage: &llm.CompletionUsage{
+			PromptTokens:        promptTokens,
+			CompletionTokens:    s.outputTokens,
+			TotalTokens:         promptTokens + s.outputTokens,
+			PromptCachedTokens:  s.cacheReadTokens,
+			CacheCreationTokens: s.cacheCreationTokens,
+			CacheReadTokens:     s.cacheReadTokens,
+		},
 	}
 }
 

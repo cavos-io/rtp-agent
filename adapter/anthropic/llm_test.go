@@ -611,6 +611,39 @@ func TestAnthropicStreamEmitsFinalUsageAfterText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamEmitsFinalUsageOnEOFWithoutMessageStop(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":7}}`,
+			``,
+		}, "\n"))),
+	}
+
+	text, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if text.Delta == nil || text.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want text delta", text)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.ID != "msg_1" {
+		t.Fatalf("usage ID = %q, want msg_1", usage.ID)
+	}
+	if usage.Usage == nil {
+		t.Fatal("Usage = nil, want final usage metadata")
+	}
+	if usage.Usage.PromptTokens != 19 || usage.Usage.CompletionTokens != 7 || usage.Usage.TotalTokens != 26 {
+		t.Fatalf("Usage = %#v, want accumulated prompt/completion/total tokens", usage.Usage)
+	}
+}
+
 func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(`data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}` + "\n\n")),
