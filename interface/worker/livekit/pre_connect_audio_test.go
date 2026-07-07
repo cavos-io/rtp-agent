@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	livekitproto "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -96,6 +97,51 @@ func TestPreConnectAudioMissingTrackIDIgnored(t *testing.T) {
 	handler.mu.Unlock()
 	if bufferCount != 0 {
 		t.Fatalf("buffers len after missing trackId = %d, want 0", bufferCount)
+	}
+}
+
+func TestPreConnectAudioMissingFormatFailsKnownTrack(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		attrs map[string]string
+	}{
+		{
+			name:  "missing sample rate",
+			attrs: map[string]string{"trackId": "track-missing-sample-rate", "channels": "1"},
+		},
+		{
+			name:  "missing channels",
+			attrs: map[string]string{"trackId": "track-missing-channels", "sampleRate": "24000"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			room := lksdk.NewRoom(nil)
+			handler := NewPreConnectAudioHandler(room, time.Second)
+			handler.Register()
+
+			room.OnStreamHeader(&livekitproto.DataStream_Header{
+				StreamId:   "stream-" + tt.attrs["trackId"],
+				Topic:      PreConnectAudioBufferStream,
+				Attributes: tt.attrs,
+				ContentHeader: &livekitproto.DataStream_Header_ByteHeader{
+					ByteHeader: &livekitproto.DataStream_ByteHeader{},
+				},
+			}, "caller-a")
+
+			done := make(chan []*model.AudioFrame, 1)
+			go func() {
+				done <- handler.WaitForData(context.Background(), tt.attrs["trackId"])
+			}()
+
+			select {
+			case frames := <-done:
+				if frames != nil {
+					t.Fatalf("WaitForData() missing format frames = %#v, want nil", frames)
+				}
+			case <-time.After(50 * time.Millisecond):
+				t.Fatal("WaitForData() blocked after missing format failure")
+			}
+		})
 	}
 }
 
