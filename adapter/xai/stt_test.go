@@ -773,6 +773,49 @@ func TestXaiSTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
 	}
 }
 
+func TestXaiSTTPushFrameEmitsReferencePeriodicRecognitionUsage(t *testing.T) {
+	oldInterval := xaiSTTUsageReportInterval
+	xaiSTTUsageReportInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		xaiSTTUsageReportInterval = oldInterval
+	})
+
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		events: make(chan *stt.SpeechEvent, 1),
+		state:  &xaiSTTStreamState{requestID: "xai-request-periodic"},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if got := chunkLengths(writes); len(got) != 1 || got[0] != 1600 {
+		t.Fatalf("writes after PushFrame = %v, want one 50ms chunk", got)
+	}
+
+	select {
+	case event := <-stream.events:
+		if event.Type != stt.SpeechEventRecognitionUsage || event.RequestID != "xai-request-periodic" {
+			t.Fatalf("event = %+v, want recognition usage with stream request id", event)
+		}
+		if event.RecognitionUsage == nil || event.RecognitionUsage.AudioDuration != 0.05 {
+			t.Fatalf("recognition usage = %+v, want 0.05s audio duration", event.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for periodic recognition_usage")
+	}
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",

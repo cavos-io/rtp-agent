@@ -33,8 +33,9 @@ const (
 	defaultXaiSTTEndpointing  = 100
 	xaiAPIKeyEnv              = "XAI_API_KEY"
 	xaiSTTPCMBytesPerSample   = 2
-	xaiSTTUsageReportInterval = 5 * time.Second
 )
+
+var xaiSTTUsageReportInterval = 5 * time.Second
 
 type XaiSTT struct {
 	mu                   sync.Mutex
@@ -427,6 +428,7 @@ type xaiSTTStream struct {
 	pendingAudio       [][]byte
 	usageAudioDuration float64
 	usageLastFlush     time.Time
+	usageTimer         *time.Timer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -436,6 +438,7 @@ type xaiSTTStream struct {
 func (s *xaiSTTStream) readLoop() {
 	defer func() {
 		s.mu.Lock()
+		s.stopUsageTimerLocked()
 		s.eventsClosed = true
 		s.mu.Unlock()
 		close(s.events)
@@ -582,6 +585,7 @@ func (s *xaiSTTStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
+	s.stopUsageTimerLocked()
 	s.pendingAudio = nil
 	if s.cancel != nil {
 		s.cancel()
@@ -643,6 +647,7 @@ func (s *xaiSTTStream) Close() error {
 		}
 	}
 	s.closed = true
+	s.stopUsageTimerLocked()
 	conn := s.conn
 	s.mu.Unlock()
 
@@ -760,14 +765,18 @@ func (s *xaiSTTStream) recordUsageAudioLocked(byteCount int) {
 	now := time.Now()
 	if s.usageLastFlush.IsZero() {
 		s.usageLastFlush = now
+		s.scheduleUsageTimerLocked(xaiSTTUsageReportInterval)
 		return
 	}
 	if now.Sub(s.usageLastFlush) >= xaiSTTUsageReportInterval {
 		s.emitRecognitionUsageAtLocked(now)
+		return
 	}
+	s.scheduleUsageTimerLocked(xaiSTTUsageReportInterval - now.Sub(s.usageLastFlush))
 }
 
 func (s *xaiSTTStream) emitRecognitionUsageLocked() {
+	s.stopUsageTimerLocked()
 	s.emitRecognitionUsageAtLocked(time.Now())
 }
 
@@ -785,6 +794,31 @@ func (s *xaiSTTStream) emitRecognitionUsageAtLocked(flushTime time.Time) {
 			AudioDuration: duration,
 		},
 	}
+}
+
+func (s *xaiSTTStream) scheduleUsageTimerLocked(delay time.Duration) {
+	if s.usageTimer != nil || s.usageAudioDuration <= 0 || s.events == nil || s.eventsClosed || xaiSTTUsageReportInterval <= 0 {
+		return
+	}
+	if delay <= 0 {
+		delay = xaiSTTUsageReportInterval
+	}
+	s.usageTimer = time.AfterFunc(delay, s.emitRecognitionUsageFromTimer)
+}
+
+func (s *xaiSTTStream) emitRecognitionUsageFromTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageTimer = nil
+	s.emitRecognitionUsageAtLocked(time.Now())
+}
+
+func (s *xaiSTTStream) stopUsageTimerLocked() {
+	if s.usageTimer == nil {
+		return
+	}
+	s.usageTimer.Stop()
+	s.usageTimer = nil
 }
 
 func xaiSTTAudioDuration(byteCount int, sampleRate int) float64 {
