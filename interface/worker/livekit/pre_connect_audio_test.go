@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestPreConnectAudioPublishFulfillsExistingWaiter(t *testing.T) {
@@ -81,6 +82,20 @@ func TestPreConnectAudioFailedBufferFulfillsExistingWaiter(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("WaitForData() did not return after pre-connect audio failure")
+	}
+}
+
+func TestPreConnectAudioMissingTrackIDIgnored(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+	reader := lksdk.NewByteStreamReader(lksdk.ByteStreamInfo{}, nil)
+
+	handler.readAudioTask(reader, "caller-a")
+
+	handler.mu.Lock()
+	bufferCount := len(handler.buffers)
+	handler.mu.Unlock()
+	if bufferCount != 0 {
+		t.Fatalf("buffers len after missing trackId = %d, want 0", bufferCount)
 	}
 }
 

@@ -90,7 +90,7 @@ func (h *PreConnectAudioHandler) handler(reader *lksdk.ByteStreamReader, partici
 }
 
 func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, participantIdentity string) {
-	attrs := reader.Info.Attributes
+	attrs := preConnectByteStreamAttributes(reader)
 	if attrs == nil {
 		logger.Logger.Warnw("pre-connect audio received but no attributes", nil, "participant", participantIdentity)
 		return
@@ -171,6 +171,18 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	}
 
 	h.publishBuffer(trackID, buf)
+}
+
+func preConnectByteStreamAttributes(reader *lksdk.ByteStreamReader) (attrs map[string]string) {
+	if reader == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			attrs = nil
+		}
+	}()
+	return reader.Info.Attributes
 }
 
 func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
