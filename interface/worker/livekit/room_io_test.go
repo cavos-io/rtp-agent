@@ -3076,6 +3076,69 @@ func TestRoomIOClearTranscriptionTargetResetsUserTranscriptionSegment(t *testing
 	}
 }
 
+func TestRoomIOHandleTrackUnpublishedClearsActiveUserTranscriptionTarget(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "interim utterance",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	interim := receivePublishedText(t, published, "interim utterance")
+	interimID := interim.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if interimID == "" {
+		t.Fatal("interim segment id must not be empty")
+	}
+
+	rio.handleTrackUnpublished("TR_user_audio", "caller-a")
+
+	rio.mu.Lock()
+	if rio.userTranscriptionTrackID != "" || rio.userTranscriptionParticipantID != "" || rio.userTranscriptionSegmentID != "" {
+		t.Fatalf("user transcription target after active unpublish = (%q, %q, %q), want cleared", rio.userTranscriptionTrackID, rio.userTranscriptionParticipantID, rio.userTranscriptionSegmentID)
+	}
+	rio.userTranscriptionTrackID = "TR_user_audio_new"
+	rio.userTranscriptionParticipantID = "caller-a"
+	rio.mu.Unlock()
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next utterance",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	next := receivePublishedText(t, published, "next utterance after track unpublished")
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" {
+		t.Fatal("next segment id must not be empty")
+	}
+	if nextID == interimID {
+		t.Fatalf("segment id must reset after active track unpublished: both = %q", nextID)
+	}
+}
+
+func TestRoomIOHandleTrackUnpublishedIgnoresInactiveUserTranscriptionTarget(t *testing.T) {
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		userTranscriptionSegmentID:     "segment-a",
+	}
+
+	rio.handleTrackUnpublished("TR_other_audio", "caller-a")
+	rio.handleTrackUnpublished("TR_user_audio", "caller-b")
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.userTranscriptionTrackID != "TR_user_audio" || rio.userTranscriptionParticipantID != "caller-a" || rio.userTranscriptionSegmentID != "segment-a" {
+		t.Fatalf("user transcription target after inactive unpublish = (%q, %q, %q), want unchanged", rio.userTranscriptionTrackID, rio.userTranscriptionParticipantID, rio.userTranscriptionSegmentID)
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)
@@ -4231,6 +4294,165 @@ func TestRoomIOOnReceivesParticipantDisconnectedEvent(t *testing.T) {
 		}
 	default:
 		t.Fatal("subscriber did not receive participant_disconnected event")
+	}
+}
+
+func TestRoomIOOnReceivesConnectionStateChangedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 2)
+	unsubscribe := rio.On(RoomEventConnectionStateChanged, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	cb := rio.GetCallback()
+	cb.OnReconnecting()
+	cb.OnReconnected()
+
+	for _, want := range []string{"reconnecting", "connected"} {
+		select {
+		case ev := <-events:
+			got, ok := ev.(*RoomConnectionStateChangedEvent)
+			if !ok {
+				t.Fatalf("event = %T, want *RoomConnectionStateChangedEvent", ev)
+			}
+			if got.State != want {
+				t.Fatalf("connection state = %q, want %q", got.State, want)
+			}
+		default:
+			t.Fatalf("subscriber did not receive %q connection state event", want)
+		}
+	}
+}
+
+func TestRoomIOOnReceivesTrackSubscribedEvent(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{DisableAudioInput: true}}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackSubscribed, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	track := &webrtc.TrackRemote{}
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.onTrackSubscribed(track, publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackSubscribedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackSubscribedEvent", ev)
+		}
+		if got.Track != track || got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_subscribed event did not preserve track, publication, and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_subscribed event")
+	}
+}
+
+func TestRoomIOOnReceivesTrackPublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackPublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.GetCallback().OnTrackPublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackPublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackPublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_published event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_published event")
+	}
+}
+
+func TestRoomIOOnReceivesTrackUnpublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackUnpublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.GetCallback().OnTrackUnpublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackUnpublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackUnpublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_unpublished event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_unpublished event")
+	}
+}
+
+func TestRoomIOOnReceivesLocalTrackPublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventLocalTrackPublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.LocalTrackPublication{}
+	participant := &lksdk.LocalParticipant{}
+	rio.GetCallback().OnLocalTrackPublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomLocalTrackPublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomLocalTrackPublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("local_track_published event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive local_track_published event")
+	}
+}
+
+func TestRoomIOOnReceivesParticipantAttributesChangedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantAttributesChanged, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	changed := map[string]string{"tier": "gold"}
+	rio.GetCallback().OnAttributesChanged(changed, nil)
+	changed["tier"] = "mutated"
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantAttributesChangedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantAttributesChangedEvent", ev)
+		}
+		if got.Changed["tier"] != "gold" {
+			t.Fatalf("changed attributes = %#v, want cloned original value", got.Changed)
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_attributes_changed event")
 	}
 }
 

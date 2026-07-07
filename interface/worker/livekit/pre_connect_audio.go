@@ -95,17 +95,20 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	channelsStr := attrs["channels"]
 	if sampleRateStr == "" || channelsStr == "" {
 		logger.Logger.Warnw("sampleRate or channels not found in pre-connect byte stream", nil)
+		h.failBuffer(trackID)
 		return
 	}
 
 	sampleRate, err := strconv.Atoi(sampleRateStr)
 	if err != nil {
 		logger.Logger.Warnw("invalid sampleRate in pre-connect byte stream", err)
+		h.failBuffer(trackID)
 		return
 	}
 	channels, err := strconv.Atoi(channelsStr)
 	if err != nil {
 		logger.Logger.Warnw("invalid channels in pre-connect byte stream", err)
+		h.failBuffer(trackID)
 		return
 	}
 
@@ -150,6 +153,7 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
 		if err != nil {
 			logger.Logger.Warnw("error reading pre-connect pcm stream", err)
+			h.failBuffer(trackID)
 			return
 		}
 		buf.Frames = append(buf.Frames, frames...)
@@ -201,6 +205,10 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 
 	ch <- buf
 	close(ch)
+}
+
+func (h *PreConnectAudioHandler) failBuffer(trackID string) {
+	h.publishBuffer(trackID, nil)
 }
 
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
