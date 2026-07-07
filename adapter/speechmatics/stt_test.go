@@ -1935,6 +1935,35 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	provider.mu.Lock()
+	provider.closed = true
+	provider.mu.Unlock()
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize after provider Close error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("finalize writes after provider Close = %#v, want none", writes)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testing.T) {
 	tests := []struct {
 		name string

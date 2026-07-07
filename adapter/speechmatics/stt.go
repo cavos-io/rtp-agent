@@ -400,6 +400,15 @@ func (s *SpeechmaticsSTT) Close() error {
 }
 
 func (s *SpeechmaticsSTT) Finalize() error {
+	if s == nil {
+		return io.ErrClosedPipe
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	streams := s.activeStreams()
 	var finalizeErr error
 	for _, stream := range streams {
