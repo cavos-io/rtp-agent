@@ -249,6 +249,9 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	if s.apiKey == "" {
 		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
 	}
+	if err := validateSpeechmaticsSTTOptions(s); err != nil {
+		return nil, err
+	}
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
@@ -390,6 +393,32 @@ func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
 		return s.language
 	}
 	return "en"
+}
+
+func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
+	if s == nil {
+		return io.ErrClosedPipe
+	}
+	var problems []string
+	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
+		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
+	}
+	if s.eouMaxDelay != nil && s.eouSilenceTrigger != nil && *s.eouMaxDelay <= *s.eouSilenceTrigger {
+		problems = append(problems, "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger")
+	}
+	if s.maxSpeakers != nil && (*s.maxSpeakers <= 1 || *s.maxSpeakers > 100) {
+		problems = append(problems, "max_speakers must be between 2 and 100")
+	}
+	if s.maxDelay != nil && (*s.maxDelay < 0.7 || *s.maxDelay > 4.0) {
+		problems = append(problems, "max_delay must be between 0.7 and 4.0")
+	}
+	if s.speakerSensitivity != nil && (*s.speakerSensitivity <= 0 || *s.speakerSensitivity >= 1.0) {
+		problems = append(problems, "speaker_sensitivity must be between 0.0 and 1.0")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid Speechmatics STT options: %s", strings.Join(problems, ", "))
+	}
+	return nil
 }
 
 func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {

@@ -575,6 +575,45 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SpeechmaticsSTTOption
+		want string
+	}{
+		{
+			name: "silence trigger too high",
+			opts: []SpeechmaticsSTTOption{WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(2.0)},
+			want: "end_of_utterance_silence_trigger must be between 0 and 2",
+		},
+		{
+			name: "max delay below minimum",
+			opts: []SpeechmaticsSTTOption{WithSpeechmaticsSTTMaxDelay(0.6)},
+			want: "max_delay must be between 0.7 and 4.0",
+		},
+		{
+			name: "eou max delay not greater than silence trigger",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.8),
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.8),
+			},
+			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://127.0.0.1:1")}, tt.opts...)
+			provider := NewSpeechmaticsSTT("test-key", opts...)
+
+			_, err := provider.Stream(context.Background(), "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream error = %v, want %q before provider dial", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	closed := false
