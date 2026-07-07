@@ -48,6 +48,7 @@ type SpeechmaticsSTT struct {
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
 	closed               bool
+	closeDone            chan struct{}
 }
 
 const (
@@ -234,6 +235,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 		focusMode:         "retain",
 		operatingPoint:    "enhanced",
 		maxDelay:          &maxDelay,
+		closeDone:         make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -278,8 +280,33 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSpeechmaticsSTTStreamURL(s), header)
+	dialCtx := ctx
+	var cancelDial context.CancelFunc
+	var stopCloseWatch chan struct{}
+	if done := s.closeDoneChannel(); done != nil {
+		dialCtx, cancelDial = context.WithCancel(ctx)
+		stopCloseWatch = make(chan struct{})
+		go func() {
+			select {
+			case <-done:
+				cancelDial()
+			case <-dialCtx.Done():
+			case <-stopCloseWatch:
+			}
+		}()
+	}
+	if cancelDial != nil {
+		defer cancelDial()
+	}
+	if stopCloseWatch != nil {
+		defer close(stopCloseWatch)
+	}
+
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
 	if err != nil {
+		if s.isClosed() {
+			return nil, io.ErrClosedPipe
+		}
 		return nil, err
 	}
 	if s.isClosed() {
@@ -335,6 +362,10 @@ func (s *SpeechmaticsSTT) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.closeDone != nil {
+		close(s.closeDone)
+		s.closeDone = nil
+	}
 	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -452,6 +483,15 @@ func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, con
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (s *SpeechmaticsSTT) closeDoneChannel() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeDone
 }
 
 func (s *SpeechmaticsSTT) isClosed() bool {

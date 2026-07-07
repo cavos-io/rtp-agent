@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1813,6 +1814,63 @@ func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 	if dials != 0 {
 		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
+func TestSpeechmaticsSTTProviderCloseCancelsReferenceStreamDial(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"))
+	oldDialer := websocket.DefaultDialer
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			close(entered)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return nil, errors.New("released without provider close cancellation")
+			}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		websocket.DefaultDialer = oldDialer
+	})
+
+	type streamResult struct {
+		stream stt.RecognizeStream
+		err    error
+	}
+	done := make(chan streamResult, 1)
+	go func() {
+		stream, err := provider.Stream(context.Background(), "")
+		done <- streamResult{stream: stream, err: err}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stream did not start Speechmatics dial")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case result := <-done:
+		if result.stream != nil {
+			t.Fatalf("Stream after provider Close = %#v, want nil", result.stream)
+		}
+		if !errors.Is(result.err, io.ErrClosedPipe) {
+			t.Fatalf("Stream after provider Close error = %v, want io.ErrClosedPipe", result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("provider Close did not cancel Speechmatics stream dial")
 	}
 }
 
