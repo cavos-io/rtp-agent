@@ -293,6 +293,89 @@ func TestRoomCallbackWithHandlersPreservesParticipantCallback(t *testing.T) {
 	}
 }
 
+func TestRoomCallbackWithHandlersPreservesParticipantDisconnectedCallback(t *testing.T) {
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnParticipantDisconnected: func(got *lksdk.RemoteParticipant) {
+			if got != participant {
+				t.Fatalf("OnParticipantDisconnected participant = %#v, want original", got)
+			}
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnParticipantDisconnected: func(got workerlivekit.RemoteParticipantView) {
+			if got != participant {
+				t.Fatalf("handler participant = %#v, want original", got)
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnParticipantDisconnected(participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnParticipantDisconnected callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("participant disconnected handler was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesDisconnectedCallback(t *testing.T) {
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnDisconnected: func() {
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnDisconnected: func() {
+			handlerCalled = true
+		},
+	})
+
+	cb.OnDisconnected()
+
+	if !existingCalled {
+		t.Fatal("existing OnDisconnected callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("disconnected handler was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesDisconnectedReasonCallback(t *testing.T) {
+	const reason = lksdk.LeaveRequested
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnDisconnectedWithReason: func(got lksdk.DisconnectionReason) {
+			if got != reason {
+				t.Fatalf("OnDisconnectedWithReason reason = %v, want %v", got, reason)
+			}
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnDisconnectedWithReason: func(got lksdk.DisconnectionReason) {
+			if got != reason {
+				t.Fatalf("handler reason = %v, want %v", got, reason)
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnDisconnectedWithReason(reason)
+
+	if !existingCalled {
+		t.Fatal("existing OnDisconnectedWithReason callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("disconnected reason handler was not called")
+	}
+}
+
 func TestRoomCallbackWithHandlersPreservesTrackCallback(t *testing.T) {
 	publication := &lksdk.RemoteTrackPublication{}
 	participant := &lksdk.RemoteParticipant{}
