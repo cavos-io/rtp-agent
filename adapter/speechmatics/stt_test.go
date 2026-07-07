@@ -32,6 +32,8 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 			Alternatives []struct {
 				Content    string  `json:"content"`
 				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			StartTime float64 `json:"start_time"`
@@ -44,6 +46,8 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "hello", Confidence: 0.92}},
 			},
 			{
@@ -53,6 +57,8 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: ",", Confidence: 1.0}},
 			},
 			{
@@ -62,12 +68,14 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
 	}
 
-	event := speechmaticsTranscriptEvent(resp)
+	event := speechmaticsTranscriptEvent(resp, nil)
 	if event == nil {
 		t.Fatal("speechmaticsTranscriptEvent returned nil")
 	}
@@ -89,101 +97,210 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
-func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
-	eventType := stt.SpeechEventInterimTranscript
-	if resp.Message == "AddTranscript" {
-		eventType = stt.SpeechEventFinalTranscript
-	}
-
-	transcript := ""
-	var totalConfidence float64
-	var minStart, maxEnd float64
-	hasTiming := false
-	var words []stt.TimedString
-
-	for _, result := range resp.Results {
-		if len(result.Alternatives) == 0 {
-			continue
-		}
-		alt := result.Alternatives[0]
-		switch result.Type {
-		case "word":
-			transcript += alt.Content + " "
-			words = append(words, stt.TimedString{
-				Text:       alt.Content,
-				StartTime:  result.StartTime,
-				EndTime:    result.EndTime,
-				Confidence: alt.Confidence,
-			})
-		case "punctuation":
-			if transcript != "" {
-				transcript = transcript[:len(transcript)-1] + alt.Content + " "
-			} else {
-				transcript = alt.Content + " "
-			}
-		}
-
-		totalConfidence += alt.Confidence
-		if !hasTiming {
-			minStart = result.StartTime
-			hasTiming = true
-		}
-		maxEnd = result.EndTime
-	}
-
-	if hasTiming {
-		if transcript != "" {
-			transcript = transcript[:len(transcript)-1]
-		}
-		return &stt.SpeechEvent{
-			Type: eventType,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:       transcript,
-					Confidence: totalConfidence / float64(len(resp.Results)),
-					StartTime:  minStart,
-					EndTime:    maxEnd,
-					Words:      words,
-				},
-			},
-		}
-	}
-
-	if resp.Metadata.Transcript == "" {
-		return nil
-	}
-	return &stt.SpeechEvent{
-		Type: eventType,
-		Alternatives: []stt.SpeechData{
+func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
+	resp := smResponse{
+		Message: "AddTranscript",
+		Results: []struct {
+			Alternatives []struct {
+				Content    string  `json:"content"`
+				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
+			} `json:"alternatives"`
+			Type      string  `json:"type"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		}{
 			{
-				Text:       resp.Metadata.Transcript,
-				Confidence: 1.0,
-				StartTime:  resp.Metadata.StartTime,
-				EndTime:    resp.Metadata.EndTime,
+				Type:      "word",
+				StartTime: 0.1,
+				EndTime:   0.3,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
+				}{{Content: "hello", Confidence: 0.92}},
+			},
+			{
+				Type:      "punctuation",
+				StartTime: 0.3,
+				EndTime:   0.3,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
+				}{{Content: ",", Confidence: 1.0}},
+			},
+			{
+				Type:      "word",
+				StartTime: 0.4,
+				EndTime:   0.8,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
+				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
 	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript fallback", events)
+	}
+	event := events[0]
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final_transcript", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "hello, world" {
+		t.Fatalf("text = %q, want punctuation-formatted transcript", got)
+	}
+	words := event.Alternatives[0].Words
+	if len(words) != 2 {
+		t.Fatalf("words = %#v, want two timed words", words)
+	}
+	if words[0].Text != "hello" || words[0].StartTime != 0.1 || words[0].EndTime != 0.3 || words[0].Confidence != 0.92 {
+		t.Fatalf("first word = %#v, want preserved word timing", words[0])
+	}
+	if words[1].Text != "world" || words[1].StartTime != 0.4 || words[1].EndTime != 0.8 || words[1].Confidence != 0.88 {
+		t.Fatalf("second word = %#v, want preserved word timing", words[1])
+	}
 }
 
-func TestSpeechmaticsEventsIgnoreReferenceRawTranscriptMessages(t *testing.T) {
-	tests := []string{"AddPartialTranscript", "AddTranscript"}
-	for _, message := range tests {
-		resp := smResponse{
-			Message: message,
-			Metadata: struct {
-				Transcript string  `json:"transcript"`
-				StartTime  float64 `json:"start_time"`
-				EndTime    float64 `json:"end_time"`
-			}{
-				Transcript: "duplicate raw transcript",
-				StartTime:  0.1,
-				EndTime:    0.4,
-			},
-		}
+func TestSpeechmaticsEventsMapReferenceRawPartialTranscriptWithOffset(t *testing.T) {
+	resp := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "partial words",
+			StartTime:  0.2,
+			EndTime:    0.5,
+		},
+	}
+	state := &speechmaticsStreamState{startTimeOffset: 1.25}
 
-		if events := speechmaticsEvents(resp, nil); len(events) != 0 {
-			t.Fatalf("%s events = %#v, want none like reference Voice SDK handler set", message, events)
-		}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw partial transcript fallback", events)
+	}
+	event := events[0]
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event.Type = %s, want interim_transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %#v, want one transcript alternative", event.Alternatives)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "partial words" {
+		t.Fatalf("text = %q, want metadata transcript", alt.Text)
+	}
+	if alt.StartTime != 1.45 || alt.EndTime != 1.75 {
+		t.Fatalf("timing = %v-%v, want start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 0 {
+		t.Fatalf("words = %#v, want none for metadata-only raw transcript", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptAppliesReferenceSpeakerFiltering(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"agent","confidence":0.9,"speaker":"agent"}]
+		},{
+			"type":"word",
+			"start_time":0.3,
+			"end_time":0.5,
+			"alternatives":[{"content":"noise","confidence":0.7,"speaker":"noise"}]
+		},{
+			"type":"word",
+			"start_time":0.5,
+			"end_time":0.7,
+			"alternatives":[{"content":"assistant","confidence":0.6,"speaker":"__ASSISTANT__"}]
+		},{
+			"type":"punctuation",
+			"start_time":0.7,
+			"end_time":0.7,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"agent"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{
+		focusSpeakers:  []string{"agent"},
+		ignoreSpeakers: []string{"noise"},
+		focusMode:      "ignore",
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one filtered raw transcript fallback", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "agent." {
+		t.Fatalf("text = %q, want only reference-active speaker text", alt.Text)
+	}
+	if alt.SpeakerID != "agent" {
+		t.Fatalf("speaker id = %q, want first emitted speaker", alt.SpeakerID)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "agent" || alt.Words[0].SpeakerID != "agent" {
+		t.Fatalf("words = %#v, want only agent word with speaker id", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptAppliesReferenceLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hola","confidence":0.9,"speaker":"agent","language":"es"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "en"})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want raw alternative language", got)
+	}
+	if got := events[0].Alternatives[0].Words[0].StartTimeOffset; got != 0 {
+		t.Fatalf("word start_time_offset = %v, want default zero offset", got)
+	}
+
+	metadataOnly := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "fallback language",
+			StartTime:  0.1,
+			EndTime:    0.2,
+		},
+	}
+	events = speechmaticsEvents(metadataOnly, &speechmaticsStreamState{language: "fr"})
+	if len(events) != 1 {
+		t.Fatalf("metadata-only events = %#v, want one raw transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "fr" {
+		t.Fatalf("metadata-only language = %q, want stream language fallback", got)
 	}
 }
 
@@ -1275,6 +1392,9 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 		waitForRecognitionStarted: true,
 		vadStream:                 vadStream,
 		writeBinary: func(data []byte) error {
+			if vadStream.ended {
+				t.Fatal("provider audio wrote after VAD EndInput, want provider audio before VAD end input")
+			}
 			writes = append(writes, append([]byte(nil), data...))
 			return nil
 		},
@@ -1310,6 +1430,60 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	}
 	if len(writes) != 1 {
 		t.Fatalf("provider writes after RecognitionStarted = %d, want buffered provider audio", len(writes))
+	}
+}
+
+func TestSpeechmaticsCloseUnblocksReferenceVADStartupDrain(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	vadStream.pushStarted = make(chan struct{})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		vadStream:                 vadStream,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	readyDone := make(chan struct{})
+	go func() {
+		stream.handleResponse(smResponse{Message: "RecognitionStarted"})
+		close(readyDone)
+	}()
+	select {
+	case <-vadStream.pushStarted:
+	case <-time.After(time.Second):
+		t.Fatal("VAD startup drain did not begin")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- stream.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		vadStream.events <- &vad.VADEvent{}
+		<-readyDone
+		err := <-closeDone
+		t.Fatalf("Close() blocked behind pending VAD startup drain, later error = %v", err)
+	}
+	select {
+	case <-readyDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecognitionStarted handler stayed blocked after Close")
 	}
 }
 
@@ -2049,6 +2223,41 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+	}
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("handleResponse returned false, want stream to continue after fixed EndOfUtterance")
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.4 {
+		t.Fatalf("usage event = %#v, want reference recognition usage after fixed EndOfUtterance", usage)
+	}
+	if stateDuration := stream.state.speechDuration; stateDuration != 0 {
+		t.Fatalf("speech duration after EndOfUtterance = %v, want reset after usage emit", stateDuration)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	var writes []map[string]interface{}
@@ -2155,6 +2364,38 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	}
 	if stream.state.focusMode != "ignore" {
 		t.Fatalf("stream focus mode = %q, want ignore", stream.state.focusMode)
+	}
+}
+
+func TestSpeechmaticsSTTUpdateSpeakersPreservesReferenceNotGivenFields(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{closeConn: func() error { return nil }}
+	provider.registerStream(stream)
+
+	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
+		t.Fatalf("initial UpdateSpeakers error = %v", err)
+	}
+	if err := provider.UpdateSpeakers([]string{"customer"}, nil, ""); err != nil {
+		t.Fatalf("partial UpdateSpeakers error = %v", err)
+	}
+
+	if got := strings.Join(provider.focusSpeakers, ","); got != "customer" {
+		t.Fatalf("provider focus speakers = %q, want customer", got)
+	}
+	if got := strings.Join(provider.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("provider ignore speakers = %q, want preserved noise", got)
+	}
+	if provider.focusMode != "ignore" {
+		t.Fatalf("provider focus mode = %q, want preserved ignore", provider.focusMode)
+	}
+	if got := strings.Join(stream.state.focusSpeakers, ","); got != "customer" {
+		t.Fatalf("stream focus speakers = %q, want customer", got)
+	}
+	if got := strings.Join(stream.state.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("stream ignore speakers = %q, want preserved noise", got)
+	}
+	if stream.state.focusMode != "ignore" {
+		t.Fatalf("stream focus mode = %q, want preserved ignore", stream.state.focusMode)
 	}
 }
 
