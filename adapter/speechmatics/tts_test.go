@@ -266,7 +266,7 @@ func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) 
 		requests++
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
 			Request:    r,
 		}, nil
 	})}
@@ -330,6 +330,37 @@ func TestSpeechmaticsTTSSynthesizeEmptyTextStillFlushesReferenceFinal(t *testing
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeNonEmptyTextErrorsWithoutAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %+v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next() error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next() error = %v, want no-audio text", err)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -344,7 +375,7 @@ func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
 			Request:    r,
 		}, nil
 	})}

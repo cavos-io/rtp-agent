@@ -243,6 +243,7 @@ type speechmaticsTTSChunkedStream struct {
 	requested     bool
 	pending       []byte
 	pendingErr    error
+	emittedAudio  bool
 	finalReady    bool
 	finalSent     bool
 	closed        bool
@@ -309,6 +310,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			} else if err != nil {
 				s.pendingErr = err
 			}
+			s.emittedAudio = true
 			return &tts.SynthesizedAudio{
 				RequestID: s.requestID,
 				Frame: &model.AudioFrame{
@@ -398,6 +400,10 @@ func speechmaticsTTSTimeoutError(err error) bool {
 func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
+	}
+	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
+		s.finish()
+		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 	}
 	s.finalSent = true
 	s.finish()
