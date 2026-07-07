@@ -3570,6 +3570,22 @@ func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T
 	}
 }
 
+func TestUpliftAITTSChunkedStreamNetReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: upliftAIReadErrorBody{err: upliftAITestTimeoutError{}}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError for response-body socket timeout", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
 	stream := &upliftAITTSChunkedStream{
 		resp: &http.Response{Body: upliftAIReadErrorBody{err: context.Canceled}},
