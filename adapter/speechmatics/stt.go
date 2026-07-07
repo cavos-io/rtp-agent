@@ -1338,15 +1338,15 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 					return err
 				}
 			}
-			if pendingVADEndInput {
-				if err := vadStream.EndInput(); err != nil {
-					_ = s.Close()
-					return err
-				}
-			}
 		}
 		for _, chunk := range pendingAudio {
 			if err := s.writeBinaryData(chunk); err != nil {
+				_ = s.Close()
+				return err
+			}
+		}
+		if vadStream != nil && pendingVADEndInput {
+			if err := vadStream.EndInput(); err != nil {
 				_ = s.Close()
 				return err
 			}

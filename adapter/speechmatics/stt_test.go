@@ -1275,6 +1275,9 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 		waitForRecognitionStarted: true,
 		vadStream:                 vadStream,
 		writeBinary: func(data []byte) error {
+			if vadStream.ended {
+				t.Fatal("provider audio wrote after VAD EndInput, want provider audio before VAD end input")
+			}
 			writes = append(writes, append([]byte(nil), data...))
 			return nil
 		},
