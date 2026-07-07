@@ -76,6 +76,10 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 		report.RealtimeModel = llm.RealtimeModelName(session.RealtimeModel)
 		report.RealtimeProvider = llm.RealtimeProvider(session.RealtimeModel)
 	}
+	if session.startedAt != nil {
+		startedAt := *session.startedAt
+		report.StartedAt = &startedAt
+	}
 	session.mu.Unlock()
 
 	events := session.RecordedEvents()
