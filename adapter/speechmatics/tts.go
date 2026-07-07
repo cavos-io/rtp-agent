@@ -248,6 +248,7 @@ type speechmaticsTTSChunkedStream struct {
 	sampleRate    int
 	requestID     string
 	requested     bool
+	retryAttempt  int
 	pcm           *audio.AudioByteStream
 	pendingFrames []*model.AudioFrame
 	pendingErr    error
@@ -388,13 +389,12 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		return nil
 	}
 	s.requested = true
-	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
-	for attempt := 0; ; attempt++ {
+	for {
 		err := s.openStream()
 		if err == nil || err == io.EOF || errors.Is(err, context.Canceled) {
 			return err
 		}
-		if s.emittedAudio || attempt >= maxRetry || !speechmaticsTTSRetryableError(err) {
+		if !s.retryBeforeAudio(err) {
 			return err
 		}
 	}
@@ -461,6 +461,35 @@ func speechmaticsTTSRetryableError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Retryable
 }
 
+func (s *speechmaticsTTSChunkedStream) retryBeforeAudio(err error) bool {
+	if s.emittedAudio || !speechmaticsTTSRetryableError(err) {
+		return false
+	}
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	if maxRetry <= 0 || s.retryAttempt >= maxRetry {
+		return false
+	}
+	s.retryAttempt++
+	s.resetRetryableAttempt()
+	return true
+}
+
+func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
+	s.cancelRequest()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.requested = false
+	s.pcm = nil
+	s.pendingFrames = nil
+	s.pendingErr = nil
+	s.finalReady = false
+	s.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
+}
+
 func speechmaticsTTSStatusReason(resp *http.Response) string {
 	if resp == nil {
 		return ""
@@ -487,8 +516,16 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		return nil, io.EOF
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
+		err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		if s.retryBeforeAudio(err) {
+			if openErr := s.ensureStream(); openErr != nil {
+				s.finish()
+				return nil, openErr
+			}
+			return s.Next()
+		}
 		s.finish()
-		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		return nil, err
 	}
 	s.finalSent = true
 	s.finish()

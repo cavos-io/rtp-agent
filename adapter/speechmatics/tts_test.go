@@ -539,6 +539,42 @@ func TestSpeechmaticsTTSSynthesizeRetriesReferenceTransientErrorBeforeAudio(t *t
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeRetriesReferenceNoAudioBeforeAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		body := []byte(nil)
+		if requests == 2 {
+			body = []byte{0x03, 0x04}
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry after no-audio response", err)
+	}
+	if audio == nil || audio.Frame == nil || string(audio.Frame.Data) != string([]byte{0x03, 0x04}) {
+		t.Fatalf("Next() audio = %+v, want PCM from retried request", audio)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want one retry after no audio", requests)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAcceptsReferenceNoContentStatus(t *testing.T) {
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
