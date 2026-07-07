@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15130,6 +15131,57 @@ func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
 	}
 	if pipeline.PublishAudio == nil {
 		t.Fatal("session assistant PublishAudio was not connected to RoomIO")
+	}
+}
+
+func TestFinishedJobDrainsRoomIOGoroutines(t *testing.T) {
+	runOneJob := func() {
+		baseAgent := agent.NewAgent("test")
+		baseAgent.VAD = &fakeAppVAD{}
+		baseAgent.STT = &fakeAppSTT{}
+		baseAgent.LLM = &fakeAppLLM{}
+		baseAgent.TTS = &fakeAppTTS{}
+		session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{
+			SessionCloseTranscriptTimeout:    0.01,
+			SessionCloseTranscriptTimeoutSet: true,
+		})
+		app := &App{
+			Session:     session,
+			Server:      worker.NewAgentServer(worker.WorkerOptions{}),
+			RoomOptions: workerlivekit.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+		}
+		jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_leak", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+		jobCtx.Room = lksdk.NewRoom(nil)
+
+		if err := app.runSession(jobCtx); err != nil {
+			t.Fatalf("runSession() error = %v", err)
+		}
+		jobCtx.Shutdown("")
+	}
+
+	settle := func() {
+		time.Sleep(200 * time.Millisecond)
+		runtime.GC()
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	runOneJob()
+	settle()
+	base := runtime.NumGoroutine()
+
+	const iterations = 8
+	for i := 0; i < iterations; i++ {
+		runOneJob()
+	}
+	settle()
+
+	leaked := runtime.NumGoroutine() - base
+	t.Logf("baseline=%d leaked after %d finished jobs=%d (%.2f per job)",
+		base, iterations, leaked, float64(leaked)/float64(iterations))
+	if leaked >= iterations {
+		t.Fatalf("finishing %d jobs leaked %d goroutines (%.2f per job); "+
+			"jobCtx.Shutdown() must close RoomIO and stop the session so its "+
+			"listener goroutines drain", iterations, leaked, float64(leaked)/float64(iterations))
 	}
 }
 
