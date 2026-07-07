@@ -352,6 +352,7 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 
 func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	upgrader := websocket.Upgrader{}
+	clientClosed := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -366,6 +367,9 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 		if err := conn.WriteJSON(map[string]interface{}{"message": "EndOfTranscript"}); err != nil {
 			t.Errorf("write EndOfTranscript: %v", err)
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_, _, err = conn.ReadMessage()
+		clientClosed <- err
 	}))
 	defer server.Close()
 
@@ -384,6 +388,18 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after EndOfTranscript = %v, want io.ErrClosedPipe", err)
+	}
+	select {
+	case err := <-clientClosed:
+		if err == nil {
+			t.Fatal("server read after EndOfTranscript succeeded, want client transport close")
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			t.Fatalf("server read after EndOfTranscript timed out, want client transport close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not observe client transport close after EndOfTranscript")
 	}
 }
 

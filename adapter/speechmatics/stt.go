@@ -572,6 +572,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 		}
 
 		if resp.Message == "EndOfTranscript" {
+			_ = s.closeTransport()
 			return
 		}
 		for _, event := range speechmaticsEvents(resp, s.state) {
@@ -941,6 +942,16 @@ func (s *speechmaticsSTTStream) closeWebsocketConn() error {
 		return writeErr
 	}
 	return closeErr
+}
+
+func (s *speechmaticsSTTStream) closeTransport() error {
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
