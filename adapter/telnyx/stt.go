@@ -259,9 +259,8 @@ func collectTelnyxFinalTranscript(stream stt.RecognizeStream, resolvedLanguage s
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{{
-			Language:   resolvedLanguage,
-			Text:       finalText.String(),
-			Confidence: stt.DefaultTranscriptConfidence(finalText.String()),
+			Language: resolvedLanguage,
+			Text:     finalText.String(),
 		}},
 	}, nil
 }

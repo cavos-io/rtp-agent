@@ -746,6 +746,9 @@ func TestTelnyxSTTFinalTranscriptCollectsAllReferenceFinals(t *testing.T) {
 	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello world" {
 		t.Fatalf("alternatives = %+v, want concatenated final text", event.Alternatives)
 	}
+	if event.Alternatives[0].Confidence != 0 {
+		t.Fatalf("confidence = %v, want omitted reference zero value", event.Alternatives[0].Confidence)
+	}
 }
 
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
