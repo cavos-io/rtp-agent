@@ -10,6 +10,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 func TestUltravoxRealtimeConstructorMatchesReference(t *testing.T) {
@@ -528,6 +529,27 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("PushAudio did not queue resampled/downmixed chunk")
+	}
+}
+
+func TestUltravoxRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0, 255},
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+	}); err != nil {
+		t.Fatalf("PushVideo error = %v, want reference warning-only no-op", err)
 	}
 }
 

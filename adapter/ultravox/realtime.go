@@ -639,7 +639,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 func (s *realtimeSession) PushVideo(*images.VideoFrame) error {
-	return ultravoxRealtimeSessionUnsupported("push_video")
+	return nil
 }
 func (s *realtimeSession) CommitAudio() error {
 	return nil
