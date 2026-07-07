@@ -253,7 +253,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *speechmaticsTTSChunkedStream) ensureStream() error {
-	if s.stream != nil || s.requested || s.text == "" {
+	if s.stream != nil || s.requested {
 		return nil
 	}
 	s.requested = true

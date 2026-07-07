@@ -249,6 +249,45 @@ func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeEmptyTextStillFlushesReferenceFinal(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		var payload map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if payload["text"] != "" {
+			t.Fatalf("text = %q, want empty text payload", payload["text"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next() = %+v, want final marker", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want provider request for empty text", requests)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
