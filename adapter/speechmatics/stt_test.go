@@ -32,6 +32,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 			Alternatives []struct {
 				Content    string  `json:"content"`
 				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			StartTime float64 `json:"start_time"`
@@ -44,6 +45,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: "hello", Confidence: 0.92}},
 			},
 			{
@@ -53,6 +55,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: ",", Confidence: 1.0}},
 			},
 			{
@@ -62,6 +65,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
@@ -96,6 +100,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 			Alternatives []struct {
 				Content    string  `json:"content"`
 				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			StartTime float64 `json:"start_time"`
@@ -108,6 +113,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: "hello", Confidence: 0.92}},
 			},
 			{
@@ -117,6 +123,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: ",", Confidence: 1.0}},
 			},
 			{
@@ -126,6 +133,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				Alternatives: []struct {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
 				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
@@ -189,6 +197,56 @@ func TestSpeechmaticsEventsMapReferenceRawPartialTranscriptWithOffset(t *testing
 	}
 	if len(alt.Words) != 0 {
 		t.Fatalf("words = %#v, want none for metadata-only raw transcript", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptAppliesReferenceSpeakerFiltering(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"agent","confidence":0.9,"speaker":"agent"}]
+		},{
+			"type":"word",
+			"start_time":0.3,
+			"end_time":0.5,
+			"alternatives":[{"content":"noise","confidence":0.7,"speaker":"noise"}]
+		},{
+			"type":"word",
+			"start_time":0.5,
+			"end_time":0.7,
+			"alternatives":[{"content":"assistant","confidence":0.6,"speaker":"__ASSISTANT__"}]
+		},{
+			"type":"punctuation",
+			"start_time":0.7,
+			"end_time":0.7,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"agent"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{
+		focusSpeakers:  []string{"agent"},
+		ignoreSpeakers: []string{"noise"},
+		focusMode:      "ignore",
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one filtered raw transcript fallback", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "agent." {
+		t.Fatalf("text = %q, want only reference-active speaker text", alt.Text)
+	}
+	if alt.SpeakerID != "agent" {
+		t.Fatalf("speaker id = %q, want first emitted speaker", alt.SpeakerID)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "agent" || alt.Words[0].SpeakerID != "agent" {
+		t.Fatalf("words = %#v, want only agent word with speaker id", alt.Words)
 	}
 }
 

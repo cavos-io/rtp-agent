@@ -859,6 +859,7 @@ type smResponse struct {
 		Alternatives []struct {
 			Content    string  `json:"content"`
 			Confidence float64 `json:"confidence"`
+			SpeakerID  string  `json:"speaker"`
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
 		StartTime float64 `json:"start_time"`
@@ -1016,6 +1017,8 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 	var totalConfidence float64
 	var minStart, maxEnd float64
 	hasTiming := false
+	var confidenceCount float64
+	speakerID := ""
 	var words []stt.TimedString
 
 	for _, result := range resp.Results {
@@ -1023,16 +1026,24 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 			continue
 		}
 		alt := result.Alternatives[0]
+		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
+		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
+			continue
+		}
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
 		switch result.Type {
 		case "word":
 			transcript += alt.Content + " "
+			if speakerID == "" {
+				speakerID = resultSpeakerID
+			}
 			words = append(words, stt.TimedString{
 				Text:       alt.Content,
 				StartTime:  startTime,
 				EndTime:    endTime,
 				Confidence: alt.Confidence,
+				SpeakerID:  resultSpeakerID,
 			})
 		case "punctuation":
 			if transcript != "" {
@@ -1043,6 +1054,7 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 		}
 
 		totalConfidence += alt.Confidence
+		confidenceCount++
 		if !hasTiming {
 			minStart = startTime
 			hasTiming = true
@@ -1059,7 +1071,8 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 			Alternatives: []stt.SpeechData{
 				{
 					Text:       transcript,
-					Confidence: totalConfidence / float64(len(resp.Results)),
+					Confidence: totalConfidence / confidenceCount,
+					SpeakerID:  speakerID,
 					StartTime:  minStart,
 					EndTime:    maxEnd,
 					Words:      words,
