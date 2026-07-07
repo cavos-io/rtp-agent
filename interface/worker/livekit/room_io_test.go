@@ -5010,6 +5010,30 @@ func TestRoomIOOnReceivesConnectionStateChangedEvent(t *testing.T) {
 	}
 }
 
+func TestRoomIOOnReceivesRoomMovedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventRoomMoved, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	rio.GetCallback().OnRoomMoved("moved-room", "refreshed-token")
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomMovedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomMovedEvent", ev)
+		}
+		if got.RoomName != "moved-room" || got.Token != "refreshed-token" {
+			t.Fatalf("room moved event = (%q, %q), want moved-room refreshed-token", got.RoomName, got.Token)
+		}
+	default:
+		t.Fatal("subscriber did not receive room_moved event")
+	}
+}
+
 func TestRoomIOOnReceivesTrackSubscribedEvent(t *testing.T) {
 	rio := &RoomIO{Options: RoomOptions{DisableAudioInput: true}}
 	events := make(chan RoomEvent, 1)

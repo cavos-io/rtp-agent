@@ -445,6 +445,35 @@ func TestRoomCallbackWithHandlersPreservesReconnectingCallback(t *testing.T) {
 	}
 }
 
+func TestRoomCallbackWithHandlersPreservesRoomMovedCallback(t *testing.T) {
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnRoomMoved: func(roomName string, token string) {
+			if roomName != "moved-room" || token != "refreshed-token" {
+				t.Fatal("existing callback received wrong room moved payload")
+			}
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnRoomMoved: func(roomName string, token string) {
+			if roomName != "moved-room" || token != "refreshed-token" {
+				t.Fatal("handler callback received wrong room moved payload")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnRoomMoved("moved-room", "refreshed-token")
+
+	if !existingCalled {
+		t.Fatal("existing OnRoomMoved callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnRoomMoved callback was not called")
+	}
+}
+
 func TestRoomCallbackWithHandlersPreservesLocalTrackPublishedCallback(t *testing.T) {
 	publication := &lksdk.LocalTrackPublication{}
 	participant := &lksdk.LocalParticipant{}
