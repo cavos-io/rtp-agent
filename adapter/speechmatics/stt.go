@@ -985,10 +985,7 @@ func (s *speechmaticsSTTStream) isClosed() bool {
 func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	switch resp.Message {
 	case "AddPartialTranscript", "AddTranscript":
-		if event := speechmaticsTranscriptEvent(resp, state); event != nil {
-			return []*stt.SpeechEvent{event}
-		}
-		return nil
+		return speechmaticsTranscriptEvents(resp, state)
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
@@ -1007,21 +1004,36 @@ func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEv
 	return events
 }
 
+type speechmaticsRawTranscriptFragment struct {
+	text       string
+	kind       string
+	speakerID  string
+	language   string
+	startTime  float64
+	endTime    float64
+	confidence float64
+}
+
+func speechmaticsTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	return speechmaticsTranscriptGroupedEvents(resp, state)
+}
+
 func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState) *stt.SpeechEvent {
+	events := speechmaticsTranscriptGroupedEvents(resp, state)
+	if len(events) == 0 {
+		return nil
+	}
+	return events[0]
+}
+
+func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	eventType := stt.SpeechEventInterimTranscript
 	if resp.Message == "AddTranscript" {
 		eventType = stt.SpeechEventFinalTranscript
 	}
 
 	startTimeOffset := speechmaticsStartTimeOffset(state)
-	transcript := ""
-	var totalConfidence float64
-	var minStart, maxEnd float64
-	hasTiming := false
-	var confidenceCount float64
-	speakerID := ""
-	language := speechmaticsSegmentLanguage("", state)
-	var words []stt.TimedString
+	var fragments []speechmaticsRawTranscriptFragment
 
 	for _, result := range resp.Results {
 		if len(result.Alternatives) == 0 {
@@ -1032,76 +1044,99 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
-		if alt.Language != "" {
-			language = alt.Language
-		}
+		language := speechmaticsSegmentLanguage(alt.Language, state)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
-		switch result.Type {
-		case "word":
-			transcript += alt.Content + " "
-			if speakerID == "" {
-				speakerID = resultSpeakerID
-			}
-			words = append(words, stt.TimedString{
-				Text:       alt.Content,
-				StartTime:  startTime,
-				EndTime:    endTime,
-				Confidence: alt.Confidence,
-				SpeakerID:  resultSpeakerID,
-			})
-		case "punctuation":
-			if transcript != "" {
-				transcript = transcript[:len(transcript)-1] + alt.Content + " "
-			} else {
-				transcript = alt.Content + " "
-			}
-		}
-
-		totalConfidence += alt.Confidence
-		confidenceCount++
-		if !hasTiming {
-			minStart = startTime
-			hasTiming = true
-		}
-		maxEnd = endTime
+		fragments = append(fragments, speechmaticsRawTranscriptFragment{
+			text:       alt.Content,
+			kind:       result.Type,
+			speakerID:  resultSpeakerID,
+			language:   language,
+			startTime:  startTime,
+			endTime:    endTime,
+			confidence: alt.Confidence,
+		})
 	}
 
-	if hasTiming {
-		if transcript != "" {
-			transcript = transcript[:len(transcript)-1]
-		}
-		return &stt.SpeechEvent{
-			Type: eventType,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:       transcript,
-					Language:   language,
-					Confidence: totalConfidence / confidenceCount,
-					SpeakerID:  speakerID,
-					StartTime:  minStart,
-					EndTime:    maxEnd,
-					Words:      words,
-				},
-			},
-		}
+	if len(fragments) > 0 {
+		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
 	}
-
 	if len(resp.Results) > 0 {
 		return nil
 	}
 	if resp.Metadata.Transcript == "" {
 		return nil
 	}
+	return []*stt.SpeechEvent{
+		{
+			Type: eventType,
+			Alternatives: []stt.SpeechData{
+				{
+					Text:       resp.Metadata.Transcript,
+					Language:   speechmaticsSegmentLanguage("", state),
+					Confidence: 1.0,
+					StartTime:  resp.Metadata.StartTime + startTimeOffset,
+					EndTime:    resp.Metadata.EndTime + startTimeOffset,
+				},
+			},
+		},
+	}
+}
+
+func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	var events []*stt.SpeechEvent
+	groupStart := 0
+	for i := 1; i <= len(fragments); i++ {
+		if i < len(fragments) && fragments[i].speakerID == fragments[groupStart].speakerID {
+			continue
+		}
+		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {
+			events = append(events, event)
+		}
+		groupStart = i
+	}
+	return events
+}
+
+func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) *stt.SpeechEvent {
+	if len(fragments) == 0 {
+		return nil
+	}
+	text := ""
+	var words []stt.TimedString
+	var totalConfidence float64
+	for i, fragment := range fragments {
+		if i == 0 {
+			text = fragment.text
+		} else if fragment.kind == "punctuation" {
+			text += fragment.text
+		} else {
+			text += " " + fragment.text
+		}
+		totalConfidence += fragment.confidence
+		if fragment.kind == "word" {
+			words = append(words, stt.TimedString{
+				Text:       fragment.text,
+				StartTime:  fragment.startTime,
+				EndTime:    fragment.endTime,
+				Confidence: fragment.confidence,
+				SpeakerID:  fragment.speakerID,
+			})
+		}
+	}
+	speakerID := fragments[0].speakerID
+	text = speechmaticsFormattedSegmentText(text, speakerID, nil, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:       resp.Metadata.Transcript,
-				Language:   speechmaticsSegmentLanguage("", state),
-				Confidence: 1.0,
-				StartTime:  resp.Metadata.StartTime + startTimeOffset,
-				EndTime:    resp.Metadata.EndTime + startTimeOffset,
+				Text:       text,
+				Language:   fragments[0].language,
+				Confidence: totalConfidence / float64(len(fragments)),
+				SpeakerID:  speakerID,
+				StartTime:  fragments[0].startTime,
+				EndTime:    fragments[len(fragments)-1].endTime,
+				Words:      words,
 			},
 		},
 	}

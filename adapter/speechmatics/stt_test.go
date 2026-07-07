@@ -324,6 +324,43 @@ func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *t
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptGroupsReferenceSpeakers(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"agent","confidence":0.9,"speaker":"agent","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.7,
+			"alternatives":[{"content":"customer","confidence":0.8,"speaker":"customer","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "en"})
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want one final transcript per adjacent speaker group", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "agent" {
+		t.Fatalf("first text = %q, want agent", got)
+	}
+	if got := events[0].Alternatives[0].SpeakerID; got != "agent" {
+		t.Fatalf("first speaker = %q, want agent", got)
+	}
+	if got := events[1].Alternatives[0].Text; got != "customer" {
+		t.Fatalf("second text = %q, want customer", got)
+	}
+	if got := events[1].Alternatives[0].SpeakerID; got != "customer" {
+		t.Fatalf("second speaker = %q, want customer", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string
