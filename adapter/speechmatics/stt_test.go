@@ -152,6 +152,29 @@ func TestSpeechmaticsSegmentEventsApplyReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsApplyReferenceDefaults(t *testing.T) {
+	state := &speechmaticsStreamState{language: "de"}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hallo",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "hallo" || alt.Language != "de" || alt.SpeakerID != "UU" {
+		t.Fatalf("alternative = %+v, want reference language and speaker defaults", alt)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",

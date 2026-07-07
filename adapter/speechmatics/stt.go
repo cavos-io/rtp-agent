@@ -257,12 +257,14 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
+	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
 
 	stream := &speechmaticsSTTStream{
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
 		state: &speechmaticsStreamState{
+			language:             streamLanguage,
 			speakerActiveFormat:  s.speakerActiveFormat,
 			speakerPassiveFormat: s.speakerPassiveFormat,
 		},
@@ -272,7 +274,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
 
-	initMsg := buildSpeechmaticsSTTStartMessage(s, language)
+	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
@@ -377,10 +379,18 @@ func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
 	return strings.TrimRight(s.baseURL, "/")
 }
 
-func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {
-	if language == "" {
-		language = s.language
+func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
+	if language != "" {
+		return language
 	}
+	if s != nil && s.language != "" {
+		return s.language
+	}
+	return "en"
+}
+
+func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {
+	language = speechmaticsSTTStreamLanguage(s, language)
 	config := map[string]interface{}{
 		"language": language,
 	}
@@ -466,6 +476,7 @@ type speechmaticsSTTStream struct {
 }
 
 type speechmaticsStreamState struct {
+	language             string
 	speechDuration       float64
 	startTimeOffset      float64
 	startTime            float64
@@ -571,14 +582,15 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
-		text := speechmaticsFormattedSegmentText(segment.Text, segment.SpeakerID, segment.IsActive, state)
+		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
+		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
 				{
 					Text:      text,
-					Language:  segment.Language,
-					SpeakerID: segment.SpeakerID,
+					Language:  speechmaticsSegmentLanguage(segment.Language, state),
+					SpeakerID: speakerID,
 					StartTime: segment.Metadata.StartTime + startTimeOffset,
 					EndTime:   segment.Metadata.EndTime + startTimeOffset,
 				},
@@ -586,6 +598,23 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState) string {
+	if language != "" {
+		return language
+	}
+	if state != nil && state.language != "" {
+		return state.language
+	}
+	return "en"
+}
+
+func speechmaticsSegmentSpeakerID(speakerID string) string {
+	if speakerID != "" {
+		return speakerID
+	}
+	return "UU"
 }
 
 func speechmaticsFormattedSegmentText(text, speakerID string, isActive *bool, state *speechmaticsStreamState) string {
@@ -603,9 +632,6 @@ func speechmaticsFormattedSegmentText(text, speakerID string, isActive *bool, st
 	}
 	if format == "" {
 		format = "{text}"
-	}
-	if speakerID == "" {
-		speakerID = "UU"
 	}
 	format = strings.ReplaceAll(format, "{speaker_id}", speakerID)
 	return strings.ReplaceAll(format, "{text}", text)
