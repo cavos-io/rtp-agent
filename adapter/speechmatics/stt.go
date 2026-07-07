@@ -711,6 +711,7 @@ type speechmaticsSTTStream struct {
 	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
+	drainEventsAfterClose      bool
 }
 
 type speechmaticsStreamState struct {
@@ -788,7 +789,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
-		s.markClosed()
+		s.markClosedDrainingEvents()
 		_ = s.closeTransport()
 		return false
 	}
@@ -1458,6 +1459,15 @@ func (s *speechmaticsSTTStream) closeTransport() error {
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		if s.shouldDrainEventsAfterClose() {
+			select {
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
+				}
+			default:
+			}
+		}
 		return nil, io.EOF
 	}
 	select {
@@ -1501,6 +1511,33 @@ func (s *speechmaticsSTTStream) markClosed() {
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}
+}
+
+func (s *speechmaticsSTTStream) markClosedDrainingEvents() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	s.drainEventsAfterClose = true
+	s.mu.Unlock()
+	s.closeDone()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+}
+
+func (s *speechmaticsSTTStream) shouldDrainEventsAfterClose() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainEventsAfterClose
 }
 
 func (s *speechmaticsSTTStream) closeDone() {

@@ -628,6 +628,52 @@ func TestSpeechmaticsSTTEndOfTranscriptClosesStreamBeforeNext(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTNextDrainsQueuedTranscriptAfterEndOfTranscript(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		errCh:  make(chan error, 1),
+		state: &speechmaticsStreamState{
+			language:        "en",
+			includePartials: true,
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if keepReading := stream.handleResponse(smResponse{
+		Message: "AddSegment",
+		Segments: []struct {
+			Text      string `json:"text"`
+			Language  string `json:"language"`
+			SpeakerID string `json:"speaker_id"`
+			IsActive  *bool  `json:"is_active"`
+			Metadata  struct {
+				StartTime float64 `json:"start_time"`
+				EndTime   float64 `json:"end_time"`
+			} `json:"metadata"`
+		}{{
+			Text:      "final before end",
+			Language:  "en",
+			SpeakerID: "S1",
+		}},
+	}); !keepReading {
+		t.Fatal("AddSegment stopped read loop")
+	}
+	if keepReading := stream.handleResponse(smResponse{Message: "EndOfTranscript"}); keepReading {
+		t.Fatal("EndOfTranscript handler continued reading, want terminal stream cleanup")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want queued final transcript before EOF", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want queued final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "final before end" {
+		t.Fatalf("transcript = %q, want final before end", got)
+	}
+}
+
 func TestSpeechmaticsSTTCloseStopsBlockedTranscriptEnqueue(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	releaseWrites := make(chan struct{})
