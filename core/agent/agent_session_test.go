@@ -2726,6 +2726,148 @@ func TestAgentSessionOnReceivesRecordedEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSessionInitializesTimelineEventEmitter(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	if session.Timeline == nil {
+		t.Fatal("Timeline = nil, want event emitter")
+	}
+}
+
+func TestAgentSessionTimelineSubscriberReceivesAllSessionEvents(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	received := make(chan string, 4)
+
+	unsubscribe := session.Timeline.AddSubscriber(func(ev Event) {
+		received <- ev.GetType()
+	})
+	defer unsubscribe()
+
+	session.UpdateAgentState(AgentStateThinking)
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{Transcript: "hello", IsFinal: true})
+	session.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "say",
+		SpeechHandle:  NewSpeechHandle(true, DefaultInputDetails()),
+	})
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	want := []string{"agent_state_changed", "user_input_transcribed", "speech_created", "error"}
+	for _, eventType := range want {
+		select {
+		case got := <-received:
+			if got != eventType {
+				t.Fatalf("timeline event type = %q, want %q", got, eventType)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeline subscriber did not receive %s", eventType)
+		}
+	}
+}
+
+func TestAgentSessionTimelineAddEventRecordsAndFansOutTypedChannels(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userEvents := session.UserStateChangedEvents()
+	timelineEvents := make(chan Event, 1)
+	session.Timeline.AddSubscriber(func(ev Event) {
+		timelineEvents <- ev
+	})
+
+	ev := &UserStateChangedEvent{
+		OldState:  UserStateListening,
+		NewState:  UserStateSpeaking,
+		CreatedAt: time.Unix(12, 0),
+	}
+	session.Timeline.AddEvent(ev)
+
+	select {
+	case got := <-userEvents:
+		if got.NewState != UserStateSpeaking || got.CreatedAt != ev.CreatedAt {
+			t.Fatalf("typed user state event = %#v, want timeline payload", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedEvents did not receive timeline event")
+	}
+
+	select {
+	case got := <-timelineEvents:
+		if got != ev {
+			t.Fatalf("timeline event = %#v, want original event pointer", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeline subscriber did not receive AddEvent payload")
+	}
+
+	recorded := session.RecordedEvents()
+	if len(recorded) != 1 || recorded[0] != ev {
+		t.Fatalf("RecordedEvents = %#v, want original timeline event", recorded)
+	}
+}
+
+func TestAgentSessionTimelineAddEventEmitsReferenceSessionEventTypes(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	received := make(chan string, 12)
+	session.Timeline.AddSubscriber(func(ev Event) {
+		received <- ev.GetType()
+	})
+
+	session.Timeline.AddEvent(&UserStateChangedEvent{OldState: UserStateListening, NewState: UserStateSpeaking})
+	session.Timeline.AddEvent(&AgentStateChangedEvent{OldState: AgentStateIdle, NewState: AgentStateThinking})
+	session.Timeline.AddEvent(&UserInputTranscribedEvent{Transcript: "hello", IsFinal: true})
+	session.Timeline.AddEvent(&ConversationItemAddedEvent{Item: &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser}})
+	session.Timeline.AddEvent(&AgentFalseInterruptionEvent{Resumed: true})
+	session.Timeline.AddEvent(&OverlappingSpeechEvent{IsInterruption: true})
+	session.Timeline.AddEvent(&FunctionToolsExecutedEvent{})
+	session.Timeline.AddEvent(&MetricsCollectedEvent{Metrics: &telemetry.LLMMetrics{Label: "agent.LLM"}})
+	session.Timeline.AddEvent(&SessionUsageUpdatedEvent{Usage: telemetry.AgentSessionUsage{}})
+	session.Timeline.AddEvent(&SpeechCreatedEvent{UserInitiated: true, Source: "say", SpeechHandle: NewSpeechHandle(true, DefaultInputDetails())})
+	session.Timeline.AddEvent(&ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+	session.Timeline.AddEvent(&CloseEvent{Reason: CloseReasonTaskCompleted})
+
+	want := []string{
+		"user_state_changed",
+		"agent_state_changed",
+		"user_input_transcribed",
+		"conversation_item_added",
+		"agent_false_interruption",
+		"overlapping_speech",
+		"function_tools_executed",
+		"metrics_collected",
+		"session_usage_updated",
+		"speech_created",
+		"error",
+		"close",
+	}
+	for _, eventType := range want {
+		select {
+		case got := <-received:
+			if got != eventType {
+				t.Fatalf("timeline event type = %q, want %q", got, eventType)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeline subscriber did not receive %s", eventType)
+		}
+	}
+}
+
+func TestAgentSessionTimelineSubscriberCanUnsubscribe(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	received := make(chan Event, 1)
+
+	unsubscribe := session.Timeline.AddSubscriber(func(ev Event) {
+		received <- ev
+	})
+	unsubscribe()
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-received:
+		t.Fatalf("unsubscribed timeline listener received event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionEventListenerPanicDoesNotBlockOtherListeners(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	received := make(chan Event, 1)
