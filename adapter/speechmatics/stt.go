@@ -74,9 +74,7 @@ type SpeechmaticsSpeakerIdentifier struct {
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 
@@ -96,9 +94,7 @@ func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTAudioEncoding(encoding string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if encoding != "" {
-			s.audioEncoding = encoding
-		}
+		s.audioEncoding = encoding
 	}
 }
 
@@ -117,6 +113,18 @@ func WithSpeechmaticsSTTOutputLocale(outputLocale string) SpeechmaticsSTTOption 
 func WithSpeechmaticsSTTFixedTurnDetection() SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.turnDetectionMode = "fixed"
+	}
+}
+
+func WithSpeechmaticsSTTAdaptiveTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "adaptive"
+	}
+}
+
+func WithSpeechmaticsSTTSmartTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "smart_turn"
 	}
 }
 
@@ -296,7 +304,8 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			focusMode:            s.focusMode,
 			includePartials:      speechmaticsIncludePartials(s),
 		},
-		owner: s,
+		owner:                     s,
+		waitForRecognitionStarted: true,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
@@ -502,7 +511,7 @@ func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
 	if language != "" {
 		return language
 	}
-	if s != nil && s.language != "" {
+	if s != nil {
 		return s.language
 	}
 	return "en"
@@ -687,9 +696,12 @@ type speechmaticsSTTStream struct {
 	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
+	audioReady  bool
 
-	speakerResultCh  chan []SpeechmaticsSpeakerIdentifier
-	pushedSampleRate uint32
+	waitForRecognitionStarted bool
+	pendingAudioChunks        [][]byte
+	speakerResultCh           chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate          uint32
 }
 
 type speechmaticsStreamState struct {
@@ -759,20 +771,40 @@ func (s *speechmaticsSTTStream) readLoop() {
 			continue
 		}
 
-		if resp.Message == "EndOfTranscript" {
-			_ = s.closeTransport()
+		if !s.handleResponse(resp) {
 			return
 		}
-		if resp.Message == "SpeakersResult" {
-			s.recordSpeakerResult(resp.Speakers)
-			continue
-		}
-		for _, event := range speechmaticsEvents(resp, s.state) {
-			if !s.enqueueEvent(event) {
-				return
+	}
+}
+
+func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
+	if resp.Message == "EndOfTranscript" {
+		s.markClosed()
+		_ = s.closeTransport()
+		return false
+	}
+	if resp.Message == "RecognitionStarted" {
+		if err := s.markReadyForAudio(); err != nil {
+			if s.errCh != nil {
+				select {
+				case s.errCh <- err:
+				default:
+				}
 			}
+			return false
+		}
+		return true
+	}
+	if resp.Message == "SpeakersResult" {
+		s.recordSpeakerResult(resp.Speakers)
+		return true
+	}
+	for _, event := range speechmaticsEvents(resp, s.state) {
+		if !s.enqueueEvent(event) {
+			return false
 		}
 	}
+	return true
 }
 
 func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
@@ -802,10 +834,6 @@ func (s *speechmaticsSTTStream) isClosed() bool {
 
 func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	switch resp.Message {
-	case "AddPartialTranscript", "AddTranscript":
-		if event := speechmaticsTranscriptEvent(resp); event != nil {
-			return []*stt.SpeechEvent{event}
-		}
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
@@ -899,7 +927,7 @@ func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState
 	if language != "" {
 		return language
 	}
-	if state != nil && state.language != "" {
+	if state != nil {
 		return state.language
 	}
 	return "en"
@@ -951,82 +979,6 @@ func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.Spee
 	}
 }
 
-func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
-	eventType := stt.SpeechEventInterimTranscript
-	if resp.Message == "AddTranscript" {
-		eventType = stt.SpeechEventFinalTranscript
-	}
-
-	transcript := ""
-	var totalConfidence float64
-	var minStart, maxEnd float64
-	hasTiming := false
-	var words []stt.TimedString
-
-	for _, result := range resp.Results {
-		if len(result.Alternatives) == 0 {
-			continue
-		}
-		alt := result.Alternatives[0]
-		switch result.Type {
-		case "word":
-			transcript += alt.Content + " "
-			words = append(words, stt.TimedString{
-				Text:       alt.Content,
-				StartTime:  result.StartTime,
-				EndTime:    result.EndTime,
-				Confidence: alt.Confidence,
-			})
-		case "punctuation":
-			if transcript != "" {
-				transcript = transcript[:len(transcript)-1] + alt.Content + " "
-			} else {
-				transcript = alt.Content + " "
-			}
-		}
-
-		totalConfidence += alt.Confidence
-		if !hasTiming {
-			minStart = result.StartTime
-			hasTiming = true
-		}
-		maxEnd = result.EndTime
-	}
-
-	if hasTiming {
-		if transcript != "" {
-			transcript = transcript[:len(transcript)-1]
-		}
-		return &stt.SpeechEvent{
-			Type: eventType,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:       transcript,
-					Confidence: totalConfidence / float64(len(resp.Results)),
-					StartTime:  minStart,
-					EndTime:    maxEnd,
-					Words:      words,
-				},
-			},
-		}
-	}
-
-	if resp.Metadata.Transcript == "" {
-		return nil
-	}
-	return &stt.SpeechEvent{
-		Type: eventType,
-		Alternatives: []stt.SpeechData{
-			{
-				Text:       resp.Metadata.Transcript,
-				Confidence: 1.0,
-				StartTime:  resp.Metadata.StartTime,
-				EndTime:    resp.Metadata.EndTime,
-			},
-		},
-	}
-}
-
 func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1047,7 +999,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioBuf = newSpeechmaticsAudioByteStream(frame)
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
-		if err := s.writeBinaryData(chunk.Data); err != nil {
+		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1082,6 +1034,32 @@ func (s *speechmaticsSTTStream) writeJSONMessage(message interface{}) error {
 		return io.ErrClosedPipe
 	}
 	return s.conn.WriteJSON(message)
+}
+
+func (s *speechmaticsSTTStream) writeAudioChunkLocked(data []byte) error {
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingAudioChunks = append(s.pendingAudioChunks, append([]byte(nil), data...))
+		return nil
+	}
+	return s.writeBinaryData(data)
+}
+
+func (s *speechmaticsSTTStream) markReadyForAudio() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	s.audioReady = true
+	pending := s.pendingAudioChunks
+	s.pendingAudioChunks = nil
+	for _, chunk := range pending {
+		if err := s.writeBinaryData(chunk); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) Finalize() error {
@@ -1175,7 +1153,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 		s.state = &speechmaticsStreamState{}
 	}
 	for _, chunk := range s.audioBuf.Flush() {
-		if err := s.writeBinaryData(chunk.Data); err != nil {
+		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1249,6 +1227,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.pendingAudioChunks = nil
 	s.closeDone()
 	defer func() {
 		if s.owner != nil {

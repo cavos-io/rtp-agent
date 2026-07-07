@@ -682,6 +682,7 @@ type AppConfig struct {
 	STTSkipVAD                              *bool
 	STTVADKwargs                            map[string]any
 	STTTextTimeoutSeconds                   *float64
+	STTTurnDetectionMode                    string
 	STTTimestampGranularities               []string
 	STTCodeSwitching                        *bool
 	STTBitDepth                             *int
@@ -1077,6 +1078,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTSkipVAD:                              getenvOptionalBool("RTP_AGENT_STT_SKIP_VAD"),
 		STTVADKwargs:                            splitEnvMap("RTP_AGENT_STT_VAD_KWARGS"),
 		STTTextTimeoutSeconds:                   getenvOptionalFloat("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS"),
+		STTTurnDetectionMode:                    normalizedEnv("RTP_AGENT_STT_TURN_DETECTION_MODE"),
 		STTTimestampGranularities:               splitEnvList("RTP_AGENT_STT_TIMESTAMP_GRANULARITIES"),
 		STTCodeSwitching:                        getenvOptionalBool("RTP_AGENT_STT_CODE_SWITCHING"),
 		STTBitDepth:                             getenvOptionalInt("RTP_AGENT_STT_BIT_DEPTH"),
@@ -3390,6 +3392,11 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		}
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
+		}
+		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+			return nil, err
+		} else if opt != nil {
+			sttOpts = append(sttOpts, opt)
 		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
@@ -6399,6 +6406,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
 		}
+		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+			return nil, err
+		} else if opt != nil {
+			sttOpts = append(sttOpts, opt)
+		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
 		}
@@ -8444,6 +8456,23 @@ func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIde
 		}
 	}
 	return speakers
+}
+
+func speechmaticsTurnDetectionOption(mode string) (speechmatics.SpeechmaticsSTTOption, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "":
+		return nil, nil
+	case "external":
+		return nil, nil
+	case "fixed":
+		return speechmatics.WithSpeechmaticsSTTFixedTurnDetection(), nil
+	case "adaptive":
+		return speechmatics.WithSpeechmaticsSTTAdaptiveTurnDetection(), nil
+	case "smart", "smart-turn", "smart_turn":
+		return speechmatics.WithSpeechmaticsSTTSmartTurnDetection(), nil
+	default:
+		return nil, fmt.Errorf("unsupported Speechmatics STT turn detection mode %q", mode)
+	}
 }
 
 func speechmaticsPunctuationOverrides(options map[string]any) map[string]interface{} {
