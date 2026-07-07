@@ -370,6 +370,14 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	if len(streams) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
 	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
 	if focusMode != "" {
@@ -378,10 +386,6 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	focusSpeakers = cloneSpeechmaticsStringSlice(s.focusSpeakers)
 	ignoreSpeakers = cloneSpeechmaticsStringSlice(s.ignoreSpeakers)
 	focusMode = s.focusMode
-	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
-	for stream := range s.streams {
-		streams = append(streams, stream)
-	}
 	s.mu.Unlock()
 
 	var updateErr error
