@@ -2965,6 +2965,49 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
+func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	errRead := errors.New("upliftai mp3 read failed after audio")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: &upliftAIFinalErrorReader{data: mp3Data, err: errRead}},
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			if frames == 0 {
+				t.Fatalf("Next error before decoded MP3 frame = %v", err)
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next terminal error = %T(%v), want APIConnectionError after decoded MP3 frames", err, err)
+			}
+			if !strings.Contains(err.Error(), errRead.Error()) {
+				t.Fatalf("Next terminal error = %q, want original read error %q", err.Error(), errRead.Error())
+			}
+			return
+		}
+		if audio == nil {
+			continue
+		}
+		if audio.IsFinal {
+			t.Fatalf("final marker arrived after %d decoded MP3 frames, want terminal read error", frames)
+		}
+		if audio.Frame != nil {
+			frames++
+		}
+	}
+
+	t.Fatalf("read %d decoded MP3 frames without terminal read error", frames)
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	pcm := []byte{0x01, 0x00, 0x03, 0x00, 0x05, 0x00, 0x07, 0x00}
 	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))

@@ -1228,10 +1228,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 			s.finalSent = true
 			return nil, io.EOF
 		}
+		if readErr := s.compressedReadError(); readErr != nil {
+			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
-			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
-				return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
-			}
 			if s.hasAudio && !s.finalSent {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
@@ -1241,9 +1241,6 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 				return nil, noAudioErr
 			}
 			return nil, io.EOF
-		}
-		if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
-			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
