@@ -2888,9 +2888,9 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "include_partials", false)
-	if _, ok := config["enable_partials"]; ok {
-		t.Fatalf("enable_partials = %#v, want reference include_partials field", config["enable_partials"])
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
+	if _, ok := config["include_partials"]; ok {
+		t.Fatalf("include_partials = %#v, want omitted because reference keeps partial-output filtering local", config["include_partials"])
 	}
 	if _, ok := config["diarization"]; ok {
 		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
@@ -2899,6 +2899,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
 	config = message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "language", "fr")
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
 
 	if _, err := json.Marshal(message); err != nil {
 		t.Fatalf("marshal start message: %v", err)
