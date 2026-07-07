@@ -318,7 +318,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		if s.isClosed() {
 			return nil, io.ErrClosedPipe
 		}
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if s.isClosed() {
 		conn.Close()
