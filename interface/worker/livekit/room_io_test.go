@@ -384,6 +384,39 @@ func TestRoomIOAttachRoomSkipsPreConnectAudioHandlerWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOPreConnectAudioRegistersDefaultTopic(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{DisableTextInput: true})
+	room := lksdk.NewRoom(nil)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterByteStreamHandler after AttachRoom() error = nil, want reference pre-connect topic registered")
+	}
+}
+
+func TestRoomIOPreConnectAudioDisabledDoesNotRegister(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{
+		DisablePreConnectAudio: true,
+		DisableTextInput:       true,
+	})
+	room := lksdk.NewRoom(nil)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler after disabled AttachRoom() error = %v, want nil", err)
+	}
+}
+
 func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
 	assistant := &agent.PipelineAgent{}
 	session := &agent.AgentSession{Assistant: assistant}

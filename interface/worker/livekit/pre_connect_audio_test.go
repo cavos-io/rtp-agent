@@ -329,6 +329,150 @@ func TestPreConnectAudioRawPCMReadErrorDropsPartialFrames(t *testing.T) {
 	}
 }
 
+func TestRoomIOPreConnectAudioWaitReturnsRawFrames(t *testing.T) {
+	data := make([]byte, 24)
+	for i := 0; i < 12; i++ {
+		data[i*2] = byte(i + 1)
+	}
+
+	frames, err := readPreConnectRawPCMFrames(bytes.NewReader(data), 100, 1)
+	if err != nil {
+		t.Fatalf("readPreConnectRawPCMFrames() error = %v", err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("frames len = %d, want raw byte-stream frame plus flushed tail", len(frames))
+	}
+	if !bytes.Equal(frames[0].Data, data[:20]) || !bytes.Equal(frames[1].Data, data[20:]) {
+		t.Fatalf("raw frame data = %v/%v, want %v/%v", frames[0].Data, frames[1].Data, data[:20], data[20:])
+	}
+}
+
+func TestRoomIOPreConnectAudioMissingTrackIDIgnored(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+	reader := lksdk.NewByteStreamReader(lksdk.ByteStreamInfo{}, nil)
+
+	handler.readAudioTask(reader, "caller-a")
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if len(handler.buffers) != 0 {
+		t.Fatalf("buffers len after missing trackId = %d, want 0", len(handler.buffers))
+	}
+}
+
+func TestRoomIOPreConnectAudioMissingFormatFails(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	handler := NewPreConnectAudioHandler(room, time.Second)
+	handler.Register()
+	received := make(chan []*model.AudioFrame, 1)
+	go func() {
+		received <- handler.WaitForData(context.Background(), "track-missing-format")
+	}()
+	waitForPreConnectBufferWaiter(t, handler, "track-missing-format")
+
+	room.OnStreamHeader(&livekitproto.DataStream_Header{
+		StreamId:   "stream-track-missing-format",
+		Topic:      PreConnectAudioBufferStream,
+		Attributes: map[string]string{"trackId": "track-missing-format"},
+		ContentHeader: &livekitproto.DataStream_Header_ByteHeader{
+			ByteHeader: &livekitproto.DataStream_ByteHeader{},
+		},
+	}, "caller-a")
+
+	select {
+	case frames := <-received:
+		if frames != nil {
+			t.Fatalf("WaitForData() missing format frames = %#v, want nil", frames)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForData() blocked after missing format failure")
+	}
+}
+
+func TestRoomIOPreConnectAudioTimeoutReturnsEmpty(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+
+	if frames := handler.WaitForData(context.Background(), "track-timeout"); frames != nil {
+		t.Fatalf("WaitForData() timeout frames = %#v, want nil", frames)
+	}
+}
+
+func TestRoomIOPreConnectAudioOldBufferDiscarded(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{
+		Timestamp: time.Now().Add(-2 * time.Second),
+		Frames: []*model.AudioFrame{{
+			Data:              []byte{1, 2},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	})
+
+	frames := handler.WaitForData(context.Background(), "track-stale")
+	if frames == nil {
+		t.Fatal("WaitForData() stale frames = nil, want empty slice")
+	}
+	if len(frames) != 0 {
+		t.Fatalf("WaitForData() stale frames len = %d, want 0", len(frames))
+	}
+}
+
+func TestRoomIOPreConnectAudioDuplicateCompletedBufferResets(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	newFrame := &model.AudioFrame{
+		Data:              []byte{3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	completed := make(chan *PreConnectAudioBuffer, 1)
+	close(completed)
+
+	handler.buffers["track-dup"] = completed
+	handler.publishBuffer("track-dup", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{newFrame},
+	})
+
+	frames := handler.WaitForData(context.Background(), "track-dup")
+	if len(frames) != 1 || frames[0] != newFrame {
+		t.Fatalf("WaitForData() duplicate completed buffer frames = %#v, want latest frame", frames)
+	}
+}
+
+func TestRoomIOPreConnectAudioCloseCancelsReaders(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.Close()
+
+	done := make(chan []*model.AudioFrame, 1)
+	go func() {
+		done <- handler.WaitForData(context.Background(), "track-after-close")
+	}()
+
+	select {
+	case frames := <-done:
+		if frames != nil {
+			t.Fatalf("WaitForData() after close = %#v, want nil", frames)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("WaitForData() blocked after pre-connect handler close")
+	}
+
+	handler.publishBuffer("track-after-close", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames: []*model.AudioFrame{{
+			Data:              []byte{1, 2},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	})
+	if frames := handler.WaitForData(context.Background(), "track-after-close"); frames != nil {
+		t.Fatalf("WaitForData() after close and late publish = %#v, want nil", frames)
+	}
+}
+
 type preConnectErrReader struct {
 	data []byte
 	err  error
