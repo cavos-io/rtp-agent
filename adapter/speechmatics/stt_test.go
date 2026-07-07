@@ -2261,6 +2261,59 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightPushFrameLikeReference(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSTTCloseUnblocksInFlightVADPushFrameLikeReference(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	vadStream.pushStarted = make(chan struct{})
+	stream := &speechmaticsSTTStream{
+		vadStream: vadStream,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- stream.PushFrame(&model.AudioFrame{
+			Data:              make([]byte, 3200),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1600,
+		})
+	}()
+
+	select {
+	case <-vadStream.pushStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame did not start VAD push")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Close did not unblock in-flight VAD PushFrame")
+	}
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("PushFrame error = %v, want closed-pipe after Close interrupted VAD", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame remained blocked after VAD Close")
+	}
+}
+
 func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	if err := provider.Close(); err != nil {
@@ -2840,6 +2893,7 @@ type fakeSpeechmaticsVADStream struct {
 	events      chan *vad.VADEvent
 	nextErr     error
 	nextStarted chan struct{}
+	pushStarted chan struct{}
 	pushed      []*model.AudioFrame
 	closed      bool
 	closedOnce  sync.Once
@@ -2850,6 +2904,13 @@ func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
 }
 
 func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
+	if s.pushStarted != nil {
+		close(s.pushStarted)
+		s.pushStarted = nil
+		if _, ok := <-s.events; !ok {
+			return io.ErrClosedPipe
+		}
+	}
 	s.pushed = append(s.pushed, frame)
 	return nil
 }

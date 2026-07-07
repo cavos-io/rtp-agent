@@ -1088,21 +1088,34 @@ func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.Spee
 
 func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if frame == nil || len(frame.Data) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	vadStream := s.vadStream
+	s.mu.Unlock()
+	if vadStream != nil {
+		if err := vadStream.PushFrame(frame); err != nil {
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
 	if s.closed {
 		return io.ErrClosedPipe
-	}
-	if frame == nil || len(frame.Data) == 0 {
-		return nil
-	}
-	if s.vadStream != nil {
-		if err := s.vadStream.PushFrame(frame); err != nil {
-			_ = s.closeLocked()
-			return err
-		}
 	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
