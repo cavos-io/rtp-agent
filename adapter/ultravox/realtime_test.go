@@ -581,6 +581,56 @@ func TestUltravoxRealtimeSessionPlaybackClearBufferEmitsReferenceSpeechStarted(t
 	}
 }
 
+func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"transcript","role":"user","medium":"voice","text":"hello","final":true,"ordinal":4}`)); err != nil {
+		t.Fatalf("handle transcript JSON error = %v", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_4", "hello", true)
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"state","state":"thinking"}`)); err != nil {
+		t.Fatalf("handle state JSON error = %v", err)
+	}
+	generation := requireUltravoxRealtimeGeneration(t, session)
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-9","parameters":{"city":"Paris"}}`)); err != nil {
+		t.Fatalf("handle tool JSON error = %v", err)
+	}
+	select {
+	case call := <-generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil")
+		}
+		if call.CallID != "call-9" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+			t.Fatalf("function call = %+v, want call-9 lookup JSON args", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dispatched function call")
+	}
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"playback_clear_buffer"}`)); err != nil {
+		t.Fatalf("handle playback clear JSON error = %v", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeSpeechStarted {
+			t.Fatalf("event type = %s, want speech_started", event.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech_started")
+	}
+}
+
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
 	t.Helper()
 	select {

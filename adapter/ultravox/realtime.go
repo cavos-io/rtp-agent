@@ -284,6 +284,10 @@ type ultravoxRealtimeToolInvocationEvent struct {
 	Parameters   map[string]any
 }
 
+type ultravoxRealtimeServerEventEnvelope struct {
+	Type string `json:"type"`
+}
+
 type realtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
@@ -454,6 +458,66 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 	case generation.audioCh <- frame:
 	default:
 	}
+}
+
+func (s *realtimeSession) handleServerTextMessage(data []byte) error {
+	var envelope ultravoxRealtimeServerEventEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+
+	switch envelope.Type {
+	case "transcript":
+		var event struct {
+			Role    string `json:"role"`
+			Text    string `json:"text"`
+			Delta   string `json:"delta"`
+			Final   bool   `json:"final"`
+			Ordinal int    `json:"ordinal"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		s.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+			Role:    event.Role,
+			Text:    event.Text,
+			Delta:   event.Delta,
+			Final:   event.Final,
+			Ordinal: event.Ordinal,
+		})
+	case "state":
+		var event struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		s.handleStateEvent(ultravoxRealtimeStateEvent{State: event.State})
+	case "client_tool_invocation":
+		var event struct {
+			ToolName     string         `json:"toolName"`
+			InvocationID string         `json:"invocationId"`
+			Parameters   map[string]any `json:"parameters"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		if event.Parameters == nil {
+			event.Parameters = map[string]any{}
+		}
+		s.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+			ToolName:     event.ToolName,
+			InvocationID: event.InvocationID,
+			Parameters:   event.Parameters,
+		})
+	case "playback_clear_buffer":
+		s.handlePlaybackClearBufferEvent()
+	case "call_started", "debug", "pong":
+		return nil
+	default:
+		return fmt.Errorf("unhandled Ultravox event type %q", envelope.Type)
+	}
+	return nil
 }
 
 func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
