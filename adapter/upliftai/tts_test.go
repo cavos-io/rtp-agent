@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -61,6 +62,20 @@ func (upliftAIErrorReader) Read([]byte) (int, error) {
 }
 
 func (upliftAIErrorReader) Close() error { return nil }
+
+type upliftAIDecodeErrorDecoder struct {
+	err error
+}
+
+func (d upliftAIDecodeErrorDecoder) Push([]byte) {}
+
+func (d upliftAIDecodeErrorDecoder) EndInput() {}
+
+func (d upliftAIDecodeErrorDecoder) Next() (*model.AudioFrame, error) {
+	return nil, d.err
+}
+
+func (d upliftAIDecodeErrorDecoder) Close() error { return nil }
 
 type upliftAIReadErrorBody struct {
 	err error
@@ -3255,6 +3270,43 @@ func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T
 	}
 
 	t.Fatalf("read %d decoded MP3 frames without terminal read error", frames)
+}
+
+func TestUpliftAITTSChunkedStreamCompressedDecodeFailureIsTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		outputFormat string
+		wantMessage  string
+	}{
+		{name: "mp3", outputFormat: "MP3_22050_32", wantMessage: "MP3 decode failed"},
+		{name: "ogg", outputFormat: "OGG_22050_16", wantMessage: "OGG decode failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeErr := errors.New("provider compressed audio decode failed")
+			stream := &upliftAITTSChunkedStream{
+				started:      true,
+				outputFormat: tc.outputFormat,
+				decoder:      upliftAIDecodeErrorDecoder{err: decodeErr},
+				resp:         &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+			}
+			defer stream.Close()
+
+			audio, err := stream.Next()
+			if audio != nil {
+				t.Fatalf("Next audio = %#v, want nil on compressed decode failure", audio)
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next error = %T(%v), want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("Next error = %q, want %q", err.Error(), tc.wantMessage)
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after compressed decode failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
+		})
+	}
 }
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {

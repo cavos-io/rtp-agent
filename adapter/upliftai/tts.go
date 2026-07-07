@@ -1260,6 +1260,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 			}
 			return nil, io.EOF
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
 	if s.closed {
@@ -1270,6 +1271,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
+			s.finalSent = true
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
 		}
 		frame = resampled
@@ -1316,6 +1318,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
 	}
 	if s.closed {
@@ -1326,6 +1329,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
+			s.finalSent = true
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
 		}
 		frame = resampled
