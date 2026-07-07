@@ -2097,6 +2097,71 @@ func TestUpliftAITTSChunkedStreamSocketIODialCancelReturnsContextCanceled(t *tes
 	}
 }
 
+func TestUpliftAITTSChunkedStreamConnectedSocketIOCancelSkipsSynthesize(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	oldDial := upliftAISocketIODialContext
+	oldAudioWait := upliftAISocketIOAudioWait
+	upliftAISocketIOAudioWait = 20 * time.Millisecond
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() {
+		upliftAISocketIODialContext = oldDial
+		upliftAISocketIOAudioWait = oldAudioWait
+	})
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+	)
+	defer provider.Close()
+	firstStream, err := provider.Synthesize(context.Background(), "warm")
+	if err != nil {
+		t.Fatalf("first Synthesize error = %v", err)
+	}
+	defer firstStream.Close()
+	firstResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := firstStream.Next()
+		firstResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	firstSynthesize := receiveUpliftAITestString(t, conn.writes, "first synthesize packet")
+	firstRequestID := upliftAITestSocketIORequestID(t, firstSynthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + firstRequestID + `"}]`
+	firstResult := receiveUpliftAITestSocketIOResult(t, firstResultCh)
+	if firstResult.err != nil || firstResult.audio == nil || !firstResult.audio.IsFinal {
+		t.Fatalf("first Next = (%#v, %v), want final marker", firstResult.audio, firstResult.err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondStream, err := provider.Synthesize(ctx, "interrupted")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	defer secondStream.Close()
+	_, err = secondStream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("second Next error = %T(%v), want context.Canceled before synthesize emit", err, err)
+	}
+	select {
+	case got := <-conn.writes:
+		t.Fatalf("canceled synthesize packet = %q, want no provider write after caller cancellation", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *testing.T) {
 	firstConn := newUpliftAITestSocketIOConn()
 	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

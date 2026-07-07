@@ -743,7 +743,13 @@ func newUpliftAISocketIOClient(baseURL string, apiKey string) *upliftAISocketIOC
 }
 
 func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	requestID := fmt.Sprintf("upliftai-%p-%d", c, c.seq.Add(1))
@@ -780,6 +786,10 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 	if c.closed {
 		c.mu.Unlock()
 		return io.ErrClosedPipe
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
 	}
 	if c.conn != nil {
 		c.mu.Unlock()
