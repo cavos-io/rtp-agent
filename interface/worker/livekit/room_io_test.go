@@ -3993,6 +3993,42 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 	}
 }
 
+func TestRoomIOOnRoomDisconnectedClosesSession(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+
+	cb := rio.GetCallback()
+	if cb.OnDisconnected == nil {
+		t.Fatal("GetCallback() did not register OnDisconnected; a room-level drop must tear down the session")
+	}
+	cb.OnDisconnected()
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != agent.CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("room disconnect did not close the session")
+	}
+}
+
+func TestRoomIOOnRoomDisconnectedCanBeDisabled(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options:      RoomOptions{DisableCloseOnDisconnect: true},
+	}
+
+	rio.GetCallback().OnDisconnected()
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event with DisableCloseOnDisconnect: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOHandleParticipantDisconnectedIgnoresUnavailableConfiguredParticipant(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{

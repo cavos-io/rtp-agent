@@ -1041,8 +1041,19 @@ func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb.OnLocalTrackSubscribed = rio.onLocalTrackSubscribed
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
+	cb.OnDisconnected = rio.onRoomDisconnected
 	cb.OnDataPacket = rio.onDataPacket
 	return cb
+}
+
+func (rio *RoomIO) onRoomDisconnected() {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
+		return
+	}
+	if rio.isDeletingRoom() {
+		return
+	}
+	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
 }
 
 func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
