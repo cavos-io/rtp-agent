@@ -687,6 +687,41 @@ func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedClientEvents(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedAudio(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case audio := <-session.audioCh:
+		t.Fatalf("queued audio after restart length = %d, want reference old message channel dropped", len(audio))
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

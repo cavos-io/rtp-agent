@@ -682,6 +682,8 @@ func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration 
 	s.pendingReply = false
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
+	close(s.audioCh)
+	s.audioCh = make(chan []byte, cap(s.audioCh))
 	generation := s.generation
 	s.generation = nil
 	return generation
