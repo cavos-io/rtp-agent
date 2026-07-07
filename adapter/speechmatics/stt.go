@@ -1417,6 +1417,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
+	inputEnded := s.inputEnded
 	s.closed = true
 	s.inputEnded = true
 	s.pendingEndInput = false
@@ -1429,6 +1430,10 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	}()
 	if s.closeConn != nil {
 		_ = s.closeConn()
+		return nil
+	}
+	if inputEnded {
+		_ = s.closeTransport()
 		return nil
 	}
 	_ = s.closeWebsocketConn()

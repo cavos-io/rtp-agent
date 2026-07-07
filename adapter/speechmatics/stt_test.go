@@ -993,6 +993,71 @@ func TestSpeechmaticsSTTEndInputWaitsForRecognitionStartedBeforeEndStream(t *tes
 	}
 }
 
+func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *testing.T) {
+	messages := make(chan string, 3)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]interface{}
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			if value, _ := message["message"].(string); value != "" {
+				messages <- value
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	stream := &speechmaticsSTTStream{conn: conn}
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	got := drainSpeechmaticsControlMessages(messages)
+	if !reflect.DeepEqual(got, []string{"EndOfStream"}) {
+		t.Fatalf("control messages = %#v, want single EndOfStream", got)
+	}
+}
+
+func drainSpeechmaticsControlMessages(messages <-chan string) []string {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			got = append(got, message)
+		case <-timer.C:
+			return got
+		}
+	}
+}
+
 func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {
