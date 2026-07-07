@@ -2052,6 +2052,12 @@ func TestSpeechmaticsSTTStartMessageEnablesReferenceDiarizationByDefault(t *test
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want reference default object", config["speaker_diarization_config"])
+	}
+	assertSpeechmaticsConfig(t, diarizationConfig, "speaker_sensitivity", float64(0.5))
+	assertSpeechmaticsConfig(t, diarizationConfig, "prefer_current_speaker", false)
 }
 
 func TestSpeechmaticsSTTStartMessageOmitsDiarizationConfigWhenDisabled(t *testing.T) {

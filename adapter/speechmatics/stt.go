@@ -710,6 +710,8 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 	if s.enableDiarization != nil && !*s.enableDiarization {
 		return config
 	}
+	config["speaker_sensitivity"] = 0.5
+	config["prefer_current_speaker"] = false
 	if len(s.knownSpeakers) > 0 {
 		config["speakers"] = speechmaticsKnownSpeakerConfig(s.knownSpeakers)
 	}
