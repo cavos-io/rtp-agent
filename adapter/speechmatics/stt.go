@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -50,8 +51,10 @@ type SpeechmaticsSTT struct {
 }
 
 const (
-	speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
-	speechmaticsRTURLEnv  = "SPEECHMATICS_RT_URL"
+	speechmaticsAPIKeyEnv       = "SPEECHMATICS_API_KEY"
+	speechmaticsRTURLEnv        = "SPEECHMATICS_RT_URL"
+	speechmaticsSTTAppParam     = "livekit/1.5.19.rc1"
+	speechmaticsVoiceSDKVersion = "0.2.8"
 )
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
@@ -481,7 +484,16 @@ func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
 }
 
 func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
-	return strings.TrimRight(s.baseURL, "/")
+	rawURL := strings.TrimRight(s.baseURL, "/")
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set("sm-app", speechmaticsSTTAppParam)
+	query.Set("sm-voice-sdk", speechmaticsVoiceSDKVersion)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {

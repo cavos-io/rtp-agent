@@ -1202,15 +1202,19 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	if streamURL.Scheme != "wss" || streamURL.Host != "eu2.rt.speechmatics.com" || streamURL.Path != "/v2" {
 		t.Fatalf("stream URL = %q, want reference default realtime endpoint", streamURL.String())
 	}
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.example/v2/"))
 	streamURL, err = url.Parse(buildSpeechmaticsSTTStreamURL(provider))
 	if err != nil {
 		t.Fatalf("parse custom stream URL: %v", err)
 	}
-	if streamURL.String() != "wss://speechmatics.example/v2" {
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.example" || streamURL.Path != "/v2" {
 		t.Fatalf("stream URL = %q, want trimmed custom base URL", streamURL.String())
 	}
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 }
 
 func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
@@ -1218,13 +1222,32 @@ func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 
 	provider := NewSpeechmaticsSTT("test-key")
 
-	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.env/v2"; got != want {
-		t.Fatalf("stream URL = %q, want environment realtime URL %q", got, want)
+	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse environment stream URL: %v", err)
 	}
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.env" || streamURL.Path != "/v2" {
+		t.Fatalf("stream URL = %q, want environment realtime URL", streamURL.String())
+	}
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.explicit/v2/"))
-	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.explicit/v2"; got != want {
-		t.Fatalf("stream URL = %q, want explicit realtime URL %q", got, want)
+	streamURL, err = url.Parse(buildSpeechmaticsSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse explicit stream URL: %v", err)
+	}
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.explicit" || streamURL.Path != "/v2" {
+		t.Fatalf("stream URL = %q, want explicit realtime URL", streamURL.String())
+	}
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
+}
+
+func assertSpeechmaticsSTTQuery(t *testing.T, query url.Values, key string, want string) {
+	t.Helper()
+	if got := query.Get(key); got != want {
+		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
 }
 
