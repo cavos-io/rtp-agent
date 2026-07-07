@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -993,6 +994,161 @@ func TestSpeechmaticsSTTEndInputWaitsForRecognitionStartedBeforeEndStream(t *tes
 	}
 }
 
+func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *testing.T) {
+	messages := make(chan string, 3)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]interface{}
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			if value, _ := message["message"].(string); value != "" {
+				messages <- value
+				if value == "StartRecognition" {
+					if err := conn.WriteJSON(map[string]interface{}{"message": "RecognitionStarted"}); err != nil {
+						t.Errorf("write RecognitionStarted: %v", err)
+						return
+					}
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	concrete, ok := stream.(*speechmaticsSTTStream)
+	if !ok {
+		t.Fatalf("stream %T is not *speechmaticsSTTStream", stream)
+	}
+	if got := <-messages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+	waitSpeechmaticsStreamReady(t, concrete)
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream %T does not implement stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	got := drainSpeechmaticsControlMessages(messages)
+	if !reflect.DeepEqual(got, []string{"EndOfStream"}) {
+		t.Fatalf("control messages = %#v, want single EndOfStream", got)
+	}
+}
+
+func TestSpeechmaticsSTTCloseBeforeEndInputDoesNotSendReferenceEndStream(t *testing.T) {
+	messages := make(chan string, 3)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]interface{}
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			if value, _ := message["message"].(string); value != "" {
+				messages <- value
+				if value == "StartRecognition" {
+					if err := conn.WriteJSON(map[string]interface{}{"message": "RecognitionStarted"}); err != nil {
+						t.Errorf("write RecognitionStarted: %v", err)
+						return
+					}
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if got := <-messages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	got := drainSpeechmaticsControlMessages(messages)
+	if len(got) != 0 {
+		t.Fatalf("control messages after Close = %#v, want no EndOfStream", got)
+	}
+}
+
+func drainSpeechmaticsControlMessages(messages <-chan string) []string {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			got = append(got, message)
+		case <-timer.C:
+			return got
+		}
+	}
+}
+
+func waitSpeechmaticsStreamReady(t *testing.T, stream *speechmaticsSTTStream) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		stream.mu.Lock()
+		ready := stream.audioReady
+		stream.mu.Unlock()
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream did not process RecognitionStarted")
+}
+
 func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {
@@ -1116,6 +1272,23 @@ func TestSpeechmaticsSTTPreservesReferenceZeroSampleRate(t *testing.T) {
 	audioFormat := message["audio_format"].(map[string]interface{})
 	if audioFormat["sample_rate"] != 0 {
 		t.Fatalf("sample_rate = %#v, want explicit reference sample rate 0", audioFormat["sample_rate"])
+	}
+}
+
+func TestSpeechmaticsSTTPreservesReferenceNegativeSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(-1))
+
+	if provider.sampleRate != -1 {
+		t.Fatalf("sample rate = %d, want explicit reference sample rate -1", provider.sampleRate)
+	}
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want no silent 16 kHz fallback for negative sample rate", got)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	audioFormat := message["audio_format"].(map[string]interface{})
+	if audioFormat["sample_rate"] != -1 {
+		t.Fatalf("sample_rate = %#v, want explicit reference sample rate -1", audioFormat["sample_rate"])
 	}
 }
 
@@ -1249,6 +1422,7 @@ func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testin
 		name string
 		opt  SpeechmaticsSTTOption
 	}{
+		{name: "fixed", opt: WithSpeechmaticsSTTFixedTurnDetection()},
 		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
 		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
 	}
@@ -1439,6 +1613,49 @@ func TestSpeechmaticsSTTGetSpeakerIDsRequestsReferenceSpeakersResult(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTGetSpeakerIDGroupsPreservesReferenceStreamShape(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	for _, speakerID := range []string{"stream-1", "stream-2"} {
+		var stream *speechmaticsSTTStream
+		stream = &speechmaticsSTTStream{
+			writeJSON: func(message interface{}) error {
+				payload, ok := message.(map[string]interface{})
+				if !ok || payload["message"] != "GetSpeakers" {
+					t.Fatalf("speaker request message = %#v, want GetSpeakers", message)
+				}
+				stream.recordSpeakerResult([]SpeechmaticsSpeakerIdentifier{
+					{Label: speakerID, SpeakerID: speakerID},
+				})
+				return nil
+			},
+			closeConn: func() error {
+				return nil
+			},
+		}
+		provider.registerStream(stream)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	groups, err := provider.GetSpeakerIDGroups(ctx)
+	if err != nil {
+		t.Fatalf("GetSpeakerIDGroups error = %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("speaker groups = %#v, want one group per active reference stream", groups)
+	}
+	seen := map[string]bool{}
+	for _, group := range groups {
+		if len(group) != 1 {
+			t.Fatalf("speaker group = %#v, want one speaker", group)
+		}
+		seen[group[0].SpeakerID] = true
+	}
+	if !seen["stream-1"] || !seen["stream-2"] {
+		t.Fatalf("speaker groups = %#v, want both stream speaker ids", groups)
+	}
+}
+
 func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
 	stream := &speechmaticsSTTStream{
@@ -1600,6 +1817,63 @@ func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTProviderCloseCancelsReferenceStreamDial(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"))
+	oldDialer := websocket.DefaultDialer
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			close(entered)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return nil, errors.New("released without provider close cancellation")
+			}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		websocket.DefaultDialer = oldDialer
+	})
+
+	type streamResult struct {
+		stream stt.RecognizeStream
+		err    error
+	}
+	done := make(chan streamResult, 1)
+	go func() {
+		stream, err := provider.Stream(context.Background(), "")
+		done <- streamResult{stream: stream, err: err}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stream did not start Speechmatics dial")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case result := <-done:
+		if result.stream != nil {
+			t.Fatalf("Stream after provider Close = %#v, want nil", result.stream)
+		}
+		if !errors.Is(result.err, io.ErrClosedPipe) {
+			t.Fatalf("Stream after provider Close error = %v, want io.ErrClosedPipe", result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("provider Close did not cancel Speechmatics stream dial")
+	}
+}
+
 func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
@@ -1755,7 +2029,10 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "enable_partials", true)
+	assertSpeechmaticsConfig(t, config, "include_partials", false)
+	if _, ok := config["enable_partials"]; ok {
+		t.Fatalf("enable_partials = %#v, want reference include_partials field", config["enable_partials"])
+	}
 	if _, ok := config["diarization"]; ok {
 		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
 	}
@@ -1775,6 +2052,12 @@ func TestSpeechmaticsSTTStartMessageEnablesReferenceDiarizationByDefault(t *test
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want reference default object", config["speaker_diarization_config"])
+	}
+	assertSpeechmaticsConfig(t, diarizationConfig, "speaker_sensitivity", float64(0.5))
+	assertSpeechmaticsConfig(t, diarizationConfig, "prefer_current_speaker", false)
 }
 
 func TestSpeechmaticsSTTStartMessageOmitsDiarizationConfigWhenDisabled(t *testing.T) {
@@ -1906,17 +2189,16 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTFixedTurnDetection(),
 		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.8),
 	)
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("conversation_config = %#v, want map", config["conversation_config"])
-	}
-	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
-	if _, ok := config["end_of_utterance_silence_trigger"]; ok {
-		t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted for reference endpointing config", config["conversation_config"])
 	}
 }
 
@@ -1928,6 +2210,9 @@ func TestSpeechmaticsSTTExternalTurnDetectionOmitsReferenceConversationConfig(t 
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "external")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
 	if _, ok := config["conversation_config"]; ok {
 		t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 	}
@@ -1940,11 +2225,12 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testi
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("conversation_config = %#v, want map for fixed turn detection", config["conversation_config"])
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.5))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted for reference fixed turn detection", config["conversation_config"])
 	}
-	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *testing.T) {
@@ -1960,6 +2246,16 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *te
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.7))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	vadConfig, ok := config["vad_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("vad_config = %#v, want reference adaptive VAD config", config["vad_config"])
+	}
+	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
+	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testing.T) {
@@ -1975,6 +2271,23 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testi
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.8))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	vadConfig, ok := config["vad_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("vad_config = %#v, want reference smart-turn VAD config", config["vad_config"])
+	}
+	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
+	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
+	smartTurnConfig, ok := config["smart_turn_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("smart_turn_config = %#v, want reference smart-turn config", config["smart_turn_config"])
+	}
+	assertSpeechmaticsConfig(t, smartTurnConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, smartTurnConfig, "smart_turn_threshold", float64(0.5))
+	assertSpeechmaticsConfig(t, smartTurnConfig, "max_audio_length", float64(8.0))
 }
 
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {

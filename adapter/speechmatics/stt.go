@@ -48,6 +48,7 @@ type SpeechmaticsSTT struct {
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
 	closed               bool
+	closeDone            chan struct{}
 }
 
 const (
@@ -86,9 +87,7 @@ func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if sampleRate >= 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
@@ -236,6 +235,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 		focusMode:         "retain",
 		operatingPoint:    "enhanced",
 		maxDelay:          &maxDelay,
+		closeDone:         make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -255,7 +255,7 @@ func (s *SpeechmaticsSTT) Provider() string {
 }
 func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate < 0 {
-		return 16000
+		return 0
 	}
 	return uint32(s.sampleRate)
 }
@@ -280,8 +280,33 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSpeechmaticsSTTStreamURL(s), header)
+	dialCtx := ctx
+	var cancelDial context.CancelFunc
+	var stopCloseWatch chan struct{}
+	if done := s.closeDoneChannel(); done != nil {
+		dialCtx, cancelDial = context.WithCancel(ctx)
+		stopCloseWatch = make(chan struct{})
+		go func() {
+			select {
+			case <-done:
+				cancelDial()
+			case <-dialCtx.Done():
+			case <-stopCloseWatch:
+			}
+		}()
+	}
+	if cancelDial != nil {
+		defer cancelDial()
+	}
+	if stopCloseWatch != nil {
+		defer close(stopCloseWatch)
+	}
+
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
 	if err != nil {
+		if s.isClosed() {
+			return nil, io.ErrClosedPipe
+		}
 		return nil, err
 	}
 	if s.isClosed() {
@@ -309,7 +334,6 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
-	stream.closeConn = stream.closeWebsocketConn
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
@@ -338,6 +362,10 @@ func (s *SpeechmaticsSTT) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.closeDone != nil {
+		close(s.closeDone)
+		s.closeDone = nil
+	}
 	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -405,6 +433,15 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 }
 
 func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
+	groups, err := s.GetSpeakerIDGroups(ctx)
+	speakers := make([]SpeechmaticsSpeakerIdentifier, 0)
+	for _, group := range groups {
+		speakers = append(speakers, group...)
+	}
+	return speakers, err
+}
+
+func (s *SpeechmaticsSTT) GetSpeakerIDGroups(ctx context.Context) ([][]SpeechmaticsSpeakerIdentifier, error) {
 	if s == nil {
 		return nil, io.ErrClosedPipe
 	}
@@ -412,7 +449,7 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		return nil, nil
 	}
 	streams := s.activeStreams()
-	speakers := make([]SpeechmaticsSpeakerIdentifier, 0, len(streams))
+	groups := make([][]SpeechmaticsSpeakerIdentifier, 0, len(streams))
 	var requestErr error
 	for _, stream := range streams {
 		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)
@@ -420,16 +457,18 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		cancel()
 		if err != nil {
 			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				groups = append(groups, nil)
 				continue
 			}
 			if requestErr == nil {
 				requestErr = err
 			}
+			groups = append(groups, nil)
 			continue
 		}
-		speakers = append(speakers, streamSpeakers...)
+		groups = append(groups, streamSpeakers)
 	}
-	return speakers, requestErr
+	return groups, requestErr
 }
 
 func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -444,6 +483,15 @@ func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, con
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, timeout)
+}
+
+func (s *SpeechmaticsSTT) closeDoneChannel() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeDone
 }
 
 func (s *SpeechmaticsSTT) isClosed() bool {
@@ -552,7 +600,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config := map[string]interface{}{
 		"language": language,
 	}
-	config["enable_partials"] = true
+	config["include_partials"] = speechmaticsIncludePartials(s)
 	if s.domain != "" {
 		config["domain"] = s.domain
 	}
@@ -580,8 +628,8 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config["audio_filtering_config"] = map[string]interface{}{
 		"volume_threshold": 0.0,
 	}
-	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
-		config["conversation_config"] = conversationConfig
+	for key, value := range speechmaticsEndpointingConfig(s) {
+		config[key] = value
 	}
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
@@ -601,32 +649,53 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	}
 }
 
-func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) {
-	if s == nil {
-		return 0, false
-	}
-	if s.eouSilenceTrigger != nil {
-		return *s.eouSilenceTrigger, true
-	}
-	if s.turnDetectionMode == "fixed" {
-		return 0.5, true
-	}
-	return 0, false
-}
-
-func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
-	if s == nil || s.turnDetectionMode != "fixed" {
+	if s == nil {
 		return config
 	}
-	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
-		config["end_of_utterance_silence_trigger"] = trigger
+	mode := s.turnDetectionMode
+	trigger := 0.5
+	switch mode {
+	case "adaptive":
+		trigger = 0.7
+		config["vad_config"] = map[string]interface{}{
+			"enabled":          true,
+			"silence_duration": 0.18,
+			"threshold":        0.35,
+		}
+	case "smart_turn":
+		mode = "adaptive"
+		trigger = 0.8
+		config["vad_config"] = map[string]interface{}{
+			"enabled":          true,
+			"silence_duration": 0.18,
+			"threshold":        0.35,
+		}
+		config["smart_turn_config"] = map[string]interface{}{
+			"enabled":              true,
+			"smart_turn_threshold": 0.5,
+			"max_audio_length":     8.0,
+		}
+	case "fixed":
+	default:
+		mode = "external"
 	}
+	if s.eouSilenceTrigger != nil {
+		trigger = *s.eouSilenceTrigger
+	}
+	maxDelay := 10.0
+	if s.eouMaxDelay != nil {
+		maxDelay = *s.eouMaxDelay
+	}
+	config["end_of_utterance_mode"] = mode
+	config["end_of_utterance_silence_trigger"] = trigger
+	config["end_of_utterance_max_delay"] = maxDelay
 	return config
 }
 
 func speechmaticsProviderManagedEndpointing(s *SpeechmaticsSTT) bool {
-	return s != nil && (s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
+	return s != nil && (s.turnDetectionMode == "fixed" || s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
 }
 
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
@@ -641,6 +710,8 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 	if s.enableDiarization != nil && !*s.enableDiarization {
 		return config
 	}
+	config["speaker_sensitivity"] = 0.5
+	config["prefer_current_speaker"] = false
 	if len(s.knownSpeakers) > 0 {
 		config["speakers"] = speechmaticsKnownSpeakerConfig(s.knownSpeakers)
 	}
@@ -1431,20 +1502,8 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		_ = s.closeConn()
 		return nil
 	}
-	_ = s.closeWebsocketConn()
+	_ = s.closeTransport()
 	return nil
-}
-
-func (s *speechmaticsSTTStream) closeWebsocketConn() error {
-	if s.conn == nil {
-		return nil
-	}
-	writeErr := s.writeJSONMessage(map[string]interface{}{"message": "EndOfStream"})
-	closeErr := s.conn.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	return closeErr
 }
 
 func (s *speechmaticsSTTStream) closeTransport() error {

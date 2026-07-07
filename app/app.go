@@ -2516,6 +2516,9 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	switch normalizeProvider(cfg.VADProvider) {
 	case "":
+		if appConfigUsesSpeechmaticsExternalSTT(cfg) {
+			a.VAD = silero.NewSileroVAD()
+		}
 		return nil
 	case providerSilero:
 		vadOpts := []silero.VADOption{}
@@ -2601,6 +2604,21 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
 	}
+}
+
+func appConfigUsesSpeechmaticsExternalSTT(cfg AppConfig) bool {
+	if !speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) {
+		return false
+	}
+	if normalizeProvider(cfg.STTProvider) == providerSpeechmatics {
+		return true
+	}
+	for _, provider := range cfg.STTFallbackProviders {
+		if normalizeProvider(provider) == providerSpeechmatics {
+			return true
+		}
+	}
+	return false
 }
 
 func existingTenModelPath() (string, bool) {
@@ -3393,7 +3411,7 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
 		}
-		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+		if opt, err := speechmaticsTurnDetectionOptionFromConfig(cfg); err != nil {
 			return nil, err
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
@@ -6406,7 +6424,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
 		}
-		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+		if opt, err := speechmaticsTurnDetectionOptionFromConfig(cfg); err != nil {
 			return nil, err
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
@@ -8456,6 +8474,22 @@ func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIde
 		}
 	}
 	return speakers
+}
+
+func speechmaticsExternalTurnDetectionMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "external":
+		return true
+	default:
+		return false
+	}
+}
+
+func speechmaticsTurnDetectionOptionFromConfig(cfg AppConfig) (speechmatics.SpeechmaticsSTTOption, error) {
+	if normalizeProvider(cfg.VADProvider) != "" {
+		return nil, nil
+	}
+	return speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode)
 }
 
 func speechmaticsTurnDetectionOption(mode string) (speechmatics.SpeechmaticsSTTOption, error) {

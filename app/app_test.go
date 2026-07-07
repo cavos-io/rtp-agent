@@ -5404,6 +5404,22 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsExternalAutoVAD(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "speechmatics")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "silero.VAD" {
+		t.Fatalf("VAD label = %q, want silero.VAD", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
@@ -6534,6 +6550,26 @@ func TestDefaultConfigFromEnvAcceptsSpitchSTTFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsFallbackExternalAutoVAD(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "speechmatics")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "silero.VAD" {
+		t.Fatalf("VAD label = %q, want silero.VAD", got)
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want fallback adapter", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
@@ -7441,11 +7477,14 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["output_locale"], "en-GB"; got != want {
 			t.Fatalf("output_locale = %#v, want %#v", got, want)
 		}
-		if _, ok := config["enable_partials"].(bool); !ok {
-			t.Fatalf("enable_partials = %#v, want bool", config["enable_partials"])
+		if _, ok := config["include_partials"].(bool); !ok {
+			t.Fatalf("include_partials = %#v, want bool", config["include_partials"])
 		}
-		if got, want := config["enable_partials"], true; got != want {
-			t.Fatalf("enable_partials = %#v, want %#v", got, want)
+		if got, want := config["include_partials"], false; got != want {
+			t.Fatalf("include_partials = %#v, want %#v", got, want)
+		}
+		if _, ok := config["enable_partials"]; ok {
+			t.Fatalf("enable_partials = %#v, want omitted reference field", config["enable_partials"])
 		}
 		if got, want := config["diarization"], "speaker"; got != want {
 			t.Fatalf("diarization = %#v, want %#v", got, want)
@@ -7469,11 +7508,14 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if _, ok := config["conversation_config"]; ok {
 			t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 		}
-		if _, ok := config["end_of_utterance_silence_trigger"]; ok {
-			t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+		if got, want := config["end_of_utterance_mode"], "external"; got != want {
+			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
 		}
-		if _, ok := config["end_of_utterance_max_delay"]; ok {
-			t.Fatalf("end_of_utterance_max_delay sent at top level in %#v", config)
+		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
+			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
 		}
 		if _, ok := message["end_of_utterance_max_delay"]; ok {
 			t.Fatalf("end_of_utterance_max_delay sent outside transcription_config in %#v", message)
@@ -7580,12 +7622,74 @@ func TestSpeechmaticsSTTFallbackPassesReferenceTurnDetectionMode(t *testing.T) {
 	select {
 	case message := <-records:
 		config, _ := message["transcription_config"].(map[string]any)
-		conversationConfig, ok := config["conversation_config"].(map[string]any)
-		if !ok {
-			t.Fatalf("conversation_config = %#v, want fixed turn detection config", config["conversation_config"])
+		if got, want := config["end_of_utterance_mode"], "fixed"; got != want {
+			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
 		}
-		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.5; got != want {
+		if got, want := config["end_of_utterance_silence_trigger"], 0.5; got != want {
 			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if _, ok := config["conversation_config"]; ok {
+			t.Fatalf("conversation_config = %#v, want omitted reference endpointing config", config["conversation_config"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics STT start message")
+	}
+}
+
+func TestSpeechmaticsSTTFallbackVADForcesReferenceExternalTurnDetection(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	records := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read speechmatics start message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode speechmatics start message: %v", err)
+			return
+		}
+		records <- message
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case message := <-records:
+		config, _ := message["transcription_config"].(map[string]any)
+		if _, ok := config["conversation_config"]; ok {
+			t.Fatalf("conversation_config = %#v, want omitted when external VAD owns turn detection", config["conversation_config"])
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")
