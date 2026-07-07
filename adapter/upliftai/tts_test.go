@@ -1882,6 +1882,41 @@ func TestUpliftAITTSChunkedStreamSocketIOConnectPingWriteFailureIsAPIConnectionE
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOAuthWriteCancelReturnsContextCanceled(t *testing.T) {
+	oldDial := upliftAISocketIODialContext
+	oldDelay := upliftAISocketIOReconnectDelay
+	upliftAISocketIOReconnectDelay = 0
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		conn := newUpliftAITestSocketIOConn()
+		conn.reads <- `2`
+		conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+		conn.writeErrAfter = 1
+		conn.writeErr = context.Canceled
+		return conn, nil
+	}
+	t.Cleanup(func() {
+		upliftAISocketIODialContext = oldDial
+		upliftAISocketIOReconnectDelay = oldDelay
+	})
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+	)
+	defer provider.Close()
+	stream, err := provider.Synthesize(context.Background(), "interrupted")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOReconnectDeadlineIsAPIConnectionError(t *testing.T) {
 	oldDial := upliftAISocketIODialContext
 	oldDelay := upliftAISocketIOReconnectDelay

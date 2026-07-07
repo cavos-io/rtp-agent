@@ -1029,6 +1029,9 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		packet := string(msg)
 		if packet == "2" {
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return context.Canceled
+				}
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
 			}
 			continue
@@ -1036,6 +1039,9 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		if strings.HasPrefix(packet, "0") {
 			payload, _ := json.Marshal(map[string]string{"token": apiKey})
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("40"+upliftAISocketIONamespace+","+string(payload))); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return context.Canceled
+				}
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
 			}
 			continue
