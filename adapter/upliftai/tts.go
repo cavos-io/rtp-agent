@@ -1343,6 +1343,7 @@ func (s *upliftAITTSChunkedStream) startCompressedDecoder(decoder codecs.AudioSt
 				_ = decoder.Close()
 				return nil, true, io.EOF
 			}
+			s.finalSent = true
 			_ = decoder.Close()
 			return nil, true, upliftAITTSReadError(readErrorPrefix, err)
 		}
