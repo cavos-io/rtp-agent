@@ -251,6 +251,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		clientEventCh:    make(chan map[string]any, 256),
 		inputSampleRate:  uint32(m.inputSampleRate),
 		outputSampleRate: uint32(m.outputSampleRate),
+		audioOutput:      m.outputMedium == "voice",
 		systemPrompt:     m.systemPrompt,
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 		toolNames:        make(map[string]struct{}),
@@ -306,6 +307,7 @@ type realtimeSession struct {
 	clientEventCh    chan map[string]any
 	inputSampleRate  uint32
 	outputSampleRate uint32
+	audioOutput      bool
 	systemPrompt     string
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
@@ -681,12 +683,20 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 		textCh:     make(chan string, 16),
 		audioCh:    make(chan *model.AudioFrame, 16),
 	}
+	modalitiesCh := make(chan []string, 1)
+	if s.audioOutput {
+		modalitiesCh <- []string{"audio", "text"}
+	} else {
+		modalitiesCh <- []string{"text"}
+	}
+	close(modalitiesCh)
 	s.generationSeq++
 	messageID := fmt.Sprintf("ultravox-turn-%d", s.generationSeq)
 	generation.messageCh <- llm.MessageGeneration{
-		MessageID: messageID,
-		TextCh:    generation.textCh,
-		AudioCh:   generation.audioCh,
+		MessageID:    messageID,
+		TextCh:       generation.textCh,
+		AudioCh:      generation.audioCh,
+		ModalitiesCh: modalitiesCh,
 	}
 	s.generation = generation
 	s.eventCh <- llm.RealtimeEvent{

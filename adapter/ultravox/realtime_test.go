@@ -576,6 +576,41 @@ func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		outputMedium string
+		want         []string
+	}{
+		{name: "voice", outputMedium: "voice", want: []string{"audio", "text"}},
+		{name: "text", outputMedium: "text", want: []string{"text"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model, err := NewRealtimeModel("test-key", WithRealtimeOutputMedium(tc.outputMedium))
+			if err != nil {
+				t.Fatalf("NewRealtimeModel error = %v", err)
+			}
+			sessionInterface, err := model.Session()
+			if err != nil {
+				t.Fatalf("Session error = %v", err)
+			}
+			session := sessionInterface.(*realtimeSession)
+			defer session.Close()
+			if tc.outputMedium == "text" {
+				requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+					"type":   "set_output_medium",
+					"medium": "text",
+				})
+			}
+
+			session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+			generation := requireUltravoxRealtimeGeneration(t, session)
+			message := requireUltravoxRealtimeMessage(t, generation)
+			requireUltravoxRealtimeModalities(t, message.ModalitiesCh, tc.want)
+		})
+	}
+}
+
 func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -1005,6 +1040,18 @@ func requireUltravoxRealtimeText(t *testing.T, textCh <-chan string, want string
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for text delta %q", want)
+	}
+}
+
+func requireUltravoxRealtimeModalities(t *testing.T, modalitiesCh <-chan []string, want []string) {
+	t.Helper()
+	select {
+	case got := <-modalitiesCh:
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("modalities = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for modalities %#v", want)
 	}
 }
 
