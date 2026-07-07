@@ -6505,3 +6505,46 @@ func (f *fakePipelineRecognizeStream) SetStartTime(startTime float64) {
 	f.startTime = startTime
 	f.startTimeSet = true
 }
+
+func TestPipelineAgentEmitsLLMMetricsWhenReplyContextCanceledBeforeTTS(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		model:    "test-llm",
+		provider: "test-llm-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello"}},
+			},
+		},
+	}
+	fakeTTS := &fakePipelineTTS{streamErr: context.Canceled}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, fakeTTS, chatCtx)
+	agent.session = session
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	agent.ctx = ctx
+
+	metricsCh := session.MetricsCollectedEvents()
+
+	speech := NewSpeechHandle(true, InputDetails{Modality: "audio"})
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if !drainForLLMMetrics(metricsCh) {
+		t.Fatal("expected LLM metrics to be emitted even though the reply context was canceled before TTS, got none")
+	}
+}
+
+func drainForLLMMetrics(ch <-chan MetricsCollectedEvent) bool {
+	for {
+		select {
+		case ev := <-ch:
+			if _, ok := ev.Metrics.(*telemetry.LLMMetrics); ok {
+				return true
+			}
+		default:
+			return false
+		}
+	}
+}
