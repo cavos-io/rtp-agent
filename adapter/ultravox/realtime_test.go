@@ -334,6 +334,50 @@ func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionInterruptSendsReferenceBargeIn(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt without active generation error = %v, want reference no-op", err)
+	}
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("barge-in event without active generation = %#v", event)
+	default:
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hello",
+		Final:   false,
+		Ordinal: 1,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hello")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt active generation error = %v, want reference barge-in", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

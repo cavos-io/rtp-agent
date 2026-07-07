@@ -363,7 +363,24 @@ func (s *realtimeSession) Say(string) error {
 }
 func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *realtimeSession) Interrupt() error {
-	return ultravoxRealtimeSessionUnsupported("interrupt")
+	s.mu.Lock()
+	generation := s.generation
+	if s.closed || generation == nil || generation.done {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	if err := s.sendClientEvent(map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	}); err != nil {
+		return err
+	}
+	s.finishGeneration(generation)
+	return nil
 }
 func (s *realtimeSession) Close() error {
 	s.closeOnce.Do(func() {
