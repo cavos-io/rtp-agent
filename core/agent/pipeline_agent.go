@@ -44,8 +44,9 @@ type PipelineAgent struct {
 	sttStream        stt.RecognizeStream
 	lastSTTFrame     *model.AudioFrame
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	rootCtx context.Context
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
 }
@@ -86,10 +87,23 @@ func NewPipelineAgent(
 func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	va.mu.Lock()
 	va.session = s
+	va.rootCtx = ctx
+	va.resetGenerationCtxLocked()
 	va.mu.Unlock()
 
 	go va.run(ctx)
 	return nil
+}
+
+func (va *PipelineAgent) resetGenerationCtxLocked() {
+	if va.cancel != nil {
+		va.cancel()
+	}
+	parent := va.rootCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	va.ctx, va.cancel = context.WithCancel(parent)
 }
 
 func (va *PipelineAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
@@ -385,14 +399,8 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.UpdateUserState(UserStateSpeaking)
 			}
 
-			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
-			if va.cancel != nil {
-				va.cancel()
-				ctx, cancel := context.WithCancel(context.Background())
-				va.ctx = ctx
-				va.cancel = cancel
-			}
+			va.resetGenerationCtxLocked()
 			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
