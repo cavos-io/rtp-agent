@@ -1297,6 +1297,20 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 	}
 }
 
+func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTFixedTurnDetection(),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want map for fixed turn detection", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
+}
+
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
 	t.Helper()
 	if got := config[key]; got != want {

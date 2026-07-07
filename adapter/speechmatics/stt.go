@@ -24,6 +24,7 @@ type SpeechmaticsSTT struct {
 	apiKey               string
 	baseURL              string
 	language             string
+	turnDetectionMode    string
 	sampleRate           int
 	audioEncoding        string
 	domain               string
@@ -108,6 +109,12 @@ func WithSpeechmaticsSTTDomain(domain string) SpeechmaticsSTTOption {
 func WithSpeechmaticsSTTOutputLocale(outputLocale string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.outputLocale = outputLocale
+	}
+}
+
+func WithSpeechmaticsSTTFixedTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "fixed"
 	}
 }
 
@@ -210,14 +217,15 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	}
 	maxDelay := 2.0
 	provider := &SpeechmaticsSTT{
-		apiKey:         apiKey,
-		baseURL:        strings.TrimRight(baseURL, "/"),
-		language:       "en",
-		sampleRate:     16000,
-		audioEncoding:  "pcm_s16le",
-		focusMode:      "retain",
-		operatingPoint: "enhanced",
-		maxDelay:       &maxDelay,
+		apiKey:            apiKey,
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		language:          "en",
+		turnDetectionMode: "external",
+		sampleRate:        16000,
+		audioEncoding:     "pcm_s16le",
+		focusMode:         "retain",
+		operatingPoint:    "enhanced",
+		maxDelay:          &maxDelay,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -543,9 +551,9 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.maxDelay != nil {
 		config["max_delay"] = *s.maxDelay
 	}
-	if s.eouSilenceTrigger != nil {
+	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
 		config["conversation_config"] = map[string]interface{}{
-			"end_of_utterance_silence_trigger": *s.eouSilenceTrigger,
+			"end_of_utterance_silence_trigger": trigger,
 		}
 	}
 	if s.punctuation != nil {
@@ -563,6 +571,19 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		},
 		"transcription_config": config,
 	}
+}
+
+func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	if s.eouSilenceTrigger != nil {
+		return *s.eouSilenceTrigger, true
+	}
+	if s.turnDetectionMode == "fixed" {
+		return 0.5, true
+	}
+	return 0, false
 }
 
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
