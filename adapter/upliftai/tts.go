@@ -1287,7 +1287,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			return nil, io.EOF
 		}
 		if strings.Contains(err.Error(), "decoder closed") {
-			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+			if readErr := s.compressedReadError(); readErr != nil {
 				s.finalSent = true
 				return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 			}
@@ -1301,7 +1301,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			}
 			return nil, io.EOF
 		}
-		if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+		if readErr := s.compressedReadError(); readErr != nil {
 			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}

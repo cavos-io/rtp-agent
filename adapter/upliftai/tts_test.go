@@ -175,6 +175,35 @@ func (b *upliftAIBlockingEOFBody) Close() error {
 	return nil
 }
 
+type upliftAIBlockingErrorBody struct {
+	data    []byte
+	offset  int
+	err     error
+	release chan struct{}
+	readErr chan struct{}
+	once    sync.Once
+}
+
+func newUpliftAIBlockingErrorBody(data []byte, err error) *upliftAIBlockingErrorBody {
+	return &upliftAIBlockingErrorBody{data: data, err: err, release: make(chan struct{}), readErr: make(chan struct{})}
+}
+
+func (b *upliftAIBlockingErrorBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	<-b.release
+	close(b.readErr)
+	return 0, b.err
+}
+
+func (b *upliftAIBlockingErrorBody) Close() error {
+	b.once.Do(func() { close(b.release) })
+	return nil
+}
+
 func newUpliftAITestHTTPProvider(apiKey string, voice string, opts ...UpliftAITTSOption) *UpliftAITTS {
 	baseOpts := []UpliftAITTSOption{WithUpliftAIBaseURL("https://upliftai.example/v1/tts")}
 	baseOpts = append(baseOpts, opts...)
@@ -3506,6 +3535,59 @@ func TestUpliftAITTSChunkedStreamStreamsReferenceOGGBeforeEOF(t *testing.T) {
 		}
 		t.Fatal("timed out waiting for decoded OGG frame before response EOF")
 	}
+}
+
+func TestUpliftAITTSChunkedStreamOGGKeepsAudioReturnedWithReadError(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+	errRead := errors.New("upliftai ogg read failed after audio")
+	body := newUpliftAIBlockingErrorBody(oggData, errRead)
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want decoded OGG frame before provider read error", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want decoded OGG frame before provider read error", audio)
+	}
+	body.Close()
+	select {
+	case <-body.readErr:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OGG provider read error")
+	}
+
+	for i := 0; i < 500; i++ {
+		audio, err = stream.Next()
+		if err != nil {
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next terminal error = %T(%v), want APIConnectionError after decoded OGG frames", err, err)
+			}
+			if !strings.Contains(err.Error(), errRead.Error()) {
+				t.Fatalf("Next terminal error = %q, want original read error %q", err.Error(), errRead.Error())
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after OGG read failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
+			return
+		}
+		if audio == nil {
+			continue
+		}
+		if audio.IsFinal {
+			t.Fatal("final marker arrived after OGG read failure, want terminal read error")
+		}
+	}
+	t.Fatal("read decoded OGG frames without terminal read error")
 }
 
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
