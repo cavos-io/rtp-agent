@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -237,7 +238,8 @@ type speechmaticsTTSChunkedStream struct {
 	sampleRate    int
 	requestID     string
 	requested     bool
-	pending       []byte
+	pcm           *audio.AudioByteStream
+	pendingFrames []*model.AudioFrame
 	pendingErr    error
 	emittedAudio  bool
 	finalReady    bool
@@ -262,6 +264,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.stream == nil {
 		return nil, io.EOF
 	}
+	if len(s.pendingFrames) > 0 {
+		return s.emitFrame(s.popPendingFrame()), nil
+	}
 	if s.pendingErr != nil {
 		err := s.pendingErr
 		s.pendingErr = nil
@@ -282,13 +287,17 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, io.EOF
 		}
 		if n > 0 {
-			data := append(s.pending, buf[:n]...)
-			completeLen := len(data) - len(data)%2
-			if completeLen == 0 {
-				s.pending = data
+			frames := s.pcmStream().Push(buf[:n])
+			if err == io.EOF {
+				frames = append(frames, s.pcmStream().Flush()...)
+				s.finalReady = true
+			} else if err != nil {
+				frames = append(frames, s.pcmStream().Flush()...)
+				s.pendingErr = err
+			}
+			if len(frames) == 0 {
 				if err != nil {
 					if err == io.EOF {
-						s.pending = nil
 						return s.emitFinal()
 					}
 					s.cancelRequest()
@@ -301,28 +310,17 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				continue
 			}
-			frameData := data[:completeLen]
-			s.pending = data[completeLen:]
-			if err == io.EOF {
-				s.pending = nil
-				s.finalReady = true
-			} else if err != nil {
-				s.pendingErr = err
-			}
-			s.emittedAudio = true
-			return &tts.SynthesizedAudio{
-				RequestID: s.requestID,
-				Frame: &model.AudioFrame{
-					Data:              frameData,
-					SampleRate:        uint32(s.sampleRate),
-					NumChannels:       1,
-					SamplesPerChannel: uint32(len(frameData) / 2),
-				},
-			}, nil
+			s.pendingFrames = append(s.pendingFrames, frames[1:]...)
+			return s.emitFrame(frames[0]), nil
 		}
 		if err != nil {
 			if err == io.EOF {
-				s.pending = nil
+				frames := s.pcmStream().Flush()
+				if len(frames) > 0 {
+					s.finalReady = true
+					s.pendingFrames = append(s.pendingFrames, frames[1:]...)
+					return s.emitFrame(frames[0]), nil
+				}
 				return s.emitFinal()
 			}
 			s.cancelRequest()
@@ -333,6 +331,34 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.finish()
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {
+	if s.pcm == nil {
+		if s.sampleRate <= 0 {
+			s.pcm = audio.NewAudioByteStream(0, 1, 1)
+			return s.pcm
+		}
+		samplesPerChannel := uint32(s.sampleRate) * 200 / 1000
+		s.pcm = audio.NewAudioByteStreamWithOptions(uint32(s.sampleRate), 1, samplesPerChannel, audio.AudioByteStreamOptions{
+			Progressive: true,
+		})
+	}
+	return s.pcm
+}
+
+func (s *speechmaticsTTSChunkedStream) popPendingFrame() *model.AudioFrame {
+	frame := s.pendingFrames[0]
+	s.pendingFrames = s.pendingFrames[1:]
+	return frame
+}
+
+func (s *speechmaticsTTSChunkedStream) emitFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
+	s.emittedAudio = true
+	return &tts.SynthesizedAudio{
+		RequestID: s.requestID,
+		Frame:     frame,
 	}
 }
 
