@@ -557,6 +557,30 @@ func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionPlaybackClearBufferEmitsReferenceSpeechStarted(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handlePlaybackClearBufferEvent()
+
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeSpeechStarted {
+			t.Fatalf("event type = %s, want speech_started", event.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech_started")
+	}
+}
+
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
 	t.Helper()
 	select {

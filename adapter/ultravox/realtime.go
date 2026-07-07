@@ -620,6 +620,18 @@ func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolIn
 	s.finishGeneration(generation)
 }
 
+func (s *realtimeSession) handlePlaybackClearBufferEvent() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}:
+	default:
+	}
+}
+
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
 	resampled, err := coreaudio.ResampleAudioFrame(frame, sampleRate)
 	if err != nil {
