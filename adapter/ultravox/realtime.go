@@ -775,7 +775,7 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 	case "call_started", "debug":
 		return nil
 	default:
-		return fmt.Errorf("unhandled Ultravox event type %q", envelope.Type)
+		return nil
 	}
 	return nil
 }

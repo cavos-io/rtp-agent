@@ -1335,6 +1335,33 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 	}
 }
 
+func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"future_event","value":1}`)); err != nil {
+		t.Fatalf("handle unknown JSON error = %v, want reference receive loop to continue", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after unknown JSON = %#v, want no emitted event", event)
+	default:
+	}
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"transcript","role":"user","medium":"voice","text":"still connected","final":true,"ordinal":5}`)); err != nil {
+		t.Fatalf("handle transcript after unknown JSON error = %v", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_5", "still connected", true)
+}
+
 func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
