@@ -5491,8 +5491,13 @@ func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
 	if err := stream.PushFrame(frame); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	if len(vadStream.pushed) == 0 {
-		t.Fatal("VAD received no frames, want Speechmatics STT to use app VAD for external endpointing")
+	deadline := time.After(time.Second)
+	for len(vadStream.pushed) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("VAD received no frames after RecognitionStarted, want Speechmatics STT to use app VAD for external endpointing")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if got := vadStream.pushed[0]; got != frame {
 		t.Fatalf("VAD frame = %#v, want original app STT input frame", got)
@@ -7589,14 +7594,15 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["output_locale"], "en-GB"; got != want {
 			t.Fatalf("output_locale = %#v, want %#v", got, want)
 		}
-		if _, ok := config["include_partials"].(bool); !ok {
-			t.Fatalf("include_partials = %#v, want bool", config["include_partials"])
+		enablePartials, ok := config["enable_partials"].(bool)
+		if !ok {
+			t.Fatalf("enable_partials = %#v, want bool", config["enable_partials"])
 		}
-		if got, want := config["include_partials"], false; got != want {
-			t.Fatalf("include_partials = %#v, want %#v", got, want)
+		if got, want := enablePartials, true; got != want {
+			t.Fatalf("enable_partials = %#v, want %#v", got, want)
 		}
-		if _, ok := config["enable_partials"]; ok {
-			t.Fatalf("enable_partials = %#v, want omitted reference field", config["enable_partials"])
+		if _, ok := config["include_partials"]; ok {
+			t.Fatalf("include_partials = %#v, want omitted because reference keeps partial-output filtering local", config["include_partials"])
 		}
 		if got, want := config["diarization"], "speaker"; got != want {
 			t.Fatalf("diarization = %#v, want %#v", got, want)

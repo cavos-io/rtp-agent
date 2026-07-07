@@ -172,6 +172,12 @@ func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
 }
 
 func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, io.ErrClosedPipe
+	}
 	return nil, fmt.Errorf("speechmatics streaming tts is unsupported")
 }
 
@@ -422,10 +428,7 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		resp.Body.Close()
 		requestCancel()
-		message := http.StatusText(resp.StatusCode)
-		if message == "" {
-			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
+		message := speechmaticsTTSStatusReason(resp)
 		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	s.mu.Lock()
@@ -438,6 +441,19 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	s.stream = resp.Body
 	s.mu.Unlock()
 	return nil
+}
+
+func speechmaticsTTSStatusReason(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	if fields := strings.Fields(resp.Status); len(fields) > 1 && fields[0] == fmt.Sprintf("%d", resp.StatusCode) {
+		return strings.TrimSpace(strings.TrimPrefix(resp.Status, fields[0]))
+	}
+	if message := http.StatusText(resp.StatusCode); message != "" {
+		return message
+	}
+	return fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
 func speechmaticsTTSTimeoutError(err error) bool {

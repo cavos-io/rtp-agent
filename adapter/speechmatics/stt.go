@@ -251,6 +251,9 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.vad != nil {
+		provider.turnDetectionMode = "external"
+	}
 	return provider
 }
 
@@ -318,7 +321,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		if s.isClosed() {
 			return nil, io.ErrClosedPipe
 		}
-		return nil, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -354,7 +360,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 	if err := conn.WriteJSON(initMsg); err != nil {
 		_ = stream.Close()
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if !s.registerStream(stream) {
@@ -397,6 +403,15 @@ func (s *SpeechmaticsSTT) Close() error {
 }
 
 func (s *SpeechmaticsSTT) Finalize() error {
+	if s == nil {
+		return io.ErrClosedPipe
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	streams := s.activeStreams()
 	var finalizeErr error
 	for _, stream := range streams {
@@ -411,9 +426,6 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	if s == nil {
 		return io.ErrClosedPipe
 	}
-	if s.enableDiarization != nil && !*s.enableDiarization {
-		return fmt.Errorf("diarization is not enabled")
-	}
 
 	s.mu.Lock()
 	if s.closed {
@@ -427,6 +439,10 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	if len(streams) == 0 {
 		s.mu.Unlock()
 		return nil
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		s.mu.Unlock()
+		return fmt.Errorf("diarization is not enabled")
 	}
 	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
@@ -631,7 +647,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config := map[string]interface{}{
 		"language": language,
 	}
-	config["include_partials"] = speechmaticsIncludePartials(s)
+	config["enable_partials"] = true
 	if s.domain != "" {
 		config["domain"] = s.domain
 	}
@@ -791,6 +807,8 @@ type speechmaticsSTTStream struct {
 	closed          bool
 	inputEnded      bool
 	pendingEndInput bool
+	pendingFinalize bool
+	pendingErr      error
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -804,6 +822,8 @@ type speechmaticsSTTStream struct {
 
 	waitForRecognitionStarted  bool
 	pendingAudioChunks         [][]byte
+	pendingVADFrames           []*model.AudioFrame
+	pendingVADEndInput         bool
 	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
@@ -840,11 +860,12 @@ type smResponse struct {
 		EndTime   float64 `json:"end_time"`
 	} `json:"results"`
 	Segments []struct {
-		Text      string `json:"text"`
-		Language  string `json:"language"`
-		SpeakerID string `json:"speaker_id"`
-		IsActive  *bool  `json:"is_active"`
-		Metadata  struct {
+		Text       string   `json:"text"`
+		Language   string   `json:"language"`
+		SpeakerID  string   `json:"speaker_id"`
+		IsActive   *bool    `json:"is_active"`
+		Annotation []string `json:"annotation"`
+		Metadata   struct {
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		} `json:"metadata"`
@@ -865,10 +886,10 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly")
+					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
 				}
 			} else {
-				s.errCh <- llm.NewAPIConnectionError(err.Error())
+				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
 			}
 			return
 		}
@@ -892,12 +913,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "RecognitionStarted" {
 		if err := s.markReadyForAudio(); err != nil {
-			if s.errCh != nil {
-				select {
-				case s.errCh <- err:
-				default:
-				}
-			}
+			s.enqueueError(err)
 			return false
 		}
 		return true
@@ -912,6 +928,16 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 	}
 	return true
+}
+
+func (s *speechmaticsSTTStream) enqueueError(err error) {
+	if s == nil || s.errCh == nil || err == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
+	}
 }
 
 func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
@@ -963,13 +989,13 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	if resp.Message == "AddSegment" {
 		eventType = stt.SpeechEventFinalTranscript
 	}
-	if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials {
-		return nil
-	}
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
+		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
+			continue
+		}
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
@@ -989,6 +1015,15 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsSegmentHasFinal(annotation []string) bool {
+	for _, value := range annotation {
+		if value == "has_final" {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
@@ -1100,9 +1135,17 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+		s.mu.Unlock()
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
 	vadStream := s.vadStream
+	bufferVAD := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	if bufferVAD {
+		s.pendingVADFrames = append(s.pendingVADFrames, frame)
+	}
 	s.mu.Unlock()
-	if vadStream != nil {
+	if vadStream != nil && !bufferVAD {
 		if err := vadStream.PushFrame(frame); err != nil {
 			_ = s.Close()
 			return err
@@ -1179,9 +1222,13 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		}
 	}
 	vadStream := s.vadStream
+	bufferVADEndInput := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	if bufferVADEndInput {
+		s.pendingVADEndInput = true
+	}
 	s.mu.Unlock()
 
-	if vadStream != nil {
+	if vadStream != nil && !bufferVADEndInput {
 		if err := vadStream.EndInput(); err != nil {
 			_ = s.Close()
 			return err
@@ -1251,10 +1298,36 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		return io.ErrClosedPipe
 	}
 	s.audioReady = true
+	pendingVADFrames := s.pendingVADFrames
+	pendingVADEndInput := s.pendingVADEndInput
+	vadStream := s.vadStream
+	s.pendingVADFrames = nil
+	s.pendingVADEndInput = false
+	if vadStream != nil {
+		for _, frame := range pendingVADFrames {
+			if err := vadStream.PushFrame(frame); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+		}
+		if pendingVADEndInput {
+			if err := vadStream.EndInput(); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+		}
+	}
 	pending := s.pendingAudioChunks
 	s.pendingAudioChunks = nil
 	for _, chunk := range pending {
 		if err := s.writeBinaryData(chunk); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
+	if s.pendingFinalize {
+		s.pendingFinalize = false
+		if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1276,6 +1349,10 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return io.ErrClosedPipe
 	}
 	if s.providerManagedEndpointing {
+		return nil
+	}
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingFinalize = true
 		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
@@ -1604,7 +1681,10 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.closed = true
 	s.inputEnded = true
 	s.pendingEndInput = false
+	s.pendingFinalize = false
 	s.pendingAudioChunks = nil
+	s.pendingVADFrames = nil
+	s.pendingVADEndInput = false
 	vadStream := s.vadStream
 	s.vadStream = nil
 	s.closeDone()
@@ -1647,6 +1727,19 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return nil, io.EOF
 	}
+	if s.pendingErr != nil {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		err := s.pendingErr
+		s.pendingErr = nil
+		s.markClosed()
+		return nil, err
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -1661,6 +1754,7 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		s.pendingErr = err
 		select {
 		case event, ok := <-s.events:
 			if ok {
@@ -1668,6 +1762,7 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
+		s.pendingErr = nil
 		s.markClosed()
 		return nil, err
 	case <-s.done:

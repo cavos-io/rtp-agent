@@ -413,6 +413,27 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
 	}
 
+	var stablePartial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"stable words",
+			"language":"en",
+			"speaker_id":"agent",
+			"annotation":["has_final"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &stablePartial); err != nil {
+		t.Fatalf("unmarshal stable partial response: %v", err)
+	}
+	events := speechmaticsEvents(stablePartial, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("stable partial events = %#v, want reference interim transcript with has_final", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "stable words" {
+		t.Fatalf("stable partial text = %q, want stable words", got)
+	}
+
 	var final smResponse
 	if err := json.Unmarshal([]byte(`{
 		"message":"AddSegment",
@@ -425,7 +446,7 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}`), &final); err != nil {
 		t.Fatalf("unmarshal final response: %v", err)
 	}
-	events := speechmaticsEvents(final, state)
+	events = speechmaticsEvents(final, state)
 	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("final events = %#v, want final transcript despite include_partials=false", events)
 	}
@@ -577,7 +598,63 @@ func TestSpeechmaticsSTTReadFailureReturnsReferenceConnectionError(t *testing.T)
 	}
 }
 
-func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
+func TestSpeechmaticsSTTReadLoopErrorDeliveryDoesNotBlockWhenErrorQueued(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverReady := make(chan struct{})
+	closeProvider := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		close(serverReady)
+		<-closeProvider
+		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+			_ = tcpConn.SetLinger(0)
+		}
+		_ = conn.UnderlyingConn().Close()
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	smStream := stream.(*speechmaticsSTTStream)
+	t.Cleanup(func() {
+		select {
+		case <-smStream.errCh:
+		default:
+		}
+	})
+	select {
+	case <-serverReady:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive StartRecognition")
+	}
+	smStream.errCh <- errors.New("queued provider error")
+	close(closeProvider)
+
+	select {
+	case _, ok := <-smStream.events:
+		if ok {
+			t.Fatal("events yielded transcript, want cleanup close")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("read loop blocked delivering provider error with queued error")
+	}
+}
+
+func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClosesVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -603,6 +680,10 @@ func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
 			_ = stream.Close()
 		}
 		t.Fatal("Stream error = nil, want StartRecognition write failure")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 	if !vadStream.closed {
 		t.Fatal("VAD stream closed = false after startup write failure")
@@ -755,11 +836,12 @@ func TestSpeechmaticsSTTNextDrainsQueuedTranscriptAfterEndOfTranscript(t *testin
 	if keepReading := stream.handleResponse(smResponse{
 		Message: "AddSegment",
 		Segments: []struct {
-			Text      string `json:"text"`
-			Language  string `json:"language"`
-			SpeakerID string `json:"speaker_id"`
-			IsActive  *bool  `json:"is_active"`
-			Metadata  struct {
+			Text       string   `json:"text"`
+			Language   string   `json:"language"`
+			SpeakerID  string   `json:"speaker_id"`
+			IsActive   *bool    `json:"is_active"`
+			Annotation []string `json:"annotation"`
+			Metadata   struct {
 				StartTime float64 `json:"start_time"`
 				EndTime   float64 `json:"end_time"`
 			} `json:"metadata"`
@@ -889,6 +971,50 @@ func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTNextSurfacesErrorAfterQueuedTranscriptLikeReference(t *testing.T) {
+	for range 64 {
+		stream := &speechmaticsSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		streamErr := errors.New("provider close")
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{
+				{Text: "hello"},
+			},
+		}
+		stream.errCh <- streamErr
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("first Next error = %v, want queued transcript before stream error", err)
+		}
+		if event == nil || event.Alternatives[0].Text != "hello" {
+			t.Fatalf("first Next event = %#v, want queued final transcript", event)
+		}
+
+		result := make(chan error, 1)
+		go func() {
+			event, err := stream.Next()
+			if event != nil {
+				result <- fmt.Errorf("second Next event = %#v, want nil", event)
+				return
+			}
+			result <- err
+		}()
+
+		select {
+		case err := <-result:
+			if !errors.Is(err, streamErr) {
+				t.Fatalf("second Next error = %v, want queued stream error", err)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("second Next blocked after queued transcript, want stream error")
+		}
+	}
+}
+
 func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {
@@ -954,6 +1080,43 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 
 	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
 	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
+}
+
+func TestSpeechmaticsSTTExplicitVADForcesReferenceExternalTurnDetectionAfterLaterModeOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: newFakeSpeechmaticsVADStream()}),
+		WithSpeechmaticsSTTFixedTurnDetection(),
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+	)
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external when explicit VAD is provided", provider.turnDetectionMode)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted because explicit VAD owns endpointing", config["conversation_config"])
+	}
+
+	var controlMessages []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages = append(controlMessages, control)
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if len(controlMessages) != 1 || controlMessages[0]["message"] != "ForceEndOfUtterance" {
+		t.Fatalf("control messages = %#v, want ForceEndOfUtterance", controlMessages)
+	}
 }
 
 func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
@@ -1099,6 +1262,57 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		vadStream:                 vadStream,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(vadStream.pushed) != 0 {
+		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered original audio", len(vadStream.pushed))
+	}
+	if len(writes) != 0 {
+		t.Fatalf("provider writes before RecognitionStarted = %d, want buffered provider audio", len(writes))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() before RecognitionStarted error = %v", err)
+	}
+	if vadStream.ended {
+		t.Fatal("VAD EndInput before RecognitionStarted = true, want buffered end input")
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	if len(vadStream.pushed) != 1 || vadStream.pushed[0] != frame {
+		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want original frame", vadStream.pushed)
+	}
+	if !vadStream.ended {
+		t.Fatal("VAD EndInput after RecognitionStarted = false, want drained end input after frames")
+	}
+	if len(writes) != 1 {
+		t.Fatalf("provider writes after RecognitionStarted = %d, want buffered provider audio", len(writes))
+	}
+}
+
 func TestSpeechmaticsSTTEndInputFlushesAndEndsReferenceInput(t *testing.T) {
 	var writes [][]byte
 	var controlMessages []map[string]interface{}
@@ -1186,6 +1400,48 @@ func TestSpeechmaticsSTTEndInputWaitsForRecognitionStartedBeforeEndStream(t *tes
 		t.Fatal("RecognitionStarted stopped read loop")
 	}
 	want := []string{"audio:800", "control:EndOfStream"}
+	if !reflect.DeepEqual(ordered, want) {
+		t.Fatalf("writes after RecognitionStarted = %#v, want %#v", ordered, want)
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeWaitsForRecognitionStartedBeforeForceEOU(t *testing.T) {
+	var ordered []string
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		writeBinary: func(data []byte) error {
+			ordered = append(ordered, fmt.Sprintf("audio:%d", len(data)))
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			ordered = append(ordered, fmt.Sprintf("control:%s", control["message"]))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if len(ordered) != 0 {
+		t.Fatalf("writes before RecognitionStarted = %#v, want finalize buffered behind audio", ordered)
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	want := []string{"audio:3200", "control:ForceEndOfUtterance"}
 	if !reflect.DeepEqual(ordered, want) {
 		t.Fatalf("writes after RecognitionStarted = %#v, want %#v", ordered, want)
 	}
@@ -1386,6 +1642,38 @@ func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTRejectsSampleRateChangeBeforeVADLikeReference(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	stream := &speechmaticsSTTStream{
+		vadStream: vadStream,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+	first := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(first); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	second := &model.AudioFrame{
+		Data:              make([]byte, 9600),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	}
+	err := stream.PushFrame(second)
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(vadStream.pushed) != 1 {
+		t.Fatalf("VAD pushed frames = %d, want only first valid sample-rate frame", len(vadStream.pushed))
+	}
+}
+
 func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	stream := &speechmaticsSTTStream{
@@ -1525,6 +1813,27 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "SPEECHMATICS_API_KEY") {
 		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
+func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"))
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on dial failure", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -1740,6 +2049,35 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	provider.mu.Lock()
+	provider.closed = true
+	provider.mu.Unlock()
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize after provider Close error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("finalize writes after provider Close = %#v, want none", writes)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1825,6 +2163,23 @@ func TestSpeechmaticsSTTUpdateSpeakersWithoutStreamsMatchesReferenceNoop(t *test
 
 	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
 		t.Fatalf("UpdateSpeakers error = %v", err)
+	}
+	if len(provider.focusSpeakers) != 0 {
+		t.Fatalf("provider focus speakers = %#v, want unchanged without active streams", provider.focusSpeakers)
+	}
+	if len(provider.ignoreSpeakers) != 0 {
+		t.Fatalf("provider ignore speakers = %#v, want unchanged without active streams", provider.ignoreSpeakers)
+	}
+	if provider.focusMode != "retain" {
+		t.Fatalf("provider focus mode = %q, want unchanged retain", provider.focusMode)
+	}
+}
+
+func TestSpeechmaticsSTTUpdateSpeakersDisabledDiarizationWithoutStreamsMatchesReferenceNoop(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+
+	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
+		t.Fatalf("UpdateSpeakers without streams error = %v, want reference no-op", err)
 	}
 	if len(provider.focusSpeakers) != 0 {
 		t.Fatalf("provider focus speakers = %#v, want unchanged without active streams", provider.focusSpeakers)
@@ -2606,9 +2961,9 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "include_partials", false)
-	if _, ok := config["enable_partials"]; ok {
-		t.Fatalf("enable_partials = %#v, want reference include_partials field", config["enable_partials"])
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
+	if _, ok := config["include_partials"]; ok {
+		t.Fatalf("include_partials = %#v, want omitted because reference keeps partial-output filtering local", config["include_partials"])
 	}
 	if _, ok := config["diarization"]; ok {
 		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
@@ -2617,6 +2972,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
 	config = message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "language", "fr")
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
 
 	if _, err := json.Marshal(message); err != nil {
 		t.Fatalf("marshal start message: %v", err)
@@ -2944,6 +3300,7 @@ type fakeSpeechmaticsVADStream struct {
 	pushStarted     chan struct{}
 	endInputStarted chan struct{}
 	pushed          []*model.AudioFrame
+	ended           bool
 	closed          bool
 	closedOnce      sync.Once
 }
@@ -2973,6 +3330,7 @@ func (s *fakeSpeechmaticsVADStream) EndInput() error {
 			return io.ErrClosedPipe
 		}
 	}
+	s.ended = true
 	s.closedOnce.Do(func() { close(s.events) })
 	return nil
 }
