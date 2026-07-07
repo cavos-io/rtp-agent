@@ -2361,6 +2361,40 @@ func TestRoomIOTranscriptionJSONFormatMatchesReference(t *testing.T) {
 	}
 }
 
+func TestRoomIOForwardsAgentTranscriptionToNextOutput(t *testing.T) {
+	next := &recordingTranscriptionTextOutput{}
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			TranscriptionNextOutput: next,
+			TranscriptionJSONFormat: true,
+		},
+		agentTextStreamOpener: factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant delta",
+		IsFinal:    false,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant final",
+		IsFinal:    true,
+	})
+
+	if len(factory.streams) != 1 {
+		t.Fatalf("opened agent transcription streams = %d, want 1", len(factory.streams))
+	}
+	if got, want := factory.streams[0].writes, []string{"{\"text\":\"assistant delta\"}\n"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("published room stream writes = %#v, want %#v", got, want)
+	}
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	wantCalls := []string{"capture:assistant delta", "capture:assistant final", "flush"}
+	if !reflect.DeepEqual(next.calls, wantCalls) {
+		t.Fatalf("next output calls = %#v, want %#v", next.calls, wantCalls)
+	}
+}
+
 func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	published := make(chan roomIOPublishedText, 3)
 	packets := make(chan *livekit.Transcription, 3)
@@ -3344,6 +3378,24 @@ func TestRoomIOCanDisableUserTranscriptionOutput(t *testing.T) {
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions
+}
+
+type recordingTranscriptionTextOutput struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *recordingTranscriptionTextOutput) CaptureText(_ context.Context, text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "capture:"+text)
+	return nil
+}
+
+func (r *recordingTranscriptionTextOutput) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "flush")
 }
 
 type fakeTextStream struct {
