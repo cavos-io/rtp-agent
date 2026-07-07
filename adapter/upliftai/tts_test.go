@@ -1041,7 +1041,7 @@ func TestUpliftAITTSStreamSegmentCancelReturnsContextCanceled(t *testing.T) {
 	}
 }
 
-func TestUpliftAITTSStreamProcessesReferenceSecondSegment(t *testing.T) {
+func TestUpliftAITTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
 	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
@@ -1088,31 +1088,35 @@ func TestUpliftAITTSStreamProcessesReferenceSecondSegment(t *testing.T) {
 	requireUpliftAITestFinal(t, stream, "first segment")
 
 	if err := stream.PushText("second segment"); err != nil {
-		t.Fatalf("PushText(second) error = %v", err)
+		t.Fatalf("PushText(second) error = %v, want reference no-op", err)
 	}
 	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush(second) error = %v", err)
+		t.Fatalf("Flush(second) error = %v, want reference no-op", err)
 	}
-	secondSynthesize := receiveUpliftAITestString(t, conn.writes, "second synthesize packet")
-	if !strings.Contains(secondSynthesize, `"text":"second segment"`) {
-		t.Fatalf("second synthesize packet = %q, want reference second segment text", secondSynthesize)
+	select {
+	case packet := <-conn.writes:
+		t.Fatalf("second segment wrote synthesize packet %q, want reference second segment ignored", packet)
+	case <-time.After(100 * time.Millisecond):
 	}
-	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
-	sendUpliftAITestSocketIOAudio(conn, secondRequestID, []byte{0x05, 0x06, 0x07, 0x08})
-	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
-	audio, err = stream.Next()
-	if err != nil || audio == nil || audio.Frame == nil || audio.IsFinal {
-		t.Fatalf("second segment Next = (%#v, %v), want audio frame", audio, err)
+	if err := stream.PushText("third segment"); err != nil {
+		t.Fatalf("PushText(third) error = %v, want reference no-op", err)
 	}
-	requireUpliftAITestFinal(t, stream, "second segment")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(third) error = %v, want reference no-op", err)
+	}
+	select {
+	case packet := <-conn.writes:
+		t.Fatalf("third segment wrote synthesize packet %q, want reference later segments ignored", packet)
+	case <-time.After(100 * time.Millisecond):
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after second segment error = %v", err)
 	}
 	if got, want := dials, 1; got != want {
-		t.Fatalf("socket.io dial count = %d, want one reused connection for two stream segments", got)
+		t.Fatalf("socket.io dial count = %d, want one connection for first accepted segment", got)
 	}
 	if audio, err := stream.Next(); audio != nil || err != io.EOF {
-		t.Fatalf("Next after second segment close = (%#v, %v), want EOF after stream close", audio, err)
+		t.Fatalf("Next after ignored second segment close = (%#v, %v), want EOF", audio, err)
 	}
 }
 
