@@ -720,6 +720,42 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionGenerationCreatedDoesNotBlockProviderReceive(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for i := 0; i < cap(session.eventCh); i++ {
+		session.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeText}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+			Role:    "agent",
+			Delta:   "hello",
+			Final:   false,
+			Ordinal: 1,
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		<-session.eventCh
+		<-done
+		t.Fatal("agent transcript handler blocked on full generation_created event buffer")
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerationsUseReferenceUniqueMessageIDs(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

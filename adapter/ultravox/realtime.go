@@ -740,12 +740,16 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 		ModalitiesCh: modalitiesCh,
 	}
 	s.generation = generation
-	s.eventCh <- llm.RealtimeEvent{
+	event := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:  generation.messageCh,
 			FunctionCh: generation.functionCh,
 		},
+	}
+	select {
+	case s.eventCh <- event:
+	default:
 	}
 	return generation
 }
