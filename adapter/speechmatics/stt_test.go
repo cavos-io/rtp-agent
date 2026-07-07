@@ -1274,6 +1274,23 @@ func TestSpeechmaticsSTTPreservesReferenceZeroSampleRate(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTPreservesReferenceNegativeSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(-1))
+
+	if provider.sampleRate != -1 {
+		t.Fatalf("sample rate = %d, want explicit reference sample rate -1", provider.sampleRate)
+	}
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want no silent 16 kHz fallback for negative sample rate", got)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	audioFormat := message["audio_format"].(map[string]interface{})
+	if audioFormat["sample_rate"] != -1 {
+		t.Fatalf("sample_rate = %#v, want explicit reference sample rate -1", audioFormat["sample_rate"])
+	}
+}
+
 func TestNewSpeechmaticsSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SPEECHMATICS_API_KEY", "env-key")
 
