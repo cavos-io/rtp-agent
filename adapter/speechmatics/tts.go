@@ -31,6 +31,10 @@ const (
 	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
 
+var speechmaticsTTSRetryInterval = func(retryAttempt int) time.Duration {
+	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
+}
+
 type SpeechmaticsTTS struct {
 	mu         sync.Mutex
 	streams    map[*speechmaticsTTSChunkedStream]struct{}
@@ -248,6 +252,7 @@ type speechmaticsTTSChunkedStream struct {
 	sampleRate    int
 	requestID     string
 	requested     bool
+	retryAttempt  int
 	pcm           *audio.AudioByteStream
 	pendingFrames []*model.AudioFrame
 	pendingErr    error
@@ -388,6 +393,18 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		return nil
 	}
 	s.requested = true
+	for {
+		err := s.openStream()
+		if err == nil || err == io.EOF || errors.Is(err, context.Canceled) {
+			return err
+		}
+		if retryErr := s.prepareRetryBeforeAudio(err); retryErr != nil {
+			return retryErr
+		}
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) openStream() error {
 	requestCtx, requestCancel := context.WithTimeout(s.ctx, defaultSpeechmaticsTTSTimeout)
 	s.mu.Lock()
 	if s.closed || s.finalSent {
@@ -443,6 +460,51 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	return nil
 }
 
+func speechmaticsTTSRetryableError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && apiErr.Retryable
+}
+
+func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
+	if s.emittedAudio || !speechmaticsTTSRetryableError(err) {
+		return err
+	}
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	if maxRetry <= 0 || s.retryAttempt >= maxRetry {
+		return err
+	}
+	interval := speechmaticsTTSRetryInterval(s.retryAttempt)
+	s.retryAttempt++
+	s.resetRetryableAttempt()
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-s.ctx.Done():
+		return context.Canceled
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
+	s.cancelRequest()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.requested = false
+	s.pcm = nil
+	s.pendingFrames = nil
+	s.pendingErr = nil
+	s.finalReady = false
+	s.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
+}
+
 func speechmaticsTTSStatusReason(resp *http.Response) string {
 	if resp == nil {
 		return ""
@@ -469,8 +531,19 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		return nil, io.EOF
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
+		err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		if retryErr := s.prepareRetryBeforeAudio(err); retryErr == nil {
+			if openErr := s.ensureStream(); openErr != nil {
+				s.finish()
+				return nil, openErr
+			}
+			return s.Next()
+		} else if retryErr != err {
+			s.finish()
+			return nil, retryErr
+		}
 		s.finish()
-		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		return nil, err
 	}
 	s.finalSent = true
 	s.finish()

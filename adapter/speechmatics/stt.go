@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -49,6 +50,7 @@ type SpeechmaticsSTT struct {
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
 	vad                  corevad.VAD
+	vadSet               bool
 	closed               bool
 	closeDone            chan struct{}
 }
@@ -222,6 +224,7 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.vad = detector
+		s.vadSet = true
 		if detector != nil {
 			s.turnDetectionMode = "external"
 		}
@@ -251,6 +254,9 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.turnDetectionMode == "external" && !provider.vadSet {
+		provider.vad = silero.NewSileroVAD()
 	}
 	if provider.vad != nil {
 		provider.turnDetectionMode = "external"
@@ -631,9 +637,6 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.speakerSensitivity != nil && (*s.speakerSensitivity <= 0 || *s.speakerSensitivity >= 1.0) {
 		problems = append(problems, "speaker_sensitivity must be between 0.0 and 1.0")
 	}
-	if s.sampleRate != 8000 && s.sampleRate != 16000 {
-		problems = append(problems, "sample_rate must be 8000 or 16000")
-	}
 	if s.enableDiarization != nil && !*s.enableDiarization {
 		if s.maxSpeakers != nil {
 			problems = append(problems, "max_speakers cannot be set when enable_diarization is False")
@@ -837,6 +840,8 @@ type speechmaticsSTTStream struct {
 	drainEventsAfterClose      bool
 	forcedEOUPending           bool
 	forcedEOUSeq               uint64
+	forcedEOUCompleted         bool
+	fixedEOUCompleted          bool
 }
 
 type speechmaticsStreamState struct {
@@ -947,13 +952,13 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfUtterance" {
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
 			s.clearForcedEOU()
-			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+			for _, event := range s.fixedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
 					return false
 				}
 			}
 		} else if s.consumeCurrentForcedEOU() {
-			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+			for _, event := range s.forcedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
 					return false
 				}
@@ -965,7 +970,21 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
 	}
+	if s.forcedEOUActive() && speechmaticsPartialMessage(resp.Message) {
+		for _, event := range speechmaticsForcedEOUPartialEvents(resp, s.state) {
+			if !s.enqueueEvent(event) {
+				return false
+			}
+		}
+		return true
+	}
+	if resp.Message == "StartOfTurn" {
+		s.resetCompletedEOU()
+	}
 	if resp.Message == "EndOfTurn" {
+		if s.consumeCompletedForcedEOU() || s.consumeCompletedFixedEOU() {
+			return true
+		}
 		s.clearForcedEOU()
 	}
 	for _, event := range speechmaticsEvents(resp, s.state) {
@@ -974,6 +993,17 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 	}
 	return true
+}
+
+func speechmaticsPartialMessage(message string) bool {
+	return message == "AddPartialSegment" || message == "AddPartialTranscript"
+}
+
+func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if resp.Message == "AddPartialTranscript" {
+		return speechmaticsFlushPendingRawFinals(state)
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
@@ -1706,7 +1736,7 @@ func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout(seq uint64) {
 		if !s.consumeForcedEOU(seq) {
 			return
 		}
-		for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+		for _, event := range s.forcedEOUEndEvents() {
 			if !s.enqueueEvent(event) {
 				return
 			}
@@ -1736,6 +1766,69 @@ func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
 	s.forcedEOUPending = false
 	s.forcedEOUSeq++
 	return true
+}
+
+func (s *speechmaticsSTTStream) forcedEOUActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.forcedEOUPending
+}
+
+func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
+	s.mu.Lock()
+	if !s.closed {
+		s.forcedEOUCompleted = true
+	}
+	s.mu.Unlock()
+	return speechmaticsEndOfTurnEvents(s.state)
+}
+
+func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
+	s.mu.Lock()
+	if !s.closed {
+		s.fixedEOUCompleted = true
+	}
+	s.mu.Unlock()
+	return speechmaticsEndOfTurnEvents(s.state)
+}
+
+func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forcedEOUCompleted {
+		return false
+	}
+	s.forcedEOUCompleted = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) consumeCompletedFixedEOU() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.fixedEOUCompleted {
+		return false
+	}
+	s.fixedEOUCompleted = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) resetCompletedEOU() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.forcedEOUCompleted = false
+	s.fixedEOUCompleted = false
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) clearForcedEOU() {

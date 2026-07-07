@@ -1655,6 +1655,31 @@ func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTDefaultExternalLoadsReferenceSileroVAD(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want default external", provider.turnDetectionMode)
+	}
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want reference default Silero VAD")
+	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want silero.VAD", label)
+	}
+}
+
+func TestSpeechmaticsSTTExplicitNilVADOptsOutOfReferenceAutoVAD(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTVAD(nil))
+
+	if provider.vad != nil {
+		t.Fatalf("vad = %#v, want nil when caller explicitly opts out", provider.vad)
+	}
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external", provider.turnDetectionMode)
+	}
+}
+
 func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	provider := NewSpeechmaticsSTT("test-key",
@@ -2561,7 +2586,7 @@ func TestSpeechmaticsSTTAllowsReferenceEndOfUtteranceMaxDelayWithoutTrigger(t *t
 	}
 }
 
-func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
+func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testing.T) {
 	tests := []struct {
 		name       string
 		sampleRate int
@@ -2576,13 +2601,13 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 			dials++
-			return nil, errors.New("unexpected speechmatics stt dial")
+			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := NewSpeechmaticsSTT("test-key",
 				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
@@ -2591,15 +2616,16 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
 
 			stream, err := provider.Stream(context.Background(), "")
 			if stream != nil {
-				t.Fatalf("Stream = %#v, want nil for invalid sample rate", stream)
+				t.Fatalf("Stream = %#v, want nil on dial failure", stream)
 			}
-			if err == nil || !strings.Contains(err.Error(), "sample_rate must be 8000 or 16000") {
-				t.Fatalf("Stream error = %v, want reference sample_rate validation", err)
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
+			}
+			if dials != i+1 {
+				t.Fatalf("dials = %d, want provider dial for reference sample_rate %d", dials, tt.sampleRate)
 			}
 		})
-	}
-	if dials != 0 {
-		t.Fatalf("invalid sample-rate streams dialed %d times, want none", dials)
 	}
 }
 
@@ -2774,6 +2800,134 @@ func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit end_of_speech")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit recognition usage")
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("late EndOfTurn stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late EndOfTurn events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTForcedEOUSuppressesReferencePartialSegments(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{includePartials: true},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	resp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{"text":"still talking","metadata":{"start_time":0.1,"end_time":0.4}}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal partial segment: %v", err)
+	}
+	if ok := stream.handleResponse(resp); !ok {
+		t.Fatal("AddPartialSegment stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("forced EOU partial events = %d, want suppressed reference partial", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTForcedEOURawPartialFlushesFinalOnly(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state: &speechmaticsStreamState{
+			bufferRawFinals: true,
+			includePartials: true,
+		},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	finalResp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{"type":"word","start_time":0.1,"end_time":0.4,"alternatives":[{"content":"done","confidence":0.9}]}]
+	}`), &finalResp); err != nil {
+		t.Fatalf("unmarshal final transcript: %v", err)
+	}
+	if ok := stream.handleResponse(finalResp); !ok {
+		t.Fatal("AddTranscript stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("buffered final events = %d, want none before reference follow-up partial", len(stream.events))
+	}
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	partialResp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{"type":"word","start_time":0.4,"end_time":0.6,"alternatives":[{"content":"late","confidence":0.8}]}]
+	}`), &partialResp); err != nil {
+		t.Fatalf("unmarshal partial transcript: %v", err)
+	}
+	if ok := stream.handleResponse(partialResp); !ok {
+		t.Fatal("AddPartialTranscript stopped read loop")
+	}
+	if len(stream.events) != 1 {
+		t.Fatalf("forced EOU raw partial events = %d, want only buffered final", len(stream.events))
+	}
+	event := <-stream.events
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "done" {
+		t.Fatalf("event = %#v, want buffered final transcript only", event)
+	}
+}
+
 func TestSpeechmaticsSTTProviderEndOfTurnCancelsReferenceForcedEOUTimeout(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 20 * time.Millisecond
@@ -2915,6 +3069,35 @@ func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.
 	}
 	if stateDuration := stream.state.speechDuration; stateDuration != 0 {
 		t.Fatalf("speech duration after EndOfUtterance = %v, want reset after usage emit", stateDuration)
+	}
+}
+
+func TestSpeechmaticsSTTFixedLateEndOfTurnAfterEndOfUtteranceDoesNotDuplicate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+	}
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit end_of_speech")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit recognition usage")
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("late EndOfTurn stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late fixed EndOfTurn events = %d, want no duplicate end_of_speech", len(stream.events))
 	}
 }
 
