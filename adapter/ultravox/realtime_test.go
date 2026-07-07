@@ -935,7 +935,7 @@ func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *t
 	}
 }
 
-func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *testing.T) {
+func TestUltravoxRealtimeSessionOutputMediumUpdateKeepsReferenceModalities(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -957,11 +957,14 @@ func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("model output medium = %q, want unchanged reference capability owner", got)
+	}
 
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 	textGeneration := requireUltravoxRealtimeGeneration(t, session)
 	textMessage := requireUltravoxRealtimeMessage(t, textGeneration)
-	requireUltravoxRealtimeModalities(t, textMessage.ModalitiesCh, []string{"text"})
+	requireUltravoxRealtimeModalities(t, textMessage.ModalitiesCh, []string{"audio", "text"})
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "listening"})
 	requireUltravoxRealtimeClosedText(t, textMessage.TextCh)
 

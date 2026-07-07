@@ -245,10 +245,10 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 		m.outputMedium = *update.outputMedium
 		sessions := m.realtimeSessions()
 		for _, session := range sessions {
-			_ = session.UpdateOptions(llm.RealtimeSessionOptions{
+			_ = session.updateOptions(llm.RealtimeSessionOptions{
 				OutputMedium:    *update.outputMedium,
 				OutputMediumSet: true,
-			})
+			}, true)
 		}
 	}
 }
@@ -541,6 +541,9 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	return nil
 }
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	return s.updateOptions(options, false)
+}
+func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, updateLocalModalities bool) error {
 	if !options.OutputMediumSet {
 		return nil
 	}
@@ -549,6 +552,9 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		"medium": options.OutputMedium,
 	}); err != nil {
 		return err
+	}
+	if !updateLocalModalities {
+		return nil
 	}
 	s.mu.Lock()
 	if options.OutputMedium == "voice" {
