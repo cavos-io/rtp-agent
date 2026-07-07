@@ -333,7 +333,7 @@ func TestUltravoxRealtimeSessionUpdateInstructionsUpdatesReferenceModelPrompt(t 
 	}
 }
 
-func TestUltravoxRealtimeSessionUpdateInstructionsClosesActiveGenerationForReferenceRestart(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateInstructionsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -356,10 +356,11 @@ func TestUltravoxRealtimeSessionUpdateInstructionsClosesActiveGenerationForRefer
 	requireUltravoxRealtimeText(t, message.TextCh, "hello")
 
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
-		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference restart cleanup", err)
+		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference restart", err)
 	}
-	requireUltravoxRealtimeClosedText(t, message.TextCh)
-	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	assertUltravoxRealtimeTextOpen(t, message.TextCh)
+	assertUltravoxRealtimeAudioOpen(t, message.AudioCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(t *testing.T) {
@@ -395,7 +396,7 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	}
 }
 
-func TestUltravoxRealtimeSessionUpdateToolsClosesActiveGenerationForReferenceRestart(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateToolsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -418,10 +419,11 @@ func TestUltravoxRealtimeSessionUpdateToolsClosesActiveGenerationForReferenceRes
 	requireUltravoxRealtimeText(t, message.TextCh, "hello")
 
 	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{name: "lookup"}}); err != nil {
-		t.Fatalf("UpdateTools changed tool set error = %v, want reference restart cleanup", err)
+		t.Fatalf("UpdateTools changed tool set error = %v, want reference restart", err)
 	}
-	requireUltravoxRealtimeClosedText(t, message.TextCh)
-	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	assertUltravoxRealtimeTextOpen(t, message.TextCh)
+	assertUltravoxRealtimeAudioOpen(t, message.AudioCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
@@ -1870,6 +1872,30 @@ func requireUltravoxRealtimeClosedAudio(t *testing.T, audioCh <-chan *audiomodel
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for closed audio channel")
+	}
+}
+
+func assertUltravoxRealtimeTextOpen(t *testing.T, textCh <-chan string) {
+	t.Helper()
+	select {
+	case _, ok := <-textCh:
+		if !ok {
+			t.Fatal("text channel closed on reference restart")
+		}
+		t.Fatal("unexpected text delta after reference restart")
+	default:
+	}
+}
+
+func assertUltravoxRealtimeAudioOpen(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) {
+	t.Helper()
+	select {
+	case _, ok := <-audioCh:
+		if !ok {
+			t.Fatal("audio channel closed on reference restart")
+		}
+		t.Fatal("unexpected audio frame after reference restart")
+	default:
 	}
 }
 

@@ -373,9 +373,8 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	if s.model != nil {
 		s.model.systemPrompt = instructions
 	}
-	generation := s.markRestartNeededLocked()
+	s.markRestartNeededLocked()
 	s.mu.Unlock()
-	s.finishGeneration(generation, true)
 	return nil
 }
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
@@ -540,9 +539,8 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		return nil
 	}
 	s.toolNames = nextToolNames
-	generation := s.markRestartNeededLocked()
+	s.markRestartNeededLocked()
 	s.mu.Unlock()
-	s.finishGeneration(generation, true)
 	return nil
 }
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
@@ -688,7 +686,7 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	}
 }
 
-func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration {
+func (s *realtimeSession) markRestartNeededLocked() {
 	s.restartCount++
 	s.pendingReply = false
 	close(s.clientEventCh)
@@ -701,9 +699,6 @@ func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration 
 	}
 	close(s.audioCh)
 	s.audioCh = make(chan []byte, cap(s.audioCh))
-	generation := s.generation
-	s.generation = nil
-	return generation
 }
 
 func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
