@@ -980,8 +980,12 @@ func TestCartesiaTTSStreamTextPacketsIncludeReferenceOptions(t *testing.T) {
 	}
 
 	msg := receiveCartesiaTestValue(t, messages, "stream text packet")
-	if msg["context_id"] != "default" || msg["transcript"] != "Bonjour tout le monde. " || msg["continue"] != true {
-		t.Fatalf("stream text packet = %#v, want reference context/transcript/continue", msg)
+	contextID, ok := msg["context_id"].(string)
+	if !ok || contextID == "" || contextID == "default" {
+		t.Fatalf("context_id = %#v, want generated reference stream context", msg["context_id"])
+	}
+	if msg["transcript"] != "Bonjour tout le monde. " || msg["continue"] != true {
+		t.Fatalf("stream text packet = %#v, want reference transcript/continue", msg)
 	}
 	if msg["model_id"] != "sonic-3" || msg["language"] != "fr" || msg["add_timestamps"] != false || msg["max_buffer_delay_ms"] != float64(0) {
 		t.Fatalf("stream options = %#v, want reference model/language/timestamp/max-buffer fields", msg)

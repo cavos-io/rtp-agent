@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
@@ -457,6 +458,7 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		audio:         make(chan *tts.SynthesizedAudio, 10),
 		errCh:         make(chan error, 1),
 		sampleRate:    t.sampleRate,
+		contextID:     cavosmath.ShortUUID(""),
 		streamOptions: cartesiaTTSStreamOptions(t),
 	}
 	stream.writeJSON = stream.writeJSONMessage
@@ -534,6 +536,7 @@ type cartesiaTTSStream struct {
 	flushed  bool
 
 	sampleRate    int
+	contextID     string
 	writeJSON     func(any) error
 	sentTokens    []string
 	skipAlignment bool
@@ -732,7 +735,7 @@ func (s *cartesiaTTSStream) sendCompleteSentencesLocked() error {
 
 func (s *cartesiaTTSStream) sendTranscriptLocked(text string) error {
 	msg := s.streamPacketLocked()
-	msg["context_id"] = "default"
+	msg["context_id"] = s.packetContextIDLocked()
 	msg["transcript"] = text + " "
 	msg["continue"] = true
 	s.sentTokens = append(s.sentTokens, text+" ")
@@ -777,7 +780,7 @@ func (s *cartesiaTTSStream) EndInput() error {
 		return err
 	}
 	msg := s.streamPacketLocked()
-	msg["context_id"] = "default"
+	msg["context_id"] = s.packetContextIDLocked()
 	msg["transcript"] = " "
 	msg["continue"] = false
 	s.flushed = true
@@ -796,6 +799,13 @@ func (s *cartesiaTTSStream) flushPendingTextLocked() error {
 	text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 	s.pendingText = ""
 	return s.sendTranscriptLocked(text)
+}
+
+func (s *cartesiaTTSStream) packetContextIDLocked() string {
+	if s.contextID != "" {
+		return s.contextID
+	}
+	return "default"
 }
 
 func (s *cartesiaTTSStream) closeAfterWriteFailureLocked() {
