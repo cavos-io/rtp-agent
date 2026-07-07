@@ -246,6 +246,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	return &realtimeSession{
 		eventCh:         make(chan llm.RealtimeEvent),
 		audioCh:         make(chan []byte, 256),
+		clientEventCh:   make(chan map[string]any, 256),
 		inputSampleRate: uint32(m.inputSampleRate),
 		audioStream:     coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 	}, nil
@@ -257,6 +258,7 @@ type realtimeSession struct {
 	mu              sync.Mutex
 	eventCh         chan llm.RealtimeEvent
 	audioCh         chan []byte
+	clientEventCh   chan map[string]any
 	inputSampleRate uint32
 	audioStream     *coreaudio.AudioByteStream
 	closed          bool
@@ -275,8 +277,16 @@ func (s *realtimeSession) UpdateTools([]llm.Tool) error {
 func (s *realtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return ultravoxRealtimeSessionUnsupported("update_options")
 }
-func (s *realtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
-	return ultravoxRealtimeSessionUnsupported("generate_reply")
+func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	text := ""
+	if options.InstructionsSet {
+		text = "<instruction>" + options.Instructions + "</instruction>"
+	}
+	return s.sendClientEvent(map[string]any{
+		"type":          "user_text_message",
+		"text":          text,
+		"deferResponse": false,
+	})
 }
 func (s *realtimeSession) Say(string) error {
 	return ultravoxRealtimeSessionUnsupported("say")
@@ -294,6 +304,7 @@ func (s *realtimeSession) Close() error {
 		s.closed = true
 		close(s.eventCh)
 		close(s.audioCh)
+		close(s.clientEventCh)
 	})
 	return nil
 }
@@ -340,6 +351,20 @@ var _ llm.RealtimeSession = (*realtimeSession)(nil)
 
 func ultravoxRealtimeSessionUnsupported(operation string) error {
 	return errors.New(operation + " is not implemented by the Ultravox realtime session")
+}
+
+func (s *realtimeSession) sendClientEvent(event map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	select {
+	case s.clientEventCh <- event:
+		return nil
+	default:
+		return errors.New("ultravox realtime client event queue is full")
+	}
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {

@@ -272,3 +272,58 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 		t.Fatal("PushAudio did not queue resampled/downmixed chunk")
 	}
 }
+
+func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v, want reference user text event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "answer briefly",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply with instructions error = %v, want reference instruction event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "<instruction>answer briefly</instruction>",
+		"deferResponse": false,
+	})
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply after Close error = %v, want reference no-op", err)
+	}
+}
+
+func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, want map[string]any) {
+	t.Helper()
+	select {
+	case got := <-session.clientEventCh:
+		for key, wantValue := range want {
+			if gotValue := got[key]; gotValue != wantValue {
+				t.Fatalf("client event %s = %#v, want %#v in %#v", key, gotValue, wantValue, got)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for client event %#v", want)
+	}
+}
