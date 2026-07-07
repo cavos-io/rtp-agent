@@ -4171,6 +4171,74 @@ func TestRoomIOCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRoomIOOnReceivesParticipantConnectedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantConnected, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	participant := &lksdk.RemoteParticipant{}
+	rio.onParticipantConnected(participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantConnectedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantConnectedEvent", ev)
+		}
+		if got.Type() != RoomEventParticipantConnected {
+			t.Fatalf("event type = %q, want %q", got.Type(), RoomEventParticipantConnected)
+		}
+		if got.Participant != participant {
+			t.Fatal("participant_connected event did not preserve participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_connected event")
+	}
+}
+
+func TestRoomIOOnReceivesParticipantDisconnectedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantDisconnected, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	participant := &lksdk.RemoteParticipant{}
+	rio.onParticipantDisconnected(participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantDisconnectedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantDisconnectedEvent", ev)
+		}
+		if got.Participant != participant {
+			t.Fatal("participant_disconnected event did not preserve participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_disconnected event")
+	}
+}
+
+func TestRoomIOOnUnsubscribeStopsDelivery(t *testing.T) {
+	rio := &RoomIO{}
+	calls := 0
+	unsubscribe := rio.On(RoomEventDisconnected, func(RoomEvent) {
+		calls++
+	})
+
+	unsubscribe()
+	rio.onRoomDisconnected()
+
+	if calls != 0 {
+		t.Fatalf("subscriber called after unsubscribe: %d", calls)
+	}
+}
+
 func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{AgentSession: session}
@@ -4193,6 +4261,102 @@ func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 		}
 	default:
 		t.Fatal("session did not receive SIP DTMF event")
+	}
+}
+
+func TestRoomIOWithCallbackPreservesExistingDataPacketCallback(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	existingCalled := false
+	cb := rio.WithCallback(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnDataPacket: func(packet lksdk.DataPacket, params lksdk.DataReceiveParams) {
+				dtmf, ok := packet.(*livekit.SipDTMF)
+				if !ok {
+					t.Fatalf("OnDataPacket packet = %T, want *livekit.SipDTMF", packet)
+				}
+				if dtmf.Digit != "5" {
+					t.Fatalf("OnDataPacket digit = %q, want 5", dtmf.Digit)
+				}
+				if params.SenderIdentity != "caller" {
+					t.Fatalf("OnDataPacket sender = %q, want caller", params.SenderIdentity)
+				}
+				existingCalled = true
+			},
+		},
+	})
+
+	cb.OnDataPacket(&livekit.SipDTMF{Digit: "5", Code: 5}, lksdk.DataReceiveParams{
+		SenderIdentity: "caller",
+	})
+
+	if !existingCalled {
+		t.Fatal("existing OnDataPacket callback was not called")
+	}
+	select {
+	case ev := <-session.SipDTMFEvents():
+		if ev.Digit != "5" {
+			t.Fatalf("SipDTMFEvent.Digit = %q, want 5", ev.Digit)
+		}
+	default:
+		t.Fatal("session did not receive SIP DTMF event")
+	}
+}
+
+func TestRoomIOOnReceivesSipDTMFReceivedEvent(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	events := make(chan RoomEvent, 1)
+	rio.On(RoomEventSipDTMFReceived, func(ev RoomEvent) {
+		events <- ev
+	})
+
+	rio.onDataPacket(&livekit.SipDTMF{Digit: "7", Code: 7}, lksdk.DataReceiveParams{
+		SenderIdentity: "caller",
+	})
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomSipDTMFReceivedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomSipDTMFReceivedEvent", ev)
+		}
+		if got.Event.Digit != "7" {
+			t.Fatalf("DTMF digit = %q, want 7", got.Event.Digit)
+		}
+		if got.Params.SenderIdentity != "caller" {
+			t.Fatalf("sender = %q, want caller", got.Params.SenderIdentity)
+		}
+	default:
+		t.Fatal("subscriber did not receive sip_dtmf_received event")
+	}
+
+	select {
+	case ev := <-session.SipDTMFEvents():
+		if ev.Digit != "7" {
+			t.Fatalf("session DTMF digit = %q, want 7", ev.Digit)
+		}
+	default:
+		t.Fatal("session did not receive SIP DTMF event")
+	}
+}
+
+func TestRoomIOOnListenerPanicDoesNotBlockOtherListeners(t *testing.T) {
+	rio := &RoomIO{}
+	called := make(chan struct{}, 1)
+	rio.On(RoomEventDisconnected, func(RoomEvent) {
+		panic("listener failed")
+	})
+	rio.On(RoomEventDisconnected, func(RoomEvent) {
+		called <- struct{}{}
+	})
+
+	rio.onRoomDisconnected()
+
+	select {
+	case <-called:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second listener was not called after first listener panic")
 	}
 }
 

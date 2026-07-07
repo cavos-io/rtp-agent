@@ -12,6 +12,7 @@ import (
 
 	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -403,6 +404,43 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	}
 }
 
+func TestJobContextMakeSessionReportIncludesSessionStartedAt(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{
+			Id: "job_session_report_started_at",
+			Room: &livekit.Room{
+				Sid:  "RM_session_started_at",
+				Name: "room-session-started-at",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = workerTestSessionAssistant{}
+
+	beforeStart := float64(time.Now().UnixNano()) / 1e9
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	afterStart := float64(time.Now().UnixNano()) / 1e9
+	defer session.CloseSoon(agent.CloseReasonUserInitiated)
+
+	ctx.SetPrimarySession(session)
+	report, err := ctx.MakeSessionReport()
+	if err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+
+	if report.StartedAt == nil {
+		t.Fatal("report StartedAt = nil, want session start timestamp")
+	}
+	if *report.StartedAt < beforeStart || *report.StartedAt > afterStart {
+		t.Fatalf("report StartedAt = %v, want between %v and %v", *report.StartedAt, beforeStart, afterStart)
+	}
+}
+
 func TestJobContextMakeSessionReportRequiresSession(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_report_no_session"}, "", "", "")
 
@@ -410,6 +448,14 @@ func TestJobContextMakeSessionReportRequiresSession(t *testing.T) {
 	if report, err := ctx.MakeSessionReport(); err == nil || report != nil || err.Error() != wantMessage {
 		t.Fatalf("MakeSessionReport() = %#v, %v; want nil and %q", report, err, wantMessage)
 	}
+}
+
+type workerTestSessionAssistant struct{}
+
+func (workerTestSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
+func (workerTestSessionAssistant) OnAudioFrame(context.Context, *audiomodel.AudioFrame) {
+}
+func (workerTestSessionAssistant) SetPublishAudio(func(context.Context, *audiomodel.AudioFrame) error) {
 }
 
 func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {

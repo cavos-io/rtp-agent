@@ -272,28 +272,31 @@ type AgentSession struct {
 	userState  UserState
 	agentState AgentState
 
-	mu                      sync.Mutex
-	activity                *AgentActivity
-	started                 bool
-	starting                bool
-	startDone               chan struct{}
-	closing                 bool
-	runCtx                  context.Context
-	runCancel               context.CancelFunc
-	runState                *RunResult
-	onEnterDepth            int
-	userTurnClaims          int
-	userTurnDone            chan struct{}
-	idleHolds               int
-	idleDone                chan struct{}
-	userAwayTimer           *time.Timer
-	userAwayGate            func() bool
-	aecWarmupTimer          *time.Timer
-	aecWarmupDone           bool
-	userdata                any
-	userdataSet             bool
-	jobContext              any
-	jobContextSet           bool
+	mu             sync.Mutex
+	activity       *AgentActivity
+	started        bool
+	starting       bool
+	startedAt      *float64
+	startDone      chan struct{}
+	closing        bool
+	runCtx         context.Context
+	runCancel      context.CancelFunc
+	runState       *RunResult
+	onEnterDepth   int
+	userTurnClaims int
+	userTurnDone   chan struct{}
+	idleHolds      int
+	idleDone       chan struct{}
+	userAwayTimer  *time.Timer
+	userAwayGate   func() bool
+	aecWarmupTimer *time.Timer
+	aecWarmupDone  bool
+	userdata       any
+	userdataSet    bool
+	jobContext     any
+	jobContextSet  bool
+	// UserTranscriptFilter, when non-nil, is applied before user transcript
+	// events are recorded or broadcast to RoomIO subscribers.
 	UserTranscriptFilter    func(string) string
 	mcpServers              []llm.MCPServer
 	recordedEvents          []Event
@@ -2245,6 +2248,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 		startDone = make(chan struct{})
 		s.starting = true
+		startedAt := float64(time.Now().UnixNano()) / 1e9
+		s.startedAt = &startedAt
 		s.startDone = startDone
 		break
 	}
