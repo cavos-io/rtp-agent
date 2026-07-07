@@ -755,20 +755,28 @@ func (s *speechmaticsSTTStream) readLoop() {
 			continue
 		}
 
-		if resp.Message == "EndOfTranscript" {
-			_ = s.closeTransport()
+		if !s.handleResponse(resp) {
 			return
 		}
-		if resp.Message == "SpeakersResult" {
-			s.recordSpeakerResult(resp.Speakers)
-			continue
-		}
-		for _, event := range speechmaticsEvents(resp, s.state) {
-			if !s.enqueueEvent(event) {
-				return
-			}
+	}
+}
+
+func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
+	if resp.Message == "EndOfTranscript" {
+		s.markClosed()
+		_ = s.closeTransport()
+		return false
+	}
+	if resp.Message == "SpeakersResult" {
+		s.recordSpeakerResult(resp.Speakers)
+		return true
+	}
+	for _, event := range speechmaticsEvents(resp, s.state) {
+		if !s.enqueueEvent(event) {
+			return false
 		}
 	}
+	return true
 }
 
 func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {

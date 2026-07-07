@@ -604,6 +604,26 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTEndOfTranscriptClosesStreamBeforeNext(t *testing.T) {
+	closedTransport := false
+	stream := &speechmaticsSTTStream{
+		closeConn: func() error {
+			closedTransport = true
+			return nil
+		},
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "EndOfTranscript"}); keepReading {
+		t.Fatal("EndOfTranscript handler continued reading, want terminal stream cleanup")
+	}
+	if !closedTransport {
+		t.Fatal("EndOfTranscript did not close provider transport")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after EndOfTranscript before Next = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestSpeechmaticsSTTCloseStopsBlockedTranscriptEnqueue(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	releaseWrites := make(chan struct{})
