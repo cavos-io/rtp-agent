@@ -266,6 +266,25 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
+	if len(s.pendingFrames) > 0 {
+		return s.emitFrame(s.popPendingFrame()), nil
+	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		s.finish()
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		if speechmaticsTTSTimeoutError(err) {
+			return nil, speechmaticsTTSTimeoutAPIError()
+		}
+		return nil, speechmaticsTTSConnectionAPIError()
+	}
+	if s.finalReady {
+		s.finalReady = false
+		return s.emitFinal()
+	}
 	if err := s.ensureStream(); err != nil {
 		if s.isClosedOrFinal() {
 			return nil, io.EOF
@@ -278,25 +297,6 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.stream == nil {
 		return nil, io.EOF
-	}
-	if len(s.pendingFrames) > 0 {
-		return s.emitFrame(s.popPendingFrame()), nil
-	}
-	if s.pendingErr != nil {
-		err := s.pendingErr
-		s.pendingErr = nil
-		s.finish()
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		if speechmaticsTTSTimeoutError(err) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-	if s.finalReady {
-		s.finalReady = false
-		return s.emitFinal()
 	}
 	for {
 		buf := make([]byte, 4096)
@@ -318,19 +318,28 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 					if err == io.EOF {
 						return s.emitFinal()
 					}
-					s.cancelRequest()
 					if errors.Is(err, context.Canceled) {
 						s.finish()
 						return nil, context.Canceled
 					}
-					if speechmaticsTTSTimeoutError(err) {
+					apiErr := speechmaticsTTSReadAPIError(err)
+					if retryErr := s.prepareRetryBeforeAudio(apiErr); retryErr == nil {
+						if openErr := s.ensureStream(); openErr != nil {
+							s.finish()
+							return nil, openErr
+						}
+						continue
+					} else if retryErr != apiErr {
 						s.finish()
-						return nil, llm.NewAPITimeoutError(err.Error())
+						return nil, retryErr
 					}
 					s.finish()
-					return nil, llm.NewAPIConnectionError(err.Error())
+					return nil, apiErr
 				}
 				continue
+			}
+			if err != nil {
+				s.closeTerminalResponse()
 			}
 			s.pendingFrames = append(s.pendingFrames, frames[1:]...)
 			return s.emitFrame(frames[0]), nil
@@ -345,18 +354,38 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return s.emitFinal()
 			}
-			s.cancelRequest()
 			if errors.Is(err, context.Canceled) {
 				s.finish()
 				return nil, context.Canceled
 			}
-			if speechmaticsTTSTimeoutError(err) {
+			apiErr := speechmaticsTTSReadAPIError(err)
+			if retryErr := s.prepareRetryBeforeAudio(apiErr); retryErr == nil {
+				if openErr := s.ensureStream(); openErr != nil {
+					s.finish()
+					return nil, openErr
+				}
+				continue
+			} else if retryErr != apiErr {
 				s.finish()
-				return nil, llm.NewAPITimeoutError(err.Error())
+				return nil, retryErr
 			}
 			s.finish()
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, apiErr
 		}
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) closeTerminalResponse() {
+	s.cancelRequest()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
 	}
 }
 
@@ -424,7 +453,7 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 	})
 	if err != nil {
 		requestCancel()
-		return llm.NewAPIConnectionError(err.Error())
+		return speechmaticsTTSConnectionAPIError()
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -433,9 +462,9 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 			return context.Canceled
 		}
 		if speechmaticsTTSTimeoutError(err) {
-			return llm.NewAPITimeoutError(err.Error())
+			return speechmaticsTTSTimeoutAPIError()
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return speechmaticsTTSConnectionAPIError()
 	}
 	if resp.StatusCode == 499 {
 		resp.Body.Close()
@@ -465,6 +494,21 @@ func speechmaticsTTSRetryableError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Retryable
 }
 
+func speechmaticsTTSTimeoutAPIError() error {
+	return llm.NewAPITimeoutError("")
+}
+
+func speechmaticsTTSConnectionAPIError() error {
+	return llm.NewAPIConnectionError("")
+}
+
+func speechmaticsTTSReadAPIError(err error) error {
+	if speechmaticsTTSTimeoutError(err) {
+		return speechmaticsTTSTimeoutAPIError()
+	}
+	return speechmaticsTTSConnectionAPIError()
+}
+
 func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
 	if s.emittedAudio || !speechmaticsTTSRetryableError(err) {
 		return err
@@ -485,6 +529,9 @@ func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error 
 	case <-timer.C:
 		return nil
 	case <-s.ctx.Done():
+		if s.isClosedOrFinal() {
+			return io.EOF
+		}
 		return context.Canceled
 	}
 }

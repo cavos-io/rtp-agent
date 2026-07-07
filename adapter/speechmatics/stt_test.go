@@ -1230,6 +1230,7 @@ func TestSpeechmaticsSTTReadLoopErrorDeliveryDoesNotBlockWhenErrorQueued(t *test
 }
 
 func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClosesVAD(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1238,12 +1239,24 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
-			_ = tcpConn.SetLinger(0)
-		}
-		_ = conn.UnderlyingConn().Close()
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
 	}))
 	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &speechmaticsFailAfterHandshakeWriteConn{Conn: conn}, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
@@ -1262,6 +1275,42 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 	}
 	if !vadStream.closed {
 		t.Fatal("VAD stream closed = false after startup write failure")
+	}
+}
+
+func TestSpeechmaticsSTTStreamRetriesReferenceStartupWriteFailure(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
+	upgrader := websocket.Upgrader{}
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		if attempts == 1 {
+			if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+				_ = tcpConn.SetLinger(0)
+			}
+			_ = conn.UnderlyingConn().Close()
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	if attempts != 2 {
+		t.Fatalf("startup attempts = %d, want one reference retry after StartRecognition write failure", attempts)
 	}
 }
 
@@ -1874,6 +1923,33 @@ func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsReferenceEmptyFrameSampleRateChange(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(16000)),
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              speechmaticsTestInt16PCM(160),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("empty-frame PushFrame() error = %v, want reference sample-rate consistency error", err)
+	}
+}
+
 func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
@@ -1904,6 +1980,34 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 	if got := len(writes[0]); got != 3200 {
 		t.Fatalf("buffered chunk length = %d, want 3200", got)
+	}
+}
+
+func TestSpeechmaticsSTTStartupDrainWriteFailureSurfacesToNext(t *testing.T) {
+	writeErr := errors.New("startup write failed")
+	stream := &speechmaticsSTTStream{
+		events:                    make(chan *stt.SpeechEvent, 1),
+		errCh:                     make(chan error, 1),
+		done:                      make(chan struct{}),
+		waitForRecognitionStarted: true,
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); keepReading {
+		t.Fatal("RecognitionStarted kept read loop after startup drain write failure")
+	}
+	if _, err := stream.Next(); !errors.Is(err, writeErr) {
+		t.Fatalf("Next() error after startup drain write failure = %v, want %v", err, writeErr)
 	}
 }
 
@@ -2519,9 +2623,12 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 }
 
 func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	oldDialer := websocket.DefaultDialer
+	attempts := 0
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			attempts++
 			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
@@ -2537,6 +2644,61 @@ func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *test
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
+	if connectionErr.Message != "failed to recognize speech after 3 attempts" {
+		t.Fatalf("APIConnectionError message = %q, want reference exhausted-retry summary", connectionErr.Message)
+	}
+	if attempts != 4 {
+		t.Fatalf("dial attempts = %d, want initial attempt plus 3 reference retries", attempts)
+	}
+}
+
+func TestSpeechmaticsSTTStreamRetriesReferenceTransientDialFailure(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	var attempts int
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("transient dial failed")
+			}
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, network, addr)
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	if attempts != 2 {
+		t.Fatalf("dial attempts = %d, want one reference retry after transient failure", attempts)
+	}
+}
+
+func withSpeechmaticsSTTRetryInterval(t *testing.T, interval time.Duration) {
+	t.Helper()
+	previous := speechmaticsSTTRetryInterval
+	speechmaticsSTTRetryInterval = func(int) time.Duration { return interval }
+	t.Cleanup(func() { speechmaticsSTTRetryInterval = previous })
 }
 
 func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testing.T) {
@@ -2587,6 +2749,7 @@ func TestSpeechmaticsSTTAllowsReferenceEndOfUtteranceMaxDelayWithoutTrigger(t *t
 }
 
 func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	tests := []struct {
 		name       string
 		sampleRate int
@@ -2607,8 +2770,9 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for i, tt := range tests {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			dialsBefore := dials
 			provider := NewSpeechmaticsSTT("test-key",
 				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
 				WithSpeechmaticsSTTSampleRate(tt.sampleRate),
@@ -2622,18 +2786,18 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 			if !errors.As(err, &connectionErr) {
 				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
 			}
-			if dials != i+1 {
+			if dials <= dialsBefore {
 				t.Fatalf("dials = %d, want provider dial for reference sample_rate %d", dials, tt.sampleRate)
 			}
 		})
 	}
 }
 
-func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(t *testing.T) {
+func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachProvider(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	tests := []struct {
 		name string
 		opts []SpeechmaticsSTTOption
-		want string
 	}{
 		{
 			name: "focus speakers",
@@ -2641,7 +2805,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, nil, "retain"),
 			},
-			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
 		},
 		{
 			name: "ignore speakers",
@@ -2649,7 +2812,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTSpeakerFocus(nil, []string{"noise"}, "retain"),
 			},
-			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
 		},
 		{
 			name: "max speakers",
@@ -2657,7 +2819,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTMaxSpeakers(3),
 			},
-			want: "max_speakers cannot be set when enable_diarization is False",
 		},
 	}
 
@@ -2666,7 +2827,7 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 			dials++
-			return nil, errors.New("unexpected speechmatics stt dial")
+			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
 	}
@@ -2674,20 +2835,74 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			dialsBefore := dials
 			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2")}, tt.opts...)
 			provider := NewSpeechmaticsSTT("test-key", opts...)
+			if err := validateSpeechmaticsSTTOptions(provider); err != nil {
+				t.Fatalf("validateSpeechmaticsSTTOptions() error = %v, want reference config accepted", err)
+			}
+			message := buildSpeechmaticsSTTStartMessage(provider, "")
+			config := message["transcription_config"].(map[string]interface{})
+			if _, ok := config["diarization"]; ok {
+				t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
+			}
+			if _, ok := config["speaker_diarization_config"]; ok {
+				t.Fatalf("speaker_diarization_config = %#v, want omitted when reference diarization disabled", config["speaker_diarization_config"])
+			}
 
 			stream, err := provider.Stream(context.Background(), "")
 			if stream != nil {
-				t.Fatalf("Stream = %#v, want nil for invalid disabled diarization options", stream)
+				t.Fatalf("Stream = %#v, want nil on dial failure", stream)
 			}
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Stream error = %v, want %q", err, tt.want)
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
+			}
+			if dials <= dialsBefore {
+				t.Fatalf("dials = %d, want provider dial for reference disabled-diarization options", dials)
 			}
 		})
 	}
-	if dials != 0 {
-		t.Fatalf("invalid disabled-diarization streams dialed %d times, want none", dials)
+}
+
+func TestSpeechmaticsSTTStreamSeedsReferenceStartTime(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		var message map[string]interface{}
+		_ = conn.ReadJSON(&message)
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	before := float64(time.Now().UnixNano()) / 1e9
+	stream, err := provider.Stream(context.Background(), "")
+	after := float64(time.Now().UnixNano()) / 1e9
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(interface{ StartTime() float64 })
+	if !ok {
+		t.Fatalf("stream %T does not expose start time", stream)
+	}
+	if got := timing.StartTime(); got < before || got > after {
+		t.Fatalf("StartTime() = %v, want between %v and %v", got, before, after)
 	}
 }
 
@@ -4356,6 +4571,19 @@ func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
 		data = append(data, sample[:]...)
 	}
 	return data
+}
+
+type speechmaticsFailAfterHandshakeWriteConn struct {
+	net.Conn
+	writes int
+}
+
+func (c *speechmaticsFailAfterHandshakeWriteConn) Write(p []byte) (int, error) {
+	c.writes++
+	if c.writes > 1 {
+		return 0, errors.New("startup write failed")
+	}
+	return c.Conn.Write(p)
 }
 
 type fakeSpeechmaticsVAD struct {

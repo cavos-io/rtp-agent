@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -623,6 +624,107 @@ func TestSpeechmaticsTTSSynthesizeRetriesReferenceNoAudioBeforeAudio(t *testing.
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeRetriesReferenceReadErrorBeforeAudio(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       speechmaticsReadErrorBody{},
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x05, 0x06})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry after pre-audio read error", err)
+	}
+	if audio == nil || audio.Frame == nil || string(audio.Frame.Data) != string([]byte{0x05, 0x06}) {
+		t.Fatalf("Next() audio = %+v, want PCM from retried request", audio)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want one retry after pre-audio read error", requests)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCloseDuringReferenceRetryWaitReturnsEOF(t *testing.T) {
+	previousRetryInterval := speechmaticsTTSRetryInterval
+	retryStarted := make(chan struct{})
+	var retryOnce sync.Once
+	speechmaticsTTSRetryInterval = func(int) time.Duration {
+		retryOnce.Do(func() { close(retryStarted) })
+		return time.Hour
+	}
+	t.Cleanup(func() { speechmaticsTTSRetryInterval = previousRetryInterval })
+
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       speechmaticsReadErrorBody{},
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			result <- fmt.Errorf("Next audio = %+v, want nil after close during retry", audio)
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case <-retryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not enter retry wait")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if err != io.EOF {
+			t.Fatalf("Next error = %v, want EOF after close during retry wait", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after Close during retry wait")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want no retry request after Close", requests)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAcceptsReferenceNoContentStatus(t *testing.T) {
 	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
@@ -709,6 +811,7 @@ func TestSpeechmaticsTTSSynthesizeStartsReferenceTimeoutAtRequest(t *testing.T) 
 }
 
 func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("http://[::1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
@@ -724,6 +827,9 @@ func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "Connection error." {
+		t.Fatalf("APIConnectionError message = %q, want reference default", connectionErr.Message)
 	}
 }
 
@@ -818,6 +924,7 @@ func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 }
 
 func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -835,6 +942,9 @@ func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("APITimeoutError message = %q, want reference default", timeoutErr.Message)
 	}
 }
 
@@ -864,6 +974,7 @@ func TestSpeechmaticsTTSSynthesizeRequestCancelReturnsContextCanceled(t *testing
 }
 
 func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -886,6 +997,9 @@ func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testi
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
+	if connectionErr.Message != "Connection error." {
+		t.Fatalf("APIConnectionError message = %q, want reference default", connectionErr.Message)
+	}
 }
 
 func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
@@ -904,8 +1018,9 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing
 }
 
 func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
+	body := &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}}
 	stream := &speechmaticsTTSChunkedStream{
-		stream:     &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}},
+		stream:     body,
 		sampleRate: 24000,
 	}
 
@@ -915,6 +1030,9 @@ func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
 	}
 	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
 		t.Fatalf("first Next = %+v, want provider audio bytes", audio)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("response body close count after terminal read = %d, want %d", got, want)
 	}
 
 	_, err = stream.Next()
@@ -1311,8 +1429,9 @@ func (b speechmaticsCloseErrorBody) Close() error {
 }
 
 type speechmaticsDataThenErrorBody struct {
-	data []byte
-	done bool
+	data       []byte
+	done       bool
+	closeCount int
 }
 
 func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
@@ -1325,6 +1444,7 @@ func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
 }
 
 func (b *speechmaticsDataThenErrorBody) Close() error {
+	b.closeCount++
 	return nil
 }
 

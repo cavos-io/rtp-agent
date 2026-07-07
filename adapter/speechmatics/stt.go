@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -64,6 +65,9 @@ const (
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
+var speechmaticsSTTRetryInterval = func(retryAttempt int) time.Duration {
+	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
+}
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -298,7 +302,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	if err := validateSpeechmaticsSTTOptions(s); err != nil {
 		return nil, err
 	}
-	header := make(map[string][]string)
+	header := make(http.Header)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
 	dialCtx := ctx
@@ -323,61 +327,109 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		defer close(stopCloseWatch)
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
-	if err != nil {
-		if s.isClosed() {
-			return nil, io.ErrClosedPipe
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
+	startupAttempt := 0
+
+	for {
+		conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header, &startupAttempt)
+		if err != nil {
 			return nil, err
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		if s.isClosed() {
+			conn.Close()
+			return nil, io.ErrClosedPipe
+		}
+
+		streamStartTime := time.Now()
+		stream := &speechmaticsSTTStream{
+			conn:   conn,
+			events: make(chan *stt.SpeechEvent, 10),
+			errCh:  make(chan error, 1),
+			done:   make(chan struct{}),
+			state: &speechmaticsStreamState{
+				language:             streamLanguage,
+				speakerActiveFormat:  s.speakerActiveFormat,
+				speakerPassiveFormat: s.speakerPassiveFormat,
+				focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
+				ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+				focusMode:            s.focusMode,
+				includePartials:      speechmaticsIncludePartials(s),
+				bufferRawFinals:      true,
+				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
+			},
+			owner:                     s,
+			waitForRecognitionStarted: true,
+		}
+		stream.writeBinary = stream.writeBinaryMessage
+		stream.writeJSON = stream.writeJSONMessage
+		if err := stream.startVAD(ctx); err != nil {
+			conn.Close()
+			return nil, err
+		}
+
+		initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
+
+		if err := conn.WriteJSON(initMsg); err != nil {
+			_ = stream.Close()
+			if retryErr := s.waitBeforeStartupRetry(dialCtx, err, &startupAttempt); retryErr != nil {
+				return nil, retryErr
+			}
+			continue
+		}
+
+		if !s.registerStream(stream) {
+			_ = stream.Close()
+			return nil, io.ErrClosedPipe
+		}
+		go stream.readLoop()
+
+		return stream, nil
 	}
+}
+
+func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, header http.Header, startupAttempt *int) (*websocket.Conn, error) {
+	for {
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
+		if err == nil {
+			return conn, nil
+		}
+		if retryErr := s.waitBeforeStartupRetry(ctx, err, startupAttempt); retryErr != nil {
+			return nil, retryErr
+		}
+	}
+}
+
+func (s *SpeechmaticsSTT) waitBeforeStartupRetry(ctx context.Context, err error, startupAttempt *int) error {
 	if s.isClosed() {
-		conn.Close()
-		return nil, io.ErrClosedPipe
+		return io.ErrClosedPipe
 	}
-	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
-
-	stream := &speechmaticsSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
-		done:   make(chan struct{}),
-		state: &speechmaticsStreamState{
-			language:             streamLanguage,
-			speakerActiveFormat:  s.speakerActiveFormat,
-			speakerPassiveFormat: s.speakerPassiveFormat,
-			focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
-			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
-			focusMode:            s.focusMode,
-			includePartials:      speechmaticsIncludePartials(s),
-			bufferRawFinals:      true,
-		},
-		owner:                     s,
-		waitForRecognitionStarted: true,
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
 	}
-	stream.writeBinary = stream.writeBinaryMessage
-	stream.writeJSON = stream.writeJSONMessage
-	if err := stream.startVAD(ctx); err != nil {
-		conn.Close()
-		return nil, err
+	connectionErr := llm.NewAPIConnectionError(err.Error())
+	if startupAttempt == nil {
+		return connectionErr
 	}
-
-	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
-
-	if err := conn.WriteJSON(initMsg); err != nil {
-		_ = stream.Close()
-		return nil, llm.NewAPIConnectionError(err.Error())
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	if *startupAttempt >= maxRetry {
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", *startupAttempt))
 	}
-
-	if !s.registerStream(stream) {
-		_ = stream.Close()
-		return nil, io.ErrClosedPipe
+	interval := speechmaticsSTTRetryInterval(*startupAttempt)
+	*startupAttempt = *startupAttempt + 1
+	if interval <= 0 {
+		return nil
 	}
-	go stream.readLoop()
-
-	return stream, nil
+	timer := time.NewTimer(interval)
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		timer.Stop()
+		if s.isClosed() {
+			return io.ErrClosedPipe
+		}
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -636,14 +688,6 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	}
 	if s.speakerSensitivity != nil && (*s.speakerSensitivity <= 0 || *s.speakerSensitivity >= 1.0) {
 		problems = append(problems, "speaker_sensitivity must be between 0.0 and 1.0")
-	}
-	if s.enableDiarization != nil && !*s.enableDiarization {
-		if s.maxSpeakers != nil {
-			problems = append(problems, "max_speakers cannot be set when enable_diarization is False")
-		}
-		if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 {
-			problems = append(problems, "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False")
-		}
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid Speechmatics STT options: %s", strings.Join(problems, ", "))
@@ -1437,13 +1481,18 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	if frame == nil || len(frame.Data) == 0 {
+	if frame == nil {
 		s.mu.Unlock()
 		return nil
 	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		s.mu.Unlock()
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	s.pushedSampleRate = frame.SampleRate
+	if len(frame.Data) == 0 {
+		s.mu.Unlock()
+		return nil
 	}
 	vadStream := s.vadStream
 	bufferVAD := vadStream != nil && s.startupGateActiveLocked()
@@ -1469,7 +1518,6 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
-	s.pushedSampleRate = frame.SampleRate
 	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
 	if err != nil {
 		return err
@@ -2214,6 +2262,11 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 				}
 			default:
 			}
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
 		}
 		return nil, io.EOF
 	}
