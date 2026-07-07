@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3497,6 +3496,51 @@ func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
 	}
 }
 
+func TestUploadJobSessionReportWaitsForUploadCompletion(t *testing.T) {
+	oldUpload := uploadSessionReport
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	uploadSessionReport = func(string, string, string, string, *agent.SessionReport) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	}
+	defer func() { uploadSessionReport = oldUpload }()
+
+	server := NewAgentServer(WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "support-agent",
+	})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_upload_wait"}, "wss://tenant.livekit.cloud", "", "")
+	jobCtx.Report = agent.NewSessionReport()
+	jobCtx.Report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	done := make(chan struct{})
+	go func() {
+		server.uploadJobSessionReport(jobCtx)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("upload did not start")
+	}
+	select {
+	case <-done:
+		t.Fatal("uploadJobSessionReport returned before upload completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("uploadJobSessionReport did not return after upload completed")
+	}
+}
+
 func TestAssignmentWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
 	oldUpload := uploadSessionReport
 	uploadCh := make(chan struct{}, 1)
@@ -4323,11 +4367,12 @@ func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
 			<-ctx.Done()
 			_ = server.Close()
 		}()
-		wsURL, err := url.Parse(rawURL)
-		if err != nil {
-			return nil, nil, err
-		}
-		conn, response, err := websocket.NewClient(clientConn, wsURL, header, 1024, 1024)
+		conn, response, err := (&websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}).DialContext(ctx, rawURL, header)
 		if err != nil {
 			_ = clientConn.Close()
 			_ = server.Close()
@@ -4439,11 +4484,12 @@ func TestRunResetsRetryAfterSuccessfulWorkerConnection(t *testing.T) {
 			<-ctx.Done()
 			_ = server.Close()
 		}()
-		wsURL, err := url.Parse(rawURL)
-		if err != nil {
-			return nil, nil, err
-		}
-		conn, response, err := websocket.NewClient(clientConn, wsURL, header, 1024, 1024)
+		conn, response, err := (&websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}).DialContext(ctx, rawURL, header)
 		if err != nil {
 			_ = clientConn.Close()
 			_ = server.Close()
