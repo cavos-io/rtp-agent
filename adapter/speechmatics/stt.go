@@ -469,6 +469,7 @@ func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) bool {
 	}
 	s.streams[stream] = struct{}{}
 	stream.owner = s
+	stream.providerManagedEndpointing = speechmaticsProviderManagedEndpointing(s)
 	return true
 }
 
@@ -624,6 +625,10 @@ func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	return config
 }
 
+func speechmaticsProviderManagedEndpointing(s *SpeechmaticsSTT) bool {
+	return s != nil && (s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
+}
+
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
 	if s == nil || s.includePartials == nil {
 		return true
@@ -701,10 +706,11 @@ type speechmaticsSTTStream struct {
 	inputAudio  speechmaticsSTTInputAudioNormalizer
 	audioReady  bool
 
-	waitForRecognitionStarted bool
-	pendingAudioChunks        [][]byte
-	speakerResultCh           chan []SpeechmaticsSpeakerIdentifier
-	pushedSampleRate          uint32
+	waitForRecognitionStarted  bool
+	pendingAudioChunks         [][]byte
+	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate           uint32
+	providerManagedEndpointing bool
 }
 
 type speechmaticsStreamState struct {
@@ -1130,6 +1136,9 @@ func (s *speechmaticsSTTStream) Finalize() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.providerManagedEndpointing {
+		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
 }

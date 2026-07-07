@@ -1198,6 +1198,36 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  SpeechmaticsSTTOption
+	}{
+		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
+		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key", tt.opt)
+			stream := &speechmaticsSTTStream{
+				writeJSON: func(message interface{}) error {
+					t.Fatalf("finalize write = %#v, want skipped for provider-managed endpointing", message)
+					return nil
+				},
+				closeConn: func() error {
+					return nil
+				},
+			}
+			provider.registerStream(stream)
+
+			if err := provider.Finalize(); err != nil {
+				t.Fatalf("Finalize error = %v", err)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	var writes []map[string]interface{}
