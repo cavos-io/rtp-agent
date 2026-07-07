@@ -137,7 +137,9 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		_ = conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-	if err := conn.WriteMessage(websocket.BinaryMessage, createTelnyxStreamingWAVHeader(s.sampleRate, telnyxSTTNumChannels)); err != nil {
+	if err := writeTelnyxSTTHeader(func(data []byte) error {
+		return conn.WriteMessage(websocket.BinaryMessage, data)
+	}, s.sampleRate); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -333,6 +335,16 @@ func createTelnyxStreamingWAVHeader(sampleRate int, numChannels int) []byte {
 	copy(header[36:40], "data")
 	binary.LittleEndian.PutUint32(header[40:44], dataSize)
 	return header
+}
+
+func writeTelnyxSTTHeader(write func([]byte) error, sampleRate int) error {
+	if write == nil {
+		return nil
+	}
+	if err := write(createTelnyxStreamingWAVHeader(sampleRate, telnyxSTTNumChannels)); err != nil {
+		return telnyxSTTWriteError(err)
+	}
+	return nil
 }
 
 type telnyxSTTStream struct {

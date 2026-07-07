@@ -1,6 +1,7 @@
 package telnyx
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -126,6 +127,25 @@ func TestTelnyxSTTStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
+func TestTelnyxSTTStreamHeaderWriteFailureReturnsAPIConnectionError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	var wroteHeader []byte
+	err := writeTelnyxSTTHeader(func(data []byte) error {
+		wroteHeader = append([]byte(nil), data...)
+		return writeErr
+	}, 16000)
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("header write error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx STT websocket write failed") {
+		t.Fatalf("header write error = %q, want write context", err)
+	}
+	if !bytes.Equal(wroteHeader, createTelnyxStreamingWAVHeader(16000, telnyxSTTNumChannels)) {
+		t.Fatalf("wrote header length = %d, want reference WAV header", len(wroteHeader))
 	}
 }
 
