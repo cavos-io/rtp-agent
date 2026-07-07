@@ -396,6 +396,41 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateToolsKeepsReferenceSameNameToolState(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	lookupV1 := ultravoxRealtimeTestTool{name: "lookup", description: "old schema"}
+	if err := session.UpdateTools([]llm.Tool{lookupV1}); err != nil {
+		t.Fatalf("UpdateTools lookup v1 error = %v", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after first tool = %d, want 1", got)
+	}
+
+	lookupV2 := ultravoxRealtimeTestTool{name: "lookup", description: "new schema"}
+	if err := session.UpdateTools([]llm.Tool{lookupV2}); err != nil {
+		t.Fatalf("UpdateTools lookup v2 error = %v", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after same-name tool update = %d, want no restart", got)
+	}
+	if got := len(session.tools); got != 1 {
+		t.Fatalf("tools len = %d, want 1 updated reference tool", got)
+	}
+	if got := session.tools[0].Description(); got != "new schema" {
+		t.Fatalf("tool description = %q, want updated same-name reference tool", got)
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateToolsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -2032,14 +2067,15 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 }
 
 type ultravoxRealtimeTestTool struct {
-	name string
+	name        string
+	description string
 }
 
 func (t ultravoxRealtimeTestTool) ID() string { return t.name }
 func (t ultravoxRealtimeTestTool) Name() string {
 	return t.name
 }
-func (t ultravoxRealtimeTestTool) Description() string { return "" }
+func (t ultravoxRealtimeTestTool) Description() string { return t.description }
 func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
 	return nil
 }

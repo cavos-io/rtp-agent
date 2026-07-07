@@ -355,6 +355,7 @@ type realtimeSession struct {
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
 	generationSeq    uint64
+	tools            []llm.Tool
 	toolNames        map[string]struct{}
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
@@ -525,10 +526,12 @@ func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	nextToolNames := make(map[string]struct{}, len(tools))
+	nextTools := make([]llm.Tool, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
+		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
 	}
 
@@ -538,9 +541,11 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		return nil
 	}
 	if ultravoxRealtimeToolNameSetsEqual(s.toolNames, nextToolNames) {
+		s.tools = nextTools
 		s.mu.Unlock()
 		return nil
 	}
+	s.tools = nextTools
 	s.toolNames = nextToolNames
 	s.markRestartNeededLocked()
 	s.mu.Unlock()
