@@ -306,6 +306,34 @@ func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionCloseFinishesReferenceActiveGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hello",
+		Final:   false,
+		Ordinal: 1,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hello")
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v, want reference active generation cleanup", err)
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -489,14 +489,18 @@ func (s *realtimeSession) Interrupt() error {
 	return nil
 }
 func (s *realtimeSession) Close() error {
+	var generation *ultravoxRealtimeGeneration
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
+		generation = s.generation
 		s.closed = true
+		s.generation = nil
 		close(s.eventCh)
 		close(s.audioCh)
 		close(s.clientEventCh)
+		s.mu.Unlock()
 	})
+	s.finishGeneration(generation)
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
