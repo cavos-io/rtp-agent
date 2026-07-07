@@ -594,6 +594,42 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	}
 }
 
+func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true, speechDuration: 0.75}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.4,
+			"alternatives":[{"content":"done","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before turn end = %#v, want buffered until reference turn boundary", events)
+	}
+	events := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(events) != 3 {
+		t.Fatalf("end events = %#v, want final transcript, end_of_speech, recognition_usage", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
+		t.Fatalf("first event = %#v, want buffered final transcript before turn end", events[0])
+	}
+	if events[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event = %s, want end_of_speech", events[1].Type)
+	}
+	if events[2].Type != stt.SpeechEventRecognitionUsage || events[2].RecognitionUsage == nil || events[2].RecognitionUsage.AudioDuration != 0.75 {
+		t.Fatalf("third event = %#v, want recognition usage", events[2])
+	}
+	if len(state.pendingRawFinals) != 0 {
+		t.Fatalf("pending finals = %#v, want flushed at turn end", state.pendingRawFinals)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{

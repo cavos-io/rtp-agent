@@ -1002,10 +1002,20 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 }
 
 func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEvent {
-	events := []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}
+	events := speechmaticsFlushPendingRawFinals(state)
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	if usage := speechmaticsRecognitionUsageEvent(state); usage != nil {
 		events = append(events, usage)
 	}
+	return events
+}
+
+func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if state == nil || len(state.pendingRawFinals) == 0 {
+		return nil
+	}
+	events := state.pendingRawFinals
+	state.pendingRawFinals = nil
 	return events
 }
 
