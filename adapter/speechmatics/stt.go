@@ -860,6 +860,7 @@ type smResponse struct {
 			Content    string  `json:"content"`
 			Confidence float64 `json:"confidence"`
 			SpeakerID  string  `json:"speaker"`
+			Language   string  `json:"language"`
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
 		StartTime float64 `json:"start_time"`
@@ -1019,6 +1020,7 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 	hasTiming := false
 	var confidenceCount float64
 	speakerID := ""
+	language := speechmaticsSegmentLanguage("", state)
 	var words []stt.TimedString
 
 	for _, result := range resp.Results {
@@ -1029,6 +1031,9 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
+		}
+		if alt.Language != "" {
+			language = alt.Language
 		}
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
@@ -1071,6 +1076,7 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 			Alternatives: []stt.SpeechData{
 				{
 					Text:       transcript,
+					Language:   language,
 					Confidence: totalConfidence / confidenceCount,
 					SpeakerID:  speakerID,
 					StartTime:  minStart,
@@ -1089,6 +1095,7 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 		Alternatives: []stt.SpeechData{
 			{
 				Text:       resp.Metadata.Transcript,
+				Language:   speechmaticsSegmentLanguage("", state),
 				Confidence: 1.0,
 				StartTime:  resp.Metadata.StartTime + startTimeOffset,
 				EndTime:    resp.Metadata.EndTime + startTimeOffset,

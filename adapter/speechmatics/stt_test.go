@@ -33,6 +33,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Content    string  `json:"content"`
 				Confidence float64 `json:"confidence"`
 				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			StartTime float64 `json:"start_time"`
@@ -46,6 +47,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "hello", Confidence: 0.92}},
 			},
 			{
@@ -56,6 +58,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: ",", Confidence: 1.0}},
 			},
 			{
@@ -66,6 +69,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
@@ -101,6 +105,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				Content    string  `json:"content"`
 				Confidence float64 `json:"confidence"`
 				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			StartTime float64 `json:"start_time"`
@@ -114,6 +119,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "hello", Confidence: 0.92}},
 			},
 			{
@@ -124,6 +130,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: ",", Confidence: 1.0}},
 			},
 			{
@@ -134,6 +141,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 					Content    string  `json:"content"`
 					Confidence float64 `json:"confidence"`
 					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
 				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
@@ -247,6 +255,52 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferenceSpeakerFiltering(t *test
 	}
 	if len(alt.Words) != 1 || alt.Words[0].Text != "agent" || alt.Words[0].SpeakerID != "agent" {
 		t.Fatalf("words = %#v, want only agent word with speaker id", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptAppliesReferenceLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hola","confidence":0.9,"speaker":"agent","language":"es"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "en"})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "es" {
+		t.Fatalf("language = %q, want raw alternative language", got)
+	}
+	if got := events[0].Alternatives[0].Words[0].StartTimeOffset; got != 0 {
+		t.Fatalf("word start_time_offset = %v, want default zero offset", got)
+	}
+
+	metadataOnly := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "fallback language",
+			StartTime:  0.1,
+			EndTime:    0.2,
+		},
+	}
+	events = speechmaticsEvents(metadataOnly, &speechmaticsStreamState{language: "fr"})
+	if len(events) != 1 {
+		t.Fatalf("metadata-only events = %#v, want one raw transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "fr" {
+		t.Fatalf("metadata-only language = %q, want stream language fallback", got)
 	}
 }
 
