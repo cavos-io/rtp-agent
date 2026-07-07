@@ -323,6 +323,22 @@ func TestUpliftAITTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("UPLIFTAI_API_KEY", "")
+	provider := NewUpliftAITTS("", "", WithUpliftAIBaseURL("https://upliftai.example/v1/tts"))
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil without API key", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "UPLIFTAI_API_KEY") {
+		t.Fatalf("Stream error = %q, want UPLIFTAI_API_KEY guidance", err)
+	}
+}
+
 func TestUpliftAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	oldClient := http.DefaultClient
 	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}

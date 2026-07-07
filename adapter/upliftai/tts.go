@@ -227,6 +227,9 @@ func (t *UpliftAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("API key is required, either as argument or set UPLIFTAI_API_KEY environment variable")
+	}
 	stream := newUpliftAITTSSynthesizeStream(t, ctx)
 	if !t.registerStream(stream) {
 		_ = stream.Close()
