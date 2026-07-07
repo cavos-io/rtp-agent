@@ -678,6 +678,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 			phraseReplacementConfigID,
 		)
 		if err != nil {
+			s.finalSent = true
 			return err
 		}
 		s.resp = &http.Response{Body: body}

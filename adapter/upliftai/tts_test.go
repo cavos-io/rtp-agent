@@ -2257,6 +2257,12 @@ func TestUpliftAITTSChunkedStreamSocketIOConnectPingWriteFailureIsAPIConnectionE
 	if got, want := dials, upliftAISocketIOAttempts; got != want {
 		t.Fatalf("socket.io dial count = %d, want reference reconnect attempts %d", got, want)
 	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after socket.io connect failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if got, want := dials, upliftAISocketIOAttempts; got != want {
+		t.Fatalf("socket.io dial count after terminal failure = %d, want %d", got, want)
+	}
 }
 
 func TestUpliftAITTSChunkedStreamSocketIOAuthWriteCancelReturnsContextCanceled(t *testing.T) {
