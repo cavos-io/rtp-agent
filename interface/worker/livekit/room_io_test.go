@@ -5165,6 +5165,45 @@ func TestRoomIOOnReceivesParticipantAttributesChangedEvent(t *testing.T) {
 	}
 }
 
+func TestRoomIOOnReceivesParticipantActiveEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantActive, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	room := lksdk.NewRoom(rio.GetCallback())
+	room.OnParticipantUpdate([]*livekit.ParticipantInfo{{
+		Sid:      "PA_active",
+		Identity: "caller-a",
+	}})
+	room.OnSpeakersChanged([]*livekit.SpeakerInfo{{
+		Sid:    "PA_active",
+		Level:  0.7,
+		Active: true,
+	}})
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantActiveEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantActiveEvent", ev)
+		}
+		if got.Participant == nil {
+			t.Fatal("participant_active event participant = nil")
+		}
+		if got.Participant.Identity() != "caller-a" {
+			t.Fatalf("participant identity = %q, want caller-a", got.Participant.Identity())
+		}
+		if !got.Participant.IsSpeaking() {
+			t.Fatal("participant_active event participant IsSpeaking() = false")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_active event")
+	}
+}
+
 func TestRoomIOOnUnsubscribeStopsDelivery(t *testing.T) {
 	rio := &RoomIO{}
 	calls := 0
