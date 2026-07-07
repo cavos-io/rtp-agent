@@ -358,20 +358,18 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 	}
 	text := s.pendingText
 	s.pendingText = ""
+	deferOpen := s.current != nil || len(s.segments) > 0
+	if deferOpen {
+		s.segments <- telnyxTTSSegment{text: text}
+	}
 	s.mu.Unlock()
 
-	segment, err := s.provider.openSegmentStream(s.ctx)
+	if deferOpen {
+		return nil
+	}
+
+	segment, err := s.openTextSegment(text)
 	if err != nil {
-		_ = s.Close()
-		return err
-	}
-	if err := segment.PushText(text); err != nil {
-		_ = segment.Close()
-		_ = s.Close()
-		return err
-	}
-	if err := tts.EndSynthesizeStreamInput(segment); err != nil {
-		_ = segment.Close()
 		_ = s.Close()
 		return err
 	}
@@ -386,6 +384,22 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 	}
 	s.segments <- telnyxTTSSegment{stream: segment, text: text}
 	return nil
+}
+
+func (s *telnyxTTSSegmentedStream) openTextSegment(text string) (tts.SynthesizeStream, error) {
+	segment, err := s.provider.openSegmentStream(s.ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := segment.PushText(text); err != nil {
+		_ = segment.Close()
+		return nil, err
+	}
+	if err := tts.EndSynthesizeStreamInput(segment); err != nil {
+		_ = segment.Close()
+		return nil, err
+	}
+	return segment, nil
 }
 
 func (s *telnyxTTSSegmentedStream) EndInput() error {
@@ -415,10 +429,14 @@ func (s *telnyxTTSSegmentedStream) Close() error {
 	s.closeSegments()
 	s.mu.Unlock()
 	if current != nil {
-		_ = current.stream.Close()
+		if current.stream != nil {
+			_ = current.stream.Close()
+		}
 	}
 	for segment := range s.segments {
-		_ = segment.stream.Close()
+		if segment.stream != nil {
+			_ = segment.stream.Close()
+		}
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
@@ -432,6 +450,14 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 			segment, ok := <-s.segments
 			if !ok {
 				return nil, io.EOF
+			}
+			if segment.stream == nil {
+				stream, err := s.openTextSegment(segment.text)
+				if err != nil {
+					_ = s.Close()
+					return nil, err
+				}
+				segment.stream = stream
 			}
 			s.current = &segment
 		}
@@ -744,16 +770,14 @@ func (s *telnyxTTSStream) closeEvents() {
 }
 
 func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
-	var message struct {
-		Audio string `json:"audio"`
+	audio, ok, err := telnyxTTSAudioPayload(payload)
+	if err != nil {
+		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
-	if err := json.Unmarshal(payload, &message); err != nil {
+	if !ok {
 		return nil, false, nil
 	}
-	if message.Audio == "" {
-		return nil, false, nil
-	}
-	data, err := telnyxDecodeBase64Audio(message.Audio)
+	data, err := telnyxDecodeBase64Audio(audio)
 	if err != nil {
 		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
@@ -761,16 +785,14 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 }
 
 func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
-	var message struct {
-		Audio string `json:"audio"`
-	}
-	if err := json.Unmarshal(payload, &message); err != nil {
+	audio, ok, err := telnyxTTSAudioPayload(payload)
+	if err != nil {
 		return nil, false, err
 	}
-	if message.Audio == "" {
+	if !ok {
 		return nil, false, nil
 	}
-	data, err := telnyxDecodeBase64Audio(message.Audio)
+	data, err := telnyxDecodeBase64Audio(audio)
 	if err != nil {
 		return nil, false, err
 	}
@@ -778,6 +800,22 @@ func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesized
 		return nil, false, nil
 	}
 	return telnyxTTSAudioFrame(data, sampleRate), false, nil
+}
+
+func telnyxTTSAudioPayload(payload []byte) (string, bool, error) {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return "", false, nil
+	}
+	value, ok := message["audio"]
+	if !ok || !telnyxTruthy(value) {
+		return "", false, nil
+	}
+	audio, ok := value.(string)
+	if !ok {
+		return "", false, fmt.Errorf("audio field has type %T", value)
+	}
+	return audio, true, nil
 }
 
 func telnyxDecodeBase64Audio(data string) ([]byte, error) {

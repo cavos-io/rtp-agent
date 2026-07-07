@@ -101,9 +101,9 @@ func TestLiveKitInferenceLLMChatBuildsTokenBeforeDelegating(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = provider.Chat(ctx, llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	err = runLiveKitInferenceLLMRequest(t, provider, ctx, llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 	if err == nil {
-		t.Fatal("Chat error = nil, want canceled request error after token creation")
+		t.Fatal("Next error = nil, want canceled request error after token creation")
 	}
 }
 
@@ -120,7 +120,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.HasPrefix(capture.userAgent, "LiveKit Agents/") {
 		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", capture.userAgent)
@@ -154,7 +154,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if capture.roomID != "RM_llm" {
 		t.Fatalf("%s = %q, want RM_llm", HeaderRoomID, capture.roomID)
@@ -183,7 +183,9 @@ func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(
+	_ = runLiveKitInferenceLLMRequest(
+		t,
+		provider,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithExtraParams(map[string]any{"inference_class": "priority"}),
@@ -220,7 +222,7 @@ func TestLiveKitInferenceLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
 		t.Fatalf("Model = %q, want updated model", provider.Model())
 	}
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"model":"openai/gpt-5-mini"`) {
 		t.Fatalf("request body = %s, want updated model", capture.requestBody)
@@ -250,7 +252,7 @@ func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing
 		"user":  "updated-user",
 	}))
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if strings.Contains(capture.requestBody, `"temperature"`) {
 		t.Fatalf("request body = %s, want replaced extra params without temperature", capture.requestBody)
@@ -276,7 +278,7 @@ func TestLiveKitInferenceLLMChatOmitsDefaultReasoningEffort(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if strings.Contains(capture.requestBody, `"reasoning_effort"`) {
 		t.Fatalf("request body = %s, want no default reasoning_effort for LiveKit inference LLM", capture.requestBody)
@@ -300,7 +302,7 @@ func TestLiveKitInferenceLLMChatRequestsReferenceUsageStreamOptions(t *testing.T
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"stream_options":{"include_usage":true}`) {
 		t.Fatalf("request body = %s, want stream_options include_usage true", capture.requestBody)
@@ -327,7 +329,7 @@ func TestLiveKitInferenceLLMChatSendsReferenceExtraHeaders(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if got := capture.header.Get("X-Trace-ID"); got != "trace-123" {
 		t.Fatalf("X-Trace-ID = %q, want trace-123", got)
@@ -353,7 +355,9 @@ func TestLiveKitInferenceLLMChatSendsReferenceCallExtraHeaders(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(
+	_ = runLiveKitInferenceLLMRequest(
+		t,
+		provider,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithExtraParams(map[string]any{
@@ -389,7 +393,9 @@ func TestLiveKitInferenceLLMChatSendsReferenceCallExtraQuery(t *testing.T) {
 	provider.baseURL = "https://livekit.test/v1"
 	provider.httpClient = capture
 
-	_, _ = provider.Chat(
+	_ = runLiveKitInferenceLLMRequest(
+		t,
+		provider,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithExtraParams(map[string]any{
@@ -431,6 +437,17 @@ type captureDeadlineHTTPClient struct {
 	jobID             string
 	inferenceProvider string
 	inferencePriority string
+}
+
+func runLiveKitInferenceLLMRequest(t *testing.T, provider *LiveKitInferenceLLM, ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) error {
+	t.Helper()
+	stream, err := provider.Chat(ctx, chatCtx, opts...)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	return err
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {

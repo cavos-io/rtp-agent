@@ -1,6 +1,7 @@
 package telnyx
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -126,6 +127,25 @@ func TestTelnyxSTTStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
+func TestTelnyxSTTStreamHeaderWriteFailureReturnsAPIConnectionError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	var wroteHeader []byte
+	err := writeTelnyxSTTHeader(func(data []byte) error {
+		wroteHeader = append([]byte(nil), data...)
+		return writeErr
+	}, 16000)
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("header write error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx STT websocket write failed") {
+		t.Fatalf("header write error = %q, want write context", err)
+	}
+	if !bytes.Equal(wroteHeader, createTelnyxStreamingWAVHeader(16000, telnyxSTTNumChannels)) {
+		t.Fatalf("wrote header length = %d, want reference WAV header", len(wroteHeader))
 	}
 }
 
@@ -520,6 +540,41 @@ func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamCloseFlushFailureReturnsAPIConnectionError(t *testing.T) {
+	writeErr := errors.New("close flush failed")
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() {},
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v, want buffered partial frame", err)
+	}
+	err := stream.Close()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Close error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx STT websocket write failed") {
+		t.Fatalf("Close error = %q, want write failure context", err)
+	}
+	if closeCalls != 0 {
+		t.Fatalf("close calls = %d, want no websocket close after failed flush", closeCalls)
+	}
+}
+
 func TestTelnyxSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &telnyxSTTStream{
@@ -746,6 +801,9 @@ func TestTelnyxSTTFinalTranscriptCollectsAllReferenceFinals(t *testing.T) {
 	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello world" {
 		t.Fatalf("alternatives = %+v, want concatenated final text", event.Alternatives)
 	}
+	if event.Alternatives[0].Confidence != 0 {
+		t.Fatalf("confidence = %v, want omitted reference zero value", event.Alternatives[0].Confidence)
+	}
 }
 
 func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
@@ -772,6 +830,17 @@ func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	}
 	assertTelnyxSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello final")
 	assertTelnyxSTTEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+
+	events, err = processTelnyxSTTEvent(state, map[string]any{
+		"transcript": "string final",
+		"is_final":   "true",
+	})
+	if err != nil {
+		t.Fatalf("process string final: %v", err)
+	}
+	assertTelnyxSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertTelnyxSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "string final")
+	assertTelnyxSTTEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
 }
 
 func assertTelnyxSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {

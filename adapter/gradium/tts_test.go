@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -380,6 +379,50 @@ func TestGradiumTTSWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing
 	}
 }
 
+func TestGradiumTTSWebsocketChunkedStreamUsesPresetConnection(t *testing.T) {
+	conn := newGradiumProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream := &gradiumTTSWebsocketChunkedStream{
+		ctx:           context.Background(),
+		modelEndpoint: "://bad-url",
+		conn:          conn,
+		sampleRate:    48000,
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want preset websocket close marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next = %#v, want final marker from preset websocket", final)
+	}
+	if dials != 0 {
+		t.Fatalf("dials = %d, want no dial when conn is preset", dials)
+	}
+	if !stream.started {
+		t.Fatal("stream.started = false, want preset connection path marked started")
+	}
+	if stream.closed {
+		t.Fatal("stream.closed = true, want provider close to produce final marker without marking stream closed")
+	}
+	if !stream.completed {
+		t.Fatal("stream.completed = false, want provider close to complete chunk stream")
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider close error = %v, want EOF", err)
+	}
+}
+
 func TestGradiumTTSWebsocketMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`{"type":"audio","audio":"!!!!"}`),
@@ -396,27 +439,7 @@ func TestGradiumTTSWebsocketMessageIgnoresReferenceEmptyBase64Noise(t *testing.T
 }
 
 func TestGradiumTTSWebsocketCloseEmitsReferenceFinalMarker(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newGradiumProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
 
 	stream := &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: 48000}
 	final, err := stream.Next()
@@ -432,27 +455,7 @@ func TestGradiumTTSWebsocketCloseEmitsReferenceFinalMarker(t *testing.T) {
 }
 
 func TestGradiumTTSWebsocketNonNormalCloseEmitsReferenceFinalMarker(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newGradiumProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 
 	stream := &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: 48000}
 	final, err := stream.Next()

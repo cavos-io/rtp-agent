@@ -137,7 +137,9 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		_ = conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-	if err := conn.WriteMessage(websocket.BinaryMessage, createTelnyxStreamingWAVHeader(s.sampleRate, telnyxSTTNumChannels)); err != nil {
+	if err := writeTelnyxSTTHeader(func(data []byte) error {
+		return conn.WriteMessage(websocket.BinaryMessage, data)
+	}, s.sampleRate); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -259,9 +261,8 @@ func collectTelnyxFinalTranscript(stream stt.RecognizeStream, resolvedLanguage s
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{{
-			Language:   resolvedLanguage,
-			Text:       finalText.String(),
-			Confidence: stt.DefaultTranscriptConfidence(finalText.String()),
+			Language: resolvedLanguage,
+			Text:     finalText.String(),
 		}},
 	}, nil
 }
@@ -334,6 +335,16 @@ func createTelnyxStreamingWAVHeader(sampleRate int, numChannels int) []byte {
 	copy(header[36:40], "data")
 	binary.LittleEndian.PutUint32(header[40:44], dataSize)
 	return header
+}
+
+func writeTelnyxSTTHeader(write func([]byte) error, sampleRate int) error {
+	if write == nil {
+		return nil
+	}
+	if err := write(createTelnyxStreamingWAVHeader(sampleRate, telnyxSTTNumChannels)); err != nil {
+		return telnyxSTTWriteError(err)
+	}
+	return nil
 }
 
 type telnyxSTTStream struct {
@@ -443,7 +454,7 @@ func (s *telnyxSTTStream) Close() error {
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			if err := s.writeBinaryData(chunk.Data); err != nil {
-				return err
+				return telnyxSTTWriteError(err)
 			}
 		}
 	}
@@ -621,8 +632,7 @@ func processTelnyxSTTEvent(state *telnyxSTTStreamState, data map[string]any) ([]
 		Text:       transcript,
 		Confidence: telnyxAnyFloat(data["confidence"]),
 	}
-	isFinal, _ := data["is_final"].(bool)
-	if isFinal {
+	if telnyxTruthy(data["is_final"]) {
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{alternative}})
 		state.speaking = false
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
@@ -640,5 +650,26 @@ func telnyxAnyFloat(value any) float64 {
 		return float64(v)
 	default:
 		return 0
+	}
+}
+
+func telnyxTruthy(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	default:
+		return true
 	}
 }

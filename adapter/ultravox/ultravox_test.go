@@ -19,11 +19,14 @@ func TestUltravoxAdapterHasNoProductionSurfaceWithoutRealtimeModel(t *testing.T)
 			continue
 		}
 		name := entry.Name()
+		if name == "doc.go" {
+			continue
+		}
 		if filepath.Ext(name) == ".go" && !strings.HasSuffix(name, "_test.go") {
 			productionFiles = append(productionFiles, name)
 		}
 	}
 	if len(productionFiles) != 0 {
-		t.Fatalf("Ultravox production files = %v, want none until a real realtime adapter exists", productionFiles)
+		t.Fatalf("Ultravox production files = %v, want no runtime surface until a real realtime adapter exists", productionFiles)
 	}
 }

@@ -132,11 +132,14 @@ func TestGroqLLMForwardsReferenceOpenAIOptions(t *testing.T) {
 	defer stream.Close()
 	_, _ = stream.Next()
 
+	if requestBody == "" {
+		t.Fatal("request body was empty, want provider request capture")
+	}
 	if !strings.Contains(requestBody, `"parallel_tool_calls":false`) {
 		t.Fatalf("request body = %s, want provider parallel_tool_calls false", requestBody)
 	}
-	if !strings.Contains(requestBody, `"tool_choice":"none"`) {
-		t.Fatalf("request body = %s, want provider tool_choice none", requestBody)
+	if strings.Contains(requestBody, `"tool_choice"`) {
+		t.Fatalf("request body = %s, want reference to omit tool_choice without tools", requestBody)
 	}
 }
 

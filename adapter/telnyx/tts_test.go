@@ -258,7 +258,9 @@ func TestTelnyxTTSStreamFlushStartsReferenceSegmentWebsockets(t *testing.T) {
 	var segments []*fakeTelnyxEndInputTTSStream
 	provider := NewTelnyxTTS("test-key", "")
 	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
-		segment := &fakeTelnyxEndInputTTSStream{}
+		segment := &fakeTelnyxEndInputTTSStream{
+			events: []*tts.SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{0x01, 0x02}}}},
+		}
 		segments = append(segments, segment)
 		return segment, nil
 	}
@@ -280,11 +282,23 @@ func TestTelnyxTTSStreamFlushStartsReferenceSegmentWebsockets(t *testing.T) {
 		t.Fatalf("Flush second error = %v", err)
 	}
 
-	if len(segments) != 2 {
-		t.Fatalf("segment streams = %d, want one provider websocket per flushed segment", len(segments))
+	if len(segments) != 1 {
+		t.Fatalf("segment streams after second Flush = %d, want second websocket deferred until first drains", len(segments))
 	}
 	if want := []string{"PushText:first", "EndInput"}; !reflect.DeepEqual(segments[0].calls, want) {
 		t.Fatalf("first segment calls = %#v, want %#v", segments[0].calls, want)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("first segment audio = (%+v, %v), want audio", audio, err)
+	}
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("first segment final = (%+v, %v), want final marker", final, err)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("second segment audio = (%+v, %v), want audio after first drains", audio, err)
+	}
+	if len(segments) != 2 {
+		t.Fatalf("segment streams after first drain = %d, want second provider websocket", len(segments))
 	}
 	if want := []string{"PushText:second", "EndInput"}; !reflect.DeepEqual(segments[1].calls, want) {
 		t.Fatalf("second segment calls = %#v, want %#v", segments[1].calls, want)
@@ -754,6 +768,14 @@ func TestTelnyxTTSAudioFromMessageReturnsAPIConnectionErrorOnMalformedAudio(t *t
 	}
 	if !strings.Contains(err.Error(), "Telnyx TTS audio decode failed") {
 		t.Fatalf("malformed audio error = %q, want decode context", err)
+	}
+
+	audioBytes, done, err = telnyxTTSAudioBytesFromMessage([]byte(`{"audio":true}`))
+	if audioBytes != nil || done {
+		t.Fatalf("non-string audio = audio=%v done=%v, want no audio and not done", audioBytes, done)
+	}
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("non-string audio error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

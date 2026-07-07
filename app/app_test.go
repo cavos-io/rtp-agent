@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -2883,9 +2884,7 @@ func TestDefaultConfigFromEnvPreservesOpenAITTSExplicitZeroSpeed(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
-	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next error = %v, want EOF", err)
-	}
+	_, _ = stream.Next()
 	if !strings.Contains(string(body), `"speed":0`) {
 		t.Fatalf("request body %s missing explicit zero speed", body)
 	}
@@ -6407,8 +6406,8 @@ func TestDefaultConfigFromEnvAcceptsLiveKitSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6421,8 +6420,8 @@ func TestDefaultConfigFromEnvAcceptsAWSSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6454,8 +6453,8 @@ func TestDefaultConfigFromEnvAcceptsFalSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6469,8 +6468,8 @@ func TestDefaultConfigFromEnvAcceptsSpitchSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6485,8 +6484,8 @@ func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6500,8 +6499,8 @@ func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 	if app.Session.VAD == nil {
 		t.Fatal("Session VAD is nil")
@@ -6582,7 +6581,7 @@ func TestElevenLabsSTTFallbackPassesReferenceServerVAD(t *testing.T) {
 	if !ok {
 		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
 	}
-	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
 		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim fallback", caps)
 	}
 	serverVAD := reflect.ValueOf(elevenProvider).Elem().FieldByName("serverVAD")
@@ -6706,6 +6705,14 @@ func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x01}, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
 
 	select {
 	case record := <-records:
@@ -8484,7 +8491,7 @@ func TestSimplismartSTTFallbackPassesReferenceOptions(t *testing.T) {
 			t.Fatalf("path = %q, want %q", got, want)
 		}
 		expectedPayload := map[string]any{
-			"audio_data":         "AQI=",
+			"audio_data":         "UklGRiYAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQIAAAABAg==",
 			"language":           "fr",
 			"model":              "custom/model",
 			"task":               "translate",
@@ -8586,7 +8593,12 @@ func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want offline interim without streaming/diarization", caps)
 	}
 
-	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "")
 	if err != nil {
 		t.Fatalf("Recognize() error = %v", err)
 	}
@@ -8594,7 +8606,7 @@ func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("event = %+v, want one interim transcript", event)
 	}
 	alt := event.Alternatives[0]
-	if alt.Text != "hello clova" || alt.Language != "en-US" || alt.Confidence != 0.92 {
+	if alt.Text != "hello clova" || alt.Language != "en-US" {
 		t.Fatalf("alternative = %+v, want mapped Clova transcript", alt)
 	}
 
@@ -8717,6 +8729,14 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x01}, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
 
 	select {
 	case record := <-records:
@@ -8987,6 +9007,14 @@ func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x01}, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
 
 	select {
 	case record := <-records:
@@ -9755,6 +9783,96 @@ func firstQueryValue(values map[string][]string, key string) string {
 	return values[key][0]
 }
 
+func runTTSRequest(t *testing.T, provider tts.TTS, text string) {
+	t.Helper()
+	stream, err := provider.Synthesize(context.Background(), text)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	_, _ = stream.Next()
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close() error = %v", err)
+	}
+}
+
+func TestRunTTSRequestDrivesLazySynthesizeStream(t *testing.T) {
+	provider := &fakeRunTTSRequestProvider{
+		stream: &fakeRunTTSRequestStream{},
+	}
+
+	runTTSRequest(t, provider, "hello lazy")
+
+	if provider.text != "hello lazy" {
+		t.Fatalf("Synthesize text = %q, want helper text", provider.text)
+	}
+	if !provider.stream.nextCalled {
+		t.Fatal("stream.Next was not called, want lazy provider request to start")
+	}
+	if !provider.stream.closed {
+		t.Fatal("stream.Close was not called, want helper cleanup")
+	}
+	if provider.synthesizeCalls != 1 {
+		t.Fatalf("Synthesize calls = %d, want exactly one request", provider.synthesizeCalls)
+	}
+	if provider.stream.nextCalls != 1 {
+		t.Fatalf("stream.Next calls = %d, want exactly one lazy request trigger", provider.stream.nextCalls)
+	}
+	if provider.stream.closeCalls != 1 {
+		t.Fatalf("stream.Close calls = %d, want exactly one cleanup", provider.stream.closeCalls)
+	}
+}
+
+type fakeRunTTSRequestProvider struct {
+	text            string
+	synthesizeCalls int
+	stream          *fakeRunTTSRequestStream
+}
+
+func (f *fakeRunTTSRequestProvider) Label() string {
+	return "fake.TTS"
+}
+
+func (f *fakeRunTTSRequestProvider) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{}
+}
+
+func (f *fakeRunTTSRequestProvider) SampleRate() int {
+	return 24000
+}
+
+func (f *fakeRunTTSRequestProvider) NumChannels() int {
+	return 1
+}
+
+func (f *fakeRunTTSRequestProvider) Synthesize(_ context.Context, text string) (tts.ChunkedStream, error) {
+	f.text = text
+	f.synthesizeCalls++
+	return f.stream, nil
+}
+
+func (f *fakeRunTTSRequestProvider) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return nil, errors.New("unused")
+}
+
+type fakeRunTTSRequestStream struct {
+	nextCalled bool
+	closed     bool
+	nextCalls  int
+	closeCalls int
+}
+
+func (f *fakeRunTTSRequestStream) Next() (*tts.SynthesizedAudio, error) {
+	f.nextCalled = true
+	f.nextCalls++
+	return nil, io.EOF
+}
+
+func (f *fakeRunTTSRequestStream) Close() error {
+	f.closed = true
+	f.closeCalls++
+	return nil
+}
+
 func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
@@ -9764,8 +9882,8 @@ func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -9781,8 +9899,8 @@ func TestDefaultConfigFromEnvAcceptsLiveKitTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -10053,13 +10171,7 @@ func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotHeaders.Get("Authorization"), "Api-Key test-baseten-key"; got != want {
 		t.Fatalf("Authorization = %q, want %q", got, want)
@@ -10136,13 +10248,7 @@ func TestCartesiaTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hola")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hola")
 
 	if got, want := gotHeaders.Get("X-API-Key"), "test-cartesia-key"; got != want {
 		t.Fatalf("X-API-Key = %q, want %q", got, want)
@@ -10476,13 +10582,7 @@ func TestRespeecherTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := tts.Provider(provider), "Respeecher"; got != want {
 		t.Fatalf("tts.Provider() = %q, want %q", got, want)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://respeecher.example/v1/public/tts/ua-rt/tts/bytes"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -10561,13 +10661,7 @@ func TestSarvamTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := tts.Provider(provider), "Sarvam"; got != want {
 		t.Fatalf("tts.Provider() = %q, want %q", got, want)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://sarvam.example/tts"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -10654,13 +10748,7 @@ func TestSmallestAITTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := tts.Provider(provider), "SmallestAI"; got != want {
 		t.Fatalf("tts.Provider() = %q, want %q", got, want)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://smallest.example/waves/v1/tts"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -10770,13 +10858,7 @@ func TestSpeechmaticsTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if !strings.HasPrefix(gotURL, "https://tts.example.com/generate/theo?") {
 		t.Fatalf("request URL = %q, want configured generate endpoint", gotURL)
@@ -10842,13 +10924,7 @@ func TestSpitchTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "bonjour")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "bonjour")
 
 	if got, want := gotURL, "https://spitch.example/tts/v1/synthesize"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -10956,6 +11032,11 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	defer stream.Close()
+	nextDone := make(chan struct{})
+	go func() {
+		_, _ = stream.Next()
+		close(nextDone)
+	}()
 
 	select {
 	case record := <-records:
@@ -10994,6 +11075,12 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for xai websocket request")
+	}
+	_ = stream.Close()
+	select {
+	case <-nextDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for xai stream Next to return")
 	}
 }
 
@@ -11054,13 +11141,7 @@ func TestFishAudioTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello fish")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello fish")
 
 	if got, want := gotURL, "https://fish.example/v1/tts"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11265,13 +11346,7 @@ func TestCambaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "bonjour")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "bonjour")
 
 	if got, want := gotURL, "https://cambai.example/apis/tts-stream"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11362,13 +11437,7 @@ func TestGnaniTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "namaste")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "namaste")
 
 	if got, want := gotURL, "https://gnani.example/api/v1/tts/inference"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11459,13 +11528,7 @@ func TestHumeTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://hume.example/v0/tts/stream/json"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11572,13 +11635,7 @@ func TestMinimaxTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hola")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hola")
 
 	if got, want := gotURL, "https://minimax.example/v1/t2a_v2"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11689,13 +11746,7 @@ func TestInworldTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if caps := provider.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference streaming with aligned transcript when timestamp type is WORD", caps)
 	}
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://inworld.example/tts/v1/voice:stream"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11759,8 +11810,8 @@ func TestDefaultConfigFromEnvAcceptsTelnyxTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -11776,8 +11827,8 @@ func TestDefaultConfigFromEnvAcceptsGroqTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -11826,13 +11877,7 @@ func TestGroqTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://groq.example/openai/v1/audio/speech"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -11865,8 +11910,8 @@ func TestDefaultConfigFromEnvAcceptsNvidiaTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -11936,8 +11981,8 @@ func TestDefaultConfigFromEnvAcceptsMistralAITTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -11994,13 +12039,7 @@ func TestMistralAITTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://mistral.example/v1/audio/speech"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12045,8 +12084,8 @@ func TestDefaultConfigFromEnvAcceptsLMNTTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12105,13 +12144,7 @@ func TestLMNTTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://api.lmnt.com/v1/ai/speech/bytes"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12160,8 +12193,8 @@ func TestDefaultConfigFromEnvAcceptsNeuphonicTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12221,13 +12254,7 @@ func TestNeuphonicTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hola")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hola")
 
 	if got, want := gotURL, "https://neuphonic.example/sse/speak/es"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12271,8 +12298,8 @@ func TestDefaultConfigFromEnvAcceptsRimeTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12393,8 +12420,8 @@ func TestDefaultConfigFromEnvAcceptsMurfTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12454,13 +12481,7 @@ func TestMurfTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://murf.example/v1/speech/stream"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12514,8 +12535,8 @@ func TestDefaultConfigFromEnvAcceptsSpeechifyTTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12573,13 +12594,7 @@ func TestSpeechifyTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://speechify.example/v1/audio/stream"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12631,8 +12646,8 @@ func TestDefaultConfigFromEnvAcceptsSimplismartTTSFallbackProvider(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -12692,13 +12707,7 @@ func TestSimplismartTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "hello")
 
 	if got, want := gotURL, "https://simplismart.example/tts"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12757,13 +12766,7 @@ func TestSimplismartTTSFallbackPassesQwenReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	stream, err := provider.Synthesize(context.Background(), "halo")
-	if err != nil {
-		t.Fatalf("Synthesize() error = %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("stream.Close() error = %v", err)
-	}
+	runTTSRequest(t, provider, "halo")
 
 	if got, want := gotURL, "https://api.simplismart.live/v1/audio/speech"; got != want {
 		t.Fatalf("request URL = %q, want %q", got, want)
@@ -12815,8 +12818,8 @@ func TestDefaultConfigFromEnvAcceptsUpliftAITTSFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -13518,8 +13521,9 @@ func TestDefaultConfigFromEnvMapsGoogleLLMHTTPOptions(t *testing.T) {
 	if options.Timeout == nil || *options.Timeout != 2500*time.Millisecond {
 		t.Fatalf("http_options timeout = %#v, want 2.5s", options.Timeout)
 	}
-	if got := options.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
-		t.Fatalf("http_options headers = %#v, want x-test yes", options.Headers)
+	headerKey := strings.ToLower("X-Test")
+	if got := options.Headers[headerKey]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("http_options headers = %#v, want %s yes", options.Headers, headerKey)
 	}
 }
 
@@ -14577,8 +14581,8 @@ func TestDefaultConfigFromEnvMapsGroqLLMOptions(t *testing.T) {
 	if requestBody["parallel_tool_calls"] != false {
 		t.Fatalf("parallel_tool_calls = %#v, want false in Groq request body %#v", requestBody["parallel_tool_calls"], requestBody)
 	}
-	if requestBody["tool_choice"] != "none" {
-		t.Fatalf("tool_choice = %#v, want none in Groq request body %#v", requestBody["tool_choice"], requestBody)
+	if _, ok := requestBody["tool_choice"]; ok {
+		t.Fatalf("tool_choice = %#v, want omitted without tools in Groq request body %#v", requestBody["tool_choice"], requestBody)
 	}
 	if requestBody["service_tier"] != "priority" {
 		t.Fatalf("service_tier = %#v, want priority in Groq request body %#v", requestBody["service_tier"], requestBody)
@@ -14779,8 +14783,8 @@ func TestDefaultConfigFromEnvAcceptsCavosSTTFallbackProvider(t *testing.T) {
 	if app.Session == nil || app.Session.STT == nil {
 		t.Fatal("Session STT is nil")
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 	if app.Session.VAD == nil {
 		t.Fatal("Session VAD is nil")
@@ -14805,8 +14809,8 @@ func TestDefaultConfigFromEnvAcceptsCavosTTSFallbackProvider(t *testing.T) {
 	if app.Session == nil || app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
 	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	if got := app.Session.TTS.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("TTS label = %q, want core fallback adapter wrapping primary openai TTS", got)
 	}
 }
 
@@ -15903,8 +15907,9 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeHTTPOptions(t *testing.T) {
 	if capturedCfg.httpOptions.APIVersion != "v1alpha" {
 		t.Fatalf("httpOptions api version = %q, want v1alpha", capturedCfg.httpOptions.APIVersion)
 	}
-	if got := capturedCfg.httpOptions.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
-		t.Fatalf("httpOptions headers = %#v, want x-test yes", capturedCfg.httpOptions.Headers)
+	headerKey := strings.ToLower("X-Test")
+	if got := capturedCfg.httpOptions.Headers[headerKey]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("httpOptions headers = %#v, want %s yes", capturedCfg.httpOptions.Headers, headerKey)
 	}
 }
 

@@ -3076,8 +3076,8 @@ func (s *realtimeSession) trackRealtimeMetrics(ev llm.RealtimeEvent) llm.Realtim
 	}
 	if ev.Metrics.Metadata == nil && s.model != nil {
 		ev.Metrics.Metadata = &telemetry.Metadata{
-			ModelName:     llm.RealtimeModelName(s.model),
-			ModelProvider: llm.RealtimeProvider(s.model),
+			ModelName:     s.model.Model(),
+			ModelProvider: s.model.Provider(),
 		}
 	}
 	timing := s.lastGeneration
