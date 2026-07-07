@@ -61,7 +61,7 @@ func WithSpeechmaticsTTSSampleRate(sampleRate int) SpeechmaticsTTSOption {
 func WithSpeechmaticsTTSBaseURL(baseURL string) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
 		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
+			t.baseURL = baseURL
 		}
 	}
 }
