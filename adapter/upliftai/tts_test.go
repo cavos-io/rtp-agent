@@ -1973,6 +1973,33 @@ func TestUpliftAITTSChunkedStreamCloseCancelsReferenceSocketIOConnect(t *testing
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIODialCancelReturnsContextCanceled(t *testing.T) {
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(ctx context.Context, _ string) (upliftAISocketIOConn, error) {
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+	)
+	defer provider.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream, err := provider.Synthesize(ctx, "interrupted")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *testing.T) {
 	firstConn := newUpliftAITestSocketIOConn()
 	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

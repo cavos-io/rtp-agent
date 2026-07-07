@@ -795,9 +795,17 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 	for attempt := 1; attempt <= upliftAISocketIOAttempts; attempt++ {
 		conn, err := upliftAISocketIODialContext(ctx, socketURL)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				c.mu.Unlock()
+				return context.Canceled
+			}
 			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
 		} else if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
 			_ = conn.Close()
+			if errors.Is(err, context.Canceled) {
+				c.mu.Unlock()
+				return context.Canceled
+			}
 			lastErr = err
 		} else {
 			if c.closed {
@@ -816,6 +824,10 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				if errors.Is(ctx.Err(), context.Canceled) {
+					c.mu.Unlock()
+					return context.Canceled
+				}
 				c.mu.Unlock()
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
 			case <-timer.C:
