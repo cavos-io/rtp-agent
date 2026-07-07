@@ -643,7 +643,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 			"type":        "raw",
 			"encoding":    s.audioEncoding,
 			"sample_rate": s.sampleRate,
-			"chunk_size":  160,
 		},
 		"transcription_config": config,
 	}

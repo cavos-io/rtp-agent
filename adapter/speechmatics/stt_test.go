@@ -2022,8 +2022,11 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	if audioFormat["encoding"] != "pcm_f32le" {
 		t.Fatalf("encoding = %#v, want pcm_f32le", audioFormat["encoding"])
 	}
-	if audioFormat["chunk_size"] != 160 {
-		t.Fatalf("chunk_size = %#v, want reference default 160", audioFormat["chunk_size"])
+	if _, ok := audioFormat["chunk_size"]; ok {
+		t.Fatalf("chunk_size = %#v, want omitted from reference StartRecognition audio_format", audioFormat["chunk_size"])
+	}
+	if _, ok := message["chunk_size"]; ok {
+		t.Fatalf("chunk_size sent outside audio_format in %#v", message)
 	}
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "language", "de")
