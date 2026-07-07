@@ -284,6 +284,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
 		state: &speechmaticsStreamState{
 			language:             streamLanguage,
 			speakerActiveFormat:  s.speakerActiveFormat,
@@ -642,11 +643,13 @@ func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []Speec
 }
 
 type speechmaticsSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn     *websocket.Conn
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	done     chan struct{}
+	doneOnce sync.Once
+	mu       sync.Mutex
+	closed   bool
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -735,8 +738,26 @@ func (s *speechmaticsSTTStream) readLoop() {
 			continue
 		}
 		for _, event := range speechmaticsEvents(resp, s.state) {
-			s.events <- event
+			if !s.enqueueEvent(event) {
+				return
+			}
 		}
+	}
+}
+
+func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
+	if event == nil {
+		return true
+	}
+	if s.done == nil {
+		s.events <- event
+		return true
+	}
+	select {
+	case s.events <- event:
+		return true
+	case <-s.done:
+		return false
 	}
 }
 
@@ -1203,6 +1224,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.closeDone()
 	defer func() {
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
@@ -1277,7 +1299,17 @@ func (s *speechmaticsSTTStream) markClosed() {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	s.closeDone()
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}
+}
+
+func (s *speechmaticsSTTStream) closeDone() {
+	if s == nil || s.done == nil {
+		return
+	}
+	s.doneOnce.Do(func() {
+		close(s.done)
+	})
 }

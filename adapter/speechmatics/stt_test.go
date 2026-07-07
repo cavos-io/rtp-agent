@@ -505,6 +505,81 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTCloseStopsBlockedTranscriptEnqueue(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	releaseWrites := make(chan struct{})
+	serverSent := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		<-releaseWrites
+		messages := []string{"first", "stale"}
+		for _, text := range messages {
+			if err := conn.WriteJSON(map[string]interface{}{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{{
+					"text":       text,
+					"language":   "en",
+					"speaker_id": "agent",
+					"metadata":   map[string]interface{}{"start_time": 0.1, "end_time": 0.2},
+				}},
+			}); err != nil {
+				return
+			}
+		}
+		close(serverSent)
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	smStream := stream.(*speechmaticsSTTStream)
+	smStream.events = make(chan *stt.SpeechEvent, 1)
+	close(releaseWrites)
+
+	select {
+	case <-serverSent:
+	case <-time.After(time.Second):
+		t.Fatal("server did not send queued Speechmatics transcript burst")
+	}
+
+	deadline := time.After(time.Second)
+	for len(smStream.events) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("first Speechmatics transcript did not queue")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	first := <-smStream.events
+	if got := first.Alternatives[0].Text; got != "first" {
+		t.Fatalf("first queued transcript = %q, want first", got)
+	}
+	select {
+	case stale, ok := <-smStream.events:
+		if ok {
+			t.Fatalf("stale transcript after Close = %+v, want read loop stopped", stale)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("events channel did not close after local Close stopped blocked enqueue")
+	}
+}
+
 func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &speechmaticsSTTStream{
