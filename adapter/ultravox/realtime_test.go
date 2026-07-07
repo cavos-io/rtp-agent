@@ -415,6 +415,103 @@ func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
 }
 
+func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hel",
+		Final:   false,
+		Ordinal: 2,
+	})
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hel")
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "hello",
+		Final:   true,
+		Ordinal: 2,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
+func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeGenerationCreated {
+			t.Fatalf("event type = %s, want generation_created", event.Type)
+		}
+		if event.Generation == nil {
+			t.Fatal("generation = nil")
+		}
+		return event.Generation
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	return nil
+}
+
+func requireUltravoxRealtimeMessage(t *testing.T, generation *llm.GenerationCreatedEvent) llm.MessageGeneration {
+	t.Helper()
+	select {
+	case message := <-generation.MessageCh:
+		return message
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	return llm.MessageGeneration{}
+}
+
+func requireUltravoxRealtimeText(t *testing.T, textCh <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-textCh:
+		if got != want {
+			t.Fatalf("text delta = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for text delta %q", want)
+	}
+}
+
+func requireUltravoxRealtimeClosedText(t *testing.T, textCh <-chan string) {
+	t.Helper()
+	select {
+	case _, ok := <-textCh:
+		if ok {
+			t.Fatal("text channel still open after final agent transcript")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for closed text channel")
+	}
+}
+
+func requireUltravoxRealtimeClosedAudio(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) {
+	t.Helper()
+	select {
+	case _, ok := <-audioCh:
+		if ok {
+			t.Fatal("audio channel still open after final agent transcript")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for closed audio channel")
+	}
+}
+
 func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSession, itemID string, transcript string, final bool) {
 	t.Helper()
 	select {

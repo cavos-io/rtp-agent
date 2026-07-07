@@ -260,6 +260,7 @@ type ultravoxRealtimeGeneration struct {
 	functionCh chan *llm.FunctionCall
 	textCh     chan string
 	audioCh    chan *model.AudioFrame
+	outputText strings.Builder
 	done       bool
 }
 
@@ -436,7 +437,16 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 }
 
 func (s *realtimeSession) handleTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
-	if event.Role != "user" || event.Text == "" {
+	switch event.Role {
+	case "user":
+		s.handleUserTranscriptEvent(event)
+	case "agent":
+		s.handleAgentTranscriptEvent(event)
+	}
+}
+
+func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
+	if event.Text == "" {
 		return
 	}
 	s.mu.Lock()
@@ -455,6 +465,50 @@ func (s *realtimeSession) handleTranscriptEvent(event ultravoxRealtimeTranscript
 	select {
 	case s.eventCh <- realtimeEvent:
 	default:
+	}
+}
+
+func (s *realtimeSession) handleAgentTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	generation := s.ensureGenerationLocked()
+	incrementalText := event.Delta
+	if incrementalText == "" && !event.Final {
+		incrementalText = event.Text
+	}
+	if incrementalText != "" {
+		generation.outputText.WriteString(incrementalText)
+	}
+	final := event.Final
+	s.mu.Unlock()
+
+	if incrementalText != "" {
+		select {
+		case generation.textCh <- incrementalText:
+		default:
+		}
+	}
+	if final {
+		s.finishGeneration(generation)
+	}
+}
+
+func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if generation == nil || generation.done {
+		return
+	}
+	generation.done = true
+	close(generation.textCh)
+	close(generation.audioCh)
+	close(generation.functionCh)
+	close(generation.messageCh)
+	if s.generation == generation {
+		s.generation = nil
 	}
 }
 
