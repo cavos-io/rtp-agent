@@ -1223,12 +1223,15 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.example/v2/"))
+	if provider.baseURL != "wss://speechmatics.example/v2/" {
+		t.Fatalf("provider baseURL = %q, want reference custom base URL preserved", provider.baseURL)
+	}
 	streamURL, err = url.Parse(buildSpeechmaticsSTTStreamURL(provider))
 	if err != nil {
 		t.Fatalf("parse custom stream URL: %v", err)
 	}
-	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.example" || streamURL.Path != "/v2" {
-		t.Fatalf("stream URL = %q, want trimmed custom base URL", streamURL.String())
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.example" || streamURL.Path != "/v2/" {
+		t.Fatalf("stream URL = %q, want reference custom base URL path", streamURL.String())
 	}
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
@@ -1238,23 +1241,29 @@ func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	t.Setenv("SPEECHMATICS_RT_URL", "wss://speechmatics.env/v2/")
 
 	provider := NewSpeechmaticsSTT("test-key")
+	if provider.baseURL != "wss://speechmatics.env/v2/" {
+		t.Fatalf("provider baseURL = %q, want environment realtime URL preserved", provider.baseURL)
+	}
 
 	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
 	if err != nil {
 		t.Fatalf("parse environment stream URL: %v", err)
 	}
-	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.env" || streamURL.Path != "/v2" {
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.env" || streamURL.Path != "/v2/" {
 		t.Fatalf("stream URL = %q, want environment realtime URL", streamURL.String())
 	}
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.explicit/v2/"))
+	if provider.baseURL != "wss://speechmatics.explicit/v2/" {
+		t.Fatalf("provider baseURL = %q, want explicit realtime URL preserved", provider.baseURL)
+	}
 	streamURL, err = url.Parse(buildSpeechmaticsSTTStreamURL(provider))
 	if err != nil {
 		t.Fatalf("parse explicit stream URL: %v", err)
 	}
-	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.explicit" || streamURL.Path != "/v2" {
+	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.explicit" || streamURL.Path != "/v2/" {
 		t.Fatalf("stream URL = %q, want explicit realtime URL", streamURL.String())
 	}
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/1.5.19.rc1")

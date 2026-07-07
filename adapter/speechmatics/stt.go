@@ -83,7 +83,7 @@ func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		if baseURL != "" {
-			s.baseURL = strings.TrimRight(baseURL, "/")
+			s.baseURL = baseURL
 		}
 	}
 }
@@ -222,7 +222,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	maxDelay := 2.0
 	provider := &SpeechmaticsSTT{
 		apiKey:            apiKey,
-		baseURL:           strings.TrimRight(baseURL, "/"),
+		baseURL:           baseURL,
 		language:          "en",
 		turnDetectionMode: "external",
 		sampleRate:        16000,
@@ -488,7 +488,7 @@ func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
 }
 
 func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
-	rawURL := strings.TrimRight(s.baseURL, "/")
+	rawURL := s.baseURL
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
