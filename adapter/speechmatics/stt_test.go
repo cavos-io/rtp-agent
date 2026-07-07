@@ -100,6 +100,49 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *testing.T) {
+	resp := smResponse{
+		Message: "AddTranscript",
+		Results: []struct {
+			Alternatives []struct {
+				Content    string  `json:"content"`
+				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
+			} `json:"alternatives"`
+			Type      string  `json:"type"`
+			Attaches  string  `json:"attaches_to"`
+			IsEOS     bool    `json:"is_eos"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		}{
+			{
+				StartTime: 0.15,
+				EndTime:   0.45,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
+				}{{Content: "defaulted", Confidence: 0.91, SpeakerID: "S1", Language: "en"}},
+			},
+		},
+	}
+
+	event := speechmaticsTranscriptEvent(resp, nil)
+	if event == nil {
+		t.Fatal("speechmaticsTranscriptEvent returned nil")
+	}
+	words := event.Alternatives[0].Words
+	if len(words) != 1 {
+		t.Fatalf("words = %#v, want missing result type treated as reference word", words)
+	}
+	word := words[0]
+	if word.Text != "defaulted" || word.StartTime != 0.15 || word.EndTime != 0.45 || word.Confidence != 0.91 || word.SpeakerID != "S1" {
+		t.Fatalf("word = %#v, want reference default word timing", word)
+	}
+}
+
 func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
@@ -403,6 +446,56 @@ func TestSpeechmaticsEventsRawTranscriptUsesReferenceAttachSpacing(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptUsesReferenceWordDelimiter(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.2,
+			"alternatives":[{"content":"私","confidence":0.9,"speaker":"agent","language":"ja"}]
+		},{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.4,
+			"alternatives":[{"content":"です","confidence":0.9,"speaker":"agent","language":"ja"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "ja", wordDelimiter: "", wordDelimiterSet: true})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "私です" {
+		t.Fatalf("text = %q, want reference language-pack word delimiter", got)
+	}
+}
+
+func TestSpeechmaticsRecognitionStartedStoresReferenceWordDelimiter(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		state: &speechmaticsStreamState{},
+	}
+	delimiter := ""
+
+	if keepReading := stream.handleResponse(smResponse{
+		Message: "RecognitionStarted",
+		LanguagePackInfo: struct {
+			WordDelimiter *string `json:"word_delimiter"`
+		}{WordDelimiter: &delimiter},
+	}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	if stream.state.wordDelimiter != "" {
+		t.Fatalf("word delimiter = %q, want empty reference delimiter", stream.state.wordDelimiter)
+	}
+	if !stream.state.wordDelimiterSet {
+		t.Fatal("word delimiter set = false, want present empty reference delimiter")
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -442,6 +535,41 @@ func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing
 	}
 	if len(alt.Words) != 1 || alt.Words[0].Text != "hello" {
 		t.Fatalf("words = %#v, want only middle word", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContent(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"","confidence":0.9,"speaker":"agent","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"kept","confidence":0.8,"speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "kept" {
+		t.Fatalf("text = %q, want empty raw content skipped", alt.Text)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "kept" {
+		t.Fatalf("words = %#v, want only non-empty content word", alt.Words)
+	}
+	if alt.StartTime != 0.4 || alt.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want non-empty fragment timing", alt.StartTime, alt.EndTime)
 	}
 }
 
@@ -513,6 +641,42 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	}
 	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "next" {
 		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	}
+}
+
+func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true, speechDuration: 0.75}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.4,
+			"alternatives":[{"content":"done","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before turn end = %#v, want buffered until reference turn boundary", events)
+	}
+	events := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(events) != 3 {
+		t.Fatalf("end events = %#v, want final transcript, end_of_speech, recognition_usage", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
+		t.Fatalf("first event = %#v, want buffered final transcript before turn end", events[0])
+	}
+	if events[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event = %s, want end_of_speech", events[1].Type)
+	}
+	if events[2].Type != stt.SpeechEventRecognitionUsage || events[2].RecognitionUsage == nil || events[2].RecognitionUsage.AudioDuration != 0.75 {
+		t.Fatalf("third event = %#v, want recognition usage", events[2])
+	}
+	if len(state.pendingRawFinals) != 0 {
+		t.Fatalf("pending finals = %#v, want flushed at turn end", state.pendingRawFinals)
 	}
 }
 
@@ -1277,6 +1441,51 @@ func TestSpeechmaticsSTTNextDrainsQueuedTranscriptAfterEndOfTranscript(t *testin
 	}
 	if got := event.Alternatives[0].Text; got != "final before end" {
 		t.Fatalf("transcript = %q, want final before end", got)
+	}
+}
+
+func TestSpeechmaticsSTTEndOfTranscriptFlushesPendingRawFinalBeforeEOF(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		errCh:  make(chan error, 1),
+		state: &speechmaticsStreamState{
+			includePartials: true,
+			bufferRawFinals: true,
+		},
+		closeConn: func() error { return nil },
+	}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.5,
+			"alternatives":[{"content":"closing","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+
+	if keepReading := stream.handleResponse(final); !keepReading {
+		t.Fatal("AddTranscript stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("events before EndOfTranscript = %d, want raw final buffered", len(stream.events))
+	}
+	if keepReading := stream.handleResponse(smResponse{Message: "EndOfTranscript"}); keepReading {
+		t.Fatal("EndOfTranscript handler continued reading, want terminal stream cleanup")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want pending raw final before EOF", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want pending raw final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "closing" {
+		t.Fatalf("transcript = %q, want pending raw final text", got)
 	}
 }
 
@@ -2514,6 +2723,163 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 	if len(writes) != 1 {
 		t.Fatalf("finalize writes after stream Close = %d, want unchanged", len(writes))
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			if got, want := payload["message"], "ForceEndOfUtterance"; got != want {
+				t.Fatalf("finalize message = %#v, want %#v", got, want)
+			}
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.25 {
+		t.Fatalf("usage event = %#v, want reference forced EOU timeout usage", usage)
+	}
+}
+
+func TestSpeechmaticsSTTProviderEndOfTurnCancelsReferenceForcedEOUTimeout(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("EndOfTurn stopped read loop")
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("provider turn event = %s, want end_of_speech", got.Type)
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("provider usage event = %s, want recognition_usage", got.Type)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(stream.events) != 0 {
+		t.Fatalf("events after provider EndOfTurn = %d, want forced EOU timeout canceled", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeSuppressesDuplicateReferenceForcedEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	writes := 0
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("second Finalize error = %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("ForceEndOfUtterance writes = %d, want one while reference forced EOU active", writes)
+	}
+}
+
+func TestSpeechmaticsSTTForcedEOUEndsOnReferenceEndOfUtteranceAck(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("EndOfUtterance ACK did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("EndOfUtterance ACK did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.3 {
+		t.Fatalf("usage event = %#v, want reference forced EOU ACK usage", usage)
 	}
 }
 

@@ -61,6 +61,7 @@ const (
 )
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
+var speechmaticsForcedEOUTimeout = time.Second
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -834,6 +835,8 @@ type speechmaticsSTTStream struct {
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
 	drainEventsAfterClose      bool
+	forcedEOUPending           bool
+	forcedEOUSeq               uint64
 }
 
 type speechmaticsStreamState struct {
@@ -847,6 +850,8 @@ type speechmaticsStreamState struct {
 	ignoreSpeakers       []string
 	focusMode            string
 	includePartials      bool
+	wordDelimiter        string
+	wordDelimiterSet     bool
 	bufferRawFinals      bool
 	pendingRawFinals     []*stt.SpeechEvent
 }
@@ -882,6 +887,9 @@ type smResponse struct {
 			EndTime   float64 `json:"end_time"`
 		} `json:"metadata"`
 	} `json:"segments"`
+	LanguagePackInfo struct {
+		WordDelimiter *string `json:"word_delimiter"`
+	} `json:"language_pack_info"`
 	Speakers []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 }
 
@@ -919,11 +927,17 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
+		for _, event := range speechmaticsFlushPendingRawFinals(s.state) {
+			if !s.enqueueEvent(event) {
+				return false
+			}
+		}
 		s.markClosedDrainingEvents()
 		_ = s.closeTransportOnce()
 		return false
 	}
 	if resp.Message == "RecognitionStarted" {
+		s.recordRecognitionStarted(resp)
 		if err := s.markReadyForAudio(); err != nil {
 			s.enqueueError(err)
 			return false
@@ -932,6 +946,13 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "EndOfUtterance" {
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
+			s.clearForcedEOU()
+			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+				if !s.enqueueEvent(event) {
+					return false
+				}
+			}
+		} else if s.consumeCurrentForcedEOU() {
 			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
 				if !s.enqueueEvent(event) {
 					return false
@@ -944,12 +965,26 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
 	}
+	if resp.Message == "EndOfTurn" {
+		s.clearForcedEOU()
+	}
 	for _, event := range speechmaticsEvents(resp, s.state) {
 		if !s.enqueueEvent(event) {
 			return false
 		}
 	}
 	return true
+}
+
+func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
+	if s == nil || resp.LanguagePackInfo.WordDelimiter == nil {
+		return
+	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.wordDelimiter = *resp.LanguagePackInfo.WordDelimiter
+	s.state.wordDelimiterSet = true
 }
 
 func (s *speechmaticsSTTStream) enqueueError(err error) {
@@ -1002,10 +1037,20 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 }
 
 func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEvent {
-	events := []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}
+	events := speechmaticsFlushPendingRawFinals(state)
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	if usage := speechmaticsRecognitionUsageEvent(state); usage != nil {
 		events = append(events, usage)
 	}
+	return events
+}
+
+func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if state == nil || len(state.pendingRawFinals) == 0 {
+		return nil
+	}
+	events := state.pendingRawFinals
+	state.pendingRawFinals = nil
 	return events
 }
 
@@ -1071,6 +1116,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			continue
 		}
 		alt := result.Alternatives[0]
+		if alt.Content == "" {
+			continue
+		}
 		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
@@ -1078,9 +1126,13 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		language := speechmaticsSegmentLanguage(alt.Language, state)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
+		kind := result.Type
+		if kind == "" {
+			kind = "word"
+		}
 		fragments = append(fragments, speechmaticsRawTranscriptFragment{
 			text:       alt.Content,
-			kind:       result.Type,
+			kind:       kind,
 			speakerID:  resultSpeakerID,
 			language:   language,
 			attaches:   result.Attaches,
@@ -1149,7 +1201,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 		} else if fragment.attaches == "previous" || fragments[i-1].attaches == "next" {
 			text += fragment.text
 		} else {
-			text += " " + fragment.text
+			text += speechmaticsRawWordDelimiter(state) + fragment.text
 		}
 		totalConfidence += fragment.confidence
 		if fragment.kind == "word" {
@@ -1178,6 +1230,13 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 			},
 		},
 	}
+}
+
+func speechmaticsRawWordDelimiter(state *speechmaticsStreamState) string {
+	if state != nil && state.wordDelimiterSet {
+		return state.wordDelimiter
+	}
+	return " "
 }
 
 func speechmaticsRawTranscriptSpeakerActive(speakerID string, state *speechmaticsStreamState) *bool {
@@ -1568,7 +1627,7 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 			}
 		}
 		if pendingFinalize {
-			if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+			if err := s.sendForceEndOfUtterance(); err != nil {
 				_ = s.Close()
 				return err
 			}
@@ -1584,18 +1643,109 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 
 func (s *speechmaticsSTTStream) Finalize() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.providerManagedEndpointing {
+		s.mu.Unlock()
 		return nil
 	}
 	if s.startupGateActiveLocked() {
 		s.pendingFinalize = true
+		s.mu.Unlock()
 		return nil
 	}
-	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+	s.mu.Unlock()
+	return s.sendForceEndOfUtterance()
+}
+
+func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
+	seq, ok := s.beginForcedEOU()
+	if !ok {
+		return nil
+	}
+	if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+		s.clearForcedEOU()
+		return err
+	}
+	s.scheduleForcedEOUTimeout(seq)
+	return nil
+}
+
+func (s *speechmaticsSTTStream) beginForcedEOU() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.providerManagedEndpointing {
+		return 0, false
+	}
+	if s.forcedEOUPending {
+		return 0, false
+	}
+	s.forcedEOUPending = true
+	s.forcedEOUSeq++
+	return s.forcedEOUSeq, true
+}
+
+func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout(seq uint64) {
+	if s == nil || speechmaticsForcedEOUTimeout <= 0 {
+		return
+	}
+	s.mu.Lock()
+	timeout := speechmaticsForcedEOUTimeout
+	s.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.done:
+			return
+		}
+		if !s.consumeForcedEOU(seq) {
+			return
+		}
+		for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+			if !s.enqueueEvent(event) {
+				return
+			}
+		}
+	}()
+}
+
+func (s *speechmaticsSTTStream) consumeForcedEOU(seq uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || !s.forcedEOUPending || s.forcedEOUSeq != seq {
+		return false
+	}
+	s.forcedEOUPending = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || !s.forcedEOUPending {
+		return false
+	}
+	s.forcedEOUPending = false
+	s.forcedEOUSeq++
+	return true
+}
+
+func (s *speechmaticsSTTStream) clearForcedEOU() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.forcedEOUPending = false
+	s.forcedEOUSeq++
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) startVAD(ctx context.Context) error {
