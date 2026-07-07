@@ -702,7 +702,8 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(s.ctx, "POST", baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return err
+		s.finalSent = true
+		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)

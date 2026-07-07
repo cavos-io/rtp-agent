@@ -488,6 +488,43 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSSynthesizeInvalidBaseURLIsTerminal(t *testing.T) {
+	var calls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("\x01\x02"))}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"",
+		WithUpliftAIBaseURL("https://upliftai.example/%zz"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "bad route")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for invalid base URL", audio)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after invalid base URL = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if calls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 before rejecting invalid base URL", calls)
+	}
+}
+
 func TestUpliftAITTSSynthesizeRequestDeadlineReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
