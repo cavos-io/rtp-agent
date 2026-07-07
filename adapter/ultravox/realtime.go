@@ -437,13 +437,20 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 		s.mu.Unlock()
 		return nil
 	}
-	s.contextItems[key] = struct{}{}
 	s.mu.Unlock()
-	return s.sendClientEvent(map[string]any{
+	if err := s.sendClientEvent(map[string]any{
 		"type":          "user_text_message",
 		"text":          eventText,
 		"deferResponse": true,
-	})
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.contextItems[key] = struct{}{}
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
@@ -460,7 +467,6 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.toolResults[key] = struct{}{}
 	s.mu.Unlock()
 
 	event := map[string]any{
@@ -475,7 +481,15 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	} else {
 		event["result"] = output.Output
 	}
-	return s.sendClientEvent(event)
+	if err := s.sendClientEvent(event); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.toolResults[key] = struct{}{}
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func ultravoxRealtimeChatMessageKey(message *llm.ChatMessage) string {

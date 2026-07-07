@@ -1109,6 +1109,42 @@ func TestUltravoxRealtimeSessionUpdateChatContextResendsReferenceReaddedItems(t 
 	})
 }
 
+func TestUltravoxRealtimeSessionUpdateChatContextRetriesAfterClientQueueBackpressure(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for i := 0; i < cap(session.clientEventCh); i++ {
+		session.clientEventCh <- map[string]any{"type": "filler"}
+	}
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "memo", Role: llm.ChatRoleUser, Text: "remember Paris"})
+	if err := session.UpdateChatContext(ctx); err == nil || !strings.Contains(err.Error(), "client event queue is full") {
+		t.Fatalf("UpdateChatContext full queue error = %v, want queue full", err)
+	}
+	<-session.clientEventCh
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext retry error = %v, want context event after backpressure clears", err)
+	}
+	for i := 0; i < cap(session.clientEventCh)-1; i++ {
+		<-session.clientEventCh
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "remember Paris",
+		"deferResponse": true,
+	})
+}
+
 func TestUltravoxRealtimeSessionPlaybackClearBufferEmitsReferenceSpeechStarted(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
