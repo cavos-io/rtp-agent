@@ -3777,6 +3777,9 @@ func TestUpliftAITTSChunkedStreamWAVNetReadTimeoutReturnsAPITimeoutError(t *test
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError for WAV response-body socket timeout", err, err)
 	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after WAV timeout = (%#v, %v), want nil, io.EOF", audio, err)
+	}
 }
 
 func TestUpliftAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {

@@ -1422,8 +1422,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || upliftAIIsTimeoutError(err) {
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 	}
 	if s.closed {
