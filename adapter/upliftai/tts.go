@@ -557,9 +557,13 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 		s.mu.Unlock()
 	}()
 
+	hasAudio := false
 	for {
 		audio, err := stream.Next()
 		if err == io.EOF {
+			if !hasAudio && strings.TrimSpace(text) != "" {
+				return (&upliftAITTSChunkedStream{text: text}).noAudioError()
+			}
 			return nil
 		}
 		if err != nil {
@@ -567,6 +571,9 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 		}
 		if audio == nil {
 			continue
+		}
+		if audio.Frame != nil {
+			hasAudio = true
 		}
 		if !s.sendResult(audio, nil) {
 			return nil

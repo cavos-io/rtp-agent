@@ -1262,6 +1262,62 @@ func TestUpliftAITTSStreamNoAudioKeepsReferenceAPIError(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamGracefulEOFWithoutAudioReturnsReferenceNoAudioError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("interrupted before audio"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.audio != nil {
+			t.Fatalf("Next audio = %#v, want nil for graceful EOF without audio", got.audio)
+		}
+		var apiErr *llm.APIError
+		if !errors.As(got.err, &apiErr) {
+			t.Fatalf("Next error = %T(%v), want reference APIError for no-audio segment", got.err, got.err)
+		}
+		if !strings.Contains(got.err.Error(), "no audio frames were pushed for text: interrupted before audio") {
+			t.Fatalf("Next error = %q, want reference no-audio message", got.err.Error())
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = stream.Close()
+		select {
+		case <-resultCh:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("timed out waiting for no-audio error after graceful EOF without audio")
+	}
+}
+
 func TestUpliftAITTSStreamSegmentCancelReturnsContextCanceled(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
