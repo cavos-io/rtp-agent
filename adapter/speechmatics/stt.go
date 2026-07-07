@@ -853,6 +853,7 @@ type smResponse struct {
 
 func (s *speechmaticsSTTStream) readLoop() {
 	defer func() {
+		s.closeVADStream()
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
@@ -1280,6 +1281,19 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 				return
 			}
 		}
+	}
+}
+
+func (s *speechmaticsSTTStream) closeVADStream() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	vadStream := s.vadStream
+	s.vadStream = nil
+	s.mu.Unlock()
+	if vadStream != nil {
+		_ = vadStream.Close()
 	}
 }
 
