@@ -364,6 +364,9 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	s.systemPrompt = instructions
+	if s.model != nil {
+		s.model.systemPrompt = instructions
+	}
 	generation := s.markRestartNeededLocked()
 	s.mu.Unlock()
 	s.finishGeneration(generation)

@@ -273,6 +273,36 @@ func TestUltravoxRealtimeSessionUpdateInstructionsMarksReferenceRestart(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateInstructionsUpdatesReferenceModelPrompt(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference shared prompt update", err)
+	}
+	if got := model.SystemPrompt(); got != "answer briefly" {
+		t.Fatalf("model system prompt = %q, want reference shared prompt update", got)
+	}
+
+	nextSessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("second Session error = %v", err)
+	}
+	nextSession := nextSessionInterface.(*realtimeSession)
+	defer nextSession.Close()
+	if got := nextSession.systemPrompt; got != "answer briefly" {
+		t.Fatalf("new session system prompt = %q, want updated prompt", got)
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateInstructionsClosesActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
