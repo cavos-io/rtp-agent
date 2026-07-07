@@ -715,6 +715,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		s.finalSent = true
 		return llm.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp

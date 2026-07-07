@@ -551,6 +551,39 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSSynthesizeStatusErrorIsTerminal(t *testing.T) {
+	var calls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("first Next error = %T %v, want APIStatusError", err, err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || err != io.EOF {
+		t.Fatalf("second Next = (%#v, %v), want nil, io.EOF after terminal status error", audio, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 after terminal status error", calls)
+	}
+}
+
 func TestUpliftAITTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	body := &upliftAIReadTrackingCloser{}
 	oldClient := http.DefaultClient
