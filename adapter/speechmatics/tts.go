@@ -91,6 +91,9 @@ func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.apiKey == "" {
+		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
+	}
 	streamCtx, cancel := context.WithTimeout(ctx, defaultSpeechmaticsTTSTimeout)
 	return &speechmaticsTTSChunkedStream{
 		ctx:        streamCtx,

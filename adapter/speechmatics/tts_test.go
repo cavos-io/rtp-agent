@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +48,33 @@ func TestNewSpeechmaticsTTSUsesEnvironmentAPIKey(t *testing.T) {
 	provider = NewSpeechmaticsTTS("explicit-key")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
+func TestSpeechmaticsTTSSynthesizeRequiresAPIKeyBeforeRequest(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "")
+	originalClient := http.DefaultClient
+	requests := 0
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil without API key", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "SPEECHMATICS_API_KEY") {
+		t.Fatalf("Synthesize error = %v, want missing API key error", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want no provider request before API key validation", requests)
 	}
 }
 
