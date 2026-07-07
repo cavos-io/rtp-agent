@@ -116,6 +116,18 @@ func WithSpeechmaticsSTTFixedTurnDetection() SpeechmaticsSTTOption {
 	}
 }
 
+func WithSpeechmaticsSTTAdaptiveTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "adaptive"
+	}
+}
+
+func WithSpeechmaticsSTTSmartTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "smart_turn"
+	}
+}
+
 func WithSpeechmaticsSTTIncludePartials(enabled bool) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.includePartials = &enabled
