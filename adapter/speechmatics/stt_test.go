@@ -1332,11 +1332,6 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
-	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("conversation_config = %#v, want object", config["conversation_config"])
-	}
-	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_max_delay", float64(1.8))
 	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
@@ -1362,6 +1357,7 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTFixedTurnDetection(),
 		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
 	)
 
@@ -1374,6 +1370,19 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
 	if _, ok := config["end_of_utterance_silence_trigger"]; ok {
 		t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+	}
+}
+
+func TestSpeechmaticsSTTExternalTurnDetectionOmitsReferenceConversationConfig(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.8),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 	}
 }
 

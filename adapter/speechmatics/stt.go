@@ -587,11 +587,11 @@ func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) 
 
 func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
+	if s == nil || s.turnDetectionMode != "fixed" {
+		return config
+	}
 	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
 		config["end_of_utterance_silence_trigger"] = trigger
-	}
-	if s != nil && s.eouMaxDelay != nil {
-		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
 	}
 	return config
 }
