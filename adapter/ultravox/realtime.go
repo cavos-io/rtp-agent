@@ -680,6 +680,8 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration {
 	s.restartCount++
 	s.pendingReply = false
+	close(s.clientEventCh)
+	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	generation := s.generation
 	s.generation = nil
 	return generation

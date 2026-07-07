@@ -661,6 +661,32 @@ func TestUltravoxRealtimeSessionRestartClearsReferencePendingGenerateReply(t *te
 	}
 }
 
+func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedClientEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("queued client event after restart = %#v, want reference old message channel dropped", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
