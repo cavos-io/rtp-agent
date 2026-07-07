@@ -3611,6 +3611,23 @@ func TestUpliftAITTSChunkedStreamWAVReadCancelReturnsContextCanceled(t *testing.
 	}
 }
 
+func TestUpliftAITTSChunkedStreamWAVNetReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		outputFormat: "WAV_22050_16",
+		resp:         &http.Response{Body: upliftAIReadErrorBody{err: upliftAITestTimeoutError{}}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError for WAV response-body socket timeout", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	body := newUpliftAICloseUnblocksReadBody(io.ErrClosedPipe)
 	stream := &upliftAITTSChunkedStream{
