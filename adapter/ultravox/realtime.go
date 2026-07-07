@@ -272,6 +272,10 @@ type ultravoxRealtimeTranscriptEvent struct {
 	Ordinal int
 }
 
+type ultravoxRealtimeStateEvent struct {
+	State string
+}
+
 type realtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
@@ -509,6 +513,42 @@ func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneratio
 	close(generation.messageCh)
 	if s.generation == generation {
 		s.generation = nil
+	}
+}
+
+func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
+	switch event.State {
+	case "listening":
+		s.mu.Lock()
+		generation := s.generation
+		s.mu.Unlock()
+		s.finishGeneration(generation)
+	case "thinking":
+		s.mu.Lock()
+		if !s.closed && (s.generation == nil || s.generation.done) {
+			s.ensureGenerationLocked()
+		}
+		s.mu.Unlock()
+	case "speaking":
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		if s.generation == nil || s.generation.done {
+			s.ensureGenerationLocked()
+		}
+		event := llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeSpeechStopped,
+			SpeechStopped: &llm.InputSpeechStoppedEvent{
+				UserTranscriptionEnabled: false,
+			},
+		}
+		s.mu.Unlock()
+		select {
+		case s.eventCh <- event:
+		default:
+		}
 	}
 }
 

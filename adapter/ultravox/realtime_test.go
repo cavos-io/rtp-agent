@@ -448,6 +448,40 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionStateEventsMatchReferenceTurnLifecycle(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "speaking"})
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeSpeechStopped {
+			t.Fatalf("event type = %s, want speech_stopped", event.Type)
+		}
+		if event.SpeechStopped == nil || event.SpeechStopped.UserTranscriptionEnabled {
+			t.Fatalf("SpeechStopped = %+v, want user transcription disabled", event.SpeechStopped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech_stopped")
+	}
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "listening"})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
 	t.Helper()
 	select {
