@@ -1291,6 +1291,48 @@ func TestSpeechmaticsSTTEndInputWaitsForRecognitionStartedBeforeEndStream(t *tes
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeWaitsForRecognitionStartedBeforeForceEOU(t *testing.T) {
+	var ordered []string
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		writeBinary: func(data []byte) error {
+			ordered = append(ordered, fmt.Sprintf("audio:%d", len(data)))
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			ordered = append(ordered, fmt.Sprintf("control:%s", control["message"]))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Finalize(); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if len(ordered) != 0 {
+		t.Fatalf("writes before RecognitionStarted = %#v, want finalize buffered behind audio", ordered)
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	want := []string{"audio:3200", "control:ForceEndOfUtterance"}
+	if !reflect.DeepEqual(ordered, want) {
+		t.Fatalf("writes after RecognitionStarted = %#v, want %#v", ordered, want)
+	}
+}
+
 func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *testing.T) {
 	messages := make(chan string, 3)
 	upgrader := websocket.Upgrader{}

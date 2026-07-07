@@ -795,6 +795,7 @@ type speechmaticsSTTStream struct {
 	closed          bool
 	inputEnded      bool
 	pendingEndInput bool
+	pendingFinalize bool
 	pendingErr      error
 
 	writeBinary func([]byte) error
@@ -1273,6 +1274,13 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 			return err
 		}
 	}
+	if s.pendingFinalize {
+		s.pendingFinalize = false
+		if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
 	if s.pendingEndInput {
 		s.pendingEndInput = false
 		if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
@@ -1290,6 +1298,10 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return io.ErrClosedPipe
 	}
 	if s.providerManagedEndpointing {
+		return nil
+	}
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingFinalize = true
 		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
@@ -1618,6 +1630,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.closed = true
 	s.inputEnded = true
 	s.pendingEndInput = false
+	s.pendingFinalize = false
 	s.pendingAudioChunks = nil
 	vadStream := s.vadStream
 	s.vadStream = nil
