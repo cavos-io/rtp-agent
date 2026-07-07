@@ -255,6 +255,17 @@ func TestPreConnectAudioRawPCMRejectsInvalidAudioShape(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioOpusRejectsInvalidDecoderConfig(t *testing.T) {
+	frames, err := readPreConnectOpusFrames(bytes.NewReader(nil), 123, 1)
+
+	if err == nil {
+		t.Fatal("readPreConnectOpusFrames() invalid decoder config error = nil")
+	}
+	if frames != nil {
+		t.Fatalf("readPreConnectOpusFrames() frames = %#v, want nil on decoder setup error", frames)
+	}
+}
+
 func TestPreConnectAudioRawPCMReadErrorDropsPartialFrames(t *testing.T) {
 	readErr := errors.New("stream failed")
 	reader := &preConnectErrReader{
