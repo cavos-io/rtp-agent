@@ -1661,29 +1661,37 @@ func (s *speechmaticsSTTStream) Finalize() error {
 }
 
 func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
+	seq, ok := s.beginForcedEOU()
+	if !ok {
+		return nil
+	}
 	if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+		s.clearForcedEOU()
 		return err
 	}
-	s.scheduleForcedEOUTimeout()
+	s.scheduleForcedEOUTimeout(seq)
 	return nil
 }
 
-func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout() {
+func (s *speechmaticsSTTStream) beginForcedEOU() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.providerManagedEndpointing {
+		return 0, false
+	}
+	if s.forcedEOUPending {
+		return 0, false
+	}
+	s.forcedEOUPending = true
+	s.forcedEOUSeq++
+	return s.forcedEOUSeq, true
+}
+
+func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout(seq uint64) {
 	if s == nil || speechmaticsForcedEOUTimeout <= 0 {
 		return
 	}
 	s.mu.Lock()
-	if s.closed || s.providerManagedEndpointing {
-		s.mu.Unlock()
-		return
-	}
-	if s.forcedEOUPending {
-		s.mu.Unlock()
-		return
-	}
-	s.forcedEOUPending = true
-	s.forcedEOUSeq++
-	seq := s.forcedEOUSeq
 	timeout := speechmaticsForcedEOUTimeout
 	s.mu.Unlock()
 
