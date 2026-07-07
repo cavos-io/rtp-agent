@@ -2516,7 +2516,7 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	switch normalizeProvider(cfg.VADProvider) {
 	case "":
-		if normalizeProvider(cfg.STTProvider) == providerSpeechmatics && speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) {
+		if appConfigUsesSpeechmaticsExternalSTT(cfg) {
 			a.VAD = silero.NewSileroVAD()
 		}
 		return nil
@@ -2604,6 +2604,21 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
 	}
+}
+
+func appConfigUsesSpeechmaticsExternalSTT(cfg AppConfig) bool {
+	if !speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) {
+		return false
+	}
+	if normalizeProvider(cfg.STTProvider) == providerSpeechmatics {
+		return true
+	}
+	for _, provider := range cfg.STTFallbackProviders {
+		if normalizeProvider(provider) == providerSpeechmatics {
+			return true
+		}
+	}
+	return false
 }
 
 func existingTenModelPath() (string, bool) {

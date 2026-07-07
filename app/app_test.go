@@ -6550,6 +6550,26 @@ func TestDefaultConfigFromEnvAcceptsSpitchSTTFallbackProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsFallbackExternalAutoVAD(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "speechmatics")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "silero.VAD" {
+		t.Fatalf("VAD label = %q, want silero.VAD", got)
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want fallback adapter", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAcceptsOVHCloudSTTFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "ovhcloud")
