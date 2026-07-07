@@ -64,6 +64,26 @@ func TestPreConnectAudioLatePublishAfterTimeoutIsNotReused(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioFailedBufferFulfillsExistingWaiter(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	received := make(chan []*model.AudioFrame, 1)
+	go func() {
+		received <- handler.WaitForData(context.Background(), "track-invalid")
+	}()
+
+	waitForPreConnectBufferWaiter(t, handler, "track-invalid")
+	handler.failBuffer("track-invalid")
+
+	select {
+	case frames := <-received:
+		if frames != nil {
+			t.Fatalf("WaitForData() failed buffer frames = %#v, want nil", frames)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForData() did not return after pre-connect audio failure")
+	}
+}
+
 func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{

@@ -1157,6 +1157,15 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 		OnTrackSubscribed:      rio.onTrackSubscribed,
 		OnTrackUnpublished: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
 			rio.emitRoomEvent(&RoomTrackUnpublishedEvent{Publication: publication, Participant: participant})
+			trackID := ""
+			if publication != nil {
+				trackID = publication.SID()
+			}
+			participantID := ""
+			if participant != nil {
+				participantID = participant.Identity()
+			}
+			rio.handleTrackUnpublished(trackID, participantID)
 		},
 		OnTrackPublishedEvent: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
 			rio.emitRoomEvent(&RoomTrackPublishedEvent{Publication: publication, Participant: participant})
@@ -1485,6 +1494,20 @@ func (rio *RoomIO) clearUserTranscriptionTargetForParticipant(participantIdentit
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	if rio.userTranscriptionParticipantID != participantIdentity {
+		return
+	}
+	rio.userTranscriptionTrackID = ""
+	rio.userTranscriptionParticipantID = ""
+	rio.userTranscriptionSegmentID = ""
+}
+
+func (rio *RoomIO) handleTrackUnpublished(trackID string, participantIdentity string) {
+	if rio == nil || trackID == "" || participantIdentity == "" {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.userTranscriptionTrackID != trackID || rio.userTranscriptionParticipantID != participantIdentity {
 		return
 	}
 	rio.userTranscriptionTrackID = ""
