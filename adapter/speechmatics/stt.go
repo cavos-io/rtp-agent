@@ -518,7 +518,12 @@ type smResponse struct {
 }
 
 func (s *speechmaticsSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		if s.owner != nil {
+			s.owner.unregisterStream(s)
+		}
+		close(s.events)
+	}()
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {

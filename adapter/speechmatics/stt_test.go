@@ -350,6 +350,40 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{"message": "EndOfTranscript"}); err != nil {
+			t.Errorf("write EndOfTranscript: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	event, err := stream.Next()
+	if event != nil || err != io.EOF {
+		t.Fatalf("Next after EndOfTranscript = (%#v, %v), want EOF", event, err)
+	}
+	if active := provider.activeStreams(); len(active) != 0 {
+		t.Fatalf("active streams after EndOfTranscript = %d, want 0", len(active))
+	}
+}
+
 func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &speechmaticsSTTStream{
