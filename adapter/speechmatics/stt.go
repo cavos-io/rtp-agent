@@ -1141,7 +1141,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 		}
 	}
 	speakerID := fragments[0].speakerID
-	text = speechmaticsFormattedSegmentText(text, speakerID, nil, state)
+	text = speechmaticsFormattedSegmentText(text, speakerID, speechmaticsRawTranscriptSpeakerActive(speakerID, state), state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -1156,6 +1156,14 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 			},
 		},
 	}
+}
+
+func speechmaticsRawTranscriptSpeakerActive(speakerID string, state *speechmaticsStreamState) *bool {
+	if state == nil || len(state.focusSpeakers) == 0 {
+		return nil
+	}
+	active := speechmaticsStringInSlice(speakerID, state.focusSpeakers)
+	return &active
 }
 
 func speechmaticsTrimRawTranscriptEdgePunctuation(fragments []speechmaticsRawTranscriptFragment) []speechmaticsRawTranscriptFragment {

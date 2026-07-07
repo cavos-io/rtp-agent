@@ -524,6 +524,35 @@ func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptAppliesReferencePassiveSpeakerFormat(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"background","confidence":0.9,"speaker":"customer","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw speaker transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{
+		focusSpeakers:        []string{"agent"},
+		focusMode:            "retain",
+		speakerActiveFormat:  "@{speaker_id}: {text}",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want retained passive speaker transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@customer [background]: background" {
+		t.Fatalf("text = %q, want reference passive speaker format", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string
