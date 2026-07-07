@@ -28,6 +28,19 @@ type fakeRoomIOTextResponder struct {
 	calls []string
 }
 
+type roomIOFakeRemoteParticipantView struct {
+	identity   string
+	kind       lksdk.ParticipantKind
+	attributes map[string]string
+}
+
+func (p roomIOFakeRemoteParticipantView) SID() string                   { return "" }
+func (p roomIOFakeRemoteParticipantView) Identity() string              { return p.identity }
+func (p roomIOFakeRemoteParticipantView) Name() string                  { return "" }
+func (p roomIOFakeRemoteParticipantView) Kind() lksdk.ParticipantKind   { return p.kind }
+func (p roomIOFakeRemoteParticipantView) Metadata() string              { return "" }
+func (p roomIOFakeRemoteParticipantView) Attributes() map[string]string { return p.attributes }
+
 func (f *fakeRoomIOTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
 	f.calls = append(f.calls, "claim-begin")
 	err := fn(ctx)
@@ -133,6 +146,36 @@ func TestNewRoomIOCanDisableAudioInput(t *testing.T) {
 
 	if rio.preConnectAudio != nil {
 		t.Fatalf("preConnectAudio = %#v, want nil when audio input disabled", rio.preConnectAudio)
+	}
+}
+
+func TestRoomIOAudioInputEnabledByDefault(t *testing.T) {
+	rio := NewRoomIO(lksdk.NewRoom(nil), &agent.AgentSession{}, RoomOptions{})
+
+	if rio.Options.DisableAudioInput {
+		t.Fatal("DisableAudioInput = true, want audio input enabled by default")
+	}
+	if rio.preConnectAudio == nil {
+		t.Fatal("preConnectAudio = nil, want default audio input path initialized")
+	}
+}
+
+func TestRoomIOAudioInputDisabledDoesNotAttach(t *testing.T) {
+	rio := NewRoomIO(&lksdk.Room{}, &agent.AgentSession{}, RoomOptions{
+		DisableAudioInput: true,
+	})
+
+	if !rio.Options.DisableAudioInput {
+		t.Fatal("DisableAudioInput = false, want configured disabled audio input")
+	}
+	if rio.preConnectAudio != nil {
+		t.Fatalf("preConnectAudio = %#v, want nil when audio input is disabled", rio.preConnectAudio)
+	}
+	if generation, activated := rio.activateAudioInputTrack("TR_audio", "caller-a"); activated || generation != 0 {
+		t.Fatalf("activateAudioInputTrack() = (%d, %v), want disabled audio input to reject attachment", generation, activated)
+	}
+	if rio.audioInputTrackActive(1) {
+		t.Fatal("audioInputTrackActive() = true after disabled attachment")
 	}
 }
 
@@ -2361,6 +2404,40 @@ func TestRoomIOTranscriptionJSONFormatMatchesReference(t *testing.T) {
 	}
 }
 
+func TestRoomIOForwardsAgentTranscriptionToNextOutput(t *testing.T) {
+	next := &recordingTranscriptionTextOutput{}
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		Options: RoomOptions{
+			TranscriptionNextOutput: next,
+			TranscriptionJSONFormat: true,
+		},
+		agentTextStreamOpener: factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant delta",
+		IsFinal:    false,
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant final",
+		IsFinal:    true,
+	})
+
+	if len(factory.streams) != 1 {
+		t.Fatalf("opened agent transcription streams = %d, want 1", len(factory.streams))
+	}
+	if got, want := factory.streams[0].writes, []string{"{\"text\":\"assistant delta\"}\n"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("published room stream writes = %#v, want %#v", got, want)
+	}
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	wantCalls := []string{"capture:assistant delta", "capture:assistant final", "flush"}
+	if !reflect.DeepEqual(next.calls, wantCalls) {
+		t.Fatalf("next output calls = %#v, want %#v", next.calls, wantCalls)
+	}
+}
+
 func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	published := make(chan roomIOPublishedText, 3)
 	packets := make(chan *livekit.Transcription, 3)
@@ -3232,6 +3309,20 @@ func TestRoomIOAudioInputIgnoresMismatchedTrackSource(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioInputIgnoresMismatchedParticipant(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if rio.shouldAcceptParticipant("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(caller-b) = true, want false for configured caller-a audio input")
+	}
+	if generation, activated := rio.activateAudioInputTrack("TR_audio_b", "caller-b"); !activated || generation == 0 {
+		t.Fatalf("activateAudioInputTrack() = (%d, %v), want internal helper to be independent of participant filtering", generation, activated)
+	}
+	if rio.shouldAcceptParticipant("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("participant filtering changed after internal track activation")
+	}
+}
+
 func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
 	rio := &RoomIO{}
 	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
@@ -3278,6 +3369,48 @@ func TestRoomIOAudioInputTrackUnpublishedFallsBackToAvailableTrack(t *testing.T)
 	}
 	if rio.audioInputTrackActive(firstGeneration) {
 		t.Fatal("old audio input generation was restored instead of opening a fresh fallback generation")
+	}
+}
+
+func TestRoomIOCloseClearsAudioInputPublicationState(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" || len(rio.audioInputTracks) != 0 {
+		t.Fatalf("audio input state after close = track %q participant %q remembered %#v, want cleared", rio.audioInputTrackID, rio.audioInputParticipantID, rio.audioInputTracks)
+	}
+	if rio.audioInputGeneration == generation {
+		t.Fatalf("audio input generation after close = %d, want advanced from active generation", rio.audioInputGeneration)
+	}
+}
+
+func TestRoomIOAudioInputCloseUnregistersHandlers(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if rio.audioInputTrackActive(generation) {
+		t.Fatal("audio input generation is still active after close")
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" || len(rio.audioInputTracks) != 0 {
+		t.Fatalf("audio input state after close = track %q participant %q remembered %#v, want cleared", rio.audioInputTrackID, rio.audioInputParticipantID, rio.audioInputTracks)
 	}
 }
 
@@ -3344,6 +3477,24 @@ func TestRoomIOCanDisableUserTranscriptionOutput(t *testing.T) {
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions
+}
+
+type recordingTranscriptionTextOutput struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *recordingTranscriptionTextOutput) CaptureText(_ context.Context, text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "capture:"+text)
+	return nil
+}
+
+func (r *recordingTranscriptionTextOutput) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "flush")
 }
 
 type fakeTextStream struct {
@@ -4090,6 +4241,36 @@ func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testin
 	}
 }
 
+func TestRoomIOSetParticipantByIdentityBeforeConnectMatchesReference(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.SetParticipant("caller-b")
+	if got, available := rio.LinkedParticipant(); got != "caller-b" || available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want configured unavailable caller-b", got, available)
+	}
+
+	if rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = true, want false for mismatched configured participant")
+	}
+	if !rio.handleParticipantConnected("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-b) = false, want true for configured participant")
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-b" || !available {
+		t.Fatalf("LinkedParticipant() after connect = (%q, %v), want available caller-b", got, available)
+	}
+}
+
+func TestRoomIOIgnoresParticipantIdentityMismatch(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if rio.handleParticipantConnected("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-b) = true, want false for configured caller-a")
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want unavailable caller-a", got, available)
+	}
+}
+
 func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testing.T) {
 	rio := &RoomIO{}
 
@@ -4161,6 +4342,26 @@ func TestRoomIOHandleParticipantConnectedSkipsUnacceptedParticipant(t *testing.T
 	}
 	if got := rio.participantIdentity(); got != "" {
 		t.Fatalf("participantIdentity() = %q, want empty", got)
+	}
+}
+
+func TestRoomIOIgnoresPublishOnBehalfParticipantForAutoLink(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.handleExistingParticipantViews([]RemoteParticipantView{
+		roomIOFakeRemoteParticipantView{
+			identity:   "agent-output",
+			kind:       lksdk.ParticipantStandard,
+			attributes: map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		},
+		roomIOFakeRemoteParticipantView{
+			identity: "caller-a",
+			kind:     lksdk.ParticipantStandard,
+		},
+	}, "agent-local")
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want available caller-a", got, available)
 	}
 }
 
@@ -4297,6 +4498,78 @@ func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T)
 	}
 }
 
+func TestRoomIODisconnectLinkedParticipantResetsAvailability(t *testing.T) {
+	rio := &RoomIO{}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() after disconnect = (%q, %v), want unavailable caller-a", got, available)
+	}
+}
+
+func TestRoomIODisconnectUnlinkedParticipantDoesNotCloseSession(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+
+	rio.handleParticipantDisconnected("caller-b", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() after unlinked disconnect = (%q, %v), want available caller-a", got, available)
+	}
+}
+
+func TestRoomIODisconnectCloseReasonsMatchReference(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason livekit.DisconnectReason
+		want   bool
+	}{
+		{"client initiated", livekit.DisconnectReason_CLIENT_INITIATED, true},
+		{"room deleted", livekit.DisconnectReason_ROOM_DELETED, true},
+		{"user rejected", livekit.DisconnectReason_USER_REJECTED, true},
+		{"duplicate identity", livekit.DisconnectReason_DUPLICATE_IDENTITY, false},
+		{"unknown", livekit.DisconnectReason_UNKNOWN_REASON, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &agent.AgentSession{}
+			rio := &RoomIO{AgentSession: session}
+			if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+				t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+			}
+
+			rio.handleParticipantDisconnected("caller-a", tt.reason)
+
+			select {
+			case ev := <-session.CloseEvents():
+				if !tt.want {
+					t.Fatalf("unexpected close event for %s: %#v", tt.reason.String(), ev)
+				}
+				if ev.Reason != agent.CloseReasonParticipantDisconnected {
+					t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+				}
+			default:
+				if tt.want {
+					t.Fatalf("session did not close for %s", tt.reason.String())
+				}
+			}
+		})
+	}
+}
+
 func TestRoomIOHandleParticipantDisconnectedSkipsCloseWhileDeletingRoom(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{
@@ -4333,6 +4606,18 @@ func TestRoomIOHandleParticipantDisconnectedAllowsLinkedParticipantReconnect(t *
 	}
 	if got := rio.participantIdentity(); got != "caller-a" {
 		t.Fatalf("participantIdentity() = %q, want caller-a", got)
+	}
+}
+
+func TestRoomIOReconnectScansExistingParticipants(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.handleExistingParticipantViews([]RemoteParticipantView{
+		roomIOFakeRemoteParticipantView{identity: "caller-a", kind: lksdk.ParticipantStandard},
+	}, "agent-local")
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want available caller-a", got, available)
 	}
 }
 

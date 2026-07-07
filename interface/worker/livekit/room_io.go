@@ -119,6 +119,7 @@ type RoomOptions struct {
 	DisableAudioOutput         bool
 	DisableTranscriptionOutput bool
 	TranscriptionJSONFormat    bool
+	TranscriptionNextOutput    TranscriptionTextOutput
 	DisableCloseOnDisconnect   bool
 	DeleteRoomOnClose          bool
 	DeleteRoom                 func(context.Context, string) error
@@ -159,6 +160,11 @@ type TextInputEvent struct {
 }
 
 type TextInputCallback func(context.Context, *agent.AgentSession, TextInputEvent) error
+
+type TranscriptionTextOutput interface {
+	CaptureText(context.Context, string) error
+	Flush()
+}
 
 type roomIOTextResponder interface {
 	Interrupt(force bool) error
@@ -720,6 +726,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
+	rio.forwardAgentTranscriptionNextOutput(streamText, ev.IsFinal)
 }
 
 func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string, string, bool) {
@@ -745,6 +752,18 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 		rio.agentTranscriptionText = ""
 	}
 	return segmentID, transcript, legacyText, true
+}
+
+func (rio *RoomIO) forwardAgentTranscriptionNextOutput(text string, final bool) {
+	if rio == nil || rio.Options.TranscriptionNextOutput == nil {
+		return
+	}
+	if err := rio.Options.TranscriptionNextOutput.CaptureText(context.Background(), text); err != nil {
+		logger.Logger.Warnw("failed to forward agent transcription text", err)
+	}
+	if final {
+		rio.Options.TranscriptionNextOutput.Flush()
+	}
 }
 
 func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (string, bool) {
@@ -957,6 +976,7 @@ func (rio *RoomIO) publishAgentTranscriptionStream(text string, opts lksdk.Strea
 	if rio == nil {
 		return
 	}
+	text = roomIOTranscriptionStreamText(text, rio.Options.TranscriptionJSONFormat)
 	if rio.agentTextStreamOpener == nil {
 		if rio.transcriptionTextPublisher != nil {
 			rio.transcriptionTextPublisher(text, opts)
@@ -1169,7 +1189,7 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "reconnecting"})
 		},
 		OnReconnected: func() {
-			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
+			rio.onRoomReconnected()
 		},
 		OnParticipantConnected: func(participant RemoteParticipantView) {
 			rio.onParticipantConnected(participant.(*lksdk.RemoteParticipant))
@@ -1219,6 +1239,11 @@ func (rio *RoomIO) onRoomDisconnected() {
 		return
 	}
 	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func (rio *RoomIO) onRoomReconnected() {
+	rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
+	rio.handleExistingParticipantViews(RoomRemoteParticipantViews(rio.Room), rio.localParticipantIdentity())
 }
 
 func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
@@ -1474,12 +1499,7 @@ func (rio *RoomIO) onParticipantConnected(participant *lksdk.RemoteParticipant) 
 		return
 	}
 	rio.emitRoomEvent(&RoomParticipantConnectedEvent{Participant: participant})
-	rio.handleParticipantConnected(
-		participant.Identity(),
-		participant.Kind(),
-		participant.Attributes(),
-		rio.localParticipantIdentity(),
-	)
+	rio.handleExistingParticipantViews([]RemoteParticipantView{participant}, rio.localParticipantIdentity())
 }
 
 func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
@@ -1511,6 +1531,20 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 		return
 	}
 	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func (rio *RoomIO) handleExistingParticipantViews(participants []RemoteParticipantView, localIdentity string) {
+	for _, participant := range participants {
+		if participant == nil {
+			continue
+		}
+		rio.handleParticipantConnected(
+			participant.Identity(),
+			participant.Kind(),
+			participant.Attributes(),
+			localIdentity,
+		)
+	}
 }
 
 func (rio *RoomIO) recordConnectedParticipant(identity string) {
@@ -1563,6 +1597,9 @@ func (rio *RoomIO) handleTrackUnpublished(trackID string, participantIdentity st
 
 func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity string) (uint64, bool) {
 	if rio == nil || trackID == "" || participantIdentity == "" {
+		return 0, false
+	}
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return 0, false
 	}
 	rio.mu.Lock()
@@ -2712,6 +2749,7 @@ func (rio *RoomIO) Close() error {
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
+	rio.clearAudioInputStateLocked()
 	rio.agentStatePublishSeq++
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
@@ -2767,4 +2805,11 @@ func (rio *RoomIO) Close() error {
 		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
 	}
 	return nil
+}
+
+func (rio *RoomIO) clearAudioInputStateLocked() {
+	rio.audioInputTrackID = ""
+	rio.audioInputParticipantID = ""
+	rio.audioInputGeneration++
+	rio.audioInputTracks = nil
 }

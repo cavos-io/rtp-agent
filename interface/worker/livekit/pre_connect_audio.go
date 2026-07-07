@@ -132,33 +132,13 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	isOpus := mimeType == "audio/opus" || strings.Contains(mimeType, "codecs=opus")
 
 	if isOpus {
-		opusDec, err := newOpusDecoder(sampleRate, channels)
-		if err == nil {
-			defer opusDec.Close()
-			for {
-				chunk := make([]byte, 4096)
-				n, err := reader.Read(chunk)
-				if n > 0 {
-					decoded, decErr := opusDec.Decode(chunk[:n])
-					if decErr == nil {
-						buf.Frames = append(buf.Frames, &model.AudioFrame{
-							Data:              decoded,
-							SampleRate:        uint32(sampleRate),
-							NumChannels:       uint32(channels),
-							SamplesPerChannel: uint32(len(decoded) / (channels * 2)),
-						})
-					}
-				}
-				if err == io.EOF {
-					break
-				} else if err != nil {
-					logger.Logger.Warnw("error reading pre-connect opus stream", err)
-					break
-				}
-			}
-		} else {
-			logger.Logger.Errorw("failed to create opus decoder for pre-connect audio", err)
+		frames, err := readPreConnectOpusFrames(reader, sampleRate, channels)
+		if err != nil {
+			logger.Logger.Warnw("error reading pre-connect opus stream", err)
+			h.failBuffer(trackID)
+			return
 		}
+		buf.Frames = append(buf.Frames, frames...)
 	} else {
 		// Raw PCM
 		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
@@ -183,6 +163,38 @@ func preConnectByteStreamAttributes(reader *lksdk.ByteStreamReader) (attrs map[s
 		}
 	}()
 	return reader.Info.Attributes
+}
+
+func readPreConnectOpusFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
+	opusDec, err := newOpusDecoder(sampleRate, channels)
+	if err != nil {
+		return nil, err
+	}
+	defer opusDec.Close()
+
+	frames := make([]*model.AudioFrame, 0)
+	chunk := make([]byte, 4096)
+	for {
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			decoded, decErr := opusDec.Decode(chunk[:n])
+			if decErr != nil {
+				return nil, decErr
+			}
+			frames = append(frames, &model.AudioFrame{
+				Data:              decoded,
+				SampleRate:        uint32(sampleRate),
+				NumChannels:       uint32(channels),
+				SamplesPerChannel: uint32(len(decoded) / (channels * 2)),
+			})
+		}
+		if err == io.EOF {
+			return frames, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
