@@ -1229,6 +1229,59 @@ func TestUpliftAITTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamIgnoresSecondSegmentAfterEmptyReferenceFirstSegment(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider(
+		"test-key",
+		"",
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+		WithUpliftAIWordTokenizer(&upliftAISequenceWordTokenizer{
+			tokens: [][]string{
+				{},
+				{"second"},
+			},
+		}),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("punctuation only"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if err := stream.PushText("second should be ignored"); err != nil {
+		t.Fatalf("PushText(second) error = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v, want reference no-op", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls = %d, want second segment ignored after empty first segment", httpCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after ignored second segment error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after ignored second segment = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
@@ -2720,6 +2773,30 @@ func (t upliftAIFixedWordTokenizer) FormatWords(words []string) string {
 	if t.formatted != "" {
 		return t.formatted
 	}
+	return strings.Join(words, " ")
+}
+
+type upliftAISequenceWordTokenizer struct {
+	tokens [][]string
+	calls  int
+}
+
+func (t *upliftAISequenceWordTokenizer) Tokenize(string, string) []string {
+	if t.calls >= len(t.tokens) {
+		return nil
+	}
+	tokens := append([]string(nil), t.tokens[t.calls]...)
+	t.calls++
+	return tokens
+}
+
+func (t *upliftAISequenceWordTokenizer) Stream(string) tokenize.WordStream {
+	return tokenize.NewBufferedTokenStream(func(text string) []string {
+		return t.Tokenize(text, "")
+	}, 1, 1)
+}
+
+func (t *upliftAISequenceWordTokenizer) FormatWords(words []string) string {
 	return strings.Join(words, " ")
 }
 

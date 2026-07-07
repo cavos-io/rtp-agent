@@ -389,8 +389,11 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	if s.buf.Len() == 0 && s.segments >= 1 {
-		return nil
+	if s.buf.Len() == 0 {
+		if s.segments >= 1 {
+			return nil
+		}
+		s.segments++
 	}
 	s.buf.WriteString(text)
 	return nil
@@ -417,7 +420,6 @@ func (s *upliftAITTSSynthesizeStream) Flush() error {
 	s.buf.Reset()
 	select {
 	case s.inputCh <- text:
-		s.segments++
 		return nil
 	case <-s.doneCh:
 		return io.ErrClosedPipe
@@ -443,7 +445,6 @@ func (s *upliftAITTSSynthesizeStream) EndInput() error {
 		}
 		select {
 		case s.inputCh <- text:
-			s.segments++
 		case <-s.doneCh:
 			return io.ErrClosedPipe
 		case <-s.ctx.Done():
