@@ -413,6 +413,27 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
 	}
 
+	var stablePartial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"stable words",
+			"language":"en",
+			"speaker_id":"agent",
+			"annotation":["has_final"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &stablePartial); err != nil {
+		t.Fatalf("unmarshal stable partial response: %v", err)
+	}
+	events := speechmaticsEvents(stablePartial, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("stable partial events = %#v, want reference interim transcript with has_final", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "stable words" {
+		t.Fatalf("stable partial text = %q, want stable words", got)
+	}
+
 	var final smResponse
 	if err := json.Unmarshal([]byte(`{
 		"message":"AddSegment",
@@ -425,7 +446,7 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}`), &final); err != nil {
 		t.Fatalf("unmarshal final response: %v", err)
 	}
-	events := speechmaticsEvents(final, state)
+	events = speechmaticsEvents(final, state)
 	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("final events = %#v, want final transcript despite include_partials=false", events)
 	}
@@ -815,11 +836,12 @@ func TestSpeechmaticsSTTNextDrainsQueuedTranscriptAfterEndOfTranscript(t *testin
 	if keepReading := stream.handleResponse(smResponse{
 		Message: "AddSegment",
 		Segments: []struct {
-			Text      string `json:"text"`
-			Language  string `json:"language"`
-			SpeakerID string `json:"speaker_id"`
-			IsActive  *bool  `json:"is_active"`
-			Metadata  struct {
+			Text       string   `json:"text"`
+			Language   string   `json:"language"`
+			SpeakerID  string   `json:"speaker_id"`
+			IsActive   *bool    `json:"is_active"`
+			Annotation []string `json:"annotation"`
+			Metadata   struct {
 				StartTime float64 `json:"start_time"`
 				EndTime   float64 `json:"end_time"`
 			} `json:"metadata"`

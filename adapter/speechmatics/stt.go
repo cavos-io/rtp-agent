@@ -858,11 +858,12 @@ type smResponse struct {
 		EndTime   float64 `json:"end_time"`
 	} `json:"results"`
 	Segments []struct {
-		Text      string `json:"text"`
-		Language  string `json:"language"`
-		SpeakerID string `json:"speaker_id"`
-		IsActive  *bool  `json:"is_active"`
-		Metadata  struct {
+		Text       string   `json:"text"`
+		Language   string   `json:"language"`
+		SpeakerID  string   `json:"speaker_id"`
+		IsActive   *bool    `json:"is_active"`
+		Annotation []string `json:"annotation"`
+		Metadata   struct {
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		} `json:"metadata"`
@@ -986,13 +987,13 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	if resp.Message == "AddSegment" {
 		eventType = stt.SpeechEventFinalTranscript
 	}
-	if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials {
-		return nil
-	}
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
+		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
+			continue
+		}
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
@@ -1012,6 +1013,15 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsSegmentHasFinal(annotation []string) bool {
+	for _, value := range annotation {
+		if value == "has_final" {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
