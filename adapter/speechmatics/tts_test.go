@@ -221,6 +221,37 @@ func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		if !ok {
+			t.Fatal("request context has no deadline, want reference 30s synth timeout")
+		}
+		remaining := time.Until(deadline)
+		if remaining < 25*time.Second || remaining > 31*time.Second {
+			t.Fatalf("request timeout = %s, want about 30s", remaining)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

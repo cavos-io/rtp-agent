@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -23,6 +24,7 @@ const (
 	defaultSpeechmaticsTTSBaseURL    = "https://preview.tts.speechmatics.com"
 	defaultSpeechmaticsTTSVoice      = "sarah"
 	defaultSpeechmaticsTTSSampleRate = 16000
+	defaultSpeechmaticsTTSTimeout    = 30 * time.Second
 	speechmaticsTTSSDKParam          = "livekit-plugins-go"
 	speechmaticsTTSAppParam          = "rtp-agent"
 )
@@ -89,7 +91,7 @@ func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithTimeout(ctx, defaultSpeechmaticsTTSTimeout)
 	return &speechmaticsTTSChunkedStream{
 		ctx:        streamCtx,
 		cancel:     cancel,
