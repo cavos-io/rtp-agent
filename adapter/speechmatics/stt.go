@@ -444,8 +444,12 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 		s.mu.Unlock()
 		return fmt.Errorf("diarization is not enabled")
 	}
-	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
-	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	if focusSpeakers != nil {
+		s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	}
+	if ignoreSpeakers != nil {
+		s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	}
 	if focusMode != "" {
 		s.focusMode = focusMode
 	}
@@ -1436,9 +1440,15 @@ func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpe
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
-	s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
-	s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
-	s.state.focusMode = focusMode
+	if focusSpeakers != nil {
+		s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	}
+	if ignoreSpeakers != nil {
+		s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	}
+	if focusMode != "" {
+		s.state.focusMode = focusMode
+	}
 	return nil
 }
 

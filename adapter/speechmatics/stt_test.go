@@ -2215,6 +2215,38 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTUpdateSpeakersPreservesReferenceNotGivenFields(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{closeConn: func() error { return nil }}
+	provider.registerStream(stream)
+
+	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
+		t.Fatalf("initial UpdateSpeakers error = %v", err)
+	}
+	if err := provider.UpdateSpeakers([]string{"customer"}, nil, ""); err != nil {
+		t.Fatalf("partial UpdateSpeakers error = %v", err)
+	}
+
+	if got := strings.Join(provider.focusSpeakers, ","); got != "customer" {
+		t.Fatalf("provider focus speakers = %q, want customer", got)
+	}
+	if got := strings.Join(provider.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("provider ignore speakers = %q, want preserved noise", got)
+	}
+	if provider.focusMode != "ignore" {
+		t.Fatalf("provider focus mode = %q, want preserved ignore", provider.focusMode)
+	}
+	if got := strings.Join(stream.state.focusSpeakers, ","); got != "customer" {
+		t.Fatalf("stream focus speakers = %q, want customer", got)
+	}
+	if got := strings.Join(stream.state.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("stream ignore speakers = %q, want preserved noise", got)
+	}
+	if stream.state.focusMode != "ignore" {
+		t.Fatalf("stream focus mode = %q, want preserved ignore", stream.state.focusMode)
+	}
+}
+
 func TestSpeechmaticsSTTUpdateSpeakersWithoutStreamsMatchesReferenceNoop(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 
