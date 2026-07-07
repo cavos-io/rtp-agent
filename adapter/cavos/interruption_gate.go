@@ -9,29 +9,36 @@ import (
 )
 
 var BackchannelsID = map[string]struct{}{
-	"hm":     {},
-	"hmm":    {},
-	"mhmm":   {},
-	"mhm":    {},
-	"mm":     {},
-	"mm-hmm": {},
-	"mmm":    {},
-	"em":     {},
-	"e":      {},
-	"uh":     {},
-	"uh-uh":  {},
-	"iya":    {},
-	"ya":     {},
-	"yap":    {},
-	"oke":    {},
-	"ok":     {},
-	"baik":   {},
-	"betul":  {},
-	"benar":  {},
-	"oh":     {},
-	"oh iya": {},
-	"he eh":  {},
-	"he-eh":  {},
+	"hm":       {},
+	"hmm":      {},
+	"mhmm":     {},
+	"mhm":      {},
+	"mm":       {},
+	"mm-hmm":   {},
+	"mmm":      {},
+	"em":       {},
+	"e":        {},
+	"uh":       {},
+	"uh-uh":    {},
+	"iya":      {},
+	"Nuh-uh":   {},
+	"nuh-uh":   {},
+	"uh-huh":   {},
+	"ya":       {},
+	"ya?":      {},
+	"yap":      {},
+	"yeah":     {},
+	"oke":      {},
+	"okei":     {},
+	"Oke":      {},
+	"ok":       {},
+	"baik":     {},
+	"betul":    {},
+	"benar":    {},
+	"oh":       {},
+	"oh iya":   {},
+	"he eh":    {},
+	"he-eh":    {},
 	"sip":      {},
 	"lanjut":   {},
 	"ya sudah": {},
@@ -104,13 +111,13 @@ func (g *CavosInterruptionGate) Decide(agentSpeaking bool, speechMs int, transcr
 				Reason:   "clear_interrupt_intent",
 			}
 		}
-		if !backchannel && speechMs >= g.config.StrongBargeInMs {
+		normalized := normalizeTranscript(transcript)
+		if normalized != "" && !backchannel && speechMs >= g.config.StrongBargeInMs {
 			return agent.InterruptionGateResult{
 				Decision: agent.InterruptionInterruptAgent,
 				Reason:   "strong_barge_in",
 			}
 		}
-		normalized := normalizeTranscript(transcript)
 		if normalized != "" && !backchannel && len(strings.Fields(normalized)) >= 4 {
 			return agent.InterruptionGateResult{
 				Decision: agent.InterruptionInterruptAgent,
