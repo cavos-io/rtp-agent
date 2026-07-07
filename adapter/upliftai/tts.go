@@ -1187,20 +1187,18 @@ func (s *upliftAITTSChunkedStream) currentNumChannels() int {
 }
 
 func validateUpliftAIOutputFormat(outputFormat string) error {
-	switch {
-	case outputFormat == "PCM_22050_16":
+	switch outputFormat {
+	case "PCM_22050_16",
+		"WAV_22050_16",
+		"WAV_22050_32",
+		"MP3_22050_32",
+		"MP3_22050_64",
+		"MP3_22050_128",
+		"OGG_22050_16",
+		"ULAW_8000_8":
 		return nil
-	case outputFormat == "WAV_22050_16", outputFormat == "WAV_22050_32":
-		return nil
-	case strings.HasPrefix(outputFormat, "MP3"):
-		return nil
-	case strings.HasPrefix(outputFormat, "OGG"):
-		return nil
-	case outputFormat == "ULAW_8000_8":
-		return nil
-	default:
-		return fmt.Errorf("unsupported output format: %s", outputFormat)
 	}
+	return fmt.Errorf("unsupported output format: %s", outputFormat)
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
