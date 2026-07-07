@@ -23,9 +23,12 @@ type RemoteParticipantView interface {
 }
 
 type RoomCallbackHandlers struct {
-	AutoSubscribe          string
-	OnParticipantConnected func(RemoteParticipantView)
-	OnTrackSubscribeError  func(RemoteTrackSubscriptionResult)
+	AutoSubscribe             string
+	OnDisconnected            func()
+	OnDisconnectedWithReason  func(lksdk.DisconnectionReason)
+	OnParticipantConnected    func(RemoteParticipantView)
+	OnParticipantDisconnected func(RemoteParticipantView)
+	OnTrackSubscribeError     func(RemoteTrackSubscriptionResult)
 }
 
 func RemoteParticipantViews(participants []*lksdk.RemoteParticipant) []RemoteParticipantView {
@@ -56,6 +59,26 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 	wrapped := lksdk.NewRoomCallback()
 	wrapped.Merge(cb)
 
+	onDisconnected := wrapped.OnDisconnected
+	wrapped.OnDisconnected = func() {
+		if onDisconnected != nil {
+			onDisconnected()
+		}
+		if handlers.OnDisconnected != nil {
+			handlers.OnDisconnected()
+		}
+	}
+
+	onDisconnectedWithReason := wrapped.OnDisconnectedWithReason
+	wrapped.OnDisconnectedWithReason = func(reason lksdk.DisconnectionReason) {
+		if onDisconnectedWithReason != nil {
+			onDisconnectedWithReason(reason)
+		}
+		if handlers.OnDisconnectedWithReason != nil {
+			handlers.OnDisconnectedWithReason(reason)
+		}
+	}
+
 	onParticipantConnected := wrapped.OnParticipantConnected
 	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
 		if onParticipantConnected != nil {
@@ -63,6 +86,16 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 		if participant != nil && handlers.OnParticipantConnected != nil {
 			handlers.OnParticipantConnected(participant)
+		}
+	}
+
+	onParticipantDisconnected := wrapped.OnParticipantDisconnected
+	wrapped.OnParticipantDisconnected = func(participant *lksdk.RemoteParticipant) {
+		if onParticipantDisconnected != nil {
+			onParticipantDisconnected(participant)
+		}
+		if participant != nil && handlers.OnParticipantDisconnected != nil {
+			handlers.OnParticipantDisconnected(participant)
 		}
 	}
 
