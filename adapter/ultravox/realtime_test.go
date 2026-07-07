@@ -1736,6 +1736,38 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testi
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_5", "still connected", true)
 }
 
+func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"transcript","role":"user","medium":"voice","text":"bad","final":true,"ordinal":"bad"}`),
+		[]byte(`{not-json`),
+	} {
+		if err := session.handleServerTextMessage(payload); err != nil {
+			t.Fatalf("handle malformed JSON error = %v, want reference recv loop to continue", err)
+		}
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after malformed JSON = %#v, want no emitted event", event)
+	default:
+	}
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"transcript","role":"user","medium":"voice","text":"still connected","final":true,"ordinal":6}`)); err != nil {
+		t.Fatalf("handle transcript after malformed JSON error = %v", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_6", "still connected", true)
+}
+
 func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

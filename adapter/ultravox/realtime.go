@@ -749,7 +749,7 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 	var envelope ultravoxRealtimeServerEventEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return err
+		return nil
 	}
 
 	switch envelope.Type {
@@ -762,7 +762,7 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 			Ordinal int    `json:"ordinal"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
-			return err
+			return nil
 		}
 		s.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
 			Role:    event.Role,
@@ -776,7 +776,7 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 			State string `json:"state"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
-			return err
+			return nil
 		}
 		s.handleStateEvent(ultravoxRealtimeStateEvent{State: event.State})
 	case "client_tool_invocation":
@@ -786,7 +786,7 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 			Parameters   map[string]any `json:"parameters"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
-			return err
+			return nil
 		}
 		if event.Parameters == nil {
 			event.Parameters = map[string]any{}
@@ -803,7 +803,7 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 			Timestamp float64 `json:"timestamp"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
-			return err
+			return nil
 		}
 		s.handlePongEvent(event.Timestamp)
 	case "call_started", "debug":
