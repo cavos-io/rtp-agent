@@ -769,6 +769,14 @@ func TestTelnyxTTSAudioFromMessageReturnsAPIConnectionErrorOnMalformedAudio(t *t
 	if !strings.Contains(err.Error(), "Telnyx TTS audio decode failed") {
 		t.Fatalf("malformed audio error = %q, want decode context", err)
 	}
+
+	audioBytes, done, err = telnyxTTSAudioBytesFromMessage([]byte(`{"audio":true}`))
+	if audioBytes != nil || done {
+		t.Fatalf("non-string audio = audio=%v done=%v, want no audio and not done", audioBytes, done)
+	}
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("non-string audio error = %T %v, want APIConnectionError", err, err)
+	}
 }
 
 func TestTelnyxTTSAudioFromMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {

@@ -770,16 +770,14 @@ func (s *telnyxTTSStream) closeEvents() {
 }
 
 func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
-	var message struct {
-		Audio string `json:"audio"`
+	audio, ok, err := telnyxTTSAudioPayload(payload)
+	if err != nil {
+		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
-	if err := json.Unmarshal(payload, &message); err != nil {
+	if !ok {
 		return nil, false, nil
 	}
-	if message.Audio == "" {
-		return nil, false, nil
-	}
-	data, err := telnyxDecodeBase64Audio(message.Audio)
+	data, err := telnyxDecodeBase64Audio(audio)
 	if err != nil {
 		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
@@ -787,16 +785,14 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 }
 
 func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
-	var message struct {
-		Audio string `json:"audio"`
-	}
-	if err := json.Unmarshal(payload, &message); err != nil {
+	audio, ok, err := telnyxTTSAudioPayload(payload)
+	if err != nil {
 		return nil, false, err
 	}
-	if message.Audio == "" {
+	if !ok {
 		return nil, false, nil
 	}
-	data, err := telnyxDecodeBase64Audio(message.Audio)
+	data, err := telnyxDecodeBase64Audio(audio)
 	if err != nil {
 		return nil, false, err
 	}
@@ -804,6 +800,22 @@ func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesized
 		return nil, false, nil
 	}
 	return telnyxTTSAudioFrame(data, sampleRate), false, nil
+}
+
+func telnyxTTSAudioPayload(payload []byte) (string, bool, error) {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return "", false, nil
+	}
+	value, ok := message["audio"]
+	if !ok || !telnyxTruthy(value) {
+		return "", false, nil
+	}
+	audio, ok := value.(string)
+	if !ok {
+		return "", false, fmt.Errorf("audio field has type %T", value)
+	}
+	return audio, true, nil
 }
 
 func telnyxDecodeBase64Audio(data string) ([]byte, error) {
