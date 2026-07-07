@@ -3094,6 +3094,9 @@ func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T
 			if !strings.Contains(err.Error(), errRead.Error()) {
 				t.Fatalf("Next terminal error = %q, want original read error %q", err.Error(), errRead.Error())
 			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after MP3 read failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
 			return
 		}
 		if audio == nil {
