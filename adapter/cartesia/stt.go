@@ -601,7 +601,7 @@ func cartesiaSTTUnexpectedCloseEvents(state *cartesiaSTTStreamState) []*stt.Spee
 	if state.currentTranscript != "" {
 		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, state.currentTranscript))
 	}
-	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	state.speaking = false
 	state.currentTranscript = ""
 	return events
@@ -669,7 +669,7 @@ func processCartesiaAutoSTTEvent(state *cartesiaSTTStreamState, data map[string]
 		}
 		state.speaking = true
 		state.currentTranscript = ""
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID}}, nil
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}, nil
 	case "turn.update":
 		if !state.speaking {
 			return nil, nil
@@ -712,7 +712,7 @@ func processCartesiaAutoSTTEvent(state *cartesiaSTTStreamState, data map[string]
 			state.speechDuration = 0
 		}
 		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, transcript))
-		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 		state.speaking = false
 		state.currentTranscript = ""
 		return events, nil
@@ -735,7 +735,7 @@ func processCartesiaLegacySTTEvent(state *cartesiaSTTStreamState, data map[strin
 		events := []*stt.SpeechEvent{}
 		if !state.speaking {
 			state.speaking = true
-			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID})
+			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
 		speechData := cartesiaLegacySpeechData(state, data, text)
 		if isFinal {
@@ -746,7 +746,7 @@ func processCartesiaLegacySTTEvent(state *cartesiaSTTStreamState, data map[strin
 			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 			if state.speaking {
 				state.speaking = false
-				events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+				events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 			}
 		} else {
 			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
