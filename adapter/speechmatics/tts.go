@@ -389,6 +389,9 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		requestCancel()
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		if speechmaticsTTSTimeoutError(err) {
 			return llm.NewAPITimeoutError(err.Error())
 		}

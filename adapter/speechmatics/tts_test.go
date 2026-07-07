@@ -654,6 +654,31 @@ func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeRequestCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, r.Context().Err()
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+	cancel()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on request cancellation", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
