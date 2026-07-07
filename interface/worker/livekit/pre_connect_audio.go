@@ -33,6 +33,7 @@ type PreConnectAudioHandler struct {
 
 	registered   bool
 	afterConnect bool
+	closed       bool
 }
 
 func NewPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration) *PreConnectAudioHandler {
@@ -66,6 +67,16 @@ func (h *PreConnectAudioHandler) Register() {
 func (h *PreConnectAudioHandler) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	h.closed = true
+	for trackID, ch := range h.buffers {
+		select {
+		case ch <- nil:
+			close(ch)
+		default:
+		}
+		delete(h.buffers, trackID)
+	}
 
 	if !h.registered {
 		return
@@ -191,6 +202,9 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if h.closed {
+		return
+	}
 	ch, ok := h.buffers[trackID]
 	if !ok {
 		if _, timedOut := h.timedOut[trackID]; timedOut {

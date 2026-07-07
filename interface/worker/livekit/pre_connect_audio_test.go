@@ -84,6 +84,26 @@ func TestPreConnectAudioFailedBufferFulfillsExistingWaiter(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioCloseIgnoresLateBuffer(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	handler.Close()
+	handler.publishBuffer("track-after-close", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{frame},
+	})
+
+	if frames := handler.WaitForData(context.Background(), "track-after-close"); frames != nil {
+		t.Fatalf("WaitForData() after close and late publish = %#v, want nil", frames)
+	}
+}
+
 func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{
