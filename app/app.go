@@ -2516,6 +2516,9 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	switch normalizeProvider(cfg.VADProvider) {
 	case "":
+		if normalizeProvider(cfg.STTProvider) == providerSpeechmatics && speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) {
+			a.VAD = silero.NewSileroVAD()
+		}
 		return nil
 	case providerSilero:
 		vadOpts := []silero.VADOption{}
@@ -8456,6 +8459,15 @@ func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIde
 		}
 	}
 	return speakers
+}
+
+func speechmaticsExternalTurnDetectionMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "external":
+		return true
+	default:
+		return false
+	}
 }
 
 func speechmaticsTurnDetectionOption(mode string) (speechmatics.SpeechmaticsSTTOption, error) {

@@ -5404,6 +5404,22 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsExternalAutoVAD(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "speechmatics")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "silero.VAD" {
+		t.Fatalf("VAD label = %q, want silero.VAD", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
