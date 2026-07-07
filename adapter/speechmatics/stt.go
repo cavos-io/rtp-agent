@@ -657,6 +657,8 @@ func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	mode := s.turnDetectionMode
 	trigger := 0.5
 	switch mode {
+	case "external":
+		return config
 	case "adaptive":
 		trigger = 0.7
 		config["vad_config"] = map[string]interface{}{
@@ -678,8 +680,15 @@ func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 			"max_audio_length":     8.0,
 		}
 	case "fixed":
+		if s.eouSilenceTrigger != nil {
+			trigger = *s.eouSilenceTrigger
+		}
+		config["conversation_config"] = map[string]interface{}{
+			"end_of_utterance_silence_trigger": trigger,
+		}
+		return config
 	default:
-		mode = "external"
+		return config
 	}
 	if s.eouSilenceTrigger != nil {
 		trigger = *s.eouSilenceTrigger

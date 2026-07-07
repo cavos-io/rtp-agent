@@ -7508,17 +7508,16 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if _, ok := config["conversation_config"]; ok {
 			t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 		}
-		if got, want := config["end_of_utterance_mode"], "external"; got != want {
-			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
-		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
-			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
-		}
-		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
-			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+			if _, ok := config[key]; ok {
+				t.Fatalf("%s = %#v, want omitted for reference external turn detection", key, config[key])
+			}
 		}
 		if _, ok := message["end_of_utterance_max_delay"]; ok {
 			t.Fatalf("end_of_utterance_max_delay sent outside transcription_config in %#v", message)
+		}
+		if _, ok := message["conversation_config"]; ok {
+			t.Fatalf("conversation_config sent outside transcription_config in %#v", message)
 		}
 		diarizationConfig, _ := config["speaker_diarization_config"].(map[string]any)
 		if got, want := diarizationConfig["speaker_sensitivity"], 0.7; got != want {
@@ -7622,14 +7621,20 @@ func TestSpeechmaticsSTTFallbackPassesReferenceTurnDetectionMode(t *testing.T) {
 	select {
 	case message := <-records:
 		config, _ := message["transcription_config"].(map[string]any)
-		if got, want := config["end_of_utterance_mode"], "fixed"; got != want {
-			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
+		conversationConfig, ok := config["conversation_config"].(map[string]any)
+		if !ok {
+			t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
 		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.5; got != want {
-			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.5; got != want {
+			t.Fatalf("conversation_config.end_of_utterance_silence_trigger = %#v, want %#v", got, want)
 		}
-		if _, ok := config["conversation_config"]; ok {
-			t.Fatalf("conversation_config = %#v, want omitted reference endpointing config", config["conversation_config"])
+		for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+			if _, ok := config[key]; ok {
+				t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+			}
+		}
+		if _, ok := message["conversation_config"]; ok {
+			t.Fatalf("conversation_config sent outside transcription_config in %#v", message)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")

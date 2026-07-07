@@ -2194,11 +2194,15 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
-	if _, ok := config["conversation_config"]; ok {
-		t.Fatalf("conversation_config = %#v, want omitted for reference endpointing config", config["conversation_config"])
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+		}
 	}
 }
 
@@ -2210,11 +2214,13 @@ func TestSpeechmaticsSTTExternalTurnDetectionOmitsReferenceConversationConfig(t 
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "external")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
 	if _, ok := config["conversation_config"]; ok {
 		t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
+	}
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted for reference external turn detection", key, config[key])
+		}
 	}
 }
 
@@ -2225,11 +2231,15 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testi
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.5))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	if _, ok := config["conversation_config"]; ok {
-		t.Fatalf("conversation_config = %#v, want omitted for reference fixed turn detection", config["conversation_config"])
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+		}
 	}
 }
 
