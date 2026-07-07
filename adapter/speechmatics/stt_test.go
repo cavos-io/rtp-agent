@@ -1,7 +1,9 @@
 package speechmatics
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -783,6 +785,40 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 	if got := len(writes[1]); got != 800 {
 		t.Fatalf("flush chunk length = %d, want 800", got)
+	}
+}
+
+func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(16000)),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := speechmaticsTestInt16PCM(480)
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("binary writes after PushFrame = %d, want resampled frame buffered below 100ms chunk", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after Flush = %d, want one resampled remainder chunk", len(writes))
+	}
+	want := speechmaticsEveryNthInt16PCM(480, 3)
+	if got := writes[0]; !bytes.Equal(got, want) {
+		t.Fatalf("flushed binary data = %#v, want 48k->16k reference resampled PCM", got)
 	}
 }
 
@@ -1852,4 +1888,25 @@ func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key s
 	if got := config[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v in %#v", key, got, want, config)
 	}
+}
+
+func speechmaticsTestInt16PCM(samples int) []byte {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(i)))
+	}
+	return data
+}
+
+func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
+	if step <= 0 {
+		return nil
+	}
+	data := make([]byte, 0, ((samples+step-1)/step)*2)
+	for i := 0; i < samples; i += step {
+		var sample [2]byte
+		binary.LittleEndian.PutUint16(sample[:], uint16(int16(i)))
+		data = append(data, sample[:]...)
+	}
+	return data
 }
