@@ -2293,6 +2293,7 @@ func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
 	dst.TurnDetection = src.TurnDetection
 	dst.TurnDetector = src.TurnDetector
 	dst.AudioTurnDetector = src.AudioTurnDetector
+	dst.InterruptionGate = src.InterruptionGate
 	dst.Avatar = src.Avatar
 	dst.STT = src.STT
 	dst.VAD = src.VAD
