@@ -601,6 +601,52 @@ func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateChatContextQueuesReferenceDeferredMessages(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "sys", Role: llm.ChatRoleSystem, Text: "be concise"})
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "user", Role: llm.ChatRoleUser, Text: "remember Paris"})
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "assistant", Role: llm.ChatRoleAssistant, Text: "managed by provider"})
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want reference deferred messages", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "<instruction>be concise</instruction>",
+		"deferResponse": true,
+	})
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "remember Paris",
+		"deferResponse": true,
+	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected assistant/duplicate context event = %#v", got)
+	default:
+	}
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("second UpdateChatContext error = %v", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("duplicate context event = %#v", got)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionPlaybackClearBufferEmitsReferenceSpeechStarted(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

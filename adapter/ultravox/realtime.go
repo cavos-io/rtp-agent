@@ -252,6 +252,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		outputSampleRate: uint32(m.outputSampleRate),
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 		toolResults:      make(map[string]struct{}),
+		contextItems:     make(map[string]struct{}),
 	}, nil
 }
 
@@ -298,6 +299,7 @@ type realtimeSession struct {
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
 	toolResults      map[string]struct{}
+	contextItems     map[string]struct{}
 	closed           bool
 	closeOnce        sync.Once
 }
@@ -310,37 +312,89 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		return nil
 	}
 	for _, item := range chatCtx.Items {
-		output, ok := item.(*llm.FunctionCallOutput)
-		if !ok || output.CallID == "" {
-			continue
-		}
-		key := output.ID
-		if key == "" {
-			key = output.CallID
-		}
-		s.mu.Lock()
-		if s.closed {
-			s.mu.Unlock()
-			return nil
-		}
-		if _, ok := s.toolResults[key]; ok {
-			s.mu.Unlock()
-			continue
-		}
-		s.toolResults[key] = struct{}{}
-		s.mu.Unlock()
-		if err := s.sendClientEvent(map[string]any{
-			"type":          "client_tool_result",
-			"invocationId":  output.CallID,
-			"result":        output.Output,
-			"agentReaction": "speaks",
-			"responseType":  "tool-response",
-		}); err != nil {
-			return err
+		switch item := item.(type) {
+		case *llm.ChatMessage:
+			if err := s.sendChatContextMessage(item); err != nil {
+				return err
+			}
+		case *llm.FunctionCallOutput:
+			if err := s.sendToolResult(item); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
+
+func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error {
+	if message == nil {
+		return nil
+	}
+	text := message.TextContent()
+	if text == "" {
+		return nil
+	}
+
+	eventText := ""
+	switch message.Role {
+	case llm.ChatRoleSystem, llm.ChatRoleDeveloper:
+		eventText = "<instruction>" + text + "</instruction>"
+	case llm.ChatRoleUser:
+		eventText = text
+	default:
+		return nil
+	}
+
+	key := message.ID
+	if key == "" {
+		key = string(message.Role) + ":" + text
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	if _, ok := s.contextItems[key]; ok {
+		s.mu.Unlock()
+		return nil
+	}
+	s.contextItems[key] = struct{}{}
+	s.mu.Unlock()
+	return s.sendClientEvent(map[string]any{
+		"type":          "user_text_message",
+		"text":          eventText,
+		"deferResponse": true,
+	})
+}
+
+func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
+	if output == nil || output.CallID == "" {
+		return nil
+	}
+	key := output.ID
+	if key == "" {
+		key = output.CallID
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	if _, ok := s.toolResults[key]; ok {
+		s.mu.Unlock()
+		return nil
+	}
+	s.toolResults[key] = struct{}{}
+	s.mu.Unlock()
+	return s.sendClientEvent(map[string]any{
+		"type":          "client_tool_result",
+		"invocationId":  output.CallID,
+		"result":        output.Output,
+		"agentReaction": "speaks",
+		"responseType":  "tool-response",
+	})
+}
+
 func (s *realtimeSession) UpdateTools([]llm.Tool) error {
 	return ultravoxRealtimeSessionUnsupported("update_tools")
 }
