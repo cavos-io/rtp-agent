@@ -269,6 +269,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		err := s.pendingErr
 		s.pendingErr = nil
 		s.finish()
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		if speechmaticsTTSTimeoutError(err) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
@@ -299,6 +302,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 						return s.emitFinal()
 					}
 					s.cancelRequest()
+					if errors.Is(err, context.Canceled) {
+						s.finish()
+						return nil, context.Canceled
+					}
 					if speechmaticsTTSTimeoutError(err) {
 						s.finish()
 						return nil, llm.NewAPITimeoutError(err.Error())
@@ -322,6 +329,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				return s.emitFinal()
 			}
 			s.cancelRequest()
+			if errors.Is(err, context.Canceled) {
+				s.finish()
+				return nil, context.Canceled
+			}
 			if speechmaticsTTSTimeoutError(err) {
 				s.finish()
 				return nil, llm.NewAPITimeoutError(err.Error())

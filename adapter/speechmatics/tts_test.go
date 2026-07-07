@@ -704,6 +704,21 @@ func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testi
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     speechmaticsReadCancelBody{},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read cancellation", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}},
@@ -1086,6 +1101,16 @@ func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
 }
 
 func (speechmaticsReadErrorBody) Close() error {
+	return nil
+}
+
+type speechmaticsReadCancelBody struct{}
+
+func (speechmaticsReadCancelBody) Read([]byte) (int, error) {
+	return 0, context.Canceled
+}
+
+func (speechmaticsReadCancelBody) Close() error {
 	return nil
 }
 
