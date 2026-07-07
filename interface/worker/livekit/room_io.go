@@ -2732,6 +2732,7 @@ func (rio *RoomIO) Close() error {
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
+	rio.clearAudioInputStateLocked()
 	rio.agentStatePublishSeq++
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
@@ -2787,4 +2788,11 @@ func (rio *RoomIO) Close() error {
 		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
 	}
 	return nil
+}
+
+func (rio *RoomIO) clearAudioInputStateLocked() {
+	rio.audioInputTrackID = ""
+	rio.audioInputParticipantID = ""
+	rio.audioInputGeneration++
+	rio.audioInputTracks = nil
 }
