@@ -407,6 +407,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Lock()
 			va.vadSpeechStarted = false
 			va.mu.Unlock()
+			va.finalizeActiveSTTStream()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnEndOfSpeech(ev)
 			} else if va.session != nil {
@@ -417,6 +418,32 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.activity.OnVADInferenceDone(ev)
 			}
 		}
+	}
+}
+
+type finalizableRecognizeStream interface {
+	Finalize() error
+}
+
+func (va *PipelineAgent) finalizeActiveSTTStream() {
+	if va == nil {
+		return
+	}
+	va.mu.Lock()
+	stream := va.sttStream
+	sttObj := va.stt
+	va.mu.Unlock()
+	finalizer, ok := stream.(finalizableRecognizeStream)
+	if !ok {
+		return
+	}
+	if err := finalizer.Finalize(); err != nil && !isSpeechStreamShutdownError(err) {
+		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
+		label := "stt"
+		if sttObj != nil {
+			label = sttObj.Label()
+		}
+		va.emitError(stt.NewSTTError(label, err, false), sttObj)
 	}
 }
 
