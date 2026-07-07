@@ -1262,6 +1262,9 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	if audioFormat["encoding"] != "pcm_f32le" {
 		t.Fatalf("encoding = %#v, want pcm_f32le", audioFormat["encoding"])
 	}
+	if audioFormat["chunk_size"] != 160 {
+		t.Fatalf("chunk_size = %#v, want reference default 160", audioFormat["chunk_size"])
+	}
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
