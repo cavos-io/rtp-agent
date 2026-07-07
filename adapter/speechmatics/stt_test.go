@@ -775,6 +775,69 @@ func TestSpeechmaticsSTTUpdateSpeakersRequiresDiarization(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTGetSpeakerIDsRequestsReferenceSpeakersResult(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	var stream *speechmaticsSTTStream
+	stream = &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("speaker request message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			stream.recordSpeakerResult([]SpeechmaticsSpeakerIdentifier{
+				{Label: "agent", SpeakerID: "spk-1"},
+			})
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	speakers, err := provider.GetSpeakerIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetSpeakerIDs error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("speaker request writes = %d, want one active stream write", len(writes))
+	}
+	if got, want := writes[0]["message"], "GetSpeakers"; got != want {
+		t.Fatalf("speaker request message = %#v, want %#v", got, want)
+	}
+	if len(speakers) != 1 || speakers[0].Label != "agent" || speakers[0].SpeakerID != "spk-1" {
+		t.Fatalf("speakers = %#v, want agent speaker id", speakers)
+	}
+}
+
+func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("speaker request write = %#v, want none when diarization disabled", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	speakers, err := provider.GetSpeakerIDs(ctx)
+	if err != nil {
+		t.Fatalf("GetSpeakerIDs error = %v, want nil for disabled diarization", err)
+	}
+	if len(speakers) != 0 {
+		t.Fatalf("speakers = %#v, want empty result for disabled diarization", speakers)
+	}
+}
+
 func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeJSON: func(interface{}) error {
