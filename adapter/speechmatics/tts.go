@@ -371,12 +371,12 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == 499 {
-			resp.Body.Close()
-			requestCancel()
-			return io.EOF
-		}
+	if resp.StatusCode == 499 {
+		resp.Body.Close()
+		requestCancel()
+		return io.EOF
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		requestCancel()
