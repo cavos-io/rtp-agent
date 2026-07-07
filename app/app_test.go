@@ -10385,6 +10385,7 @@ func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 			apiSource: r.Header.Get("x-api-source"),
 			setup:     setup,
 		}
+		_, _, _ = conn.ReadMessage()
 	})
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -10434,6 +10435,9 @@ func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
 
 	select {
 	case record := <-records:

@@ -165,7 +165,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		errCh:        make(chan error, 1),
 		ctx:          streamCtx,
 		cancel:       cancel,
-		audioBStream: gradiumSTTAudioByteStream(),
+		audioBStream: gradiumSTTAudioByteStream(s.sampleRate, s.bufferSizeSeconds),
 		state: &gradiumSTTMessageState{
 			language:       streamLanguage,
 			vadBucket:      s.vadBucket,
@@ -416,8 +416,18 @@ func (s *gradiumSTTStream) currentStartTimeOffset() float64 {
 	return s.startTimeOffset
 }
 
-func gradiumSTTAudioByteStream() *audio.AudioByteStream {
-	return audio.NewAudioByteStream(defaultSTTSampleRate, 1, 1920)
+func gradiumSTTAudioByteStream(sampleRate int, bufferSizeSeconds float64) *audio.AudioByteStream {
+	if sampleRate <= 0 {
+		sampleRate = defaultSTTSampleRate
+	}
+	if bufferSizeSeconds <= 0 {
+		bufferSizeSeconds = defaultSTTBufferSeconds
+	}
+	samplesPerChannel := uint32(float64(sampleRate) * bufferSizeSeconds)
+	if samplesPerChannel == 0 {
+		samplesPerChannel = 1
+	}
+	return audio.NewAudioByteStream(uint32(sampleRate), 1, samplesPerChannel)
 }
 
 func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {

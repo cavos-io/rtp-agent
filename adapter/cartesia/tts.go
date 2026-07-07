@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
@@ -438,34 +439,28 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
 	if t.isClosed() {
-		conn.Close()
 		return nil, io.ErrClosedPipe
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	stream := &cartesiaTTSStream{
 		provider:      t,
-		conn:          conn,
+		ctx:           ctx,
 		audio:         make(chan *tts.SynthesizedAudio, 10),
 		errCh:         make(chan error, 1),
 		sampleRate:    t.sampleRate,
+		contextID:     cavosmath.ShortUUID(""),
+		streamURL:     buildCartesiaStreamURL(t),
+		streamHeaders: buildCartesiaStreamHeaders(t),
 		streamOptions: cartesiaTTSStreamOptions(t),
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	if !t.registerStream(stream) {
-		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-
-	go stream.readLoop()
 
 	return stream, nil
 }
@@ -526,6 +521,7 @@ func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
 
 type cartesiaTTSStream struct {
 	provider *CartesiaTTS
+	ctx      context.Context
 	conn     *websocket.Conn
 	audio    chan *tts.SynthesizedAudio
 	errCh    chan error
@@ -534,6 +530,9 @@ type cartesiaTTSStream struct {
 	flushed  bool
 
 	sampleRate    int
+	contextID     string
+	streamURL     string
+	streamHeaders http.Header
 	writeJSON     func(any) error
 	sentTokens    []string
 	skipAlignment bool
@@ -732,7 +731,7 @@ func (s *cartesiaTTSStream) sendCompleteSentencesLocked() error {
 
 func (s *cartesiaTTSStream) sendTranscriptLocked(text string) error {
 	msg := s.streamPacketLocked()
-	msg["context_id"] = "default"
+	msg["context_id"] = s.packetContextIDLocked()
 	msg["transcript"] = text + " "
 	msg["continue"] = true
 	s.sentTokens = append(s.sentTokens, text+" ")
@@ -777,7 +776,7 @@ func (s *cartesiaTTSStream) EndInput() error {
 		return err
 	}
 	msg := s.streamPacketLocked()
-	msg["context_id"] = "default"
+	msg["context_id"] = s.packetContextIDLocked()
 	msg["transcript"] = " "
 	msg["continue"] = false
 	s.flushed = true
@@ -798,6 +797,13 @@ func (s *cartesiaTTSStream) flushPendingTextLocked() error {
 	return s.sendTranscriptLocked(text)
 }
 
+func (s *cartesiaTTSStream) packetContextIDLocked() string {
+	if s.contextID != "" {
+		return s.contextID
+	}
+	return "default"
+}
+
 func (s *cartesiaTTSStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	if s.conn != nil {
@@ -813,7 +819,41 @@ func (s *cartesiaTTSStream) writeJSONData(msg any) error {
 }
 
 func (s *cartesiaTTSStream) writeJSONMessage(msg any) error {
+	if err := s.ensureConnectedLocked(); err != nil {
+		return err
+	}
 	return s.conn.WriteJSON(msg)
+}
+
+func (s *cartesiaTTSStream) ensureConnectedLocked() error {
+	if s.conn != nil {
+		return nil
+	}
+	if s.provider != nil && s.provider.isClosed() {
+		return io.ErrClosedPipe
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.streamURL, s.streamHeaders)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if s.closed {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	if s.provider != nil && s.provider.isClosed() {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	s.conn = conn
+	go s.readLoop()
+	return nil
 }
 
 func (s *cartesiaTTSStream) Close() error {
@@ -826,7 +866,10 @@ func (s *cartesiaTTSStream) Close() error {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	return s.conn.Close()
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
 }
 
 func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {

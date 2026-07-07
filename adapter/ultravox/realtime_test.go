@@ -10,6 +10,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 func TestUltravoxRealtimeConstructorMatchesReference(t *testing.T) {
@@ -234,6 +235,34 @@ func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testin
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
+}
+
+func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeOutputMedium("text"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
 		"type":   "set_output_medium",
 		"medium": "text",
@@ -531,6 +560,27 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 	}
 }
 
+func TestUltravoxRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0, 255},
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+	}); err != nil {
+		t.Fatalf("PushVideo error = %v, want reference warning-only no-op", err)
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -569,6 +619,134 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
 		t.Fatalf("GenerateReply after Close error = %v, want reference no-op", err)
+	}
+}
+
+func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	userGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !userGeneration.UserInitiated {
+		t.Fatal("generation UserInitiated = false, want true for GenerateReply response")
+	}
+	requireUltravoxRealtimeMessage(t, userGeneration)
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	providerGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if providerGeneration.UserInitiated {
+		t.Fatal("next generation UserInitiated = true, want pending GenerateReply consumed once")
+	}
+}
+
+func TestUltravoxRealtimeSessionRestartClearsReferencePendingGenerateReply(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	if generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true, want restart to cancel pending GenerateReply")
+	}
+}
+
+func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedClientEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("queued client event after restart = %#v, want reference old message channel dropped", event)
+	default:
+	}
+}
+
+func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedAudio(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case audio := <-session.audioCh:
+		t.Fatalf("queued audio after restart length = %d, want reference old message channel dropped", len(audio))
+	default:
 	}
 }
 
@@ -963,6 +1141,30 @@ func TestUltravoxRealtimeSessionGenerationsUseReferenceUniqueMessageIDs(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerationCreatedCarriesReferenceMetadata(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+
+	if generation.ResponseID != message.MessageID {
+		t.Fatalf("generation response id = %q, want message id %q", generation.ResponseID, message.MessageID)
+	}
+	if generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true, want false for provider-started generation")
+	}
+}
+
 func TestUltravoxRealtimeSessionStateEventsMatchReferenceTurnLifecycle(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -1030,6 +1232,45 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 	}
 	requireUltravoxRealtimeClosedText(t, message.TextCh)
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
+func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+		ToolName:     "lookup",
+		InvocationID: "call-7",
+		Parameters:   map[string]any{"city": "Paris"},
+	})
+	toolGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if toolGeneration.UserInitiated {
+		t.Fatal("tool generation UserInitiated = true, want false for tool-only placeholder")
+	}
+	requireUltravoxRealtimeMessage(t, toolGeneration)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	replyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !replyGeneration.UserInitiated {
+		t.Fatal("reply generation UserInitiated = false, want pending GenerateReply preserved")
+	}
 }
 
 func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.T) {
@@ -1311,6 +1552,33 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for speech_started")
 	}
+}
+
+func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"future_event","value":1}`)); err != nil {
+		t.Fatalf("handle unknown JSON error = %v, want reference receive loop to continue", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after unknown JSON = %#v, want no emitted event", event)
+	default:
+	}
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"transcript","role":"user","medium":"voice","text":"still connected","final":true,"ordinal":5}`)); err != nil {
+		t.Fatalf("handle transcript after unknown JSON error = %v", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_5", "still connected", true)
 }
 
 func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {

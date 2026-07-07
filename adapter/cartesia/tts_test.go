@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -767,20 +766,16 @@ func TestCartesiaStreamOptionsUseReferenceDefaults(t *testing.T) {
 }
 
 func TestCartesiaTTSStreamDoesNotSendInitialTranscriptPacket(t *testing.T) {
-	clientConn, serverConn := net.Pipe()
-	serverErr := make(chan error, 1)
-	go runCartesiaNoInitialMessageWebsocketServer(serverConn, serverErr)
-
 	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
-			return clientConn, nil
+			dialCalls++
+			return nil, errors.New("unexpected eager websocket dial")
 		},
 		Proxy: nil,
 	}
-	defer func() {
-		websocket.DefaultDialer = oldDialer
-	}()
+	defer func() { websocket.DefaultDialer = oldDialer }()
 
 	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
 	stream, err := provider.Stream(context.Background())
@@ -788,14 +783,8 @@ func TestCartesiaTTSStreamDoesNotSendInitialTranscriptPacket(t *testing.T) {
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
-
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			t.Fatalf("server saw unexpected initial message: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for websocket initial-message check")
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Stream = %d, want 0 before tokenizer output", dialCalls)
 	}
 }
 
@@ -980,8 +969,12 @@ func TestCartesiaTTSStreamTextPacketsIncludeReferenceOptions(t *testing.T) {
 	}
 
 	msg := receiveCartesiaTestValue(t, messages, "stream text packet")
-	if msg["context_id"] != "default" || msg["transcript"] != "Bonjour tout le monde. " || msg["continue"] != true {
-		t.Fatalf("stream text packet = %#v, want reference context/transcript/continue", msg)
+	contextID, ok := msg["context_id"].(string)
+	if !ok || contextID == "" || contextID == "default" {
+		t.Fatalf("context_id = %#v, want generated reference stream context", msg["context_id"])
+	}
+	if msg["transcript"] != "Bonjour tout le monde. " || msg["continue"] != true {
+		t.Fatalf("stream text packet = %#v, want reference transcript/continue", msg)
 	}
 	if msg["model_id"] != "sonic-3" || msg["language"] != "fr" || msg["add_timestamps"] != false || msg["max_buffer_delay_ms"] != float64(0) {
 		t.Fatalf("stream options = %#v, want reference model/language/timestamp/max-buffer fields", msg)
@@ -1091,6 +1084,12 @@ func TestCartesiaTTSCloseClosesActiveStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
 	}
+	if err := stream.PushText("hello before close"); err != nil {
+		t.Fatalf("PushText before provider Close error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush before provider Close error = %v", err)
+	}
 
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
@@ -1174,6 +1173,81 @@ func TestCartesiaTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamDefersReferenceDialUntilInput(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("cartesia tts dial should be lazy")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewCartesiaTTS("test-key", "", "")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want lazy reference stream", err)
+	}
+	defer stream.Close()
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Stream = %d, want 0 before input", dialCalls)
+	}
+}
+
+func TestCartesiaTTSStreamEndInputOpensReferenceSocket(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaCaptureMessageWebsocketServer(serverConn, messages, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	msg := receiveCartesiaTestValue(t, messages, "end-input packet")
+	contextID, ok := msg["context_id"].(string)
+	if !ok || contextID == "" || contextID == "default" {
+		t.Fatalf("context_id = %#v, want generated reference stream context", msg["context_id"])
+	}
+	if msg["transcript"] != " " || msg["continue"] != false {
+		t.Fatalf("end-input packet = %#v, want reference space transcript with continue=false", msg)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for end-input websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("end-input websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for end-input websocket server")
+	}
+}
+
 func TestCartesiaTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1187,12 +1261,14 @@ func TestCartesiaTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "")
 
 	stream, err := provider.Stream(context.Background())
-	if stream != nil {
-		defer stream.Close()
+	if err != nil {
+		t.Fatalf("Stream error = %v, want lazy reference stream", err)
 	}
+	defer stream.Close()
+	err = stream.PushText("hello before failure. Tail")
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("PushText error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -1729,36 +1805,6 @@ func runCartesiaHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, e
 				return
 			}
 			errCh <- nil
-		}),
-	}
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		errCh <- err
-	}
-}
-
-func runCartesiaNoInitialMessageWebsocketServer(conn net.Conn, errCh chan<- error) {
-	upgrader := websocket.Upgrader{}
-	listener := &singleCartesiaConnListener{conn: conn}
-	server := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ws, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			defer ws.Close()
-			_ = ws.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
-			_, raw, err := ws.ReadMessage()
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				errCh <- nil
-				return
-			}
-			if err != nil {
-				errCh <- nil
-				return
-			}
-			errCh <- fmt.Errorf("unexpected initial websocket message %s", raw)
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
