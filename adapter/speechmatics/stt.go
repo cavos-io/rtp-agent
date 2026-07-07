@@ -837,6 +837,7 @@ type speechmaticsSTTStream struct {
 	drainEventsAfterClose      bool
 	forcedEOUPending           bool
 	forcedEOUSeq               uint64
+	forcedEOUCompleted         bool
 }
 
 type speechmaticsStreamState struct {
@@ -953,7 +954,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 				}
 			}
 		} else if s.consumeCurrentForcedEOU() {
-			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+			for _, event := range s.forcedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
 					return false
 				}
@@ -965,7 +966,13 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
 	}
+	if resp.Message == "StartOfTurn" {
+		s.resetForcedEOUCompletion()
+	}
 	if resp.Message == "EndOfTurn" {
+		if s.consumeCompletedForcedEOU() {
+			return true
+		}
 		s.clearForcedEOU()
 	}
 	for _, event := range speechmaticsEvents(resp, s.state) {
@@ -1706,7 +1713,7 @@ func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout(seq uint64) {
 		if !s.consumeForcedEOU(seq) {
 			return
 		}
-		for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+		for _, event := range s.forcedEOUEndEvents() {
 			if !s.enqueueEvent(event) {
 				return
 			}
@@ -1736,6 +1743,37 @@ func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
 	s.forcedEOUPending = false
 	s.forcedEOUSeq++
 	return true
+}
+
+func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
+	s.mu.Lock()
+	if !s.closed {
+		s.forcedEOUCompleted = true
+	}
+	s.mu.Unlock()
+	return speechmaticsEndOfTurnEvents(s.state)
+}
+
+func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forcedEOUCompleted {
+		return false
+	}
+	s.forcedEOUCompleted = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) resetForcedEOUCompletion() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.forcedEOUCompleted = false
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) clearForcedEOU() {
