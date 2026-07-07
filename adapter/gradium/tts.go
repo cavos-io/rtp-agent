@@ -171,24 +171,17 @@ func (t *GradiumTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateGradiumAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildGradiumTTSHeaders(t))
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
-	}
-	if err := writeGradiumTTSMessage(conn, mustBuildGradiumTTSSetup(t)); err != nil {
-		conn.Close()
-		return nil, err
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	return &gradiumTTSSynthesizeStream{
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		sampleRate: t.SampleRate(),
+		ctx:           streamCtx,
+		cancel:        cancel,
+		modelEndpoint: t.modelEndpoint,
+		headers:       buildGradiumTTSHeaders(t),
+		setup:         mustBuildGradiumTTSSetup(t),
+		sampleRate:    t.SampleRate(),
 	}, nil
 }
 
@@ -311,15 +304,18 @@ func (s *gradiumTTSWebsocketChunkedStream) Close() error {
 }
 
 type gradiumTTSSynthesizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	mu         sync.Mutex
-	closed     bool
-	inputEnded bool
-	sampleRate int
-	finalDone  bool
-	pending    string
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	modelEndpoint string
+	headers       http.Header
+	setup         map[string]any
+	mu            sync.Mutex
+	closed        bool
+	inputEnded    bool
+	sampleRate    int
+	finalDone     bool
+	pending       string
 
 	writeMessage func(map[string]any) error
 }
@@ -409,7 +405,62 @@ func (s *gradiumTTSSynthesizeStream) writeMessageData(message map[string]any) er
 	if s.writeMessage != nil {
 		return s.writeMessage(message)
 	}
-	return writeGradiumTTSMessage(s.conn, message)
+	if err := s.ensureConnected(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	conn := s.conn
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return io.ErrClosedPipe
+	}
+	if conn == nil {
+		return io.ErrClosedPipe
+	}
+	return writeGradiumTTSMessage(conn, message)
+}
+
+func (s *gradiumTTSSynthesizeStream) ensureConnected() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if s.conn != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	ctx := s.ctx
+	modelEndpoint := s.modelEndpoint
+	headers := s.headers
+	setup := s.setup
+	s.mu.Unlock()
+
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, modelEndpoint, headers)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
+	}
+	if err := writeGradiumTTSMessage(conn, setup); err != nil {
+		_ = conn.Close()
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	if s.conn != nil {
+		_ = conn.Close()
+		return nil
+	}
+	s.conn = conn
+	return nil
 }
 
 func (s *gradiumTTSSynthesizeStream) Close() error {
@@ -459,6 +510,9 @@ func (s *gradiumTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	conn := s.conn
 	sampleRate := s.sampleRate
 	s.mu.Unlock()
+	if conn == nil {
+		return nil, io.EOF
+	}
 
 	audio, err := (&gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: sampleRate}).Next()
 	if err != nil {

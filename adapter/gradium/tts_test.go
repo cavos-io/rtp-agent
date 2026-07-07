@@ -150,6 +150,34 @@ func TestGradiumTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
 	}
 }
 
+func TestGradiumTTSStreamDefersReferenceConnectUntilText(t *testing.T) {
+	dials := 0
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("gradium tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewGradiumTTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want lazy reference stream", err)
+	}
+	if dials != 0 {
+		t.Fatalf("dials before text = %d, want 0", dials)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before text error = %v", err)
+	}
+	if dials != 0 {
+		t.Fatalf("dials after close-before-text = %d, want 0", dials)
+	}
+}
+
 func TestGradiumTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -163,12 +191,19 @@ func TestGradiumTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	provider := NewGradiumTTS("test-key", "")
 	stream, err := provider.Stream(context.Background())
 
-	if stream != nil {
-		t.Fatalf("Stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Stream error = %v, want lazy reference stream", err)
+	}
+	if stream == nil {
+		t.Fatal("Stream = nil, want lazy reference stream")
+	}
+	err = stream.PushText("hello world")
+	if err == nil {
+		t.Fatal("PushText error = nil, want websocket dial failure")
 	}
 	var apiErr *llm.APIConnectionError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("PushText error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
