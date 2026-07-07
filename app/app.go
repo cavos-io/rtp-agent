@@ -2340,6 +2340,9 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 				return err
 			}
 		}
+		// App uses the lower-level RoomIO path because it configures recorder and
+		// room-tool internals. Normal worker entrypoints should prefer
+		// JobContext.StartSession so RoomIO does not become the room event API.
 		var roomIO *workerlivekit.RoomIO
 		if ctx.Room == nil {
 			roomIO = workerlivekit.NewRoomIO(nil, a.Session, roomOptions)

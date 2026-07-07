@@ -71,6 +71,49 @@ func TestRoomIOAudioTrackPublicationOptionsUseReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioOutputEnabledByDefault(t *testing.T) {
+	assistant := &agent.PipelineAgent{}
+	session := &agent.AgentSession{Assistant: assistant}
+
+	rio := NewRoomIO(nil, session, RoomOptions{})
+
+	if rio.Options.DisableAudioOutput {
+		t.Fatal("DisableAudioOutput = true, want audio output enabled by default")
+	}
+	if assistant.PublishAudio == nil {
+		t.Fatal("PublishAudio = nil, want room audio output wired by default")
+	}
+	if rio.audioSubscribed == nil {
+		t.Fatal("audioSubscribed = nil, want default audio output subscription gate")
+	}
+}
+
+func TestRoomIOAudioOutputPublishesDefaultTrackName(t *testing.T) {
+	rio := &RoomIO{}
+
+	opts := rio.audioTrackPublicationOptions()
+
+	if opts.Name != "roomio_audio" {
+		t.Fatalf("audio track name = %q, want roomio_audio", opts.Name)
+	}
+	if opts.Source != livekit.TrackSource_MICROPHONE {
+		t.Fatalf("audio track source = %v, want MICROPHONE", opts.Source)
+	}
+}
+
+func TestRoomIOAudioOutputUsesCustomTrackName(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{AudioTrackName: "agent-output"}}
+
+	opts := rio.audioTrackPublicationOptions()
+
+	if opts.Name != "agent-output" {
+		t.Fatalf("audio track name = %q, want agent-output", opts.Name)
+	}
+	if opts.Source != livekit.TrackSource_MICROPHONE {
+		t.Fatalf("audio track source = %v, want MICROPHONE", opts.Source)
+	}
+}
+
 func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) {
 	rio := &RoomIO{
 		Options: RoomOptions{
@@ -384,6 +427,39 @@ func TestRoomIOAttachRoomSkipsPreConnectAudioHandlerWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOPreConnectAudioRegistersDefaultTopic(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{DisableTextInput: true})
+	room := lksdk.NewRoom(nil)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterByteStreamHandler after AttachRoom() error = nil, want reference pre-connect topic registered")
+	}
+}
+
+func TestRoomIOPreConnectAudioDisabledDoesNotRegister(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{
+		DisablePreConnectAudio: true,
+		DisableTextInput:       true,
+	})
+	room := lksdk.NewRoom(nil)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler after disabled AttachRoom() error = %v, want nil", err)
+	}
+}
+
 func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
 	assistant := &agent.PipelineAgent{}
 	session := &agent.AgentSession{Assistant: assistant}
@@ -394,6 +470,20 @@ func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
 
 	if assistant.PublishAudio != nil {
 		t.Fatal("PublishAudio configured despite disabled room audio output")
+	}
+}
+
+func TestRoomIOAudioOutputDisabledDoesNotPublish(t *testing.T) {
+	assistant := &agent.PipelineAgent{}
+	session := &agent.AgentSession{Assistant: assistant}
+
+	rio := NewRoomIO(nil, session, RoomOptions{DisableAudioOutput: true})
+
+	if assistant.PublishAudio != nil {
+		t.Fatal("PublishAudio configured despite disabled room audio output")
+	}
+	if err := rio.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil with disabled audio output", err)
 	}
 }
 
@@ -570,6 +660,49 @@ func TestRoomIOPublishAudioWaitsForSubscriptionBeforeEncoding(t *testing.T) {
 	}
 	if len(encoder.calls) == 0 {
 		t.Fatal("encoder was not called after audio subscription")
+	}
+}
+
+func TestRoomIOAudioOutputWaitsForSubscriptionBeforeCapture(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PublishAudio returned before subscription with error %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want no capture before subscription", len(encoder.calls))
+	}
+
+	rio.markAudioSubscribed()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PublishAudio after subscription error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not return after subscription")
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 after subscription", len(encoder.calls))
 	}
 }
 
@@ -918,6 +1051,32 @@ func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioOutputFlushReportsPlaybackFinished(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.Flush()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = true, want false after Flush")
+	}
+	if ev.PlaybackPosition != 20*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want 20ms", ev.PlaybackPosition)
+	}
+}
+
 func TestRoomIOCloseUnblocksActivePlayoutWait(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	frame := &model.AudioFrame{
@@ -949,6 +1108,39 @@ func TestRoomIOCloseUnblocksActivePlayoutWait(t *testing.T) {
 	select {
 	case err := <-errCh:
 		t.Fatalf("WaitForPlayout error after Close = %v", err)
+	case ev := <-done:
+		if !ev.Interrupted {
+			t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not unblock after Close")
+	}
+}
+
+func TestRoomIOAudioOutputCloseCancelsForwarding(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	done := make(chan PlaybackFinishedEvent, 1)
+	go func() {
+		ev, _ := rio.WaitForPlayout(context.Background())
+		done <- ev
+	}()
+	waitForPlaybackWaiters(t, rio, 1)
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
 	case ev := <-done:
 		if !ev.Interrupted {
 			t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after Close")
@@ -1392,6 +1584,49 @@ func TestRoomIOPauseAudioOutputDefersPublishUntilResume(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioOutputPauseResumeControlsForwarding(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    encoder,
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	rio.PauseAudioOutput()
+	done := make(chan error, 1)
+	go func() {
+		done <- rio.PublishAudio(context.Background(), frame)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PublishAudio returned while paused with error %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(encoder.calls) != 0 {
+		t.Fatalf("encoder calls = %d, want 0 while paused", len(encoder.calls))
+	}
+
+	rio.ResumeAudioOutput()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PublishAudio after resume error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PublishAudio did not resume")
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 after resume", len(encoder.calls))
+	}
+}
+
 func TestRoomIOClearBufferDropsPausedPublish(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
@@ -1455,6 +1690,29 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	}
 	if ev.PlaybackPosition >= 10*time.Millisecond {
 		t.Fatalf("PlaybackPosition = %v, want less than full pushed duration after ClearBuffer", ev.PlaybackPosition)
+	}
+}
+
+func TestRoomIOAudioOutputClearBufferInterruptsPlayback(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
 	}
 }
 
@@ -4742,6 +5000,30 @@ func TestRoomIOOnReceivesConnectionStateChangedEvent(t *testing.T) {
 	}
 }
 
+func TestRoomIOOnReceivesRoomMovedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventRoomMoved, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	rio.GetCallback().OnRoomMoved("moved-room", "refreshed-token")
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomMovedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomMovedEvent", ev)
+		}
+		if got.RoomName != "moved-room" || got.Token != "refreshed-token" {
+			t.Fatalf("room moved event = (%q, %q), want moved-room refreshed-token", got.RoomName, got.Token)
+		}
+	default:
+		t.Fatal("subscriber did not receive room_moved event")
+	}
+}
+
 func TestRoomIOOnReceivesTrackSubscribedEvent(t *testing.T) {
 	rio := &RoomIO{Options: RoomOptions{DisableAudioInput: true}}
 	events := make(chan RoomEvent, 1)
@@ -4870,6 +5152,45 @@ func TestRoomIOOnReceivesParticipantAttributesChangedEvent(t *testing.T) {
 		}
 	default:
 		t.Fatal("subscriber did not receive participant_attributes_changed event")
+	}
+}
+
+func TestRoomIOOnReceivesParticipantActiveEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantActive, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	room := lksdk.NewRoom(rio.GetCallback())
+	room.OnParticipantUpdate([]*livekit.ParticipantInfo{{
+		Sid:      "PA_active",
+		Identity: "caller-a",
+	}})
+	room.OnSpeakersChanged([]*livekit.SpeakerInfo{{
+		Sid:    "PA_active",
+		Level:  0.7,
+		Active: true,
+	}})
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantActiveEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantActiveEvent", ev)
+		}
+		if got.Participant == nil {
+			t.Fatal("participant_active event participant = nil")
+		}
+		if got.Participant.Identity() != "caller-a" {
+			t.Fatalf("participant identity = %q, want caller-a", got.Participant.Identity())
+		}
+		if !got.Participant.IsSpeaking() {
+			t.Fatal("participant_active event participant IsSpeaking() = false")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_active event")
 	}
 }
 

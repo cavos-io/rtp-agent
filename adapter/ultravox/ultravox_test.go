@@ -6,6 +6,10 @@ import (
 )
 
 func TestUltravoxPluginMetadataMatchesReference(t *testing.T) {
+	if !strings.HasPrefix(PluginVersion, "v") {
+		t.Fatalf("PluginVersion = %q, want semantic version tag", PluginVersion)
+	}
+
 	tests := []struct {
 		name string
 		got  string
@@ -19,7 +23,7 @@ func TestUltravoxPluginMetadataMatchesReference(t *testing.T) {
 		{
 			name: "version",
 			got:  PluginVersion,
-			want: "v0.1.5",
+			want: "v0.1.6",
 		},
 		{
 			name: "package",

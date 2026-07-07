@@ -778,6 +778,142 @@ func TestJobContextConnectPreparedRoomRegistersRoomIOPreConnectBeforeJoin(t *tes
 	}
 }
 
+func TestJobContextStartSessionConnectsRoomCreatesRoomIOAndStartsSession(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_start_session", Room: &livekit.Room{Name: "room-start"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+
+	var joinedRoom *lksdk.Room
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, room *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			joinedRoom = room
+			return nil
+		},
+	}
+	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomOptions: workerlivekit.RoomOptions{
+			DisableAudioInput:  true,
+			DisableAudioOutput: true,
+			DisableTextInput:   true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	if ctx.Room == nil {
+		t.Fatal("StartSession did not install a room on JobContext")
+	}
+	if joinedRoom != ctx.Room {
+		t.Fatal("StartSession connected a different room than JobContext.Room")
+	}
+	if session.Room != ctx.Room {
+		t.Fatal("StartSession did not expose JobContext.Room on AgentSession")
+	}
+	if got, err := ctx.PrimarySession(); err != nil || got != session {
+		t.Fatalf("PrimarySession() = %v, %v; want started session", got, err)
+	}
+	if got, err := session.JobContext(); err != nil || got != ctx {
+		t.Fatalf("AgentSession.JobContext() = %v, %v; want job context", got, err)
+	}
+}
+
+func TestJobContextStartSessionUsesRoomCallbackForSubscriptions(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_start_session_callback", Room: &livekit.Room{Name: "room-callback"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+
+	called := false
+	cb := &lksdk.RoomCallback{
+		OnDisconnected: func() {
+			called = true
+		},
+	}
+
+	var capturedCallback *lksdk.RoomCallback
+	oldNewRoom := jobContextNewRoom
+	jobContextNewRoom = func(cb *lksdk.RoomCallback) *lksdk.Room {
+		capturedCallback = cb
+		return lksdk.NewRoom(cb)
+	}
+	t.Cleanup(func() { jobContextNewRoom = oldNewRoom })
+
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, room *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomCallback: cb,
+		RoomOptions: workerlivekit.RoomOptions{
+			DisableAudioInput:        true,
+			DisableAudioOutput:       true,
+			DisableTextInput:         true,
+			DisableCloseOnDisconnect: true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	if capturedCallback == nil || capturedCallback.OnDisconnected == nil {
+		t.Fatal("StartSession did not install a chained room callback")
+	}
+
+	capturedCallback.OnDisconnected()
+
+	if !called {
+		t.Fatal("StartSession did not preserve the user room callback")
+	}
+}
+
+func TestJobContextStartSessionLeavesRoomAsPublicSubscriptionSurface(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_room_surface", Room: &livekit.Room{Name: "room-surface"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, room *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			room.LocalParticipant = &lksdk.LocalParticipant{}
+			return nil
+		},
+	}
+	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomOptions: RoomOptions{
+			DisableAudioInput:  true,
+			DisableAudioOutput: true,
+			DisableTextInput:   true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	if ctx.Room == nil {
+		t.Fatal("JobContext.Room is nil after StartSession")
+	}
+	if ctx.Agent() != ctx.Room.LocalParticipant {
+		t.Fatal("JobContext.Agent() is not derived from JobContext.Room")
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
 	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}

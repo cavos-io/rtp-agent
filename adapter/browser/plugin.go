@@ -2,7 +2,7 @@ package browser
 
 const (
 	PluginTitle   = "rtp-agent.plugins.browser"
-	PluginVersion = "v0.1.5"
+	PluginVersion = "v0.1.6"
 	PluginPackage = "rtp-agent.plugins.browser"
 )
 

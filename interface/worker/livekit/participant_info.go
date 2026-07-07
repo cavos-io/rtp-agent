@@ -29,6 +29,7 @@ type RoomCallbackHandlers struct {
 	OnDisconnectedWithReason  func(lksdk.DisconnectionReason)
 	OnReconnecting            func()
 	OnReconnected             func()
+	OnRoomMoved               func(roomName string, token string)
 	OnParticipantConnected    func(RemoteParticipantView)
 	OnParticipantDisconnected func(RemoteParticipantView)
 	OnLocalTrackPublished     func(*lksdk.LocalTrackPublication, *lksdk.LocalParticipant)
@@ -69,6 +70,9 @@ func RoomLocalParticipant(room *lksdk.Room) *lksdk.LocalParticipant {
 func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandlers) *lksdk.RoomCallback {
 	wrapped := lksdk.NewRoomCallback()
 	wrapped.Merge(cb)
+	if cb != nil && cb.OnRoomMoved != nil {
+		wrapped.OnRoomMoved = cb.OnRoomMoved
+	}
 
 	onDisconnected := wrapped.OnDisconnected
 	wrapped.OnDisconnected = func() {
@@ -107,6 +111,16 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 		if handlers.OnReconnected != nil {
 			handlers.OnReconnected()
+		}
+	}
+
+	onRoomMoved := wrapped.OnRoomMoved
+	wrapped.OnRoomMoved = func(roomName string, token string) {
+		if onRoomMoved != nil {
+			onRoomMoved(roomName, token)
+		}
+		if handlers.OnRoomMoved != nil {
+			handlers.OnRoomMoved(roomName, token)
 		}
 	}
 
