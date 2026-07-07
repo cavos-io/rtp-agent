@@ -702,7 +702,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) || upliftAIIsTimeoutError(err) {
 			return llm.NewAPITimeoutError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
