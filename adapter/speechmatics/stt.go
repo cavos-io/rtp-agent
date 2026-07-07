@@ -205,13 +205,16 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	if baseURL == "" {
 		baseURL = "wss://eu2.rt.speechmatics.com/v2"
 	}
+	maxDelay := 2.0
 	provider := &SpeechmaticsSTT{
-		apiKey:        apiKey,
-		baseURL:       strings.TrimRight(baseURL, "/"),
-		language:      "en",
-		sampleRate:    16000,
-		audioEncoding: "pcm_s16le",
-		focusMode:     "retain",
+		apiKey:         apiKey,
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		language:       "en",
+		sampleRate:     16000,
+		audioEncoding:  "pcm_s16le",
+		focusMode:      "retain",
+		operatingPoint: "enhanced",
+		maxDelay:       &maxDelay,
 	}
 	for _, opt := range opts {
 		opt(provider)

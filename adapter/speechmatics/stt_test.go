@@ -780,6 +780,15 @@ func TestSpeechmaticsSTTStartMessageEnablesReferenceDiarizationByDefault(t *test
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 }
 
+func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
+	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+}
+
 func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdditionalVocab([]SpeechmaticsAdditionalVocabEntry{
