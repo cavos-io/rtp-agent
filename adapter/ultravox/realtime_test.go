@@ -1120,6 +1120,49 @@ func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *tes
 	}
 }
 
+func TestUltravoxRealtimeSessionMetricsAnchorToRecentReferenceUserFinal(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "done",
+		Final:   true,
+		Ordinal: 4,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_4", "done", true)
+	time.Sleep(25 * time.Millisecond)
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "ok",
+		Final:   false,
+		Ordinal: 5,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "ok")
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "ok",
+		Final:   true,
+		Ordinal: 5,
+	})
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.TTFT < 0.01 {
+		t.Fatalf("metrics TTFT = %f, want anchored to recent user final transcript", metrics.TTFT)
+	}
+}
+
 func TestUltravoxRealtimeSessionInterruptEmitsReferenceCancelledMetrics(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

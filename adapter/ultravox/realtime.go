@@ -358,6 +358,7 @@ type realtimeSession struct {
 	contextItems     map[string]struct{}
 	pendingReply     bool
 	restartCount     uint64
+	lastUserFinalAt  time.Time
 	closed           bool
 	closeOnce        sync.Once
 }
@@ -826,7 +827,7 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 		functionCh: make(chan *llm.FunctionCall, 1),
 		textCh:     make(chan string, 16),
 		audioCh:    make(chan *model.AudioFrame, 16),
-		createdAt:  time.Now(),
+		createdAt:  s.pickGenerationCreatedAtLocked(),
 	}
 	modalitiesCh := make(chan []string, 1)
 	if s.audioOutput {
@@ -884,6 +885,9 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 	if s.closed {
 		return
 	}
+	if event.Final {
+		s.lastUserFinalAt = time.Now()
+	}
 	realtimeEvent := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
 		InputTranscription: &llm.InputTranscriptionCompleted{
@@ -896,6 +900,17 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 	case s.eventCh <- realtimeEvent:
 	default:
 	}
+}
+
+func (s *realtimeSession) pickGenerationCreatedAtLocked() time.Time {
+	now := time.Now()
+	if !s.lastUserFinalAt.IsZero() {
+		since := now.Sub(s.lastUserFinalAt)
+		if since >= 0 && since <= 10*time.Second {
+			return s.lastUserFinalAt
+		}
+	}
+	return now
 }
 
 func (s *realtimeSession) handleAgentTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
