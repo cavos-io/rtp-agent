@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -650,7 +651,15 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		})
 	case "playback_clear_buffer":
 		s.handlePlaybackClearBufferEvent()
-	case "call_started", "debug", "pong":
+	case "pong":
+		var event struct {
+			Timestamp float64 `json:"timestamp"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		s.handlePongEvent(event.Timestamp)
+	case "call_started", "debug":
 		return nil
 	default:
 		return fmt.Errorf("unhandled Ultravox event type %q", envelope.Type)
@@ -834,6 +843,13 @@ func (s *realtimeSession) handlePlaybackClearBufferEvent() {
 	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}:
 	default:
 	}
+}
+
+func (s *realtimeSession) handlePongEvent(float64) {
+	_ = s.sendClientEvent(map[string]any{
+		"type":      "ping",
+		"timestamp": float64(time.Now().UnixNano()) / float64(time.Second),
+	})
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {

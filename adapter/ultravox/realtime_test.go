@@ -911,6 +911,35 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 	}
 }
 
+func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"pong","timestamp":123.4}`)); err != nil {
+		t.Fatalf("handle pong JSON error = %v", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		if got["type"] != "ping" {
+			t.Fatalf("pong response event type = %#v, want ping in %#v", got["type"], got)
+		}
+		timestamp, ok := got["timestamp"].(float64)
+		if !ok || timestamp <= 0 {
+			t.Fatalf("pong response timestamp = %#v, want positive float64", got["timestamp"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference ping after pong")
+	}
+}
+
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
 	t.Helper()
 	select {
