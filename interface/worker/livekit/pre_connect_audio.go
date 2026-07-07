@@ -231,6 +231,10 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 	}
 
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil
+	}
 	ch, ok := h.buffers[trackID]
 	if !ok {
 		ch = make(chan *PreConnectAudioBuffer, 1)
@@ -247,12 +251,16 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 	select {
 	case <-ctx.Done():
 		h.mu.Lock()
-		h.timedOut[trackID] = struct{}{}
+		if !h.closed {
+			h.timedOut[trackID] = struct{}{}
+		}
 		h.mu.Unlock()
 		return nil
 	case <-time.After(h.timeout):
 		h.mu.Lock()
-		h.timedOut[trackID] = struct{}{}
+		if !h.closed {
+			h.timedOut[trackID] = struct{}{}
+		}
 		h.mu.Unlock()
 		return nil
 	case buf := <-ch:

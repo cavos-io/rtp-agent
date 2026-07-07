@@ -104,6 +104,25 @@ func TestPreConnectAudioCloseIgnoresLateBuffer(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioWaitAfterCloseReturnsImmediately(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.Close()
+
+	done := make(chan []*model.AudioFrame, 1)
+	go func() {
+		done <- handler.WaitForData(context.Background(), "track-after-close")
+	}()
+
+	select {
+	case frames := <-done:
+		if frames != nil {
+			t.Fatalf("WaitForData() after close = %#v, want nil", frames)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("WaitForData() blocked after handler close")
+	}
+}
+
 func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{
