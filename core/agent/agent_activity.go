@@ -1771,7 +1771,7 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 		return
 	}
 	ct := a.currentInterruptionTranscript()
-	if a.shortInterruptionTranscript(ct) || a.interruptionGateSuppresses(ct) {
+	if a.shortInterruptionTranscript(ct) || a.interruptionGateSuppresses(ct, int(ev.SpeechDuration*1000)) {
 		return
 	}
 	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration, time.Time{})
@@ -1848,7 +1848,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	})
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		if !a.shortInterruptionTranscript(transcript) && !a.interruptionGateSuppresses(transcript) {
+		if !a.shortInterruptionTranscript(transcript) && !a.interruptionGateSuppresses(transcript, 0) {
 			a.interruptByAudioActivity("interim transcript", "transcript", transcript, time.Time{})
 			if !a.isUserSpeaking() {
 				a.startFalseInterruptionTimer()
@@ -1931,7 +1931,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		if !a.shortInterruptionTranscript(transcript) && !a.interruptionGateSuppresses(transcript) {
+		if !a.shortInterruptionTranscript(transcript) && !a.interruptionGateSuppresses(transcript, 0) {
 			a.interruptByAudioActivity("final transcript", "transcript", transcript, time.Time{})
 			if !a.isUserSpeaking() {
 				a.startFalseInterruptionTimer()
@@ -2987,10 +2987,10 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if !a.InterruptionEnabled() {
 		return false
 	}
-	return a.shortInterruptionTranscript(transcript) || a.interruptionGateSuppresses(transcript)
+	return a.shortInterruptionTranscript(transcript) || a.interruptionGateSuppresses(transcript, 0)
 }
 
-func (a *AgentActivity) interruptionGateSuppresses(transcript string) bool {
+func (a *AgentActivity) interruptionGateSuppresses(transcript string, vadSpeechMs int) bool {
 	if a == nil || a.Agent == nil || a.Agent.InterruptionGate == nil {
 		return false
 	}
@@ -3001,6 +3001,9 @@ func (a *AgentActivity) interruptionGateSuppresses(transcript string) bool {
 	speechMs := 0
 	if !a.userSpeechStartedAt.IsZero() {
 		speechMs = int(time.Since(a.userSpeechStartedAt).Milliseconds())
+	}
+	if speechMs == 0 && vadSpeechMs > 0 {
+		speechMs = vadSpeechMs
 	}
 	result := a.Agent.InterruptionGate.Decide(agentSpeaking, speechMs, transcript)
 	return result.Decision == InterruptionIgnore || result.Decision == InterruptionContinueListening
