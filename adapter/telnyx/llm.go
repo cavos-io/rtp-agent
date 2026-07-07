@@ -87,6 +87,10 @@ func (l *TelnyxLLM) BaseURL() string {
 	return l.baseURL
 }
 
+func (l *TelnyxLLM) Provider() string {
+	return "telnyx"
+}
+
 func (l *TelnyxLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.err != nil {
 		return nil, l.err

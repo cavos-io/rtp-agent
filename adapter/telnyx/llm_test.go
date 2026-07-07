@@ -21,6 +21,9 @@ func TestNewTelnyxLLMDefaultsMatchReference(t *testing.T) {
 	if provider.BaseURL() != "https://api.telnyx.com/v2/ai" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.BaseURL())
 	}
+	if got := llm.Provider(provider); got != "telnyx" {
+		t.Fatalf("provider metadata = %q, want telnyx", got)
+	}
 }
 
 func TestNewTelnyxLLMUsesEnvironmentAPIKey(t *testing.T) {
