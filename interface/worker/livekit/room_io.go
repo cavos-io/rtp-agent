@@ -1599,6 +1599,9 @@ func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity s
 	if rio == nil || trackID == "" || participantIdentity == "" {
 		return 0, false
 	}
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
+		return 0, false
+	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	rio.rememberAudioInputTrackLocked(trackID, participantIdentity)

@@ -149,6 +149,36 @@ func TestNewRoomIOCanDisableAudioInput(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioInputEnabledByDefault(t *testing.T) {
+	rio := NewRoomIO(lksdk.NewRoom(nil), &agent.AgentSession{}, RoomOptions{})
+
+	if rio.Options.DisableAudioInput {
+		t.Fatal("DisableAudioInput = true, want audio input enabled by default")
+	}
+	if rio.preConnectAudio == nil {
+		t.Fatal("preConnectAudio = nil, want default audio input path initialized")
+	}
+}
+
+func TestRoomIOAudioInputDisabledDoesNotAttach(t *testing.T) {
+	rio := NewRoomIO(&lksdk.Room{}, &agent.AgentSession{}, RoomOptions{
+		DisableAudioInput: true,
+	})
+
+	if !rio.Options.DisableAudioInput {
+		t.Fatal("DisableAudioInput = false, want configured disabled audio input")
+	}
+	if rio.preConnectAudio != nil {
+		t.Fatalf("preConnectAudio = %#v, want nil when audio input is disabled", rio.preConnectAudio)
+	}
+	if generation, activated := rio.activateAudioInputTrack("TR_audio", "caller-a"); activated || generation != 0 {
+		t.Fatalf("activateAudioInputTrack() = (%d, %v), want disabled audio input to reject attachment", generation, activated)
+	}
+	if rio.audioInputTrackActive(1) {
+		t.Fatal("audioInputTrackActive() = true after disabled attachment")
+	}
+}
+
 func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	pcm := make([]byte, 960)
 	frame := roomIOInputFrameFromPCM(pcm, roomIOOpusClockRate, 1)
@@ -3279,6 +3309,20 @@ func TestRoomIOAudioInputIgnoresMismatchedTrackSource(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioInputIgnoresMismatchedParticipant(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if rio.shouldAcceptParticipant("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(caller-b) = true, want false for configured caller-a audio input")
+	}
+	if generation, activated := rio.activateAudioInputTrack("TR_audio_b", "caller-b"); !activated || generation == 0 {
+		t.Fatalf("activateAudioInputTrack() = (%d, %v), want internal helper to be independent of participant filtering", generation, activated)
+	}
+	if rio.shouldAcceptParticipant("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("participant filtering changed after internal track activation")
+	}
+}
+
 func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
 	rio := &RoomIO{}
 	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
@@ -3346,6 +3390,27 @@ func TestRoomIOCloseClearsAudioInputPublicationState(t *testing.T) {
 	}
 	if rio.audioInputGeneration == generation {
 		t.Fatalf("audio input generation after close = %d, want advanced from active generation", rio.audioInputGeneration)
+	}
+}
+
+func TestRoomIOAudioInputCloseUnregistersHandlers(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if rio.audioInputTrackActive(generation) {
+		t.Fatal("audio input generation is still active after close")
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" || len(rio.audioInputTracks) != 0 {
+		t.Fatalf("audio input state after close = track %q participant %q remembered %#v, want cleared", rio.audioInputTrackID, rio.audioInputParticipantID, rio.audioInputTracks)
 	}
 }
 
