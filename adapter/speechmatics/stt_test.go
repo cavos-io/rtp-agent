@@ -2029,7 +2029,10 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "enable_partials", true)
+	assertSpeechmaticsConfig(t, config, "include_partials", false)
+	if _, ok := config["enable_partials"]; ok {
+		t.Fatalf("enable_partials = %#v, want reference include_partials field", config["enable_partials"])
+	}
 	if _, ok := config["diarization"]; ok {
 		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
 	}

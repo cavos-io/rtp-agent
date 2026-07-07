@@ -600,7 +600,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config := map[string]interface{}{
 		"language": language,
 	}
-	config["enable_partials"] = true
+	config["include_partials"] = speechmaticsIncludePartials(s)
 	if s.domain != "" {
 		config["domain"] = s.domain
 	}
