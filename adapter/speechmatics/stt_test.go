@@ -699,6 +699,82 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("speaker update message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore")
+	if err != nil {
+		t.Fatalf("UpdateSpeakers error = %v", err)
+	}
+
+	if got := strings.Join(provider.focusSpeakers, ","); got != "agent" {
+		t.Fatalf("provider focus speakers = %q, want agent", got)
+	}
+	if got := strings.Join(provider.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("provider ignore speakers = %q, want noise", got)
+	}
+	if provider.focusMode != "ignore" {
+		t.Fatalf("provider focus mode = %q, want ignore", provider.focusMode)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("speaker update writes = %d, want one active stream write", len(writes))
+	}
+	if got, want := writes[0]["message"], "SetRecognitionConfig"; got != want {
+		t.Fatalf("speaker update message = %#v, want %#v", got, want)
+	}
+	config, ok := writes[0]["transcription_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("transcription_config = %#v, want object", writes[0]["transcription_config"])
+	}
+	speakerConfig, ok := config["speaker_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_config = %#v, want object", config["speaker_config"])
+	}
+	if got := strings.Join(speakerConfig["focus_speakers"].([]string), ","); got != "agent" {
+		t.Fatalf("focus_speakers = %q, want agent", got)
+	}
+	if got := strings.Join(speakerConfig["ignore_speakers"].([]string), ","); got != "noise" {
+		t.Fatalf("ignore_speakers = %q, want noise", got)
+	}
+	if got, want := speakerConfig["focus_mode"], "ignore"; got != want {
+		t.Fatalf("focus_mode = %#v, want %#v", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTUpdateSpeakersRequiresDiarization(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("speaker update write = %#v, want none when diarization disabled", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	err := provider.UpdateSpeakers([]string{"agent"}, nil, "retain")
+	if err == nil || !strings.Contains(err.Error(), "diarization is not enabled") {
+		t.Fatalf("UpdateSpeakers error = %v, want diarization disabled error", err)
+	}
+}
+
 func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeJSON: func(interface{}) error {

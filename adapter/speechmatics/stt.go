@@ -337,6 +337,42 @@ func (s *SpeechmaticsSTT) Finalize() error {
 	return finalizeErr
 }
 
+func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
+	if s == nil {
+		return io.ErrClosedPipe
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		return fmt.Errorf("diarization is not enabled")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	if focusMode != "" {
+		s.focusMode = focusMode
+	}
+	focusSpeakers = cloneSpeechmaticsStringSlice(s.focusSpeakers)
+	ignoreSpeakers = cloneSpeechmaticsStringSlice(s.ignoreSpeakers)
+	focusMode = s.focusMode
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	var updateErr error
+	for _, stream := range streams {
+		if err := stream.UpdateSpeakers(focusSpeakers, ignoreSpeakers, focusMode); err != nil && updateErr == nil && !errors.Is(err, io.ErrClosedPipe) {
+			updateErr = err
+		}
+	}
+	return updateErr
+}
+
 func (s *SpeechmaticsSTT) isClosed() bool {
 	if s == nil {
 		return true
@@ -454,11 +490,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		config["additional_vocab"] = s.additionalVocab
 	}
 	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
-		config["speaker_config"] = map[string]interface{}{
-			"focus_speakers":  s.focusSpeakers,
-			"ignore_speakers": s.ignoreSpeakers,
-			"focus_mode":      s.focusMode,
-		}
+		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
 	}
 	if len(s.knownSpeakers) > 0 {
 		config["known_speakers"] = s.knownSpeakers
@@ -496,6 +528,21 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		},
 		"transcription_config": config,
 	}
+}
+
+func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {
+	return map[string]interface{}{
+		"focus_speakers":  cloneSpeechmaticsStringSlice(focusSpeakers),
+		"ignore_speakers": cloneSpeechmaticsStringSlice(ignoreSpeakers),
+		"focus_mode":      focusMode,
+	}
+}
+
+func cloneSpeechmaticsStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 type speechmaticsSTTStream struct {
@@ -836,6 +883,20 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return io.ErrClosedPipe
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+}
+
+func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(map[string]interface{}{
+		"message": "SetRecognitionConfig",
+		"transcription_config": map[string]interface{}{
+			"speaker_config": speechmaticsSTTSpeakerConfig(focusSpeakers, ignoreSpeakers, focusMode),
+		},
+	})
 }
 
 func (s *speechmaticsSTTStream) Flush() error {
