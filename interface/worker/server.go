@@ -1985,18 +1985,16 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 	if !plan.Upload {
 		return
 	}
-	go func() {
-		err := uploadSessionReport(
-			plan.URL,
-			plan.APIKey,
-			plan.APISecret,
-			plan.AgentName,
-			plan.Report,
-		)
-		if err != nil {
-			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-		}
-	}()
+	err := uploadSessionReport(
+		plan.URL,
+		plan.APIKey,
+		plan.APISecret,
+		plan.AgentName,
+		plan.Report,
+	)
+	if err != nil {
+		logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+	}
 }
 
 func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
