@@ -1189,7 +1189,7 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "reconnecting"})
 		},
 		OnReconnected: func() {
-			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
+			rio.onRoomReconnected()
 		},
 		OnParticipantConnected: func(participant RemoteParticipantView) {
 			rio.onParticipantConnected(participant.(*lksdk.RemoteParticipant))
@@ -1239,6 +1239,11 @@ func (rio *RoomIO) onRoomDisconnected() {
 		return
 	}
 	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func (rio *RoomIO) onRoomReconnected() {
+	rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
+	rio.handleExistingParticipantViews(RoomRemoteParticipantViews(rio.Room), rio.localParticipantIdentity())
 }
 
 func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
@@ -1494,12 +1499,7 @@ func (rio *RoomIO) onParticipantConnected(participant *lksdk.RemoteParticipant) 
 		return
 	}
 	rio.emitRoomEvent(&RoomParticipantConnectedEvent{Participant: participant})
-	rio.handleParticipantConnected(
-		participant.Identity(),
-		participant.Kind(),
-		participant.Attributes(),
-		rio.localParticipantIdentity(),
-	)
+	rio.handleExistingParticipantViews([]RemoteParticipantView{participant}, rio.localParticipantIdentity())
 }
 
 func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
@@ -1531,6 +1531,20 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 		return
 	}
 	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func (rio *RoomIO) handleExistingParticipantViews(participants []RemoteParticipantView, localIdentity string) {
+	for _, participant := range participants {
+		if participant == nil {
+			continue
+		}
+		rio.handleParticipantConnected(
+			participant.Identity(),
+			participant.Kind(),
+			participant.Attributes(),
+			localIdentity,
+		)
+	}
 }
 
 func (rio *RoomIO) recordConnectedParticipant(identity string) {
