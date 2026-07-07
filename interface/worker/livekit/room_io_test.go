@@ -4181,6 +4181,74 @@ func TestRoomIOCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRoomIOOnReceivesParticipantConnectedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantConnected, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	participant := &lksdk.RemoteParticipant{}
+	rio.onParticipantConnected(participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantConnectedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantConnectedEvent", ev)
+		}
+		if got.Type() != RoomEventParticipantConnected {
+			t.Fatalf("event type = %q, want %q", got.Type(), RoomEventParticipantConnected)
+		}
+		if got.Participant != participant {
+			t.Fatal("participant_connected event did not preserve participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_connected event")
+	}
+}
+
+func TestRoomIOOnReceivesParticipantDisconnectedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantDisconnected, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	participant := &lksdk.RemoteParticipant{}
+	rio.onParticipantDisconnected(participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantDisconnectedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantDisconnectedEvent", ev)
+		}
+		if got.Participant != participant {
+			t.Fatal("participant_disconnected event did not preserve participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_disconnected event")
+	}
+}
+
+func TestRoomIOOnUnsubscribeStopsDelivery(t *testing.T) {
+	rio := &RoomIO{}
+	calls := 0
+	unsubscribe := rio.On(RoomEventDisconnected, func(RoomEvent) {
+		calls++
+	})
+
+	unsubscribe()
+	rio.onRoomDisconnected()
+
+	if calls != 0 {
+		t.Fatalf("subscriber called after unsubscribe: %d", calls)
+	}
+}
+
 func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{AgentSession: session}
