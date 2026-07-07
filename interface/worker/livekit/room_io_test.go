@@ -3139,6 +3139,66 @@ func TestRoomIOHandleTrackUnpublishedIgnoresInactiveUserTranscriptionTarget(t *t
 	}
 }
 
+func TestRoomIOAudioInputSwitchesToNewAcceptedTrack(t *testing.T) {
+	rio := &RoomIO{}
+
+	firstGeneration, firstActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !firstActivated {
+		t.Fatal("first audio input track was not activated")
+	}
+	if !rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("first audio input generation is not active after activation")
+	}
+
+	secondGeneration, secondActivated := rio.activateAudioInputTrack("TR_audio_b", "caller-a")
+	if !secondActivated {
+		t.Fatal("second audio input track was not activated")
+	}
+	if secondGeneration == firstGeneration {
+		t.Fatalf("audio input generation did not advance: both = %d", firstGeneration)
+	}
+	if rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("old audio input generation is still active after switching tracks")
+	}
+	if !rio.audioInputTrackActive(secondGeneration) {
+		t.Fatal("new audio input generation is not active after switching tracks")
+	}
+}
+
+func TestRoomIOAudioInputIgnoresDuplicateAcceptedTrack(t *testing.T) {
+	rio := &RoomIO{}
+
+	firstGeneration, firstActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !firstActivated {
+		t.Fatal("first audio input track was not activated")
+	}
+	secondGeneration, secondActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+
+	if secondActivated {
+		t.Fatal("duplicate active audio input track activated a new stream")
+	}
+	if secondGeneration != firstGeneration {
+		t.Fatalf("duplicate generation = %d, want existing %d", secondGeneration, firstGeneration)
+	}
+	if !rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("active audio input generation was cleared by duplicate track")
+	}
+}
+
+func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	rio.handleTrackUnpublished("TR_audio_a", "caller-a")
+
+	if rio.audioInputTrackActive(generation) {
+		t.Fatal("audio input generation is still active after matching track unpublished")
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)
