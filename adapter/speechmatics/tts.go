@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -86,8 +87,10 @@ func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
 	return &speechmaticsTTSChunkedStream{
-		ctx:        ctx,
+		ctx:        streamCtx,
+		cancel:     cancel,
 		text:       text,
 		apiKey:     t.apiKey,
 		baseURL:    t.baseURL,
@@ -155,8 +158,10 @@ func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, err
 }
 
 type speechmaticsTTSChunkedStream struct {
+	mu         sync.Mutex
 	stream     io.ReadCloser
 	ctx        context.Context
+	cancel     context.CancelFunc
 	text       string
 	apiKey     string
 	baseURL    string
@@ -170,11 +175,17 @@ type speechmaticsTTSChunkedStream struct {
 }
 
 func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed || s.finalSent {
+	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
 	if err := s.ensureStream(); err != nil {
+		if s.isClosedOrFinal() {
+			return nil, io.EOF
+		}
 		return nil, err
+	}
+	if s.isClosedOrFinal() {
+		return nil, io.EOF
 	}
 	if s.stream == nil {
 		return nil, io.EOF
@@ -249,7 +260,14 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		resp.Body.Close()
 		return llm.NewAPIStatusError("Speechmatics TTS request failed", resp.StatusCode, "", string(respBody))
 	}
+	s.mu.Lock()
+	if s.closed || s.finalSent {
+		s.mu.Unlock()
+		resp.Body.Close()
+		return io.EOF
+	}
 	s.stream = resp.Body
+	s.mu.Unlock()
 	return nil
 }
 
@@ -262,13 +280,28 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {
+	s.mu.Lock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	s.finalSent = true
-	if s.stream == nil {
+	stream := s.stream
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if stream == nil {
 		return nil
 	}
-	return s.stream.Close()
+	return stream.Close()
+}
+
+func (s *speechmaticsTTSChunkedStream) isClosedOrFinal() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed || s.finalSent
 }

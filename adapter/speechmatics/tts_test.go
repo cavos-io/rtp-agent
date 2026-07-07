@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -393,6 +395,65 @@ func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if err != io.EOF {
 		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCloseCancelsPendingRequest(t *testing.T) {
+	originalClient := http.DefaultClient
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		http.DefaultClient = originalClient
+	})
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		case <-release:
+			return nil, errors.New("released without request cancellation")
+		}
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- nextResult{audio: audio, err: err}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next did not start Speechmatics request")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case result := <-done:
+		if result.audio != nil {
+			t.Fatalf("Next after Close audio = %+v, want nil", result.audio)
+		}
+		if result.err != io.EOF {
+			t.Fatalf("Next after Close error = %v, want EOF", result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(release) })
+		t.Fatal("Close did not cancel pending Speechmatics request")
 	}
 }
 
