@@ -409,6 +409,7 @@ func (s *speechmaticsTTSChunkedStream) Close() error {
 	s.closed = true
 	s.finalSent = true
 	stream := s.stream
+	s.stream = nil
 	cancel := s.cancel
 	requestCancel := s.requestCancel
 	s.mu.Unlock()
@@ -446,6 +447,13 @@ func (s *speechmaticsTTSChunkedStream) cancelRequest() {
 
 func (s *speechmaticsTTSChunkedStream) finish() {
 	s.cancelRequest()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}

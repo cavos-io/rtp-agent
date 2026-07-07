@@ -494,8 +494,9 @@ func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 }
 
 func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	body := &speechmaticsCloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &speechmaticsTTSChunkedStream{
-		stream:     io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		stream:     body,
 		sampleRate: 24000,
 	}
 
@@ -513,6 +514,9 @@ func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if final == nil || !final.IsFinal || final.Frame != nil {
 		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("response body close count after final = %d, want %d", got, want)
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want EOF", err)
