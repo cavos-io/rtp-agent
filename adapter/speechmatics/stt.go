@@ -239,7 +239,11 @@ func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true, AlignedTranscript: "chunk", OfflineRecognize: false}
+	diarization := true
+	if s != nil && s.enableDiarization != nil {
+		diarization = *s.enableDiarization
+	}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: diarization, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

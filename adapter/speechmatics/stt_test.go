@@ -551,6 +551,11 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	if got := stt.Model(provider); got != "standard" {
 		t.Fatalf("configured model metadata = %q, want standard", got)
 	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+	if capabilities := provider.Capabilities(); capabilities.Diarization {
+		t.Fatal("Diarization with disabled option = true, want false")
+	}
 }
 
 func TestSpeechmaticsSTTExposesReferenceInputSampleRate(t *testing.T) {
