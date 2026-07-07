@@ -191,9 +191,11 @@ const (
 	RoomEventParticipantDisconnected      = "participant_disconnected"
 	RoomEventParticipantAttributesChanged = "participant_attributes_changed"
 	RoomEventParticipantActive            = "participant_active"
+	RoomEventTrackSubscribed              = "track_subscribed"
 	RoomEventTrackUnpublished             = "track_unpublished"
 	RoomEventTrackPublished               = "track_published"
 	RoomEventLocalTrackPublished          = "local_track_published"
+	RoomEventSipDTMFReceived              = "sip_dtmf_received"
 )
 
 type RoomEvent interface {
@@ -239,6 +241,14 @@ type RoomParticipantActiveEvent struct {
 
 func (*RoomParticipantActiveEvent) Type() string { return RoomEventParticipantActive }
 
+type RoomTrackSubscribedEvent struct {
+	Track       *webrtc.TrackRemote
+	Publication *lksdk.RemoteTrackPublication
+	Participant *lksdk.RemoteParticipant
+}
+
+func (*RoomTrackSubscribedEvent) Type() string { return RoomEventTrackSubscribed }
+
 type RoomTrackUnpublishedEvent struct {
 	Publication *lksdk.RemoteTrackPublication
 	Participant *lksdk.RemoteParticipant
@@ -259,6 +269,13 @@ type RoomLocalTrackPublishedEvent struct {
 }
 
 func (*RoomLocalTrackPublishedEvent) Type() string { return RoomEventLocalTrackPublished }
+
+type RoomSipDTMFReceivedEvent struct {
+	Event  *livekit.SipDTMF
+	Params lksdk.DataReceiveParams
+}
+
+func (*RoomSipDTMFReceivedEvent) Type() string { return RoomEventSipDTMFReceived }
 
 type RoomIOAudioOutputDiagnostics struct {
 	TrackID                     string
@@ -1189,6 +1206,7 @@ func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveP
 	if !ok {
 		return
 	}
+	rio.emitRoomEvent(&RoomSipDTMFReceivedEvent{Event: dtmf, Params: params})
 	rio.AgentSession.EmitSipDTMF(agent.SipDTMFEvent{
 		Digit:          dtmf.Digit,
 		Code:           dtmf.Code,
@@ -1372,6 +1390,13 @@ func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	if track != nil {
+		rio.emitRoomEvent(&RoomTrackSubscribedEvent{
+			Track:       track,
+			Publication: publication,
+			Participant: rp,
+		})
+	}
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
