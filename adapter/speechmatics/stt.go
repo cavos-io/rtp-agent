@@ -798,10 +798,6 @@ func (s *speechmaticsSTTStream) isClosed() bool {
 
 func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	switch resp.Message {
-	case "AddPartialTranscript", "AddTranscript":
-		if event := speechmaticsTranscriptEvent(resp); event != nil {
-			return []*stt.SpeechEvent{event}
-		}
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
@@ -944,82 +940,6 @@ func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.Spee
 	return &stt.SpeechEvent{
 		Type:             stt.SpeechEventRecognitionUsage,
 		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
-	}
-}
-
-func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
-	eventType := stt.SpeechEventInterimTranscript
-	if resp.Message == "AddTranscript" {
-		eventType = stt.SpeechEventFinalTranscript
-	}
-
-	transcript := ""
-	var totalConfidence float64
-	var minStart, maxEnd float64
-	hasTiming := false
-	var words []stt.TimedString
-
-	for _, result := range resp.Results {
-		if len(result.Alternatives) == 0 {
-			continue
-		}
-		alt := result.Alternatives[0]
-		switch result.Type {
-		case "word":
-			transcript += alt.Content + " "
-			words = append(words, stt.TimedString{
-				Text:       alt.Content,
-				StartTime:  result.StartTime,
-				EndTime:    result.EndTime,
-				Confidence: alt.Confidence,
-			})
-		case "punctuation":
-			if transcript != "" {
-				transcript = transcript[:len(transcript)-1] + alt.Content + " "
-			} else {
-				transcript = alt.Content + " "
-			}
-		}
-
-		totalConfidence += alt.Confidence
-		if !hasTiming {
-			minStart = result.StartTime
-			hasTiming = true
-		}
-		maxEnd = result.EndTime
-	}
-
-	if hasTiming {
-		if transcript != "" {
-			transcript = transcript[:len(transcript)-1]
-		}
-		return &stt.SpeechEvent{
-			Type: eventType,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:       transcript,
-					Confidence: totalConfidence / float64(len(resp.Results)),
-					StartTime:  minStart,
-					EndTime:    maxEnd,
-					Words:      words,
-				},
-			},
-		}
-	}
-
-	if resp.Metadata.Transcript == "" {
-		return nil
-	}
-	return &stt.SpeechEvent{
-		Type: eventType,
-		Alternatives: []stt.SpeechData{
-			{
-				Text:       resp.Metadata.Transcript,
-				Confidence: 1.0,
-				StartTime:  resp.Metadata.StartTime,
-				EndTime:    resp.Metadata.EndTime,
-			},
-		},
 	}
 }
 

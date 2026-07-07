@@ -82,6 +82,104 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
+	eventType := stt.SpeechEventInterimTranscript
+	if resp.Message == "AddTranscript" {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+
+	transcript := ""
+	var totalConfidence float64
+	var minStart, maxEnd float64
+	hasTiming := false
+	var words []stt.TimedString
+
+	for _, result := range resp.Results {
+		if len(result.Alternatives) == 0 {
+			continue
+		}
+		alt := result.Alternatives[0]
+		switch result.Type {
+		case "word":
+			transcript += alt.Content + " "
+			words = append(words, stt.TimedString{
+				Text:       alt.Content,
+				StartTime:  result.StartTime,
+				EndTime:    result.EndTime,
+				Confidence: alt.Confidence,
+			})
+		case "punctuation":
+			if transcript != "" {
+				transcript = transcript[:len(transcript)-1] + alt.Content + " "
+			} else {
+				transcript = alt.Content + " "
+			}
+		}
+
+		totalConfidence += alt.Confidence
+		if !hasTiming {
+			minStart = result.StartTime
+			hasTiming = true
+		}
+		maxEnd = result.EndTime
+	}
+
+	if hasTiming {
+		if transcript != "" {
+			transcript = transcript[:len(transcript)-1]
+		}
+		return &stt.SpeechEvent{
+			Type: eventType,
+			Alternatives: []stt.SpeechData{
+				{
+					Text:       transcript,
+					Confidence: totalConfidence / float64(len(resp.Results)),
+					StartTime:  minStart,
+					EndTime:    maxEnd,
+					Words:      words,
+				},
+			},
+		}
+	}
+
+	if resp.Metadata.Transcript == "" {
+		return nil
+	}
+	return &stt.SpeechEvent{
+		Type: eventType,
+		Alternatives: []stt.SpeechData{
+			{
+				Text:       resp.Metadata.Transcript,
+				Confidence: 1.0,
+				StartTime:  resp.Metadata.StartTime,
+				EndTime:    resp.Metadata.EndTime,
+			},
+		},
+	}
+}
+
+func TestSpeechmaticsEventsIgnoreReferenceRawTranscriptMessages(t *testing.T) {
+	tests := []string{"AddPartialTranscript", "AddTranscript"}
+	for _, message := range tests {
+		resp := smResponse{
+			Message: message,
+			Metadata: struct {
+				Transcript string  `json:"transcript"`
+				StartTime  float64 `json:"start_time"`
+				EndTime    float64 `json:"end_time"`
+			}{
+				Transcript: "duplicate raw transcript",
+				StartTime:  0.1,
+				EndTime:    0.4,
+			},
+		}
+
+		if events := speechmaticsEvents(resp, nil); len(events) != 0 {
+			t.Fatalf("%s events = %#v, want none like reference Voice SDK handler set", message, events)
+		}
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string
@@ -410,14 +508,15 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 		messages := []map[string]interface{}{
 			{"message": "Error", "type": "telemetry", "reason": "provider diagnostic"},
 			{
-				"message": "AddTranscript",
-				"results": []map[string]interface{}{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{
 					{
-						"type":       "word",
-						"start_time": 0.0,
-						"end_time":   0.2,
-						"alternatives": []map[string]interface{}{
-							{"content": "hello", "confidence": 0.9},
+						"text":       "hello",
+						"language":   "en",
+						"speaker_id": "S1",
+						"metadata": map[string]interface{}{
+							"start_time": 0.0,
+							"end_time":   0.2,
 						},
 					},
 				},
