@@ -1218,6 +1218,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed {
+			s.finalSent = true
+			return nil, io.EOF
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
 			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
 				return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
@@ -1264,6 +1268,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed {
+			s.finalSent = true
+			return nil, io.EOF
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
 			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
 				return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
@@ -1310,6 +1318,11 @@ func (s *upliftAITTSChunkedStream) startCompressedDecoder(decoder codecs.AudioSt
 			return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 		}
 		if err != nil {
+			if s.closed {
+				s.finalSent = true
+				_ = decoder.Close()
+				return nil, true, io.EOF
+			}
 			_ = decoder.Close()
 			return nil, true, upliftAITTSReadError(readErrorPrefix, err)
 		}
@@ -1376,6 +1389,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 	}
 	frame, done, err := s.wav.nextFrame()
 	if err != nil {
+		if s.closed {
+			s.finalSent = true
+			return nil, io.EOF
+		}
 		if errors.Is(err, io.EOF) && !s.hasAudio {
 			if noAudioErr := s.noAudioError(); noAudioErr != nil {
 				s.finalSent = true
@@ -1591,6 +1608,10 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(buf[:n])...)
 		}
 		if err != nil {
+			if s.closed {
+				s.finalSent = true
+				return nil, io.EOF
+			}
 			if err == io.EOF {
 				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
 				if len(s.pcmFrames) > 0 {
@@ -1671,6 +1692,10 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 			}
 		}
 		if err != nil {
+			if s.closed {
+				s.finalSent = true
+				return nil, io.EOF
+			}
 			if err == io.EOF {
 				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
 				if len(s.pcmFrames) > 0 {

@@ -69,6 +69,36 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+type upliftAICloseUnblocksReadBody struct {
+	readEntered chan struct{}
+	closed      chan struct{}
+	err         error
+	once        sync.Once
+}
+
+func newUpliftAICloseUnblocksReadBody(err error) *upliftAICloseUnblocksReadBody {
+	return &upliftAICloseUnblocksReadBody{
+		readEntered: make(chan struct{}),
+		closed:      make(chan struct{}),
+		err:         err,
+	}
+}
+
+func (b *upliftAICloseUnblocksReadBody) Read([]byte) (int, error) {
+	b.once.Do(func() { close(b.readEntered) })
+	<-b.closed
+	return 0, b.err
+}
+
+func (b *upliftAICloseUnblocksReadBody) Close() error {
+	select {
+	case <-b.closed:
+	default:
+		close(b.closed)
+	}
+	return nil
+}
+
 type upliftAICloseErrorBody struct {
 	err error
 }
@@ -3393,6 +3423,38 @@ func TestUpliftAITTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) 
 	_, err := stream.Next()
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := newUpliftAICloseUnblocksReadBody(io.ErrClosedPipe)
+	stream := &upliftAITTSChunkedStream{
+		text: "interrupted",
+		resp: &http.Response{Body: body},
+	}
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	select {
+	case <-body.readEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocked UpliftAI response-body read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close during read error = %v", err)
+	}
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	if result.audio != nil || result.err != io.EOF {
+		t.Fatalf("Next after Close during read = (%#v, %v), want EOF", result.audio, result.err)
 	}
 }
 
