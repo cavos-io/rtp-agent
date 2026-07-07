@@ -16,6 +16,7 @@ const (
 	defaultRealtimeInputSampleRate  = 16000
 	defaultRealtimeOutputSampleRate = 24000
 	defaultRealtimeOutputMedium     = "voice"
+	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 )
 
 type RealtimeModel struct {
@@ -59,6 +60,8 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		outputMedium:     defaultRealtimeOutputMedium,
 		inputSampleRate:  defaultRealtimeInputSampleRate,
 		outputSampleRate: defaultRealtimeOutputSampleRate,
+		firstSpeaker:     defaultRealtimeFirstSpeaker,
+		firstSpeakerSet:  true,
 	}
 	for _, opt := range opts {
 		opt(model)

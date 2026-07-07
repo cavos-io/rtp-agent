@@ -47,6 +47,9 @@ func TestUltravoxRealtimeDefaultsMatchReference(t *testing.T) {
 	if got := model.OutputMedium(); got != "voice" {
 		t.Fatalf("output medium = %q, want reference voice", got)
 	}
+	if got, ok := model.FirstSpeaker(); !ok || got != "FIRST_SPEAKER_USER" {
+		t.Fatalf("first speaker = %q/%v, want reference FIRST_SPEAKER_USER/true", got, ok)
+	}
 
 	caps := model.Capabilities()
 	if !caps.MessageTruncation || !caps.TurnDetection || !caps.UserTranscription || !caps.AutoToolReplyGeneration || !caps.AudioOutput {
