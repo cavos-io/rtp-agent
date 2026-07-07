@@ -3199,6 +3199,41 @@ func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioInputTrackUnpublishedFallsBackToAvailableTrack(t *testing.T) {
+	rio := &RoomIO{}
+	firstGeneration, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("first audio input track was not activated")
+	}
+	secondGeneration, activated := rio.activateAudioInputTrack("TR_audio_b", "caller-a")
+	if !activated {
+		t.Fatal("second audio input track was not activated")
+	}
+
+	rio.handleTrackUnpublished("TR_audio_b", "caller-a")
+
+	if rio.audioInputTrackActive(secondGeneration) {
+		t.Fatal("unpublished active audio input generation is still active")
+	}
+	rio.mu.Lock()
+	activeTrack := rio.audioInputTrackID
+	activeParticipant := rio.audioInputParticipantID
+	activeGeneration := rio.audioInputGeneration
+	rio.mu.Unlock()
+	if activeTrack != "TR_audio_a" || activeParticipant != "caller-a" {
+		t.Fatalf("active audio input after fallback = (%q, %q), want previous available track", activeTrack, activeParticipant)
+	}
+	if activeGeneration <= secondGeneration {
+		t.Fatalf("fallback generation = %d, want greater than unpublished generation %d", activeGeneration, secondGeneration)
+	}
+	if !rio.audioInputTrackActive(activeGeneration) {
+		t.Fatal("fallback audio input generation is not active")
+	}
+	if rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("old audio input generation was restored instead of opening a fresh fallback generation")
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)

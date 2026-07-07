@@ -184,6 +184,10 @@ type PlaybackFinishedEvent struct {
 	AudioLastError            string
 }
 
+type roomIOAudioInputTrack struct {
+	TrackID string
+}
+
 const (
 	RoomEventDisconnected                 = "disconnected"
 	RoomEventConnectionStateChanged       = "connection_state_changed"
@@ -321,6 +325,7 @@ type RoomIO struct {
 	audioInputTrackID       string
 	audioInputParticipantID string
 	audioInputGeneration    uint64
+	audioInputTracks        map[string][]roomIOAudioInputTrack
 
 	audioPublication *lksdk.LocalTrackPublication
 	audioSubscribed  chan struct{}
@@ -1516,10 +1521,9 @@ func (rio *RoomIO) handleTrackUnpublished(trackID string, participantIdentity st
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	rio.removeAudioInputTrackLocked(trackID, participantIdentity)
 	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity {
-		rio.audioInputTrackID = ""
-		rio.audioInputParticipantID = ""
-		rio.audioInputGeneration++
+		rio.activateFallbackAudioInputTrackLocked(participantIdentity)
 	}
 	if rio.userTranscriptionTrackID != trackID || rio.userTranscriptionParticipantID != participantIdentity {
 		return
@@ -1527,6 +1531,10 @@ func (rio *RoomIO) handleTrackUnpublished(trackID string, participantIdentity st
 	rio.userTranscriptionTrackID = ""
 	rio.userTranscriptionParticipantID = ""
 	rio.userTranscriptionSegmentID = ""
+	if rio.audioInputParticipantID == participantIdentity && rio.audioInputTrackID != "" {
+		rio.userTranscriptionTrackID = rio.audioInputTrackID
+		rio.userTranscriptionParticipantID = participantIdentity
+	}
 }
 
 func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity string) (uint64, bool) {
@@ -1535,6 +1543,7 @@ func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity s
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	rio.rememberAudioInputTrackLocked(trackID, participantIdentity)
 	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity {
 		return rio.audioInputGeneration, false
 	}
@@ -1551,6 +1560,53 @@ func (rio *RoomIO) audioInputTrackActive(generation uint64) bool {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	return !rio.closed && !rio.audioDisabled && rio.audioInputGeneration == generation
+}
+
+func (rio *RoomIO) rememberAudioInputTrackLocked(trackID string, participantIdentity string) {
+	if rio.audioInputTracks == nil {
+		rio.audioInputTracks = make(map[string][]roomIOAudioInputTrack)
+	}
+	for _, track := range rio.audioInputTracks[participantIdentity] {
+		if track.TrackID == trackID {
+			return
+		}
+	}
+	rio.audioInputTracks[participantIdentity] = append(rio.audioInputTracks[participantIdentity], roomIOAudioInputTrack{
+		TrackID: trackID,
+	})
+}
+
+func (rio *RoomIO) removeAudioInputTrackLocked(trackID string, participantIdentity string) {
+	tracks := rio.audioInputTracks[participantIdentity]
+	if len(tracks) == 0 {
+		return
+	}
+	kept := tracks[:0]
+	for _, track := range tracks {
+		if track.TrackID != trackID {
+			kept = append(kept, track)
+		}
+	}
+	if len(kept) == 0 {
+		delete(rio.audioInputTracks, participantIdentity)
+		return
+	}
+	rio.audioInputTracks[participantIdentity] = kept
+}
+
+func (rio *RoomIO) activateFallbackAudioInputTrackLocked(participantIdentity string) {
+	for _, track := range rio.audioInputTracks[participantIdentity] {
+		if track.TrackID == "" {
+			continue
+		}
+		rio.audioInputTrackID = track.TrackID
+		rio.audioInputParticipantID = participantIdentity
+		rio.audioInputGeneration++
+		return
+	}
+	rio.audioInputTrackID = ""
+	rio.audioInputParticipantID = ""
+	rio.audioInputGeneration++
 }
 
 func (rio *RoomIO) forgetConnectedParticipant(identity string) {
