@@ -540,6 +540,41 @@ func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamCloseFlushFailureReturnsAPIConnectionError(t *testing.T) {
+	writeErr := errors.New("close flush failed")
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		cancel: func() {},
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v, want buffered partial frame", err)
+	}
+	err := stream.Close()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Close error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx STT websocket write failed") {
+		t.Fatalf("Close error = %q, want write failure context", err)
+	}
+	if closeCalls != 0 {
+		t.Fatalf("close calls = %d, want no websocket close after failed flush", closeCalls)
+	}
+}
+
 func TestTelnyxSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &telnyxSTTStream{

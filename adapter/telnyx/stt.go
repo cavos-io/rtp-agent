@@ -454,7 +454,7 @@ func (s *telnyxSTTStream) Close() error {
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			if err := s.writeBinaryData(chunk.Data); err != nil {
-				return err
+				return telnyxSTTWriteError(err)
 			}
 		}
 	}
