@@ -22,8 +22,8 @@ func TestNewTelnyxLLMDefaultsMatchReference(t *testing.T) {
 	if provider.BaseURL() != "https://api.telnyx.com/v2/ai" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.BaseURL())
 	}
-	if got := llm.Provider(provider); got != "telnyx" {
-		t.Fatalf("provider metadata = %q, want telnyx", got)
+	if got := llm.Provider(provider); got != "api.telnyx.com" {
+		t.Fatalf("provider metadata = %q, want reference base URL host", got)
 	}
 }
 
@@ -78,6 +78,9 @@ func TestTelnyxLLMForwardsReferenceConstructorOptions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.Items = []llm.ChatItem{
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if got := llm.Provider(provider); got != "telnyx.example" {
+		t.Fatalf("provider metadata = %q, want configured base URL host", got)
 	}
 
 	stream, err := provider.Chat(context.Background(), chatCtx,

@@ -3,6 +3,7 @@ package telnyx
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -88,7 +89,14 @@ func (l *TelnyxLLM) BaseURL() string {
 }
 
 func (l *TelnyxLLM) Provider() string {
-	return "telnyx"
+	if l == nil {
+		return ""
+	}
+	u, err := url.Parse(l.baseURL)
+	if err != nil || u.Host == "" {
+		return l.baseURL
+	}
+	return u.Host
 }
 
 func (l *TelnyxLLM) Close() error {
