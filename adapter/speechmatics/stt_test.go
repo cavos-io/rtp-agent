@@ -100,6 +100,49 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *testing.T) {
+	resp := smResponse{
+		Message: "AddTranscript",
+		Results: []struct {
+			Alternatives []struct {
+				Content    string  `json:"content"`
+				Confidence float64 `json:"confidence"`
+				SpeakerID  string  `json:"speaker"`
+				Language   string  `json:"language"`
+			} `json:"alternatives"`
+			Type      string  `json:"type"`
+			Attaches  string  `json:"attaches_to"`
+			IsEOS     bool    `json:"is_eos"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		}{
+			{
+				StartTime: 0.15,
+				EndTime:   0.45,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+					SpeakerID  string  `json:"speaker"`
+					Language   string  `json:"language"`
+				}{{Content: "defaulted", Confidence: 0.91, SpeakerID: "S1", Language: "en"}},
+			},
+		},
+	}
+
+	event := speechmaticsTranscriptEvent(resp, nil)
+	if event == nil {
+		t.Fatal("speechmaticsTranscriptEvent returned nil")
+	}
+	words := event.Alternatives[0].Words
+	if len(words) != 1 {
+		t.Fatalf("words = %#v, want missing result type treated as reference word", words)
+	}
+	word := words[0]
+	if word.Text != "defaulted" || word.StartTime != 0.15 || word.EndTime != 0.45 || word.Confidence != 0.91 || word.SpeakerID != "S1" {
+		t.Fatalf("word = %#v, want reference default word timing", word)
+	}
+}
+
 func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",

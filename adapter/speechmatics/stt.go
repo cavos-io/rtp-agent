@@ -1081,9 +1081,13 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		language := speechmaticsSegmentLanguage(alt.Language, state)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
+		kind := result.Type
+		if kind == "" {
+			kind = "word"
+		}
 		fragments = append(fragments, speechmaticsRawTranscriptFragment{
 			text:       alt.Content,
-			kind:       result.Type,
+			kind:       kind,
 			speakerID:  resultSpeakerID,
 			language:   language,
 			attaches:   result.Attaches,
