@@ -111,13 +111,13 @@ func (g *CavosInterruptionGate) Decide(agentSpeaking bool, speechMs int, transcr
 				Reason:   "clear_interrupt_intent",
 			}
 		}
-		normalized := normalizeTranscript(transcript)
-		if normalized != "" && !backchannel && speechMs >= g.config.StrongBargeInMs {
+		if !backchannel && speechMs >= g.config.StrongBargeInMs {
 			return agent.InterruptionGateResult{
 				Decision: agent.InterruptionInterruptAgent,
 				Reason:   "strong_barge_in",
 			}
 		}
+		normalized := normalizeTranscript(transcript)
 		if normalized != "" && !backchannel && len(strings.Fields(normalized)) >= 4 {
 			return agent.InterruptionGateResult{
 				Decision: agent.InterruptionInterruptAgent,
