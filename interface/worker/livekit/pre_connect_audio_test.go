@@ -159,6 +159,29 @@ func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioDuplicateCompletedBufferResetsClosedSlot(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	newFrame := &model.AudioFrame{
+		Data:              []byte{3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	completed := make(chan *PreConnectAudioBuffer, 1)
+	close(completed)
+
+	handler.buffers["track-dup"] = completed
+	handler.publishBuffer("track-dup", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{newFrame},
+	})
+
+	frames := handler.WaitForData(context.Background(), "track-dup")
+	if len(frames) != 1 || frames[0] != newFrame {
+		t.Fatalf("WaitForData() duplicate completed closed-slot frames = %#v, want latest frame", frames)
+	}
+}
+
 func TestPreConnectAudioAfterConnectStillWaitsForData(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.afterConnect = true
