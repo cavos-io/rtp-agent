@@ -201,10 +201,11 @@ type AgentActivity struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	eouMu     sync.Mutex
-	eouCancel context.CancelFunc
-	eouDone   chan struct{}
-	eouTrace  *eouWaitTrace
+	eouMu             sync.Mutex
+	eouCancel         context.CancelFunc
+	eouDone           chan struct{}
+	eouTrace          *eouWaitTrace
+	eouReplyGenerated bool // guards against double EOU reply in Smart Turn mode
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
@@ -1174,6 +1175,7 @@ func (a *AgentActivity) cancelPendingEOUDetection() {
 		a.eouCancel()
 		a.eouCancel = nil
 	}
+	a.eouReplyGenerated = false
 	a.eouMu.Unlock()
 	a.endEOUWait("dropped", time.Time{})
 	a.manualTurnCommitted = false
@@ -2469,7 +2471,15 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
 	if a.vadBasedTurnDetection() && !a.isUserSpeaking() {
-		a.runEOUDetection(a.pendingFinalEndOfTurnInfo(), "stt")
+		skipEOU := false
+		if a.Agent.AudioTurnDetector != nil && a.Agent.InterruptionGate != nil && !a.bargeInGateGoverns() {
+			a.eouMu.Lock()
+			skipEOU = a.eouReplyGenerated
+			a.eouMu.Unlock()
+		}
+		if !skipEOU {
+			a.runEOUDetection(a.pendingFinalEndOfTurnInfo(), "stt")
+		}
 	}
 }
 
@@ -4029,17 +4039,16 @@ func (a *AgentActivity) interruptionGateSuppresses(transcript string) bool {
 	if a.bargeInGateGoverns() {
 		return false
 	}
-	agentSpeaking := a.Session != nil && a.Session.AgentState() == AgentStateSpeaking
+	a.queueMu.Lock()
+	cs := a.currentSpeech
+	a.queueMu.Unlock()
+	agentSpeaking := cs != nil && !cs.IsDone() && !cs.IsInterrupted()
 	speechMs := 0
 	if !a.userSpeechStartedAt.IsZero() {
 		speechMs = int(time.Since(a.userSpeechStartedAt).Milliseconds())
 	}
 	result := a.Agent.InterruptionGate.Decide(agentSpeaking, speechMs, transcript)
-	if result.Decision == InterruptionIgnore || result.Decision == InterruptionContinueListening {
-		logger.Logger.Debugw("interruption gate suppressed", "decision", result.Decision, "reason", result.Reason, "transcript", transcript)
-		return true
-	}
-	return false
+	return result.Decision == InterruptionIgnore || result.Decision == InterruptionContinueListening
 }
 
 func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {
@@ -4221,7 +4230,7 @@ func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatConte
 	if preemptive == nil {
 		return nil, nil
 	}
-	matches := preemptive.transcript == newMsg.TextContent() &&
+	matches := strings.TrimSpace(preemptive.transcript) == strings.TrimSpace(newMsg.TextContent()) &&
 		preemptive.chatCtx.IsEquivalent(chatCtx) &&
 		preemptive.toolsKey == a.currentToolsKey() &&
 		reflect.DeepEqual(preemptive.toolChoice, a.currentToolChoice())
@@ -4823,8 +4832,24 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 		if !current {
 			return
 		}
+		guardReply := a.Agent.AudioTurnDetector != nil && a.Agent.InterruptionGate != nil && !a.bargeInGateGoverns()
+		if guardReply {
+			a.eouMu.Lock()
+			if a.eouReplyGenerated {
+				a.eouMu.Unlock()
+				return
+			}
+			a.eouReplyGenerated = true
+			a.eouMu.Unlock()
+		}
 		a.clearPendingUserTurn()
-		if _, err := a.completeUserTurn(a.ctx, info); err != nil {
+		handle, err := a.completeUserTurn(a.ctx, info)
+		if guardReply && (err != nil || handle == nil) {
+			a.eouMu.Lock()
+			a.eouReplyGenerated = false
+			a.eouMu.Unlock()
+		}
+		if err != nil {
 			a.Session.Logger().Errorw("user turn completion failed", err)
 			return
 		}
