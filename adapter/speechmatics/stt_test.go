@@ -1398,6 +1398,68 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SpeechmaticsSTTOption
+		want string
+	}{
+		{
+			name: "focus speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, nil, "retain"),
+			},
+			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
+		},
+		{
+			name: "ignore speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTSpeakerFocus(nil, []string{"noise"}, "retain"),
+			},
+			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
+		},
+		{
+			name: "max speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTMaxSpeakers(3),
+			},
+			want: "max_speakers cannot be set when enable_diarization is False",
+		},
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected speechmatics stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2")}, tt.opts...)
+			provider := NewSpeechmaticsSTT("test-key", opts...)
+
+			stream, err := provider.Stream(context.Background(), "")
+			if stream != nil {
+				t.Fatalf("Stream = %#v, want nil for invalid disabled diarization options", stream)
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	if dials != 0 {
+		t.Fatalf("invalid disabled-diarization streams dialed %d times, want none", dials)
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	closed := false

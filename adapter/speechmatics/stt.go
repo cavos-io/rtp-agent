@@ -592,6 +592,14 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.sampleRate != 8000 && s.sampleRate != 16000 {
 		problems = append(problems, "sample_rate must be 8000 or 16000")
 	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		if s.maxSpeakers != nil {
+			problems = append(problems, "max_speakers cannot be set when enable_diarization is False")
+		}
+		if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 {
+			problems = append(problems, "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False")
+		}
+	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid Speechmatics STT options: %s", strings.Join(problems, ", "))
 	}
