@@ -304,6 +304,26 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferenceLanguage(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"metadata":{"transcript":"assistant noise","start_time":0.1,"end_time":0.3},
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"assistant","confidence":0.9,"speaker":"__ASSISTANT__"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	if events := speechmaticsEvents(resp, nil); len(events) != 0 {
+		t.Fatalf("events = %#v, want none after reference raw result filtering", events)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string

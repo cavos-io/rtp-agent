@@ -1087,6 +1087,9 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 		}
 	}
 
+	if len(resp.Results) > 0 {
+		return nil
+	}
 	if resp.Metadata.Transcript == "" {
 		return nil
 	}
