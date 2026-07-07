@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -2324,6 +2325,39 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("agent transcription stream was not published")
+	}
+}
+
+func TestRoomIOTranscriptionJSONFormatMatchesReference(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		Options: RoomOptions{
+			TranscriptionJSONFormat: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.publishTranscriptionTextStream("assistant transcript", "TR_agent_audio", false, "SG_json")
+
+	select {
+	case got := <-published:
+		if !strings.HasSuffix(got.text, "\n") {
+			t.Fatalf("published JSON transcription = %q, want newline-delimited JSON", got.text)
+		}
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(strings.TrimSuffix(got.text, "\n")), &payload); err != nil {
+			t.Fatalf("published JSON transcription did not decode: %v", err)
+		}
+		if payload["text"] != "assistant transcript" {
+			t.Fatalf("published JSON transcription text = %q, want assistant transcript", payload["text"])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+	default:
+		t.Fatal("JSON transcription stream was not published")
 	}
 }
 

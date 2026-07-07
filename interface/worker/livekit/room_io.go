@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -117,6 +118,7 @@ type RoomOptions struct {
 	DisableTextInput           bool
 	DisableAudioOutput         bool
 	DisableTranscriptionOutput bool
+	TranscriptionJSONFormat    bool
 	DisableCloseOnDisconnect   bool
 	DeleteRoomOnClose          bool
 	DeleteRoom                 func(context.Context, string) error
@@ -854,6 +856,7 @@ func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, f
 	if rio == nil || rio.transcriptionTextPublisher == nil {
 		return
 	}
+	text = roomIOTranscriptionStreamText(text, rio.Options.TranscriptionJSONFormat)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(final),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -865,6 +868,21 @@ func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, f
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
+}
+
+func roomIOTranscriptionStreamText(text string, jsonFormat bool) string {
+	if !jsonFormat {
+		return text
+	}
+	payload, err := json.Marshal(struct {
+		Text string `json:"text"`
+	}{
+		Text: text,
+	})
+	if err != nil {
+		return text
+	}
+	return string(payload) + "\n"
 }
 
 func (rio *RoomIO) roomConnected() bool {
