@@ -82,9 +82,7 @@ func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if baseURL != "" {
-			s.baseURL = baseURL
-		}
+		s.baseURL = baseURL
 	}
 }
 
@@ -515,6 +513,9 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 		return io.ErrClosedPipe
 	}
 	var problems []string
+	if s.baseURL == "" {
+		problems = append(problems, "missing Speechmatics base URL")
+	}
 	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
 		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
 	}

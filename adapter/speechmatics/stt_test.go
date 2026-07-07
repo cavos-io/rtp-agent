@@ -1284,6 +1284,21 @@ func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 }
 
+func TestSpeechmaticsSTTPreservesReferenceEmptyBaseURL(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(""))
+	if provider.baseURL != "" {
+		t.Fatalf("baseURL = %q, want explicit empty reference base URL", provider.baseURL)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil for missing base URL", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "base URL") {
+		t.Fatalf("Stream error = %v, want missing base URL error", err)
+	}
+}
+
 func assertSpeechmaticsSTTQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
