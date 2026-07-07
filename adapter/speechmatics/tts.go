@@ -384,7 +384,7 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	})
 	if err != nil {
 		requestCancel()
-		return err
+		return llm.NewAPIConnectionError(err.Error())
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -553,6 +553,25 @@ func TestSpeechmaticsTTSSynthesizeStartsReferenceTimeoutAtRequest(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("http://[::1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on request setup error", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
