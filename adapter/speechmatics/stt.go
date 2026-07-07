@@ -64,8 +64,9 @@ type SpeechmaticsAdditionalVocabEntry struct {
 }
 
 type SpeechmaticsSpeakerIdentifier struct {
-	Label     string `json:"label"`
-	SpeakerID string `json:"speaker_id"`
+	Label              string   `json:"label"`
+	SpeakerID          string   `json:"speaker_id,omitempty"`
+	SpeakerIdentifiers []string `json:"speaker_identifiers,omitempty"`
 }
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
@@ -608,7 +609,7 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 		return config
 	}
 	if len(s.knownSpeakers) > 0 {
-		config["speakers"] = s.knownSpeakers
+		config["speakers"] = speechmaticsKnownSpeakerConfig(s.knownSpeakers)
 	}
 	if s.speakerSensitivity != nil {
 		config["speaker_sensitivity"] = *s.speakerSensitivity
@@ -618,6 +619,22 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 	}
 	if s.preferCurrentSpeaker != nil {
 		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
+	}
+	return config
+}
+
+func speechmaticsKnownSpeakerConfig(speakers []SpeechmaticsSpeakerIdentifier) []map[string]interface{} {
+	config := make([]map[string]interface{}, 0, len(speakers))
+	for _, speaker := range speakers {
+		identifiers := cloneSpeechmaticsStringSlice(speaker.SpeakerIdentifiers)
+		if len(identifiers) == 0 && speaker.SpeakerID != "" {
+			identifiers = []string{speaker.SpeakerID}
+		}
+		entry := map[string]interface{}{
+			"label":               speaker.Label,
+			"speaker_identifiers": identifiers,
+		}
+		config = append(config, entry)
 	}
 	return config
 }

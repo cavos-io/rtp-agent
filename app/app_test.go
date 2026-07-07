@@ -7515,8 +7515,11 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := knownSpeaker["label"], "agent"; got != want {
 			t.Fatalf("known speaker label = %#v, want %#v", got, want)
 		}
-		if got, want := knownSpeaker["speaker_id"], "spk-1"; got != want {
-			t.Fatalf("known speaker id = %#v, want %#v", got, want)
+		if got, want := fmt.Sprint(knownSpeaker["speaker_identifiers"]), "[spk-1]"; got != want {
+			t.Fatalf("known speaker identifiers = %#v, want %#v", knownSpeaker["speaker_identifiers"], want)
+		}
+		if _, ok := knownSpeaker["speaker_id"]; ok {
+			t.Fatalf("known speaker speaker_id = %#v, want omitted from provider config", knownSpeaker["speaker_id"])
 		}
 		if _, ok := config["known_speakers"]; ok {
 			t.Fatalf("known_speakers sent at top level in %#v", config)

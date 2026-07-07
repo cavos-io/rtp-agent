@@ -1350,9 +1350,23 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	if !ok {
 		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
 	}
-	knownSpeakers := diarizationConfig["speakers"].([]SpeechmaticsSpeakerIdentifier)
-	if len(knownSpeakers) != 1 || knownSpeakers[0].Label != "agent" || knownSpeakers[0].SpeakerID != "spk-1" {
-		t.Fatalf("speaker_diarization_config.speakers = %#v, want agent speaker id", knownSpeakers)
+	knownSpeakersJSON, err := json.Marshal(diarizationConfig["speakers"])
+	if err != nil {
+		t.Fatalf("marshal speaker_diarization_config.speakers: %v", err)
+	}
+	var knownSpeakers []map[string]interface{}
+	if err := json.Unmarshal(knownSpeakersJSON, &knownSpeakers); err != nil {
+		t.Fatalf("decode speaker_diarization_config.speakers: %v", err)
+	}
+	if len(knownSpeakers) != 1 || knownSpeakers[0]["label"] != "agent" {
+		t.Fatalf("speaker_diarization_config.speakers = %#v, want agent speaker", knownSpeakers)
+	}
+	identifiers, _ := knownSpeakers[0]["speaker_identifiers"].([]interface{})
+	if len(identifiers) != 1 || identifiers[0] != "spk-1" {
+		t.Fatalf("speaker_identifiers = %#v, want spk-1", knownSpeakers[0]["speaker_identifiers"])
+	}
+	if _, ok := knownSpeakers[0]["speaker_id"]; ok {
+		t.Fatalf("speaker_id = %#v, want omitted from known-speaker config", knownSpeakers[0]["speaker_id"])
 	}
 	if _, ok := config["known_speakers"]; ok {
 		t.Fatalf("known_speakers sent at top level in %#v", config)
