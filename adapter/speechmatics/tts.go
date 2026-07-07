@@ -44,9 +44,7 @@ type SpeechmaticsTTSOption func(*SpeechmaticsTTS)
 
 func WithSpeechmaticsTTSVoice(voice string) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
-		if voice != "" {
-			t.voice = voice
-		}
+		t.voice = voice
 	}
 }
 

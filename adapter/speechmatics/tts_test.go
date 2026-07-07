@@ -166,6 +166,27 @@ func TestSpeechmaticsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSVoice(""))
+	if provider.voice != "" {
+		t.Fatalf("constructor voice = %q, want explicit empty reference voice", provider.voice)
+	}
+
+	provider = NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSVoice("theo"))
+	provider.UpdateOptions(WithSpeechmaticsTTSVoice(""))
+	if provider.voice != "" {
+		t.Fatalf("updated voice = %q, want explicit empty reference voice", provider.voice)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/" {
+		t.Fatalf("request path = %q, want reference empty voice path", req.URL.Path)
+	}
+}
+
 func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceSampleRate(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key")
 
