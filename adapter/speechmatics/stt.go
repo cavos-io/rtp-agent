@@ -345,6 +345,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
 			focusMode:            s.focusMode,
 			includePartials:      speechmaticsIncludePartials(s),
+			bufferRawFinals:      true,
 		},
 		owner:                     s,
 		waitForRecognitionStarted: true,
@@ -846,6 +847,8 @@ type speechmaticsStreamState struct {
 	ignoreSpeakers       []string
 	focusMode            string
 	includePartials      bool
+	bufferRawFinals      bool
+	pendingRawFinals     []*stt.SpeechEvent
 }
 
 type smResponse struct {
@@ -1031,13 +1034,35 @@ func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState
 }
 
 func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if resp.Message == "AddPartialTranscript" {
+		return speechmaticsRawPartialTranscriptEvents(resp, state)
+	}
 	eventType := stt.SpeechEventInterimTranscript
 	if resp.Message == "AddTranscript" {
 		eventType = stt.SpeechEventFinalTranscript
-	} else if state != nil && !state.includePartials {
+	}
+	events := speechmaticsRawTranscriptEvents(resp, state, eventType)
+	if resp.Message == "AddTranscript" && state != nil && state.bufferRawFinals {
+		state.pendingRawFinals = append(state.pendingRawFinals, events...)
 		return nil
 	}
+	return events
+}
 
+func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	var events []*stt.SpeechEvent
+	if state != nil && len(state.pendingRawFinals) > 0 {
+		events = append(events, state.pendingRawFinals...)
+		state.pendingRawFinals = nil
+	}
+	if state != nil && !state.includePartials {
+		return events
+	}
+	events = append(events, speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)...)
+	return events
+}
+
+func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamState, eventType stt.SpeechEventType) []*stt.SpeechEvent {
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 	var fragments []speechmaticsRawTranscriptFragment
 
@@ -1069,10 +1094,7 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 	if len(fragments) > 0 {
 		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
 	}
-	if len(resp.Results) > 0 {
-		return nil
-	}
-	if resp.Metadata.Transcript == "" {
+	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
 		return nil
 	}
 	return []*stt.SpeechEvent{

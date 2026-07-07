@@ -458,16 +458,61 @@ func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing
 	}`), &partial); err != nil {
 		t.Fatalf("unmarshal raw partial transcript: %v", err)
 	}
-	state := &speechmaticsStreamState{includePartials: false}
+	state := &speechmaticsStreamState{includePartials: false, bufferRawFinals: true}
 	if events := speechmaticsEvents(partial, state); len(events) != 0 {
 		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
 	}
 
 	final := partial
 	final.Message = "AddTranscript"
-	events := speechmaticsEvents(final, state)
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final raw transcript before following partial = %#v, want buffered final", events)
+	}
+	events := speechmaticsEvents(partial, state)
 	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
-		t.Fatalf("final raw transcript events = %#v, want final transcript despite include_partials false", events)
+		t.Fatalf("final raw transcript events = %#v, want final transcript after following partial despite include_partials false", events)
+	}
+}
+
+func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.T) {
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"done","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal raw final transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before following partial = %#v, want buffered final", events)
+	}
+
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"next","confidence":0.8,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript: %v", err)
+	}
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 2 {
+		t.Fatalf("events after following partial = %#v, want buffered final then partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
+		t.Fatalf("first event = %#v, want buffered final transcript", events[0])
+	}
+	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "next" {
+		t.Fatalf("second event = %#v, want following interim transcript", events[1])
 	}
 }
 
