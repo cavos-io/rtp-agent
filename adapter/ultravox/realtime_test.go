@@ -197,6 +197,24 @@ func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeOutputMedium("text"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
+}
+
 func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

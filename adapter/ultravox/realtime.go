@@ -244,7 +244,7 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	return &realtimeSession{
+	session := &realtimeSession{
 		eventCh:          make(chan llm.RealtimeEvent, 16),
 		audioCh:          make(chan []byte, 256),
 		clientEventCh:    make(chan map[string]any, 256),
@@ -253,7 +253,14 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 		toolResults:      make(map[string]struct{}),
 		contextItems:     make(map[string]struct{}),
-	}, nil
+	}
+	if m.outputMedium == "text" {
+		session.clientEventCh <- map[string]any{
+			"type":   "set_output_medium",
+			"medium": "text",
+		}
+	}
+	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
