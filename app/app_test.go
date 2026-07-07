@@ -5491,8 +5491,13 @@ func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
 	if err := stream.PushFrame(frame); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	if len(vadStream.pushed) == 0 {
-		t.Fatal("VAD received no frames, want Speechmatics STT to use app VAD for external endpointing")
+	deadline := time.After(time.Second)
+	for len(vadStream.pushed) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("VAD received no frames after RecognitionStarted, want Speechmatics STT to use app VAD for external endpointing")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if got := vadStream.pushed[0]; got != frame {
 		t.Fatalf("VAD frame = %#v, want original app STT input frame", got)

@@ -1262,6 +1262,57 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		vadStream:                 vadStream,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(vadStream.pushed) != 0 {
+		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered original audio", len(vadStream.pushed))
+	}
+	if len(writes) != 0 {
+		t.Fatalf("provider writes before RecognitionStarted = %d, want buffered provider audio", len(writes))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() before RecognitionStarted error = %v", err)
+	}
+	if vadStream.ended {
+		t.Fatal("VAD EndInput before RecognitionStarted = true, want buffered end input")
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	if len(vadStream.pushed) != 1 || vadStream.pushed[0] != frame {
+		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want original frame", vadStream.pushed)
+	}
+	if !vadStream.ended {
+		t.Fatal("VAD EndInput after RecognitionStarted = false, want drained end input after frames")
+	}
+	if len(writes) != 1 {
+		t.Fatalf("provider writes after RecognitionStarted = %d, want buffered provider audio", len(writes))
+	}
+}
+
 func TestSpeechmaticsSTTEndInputFlushesAndEndsReferenceInput(t *testing.T) {
 	var writes [][]byte
 	var controlMessages []map[string]interface{}
@@ -3249,6 +3300,7 @@ type fakeSpeechmaticsVADStream struct {
 	pushStarted     chan struct{}
 	endInputStarted chan struct{}
 	pushed          []*model.AudioFrame
+	ended           bool
 	closed          bool
 	closedOnce      sync.Once
 }
@@ -3278,6 +3330,7 @@ func (s *fakeSpeechmaticsVADStream) EndInput() error {
 			return io.ErrClosedPipe
 		}
 	}
+	s.ended = true
 	s.closedOnce.Do(func() { close(s.events) })
 	return nil
 }

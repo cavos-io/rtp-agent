@@ -822,6 +822,8 @@ type speechmaticsSTTStream struct {
 
 	waitForRecognitionStarted  bool
 	pendingAudioChunks         [][]byte
+	pendingVADFrames           []*model.AudioFrame
+	pendingVADEndInput         bool
 	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
@@ -1138,8 +1140,12 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	vadStream := s.vadStream
+	bufferVAD := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	if bufferVAD {
+		s.pendingVADFrames = append(s.pendingVADFrames, frame)
+	}
 	s.mu.Unlock()
-	if vadStream != nil {
+	if vadStream != nil && !bufferVAD {
 		if err := vadStream.PushFrame(frame); err != nil {
 			_ = s.Close()
 			return err
@@ -1216,9 +1222,13 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		}
 	}
 	vadStream := s.vadStream
+	bufferVADEndInput := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	if bufferVADEndInput {
+		s.pendingVADEndInput = true
+	}
 	s.mu.Unlock()
 
-	if vadStream != nil {
+	if vadStream != nil && !bufferVADEndInput {
 		if err := vadStream.EndInput(); err != nil {
 			_ = s.Close()
 			return err
@@ -1288,6 +1298,25 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		return io.ErrClosedPipe
 	}
 	s.audioReady = true
+	pendingVADFrames := s.pendingVADFrames
+	pendingVADEndInput := s.pendingVADEndInput
+	vadStream := s.vadStream
+	s.pendingVADFrames = nil
+	s.pendingVADEndInput = false
+	if vadStream != nil {
+		for _, frame := range pendingVADFrames {
+			if err := vadStream.PushFrame(frame); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+		}
+		if pendingVADEndInput {
+			if err := vadStream.EndInput(); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+		}
+	}
 	pending := s.pendingAudioChunks
 	s.pendingAudioChunks = nil
 	for _, chunk := range pending {
@@ -1654,6 +1683,8 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.pendingEndInput = false
 	s.pendingFinalize = false
 	s.pendingAudioChunks = nil
+	s.pendingVADFrames = nil
+	s.pendingVADEndInput = false
 	vadStream := s.vadStream
 	s.vadStream = nil
 	s.closeDone()
