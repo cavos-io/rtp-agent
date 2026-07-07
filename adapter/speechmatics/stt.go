@@ -543,9 +543,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if len(s.additionalVocab) > 0 {
 		config["additional_vocab"] = s.additionalVocab
 	}
-	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
-		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
-	}
 	if s.operatingPoint != "" {
 		config["operating_point"] = s.operatingPoint
 	}
@@ -622,14 +619,6 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
 	}
 	return config
-}
-
-func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {
-	return map[string]interface{}{
-		"focus_speakers":  cloneSpeechmaticsStringSlice(focusSpeakers),
-		"ignore_speakers": cloneSpeechmaticsStringSlice(ignoreSpeakers),
-		"focus_mode":      focusMode,
-	}
 }
 
 func cloneSpeechmaticsStringSlice(values []string) []string {
@@ -1079,12 +1068,7 @@ func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpe
 	s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
 	s.state.focusMode = focusMode
-	return s.writeJSONData(map[string]interface{}{
-		"message": "SetRecognitionConfig",
-		"transcription_config": map[string]interface{}{
-			"speaker_config": speechmaticsSTTSpeakerConfig(focusSpeakers, ignoreSpeakers, focusMode),
-		},
-	})
+	return nil
 }
 
 func (s *speechmaticsSTTStream) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {

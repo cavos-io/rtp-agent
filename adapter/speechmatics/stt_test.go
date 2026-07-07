@@ -934,28 +934,8 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	if provider.focusMode != "ignore" {
 		t.Fatalf("provider focus mode = %q, want ignore", provider.focusMode)
 	}
-	if len(writes) != 1 {
-		t.Fatalf("speaker update writes = %d, want one active stream write", len(writes))
-	}
-	if got, want := writes[0]["message"], "SetRecognitionConfig"; got != want {
-		t.Fatalf("speaker update message = %#v, want %#v", got, want)
-	}
-	config, ok := writes[0]["transcription_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("transcription_config = %#v, want object", writes[0]["transcription_config"])
-	}
-	speakerConfig, ok := config["speaker_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("speaker_config = %#v, want object", config["speaker_config"])
-	}
-	if got := strings.Join(speakerConfig["focus_speakers"].([]string), ","); got != "agent" {
-		t.Fatalf("focus_speakers = %q, want agent", got)
-	}
-	if got := strings.Join(speakerConfig["ignore_speakers"].([]string), ","); got != "noise" {
-		t.Fatalf("ignore_speakers = %q, want noise", got)
-	}
-	if got, want := speakerConfig["focus_mode"], "ignore"; got != want {
-		t.Fatalf("focus_mode = %#v, want %#v", got, want)
+	if len(writes) != 0 {
+		t.Fatalf("speaker update writes = %d, want none because reference SDK updates local diarization config", len(writes))
 	}
 	if stream.state == nil {
 		t.Fatal("stream state = nil, want updated local speaker filter")
@@ -968,6 +948,47 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	}
 	if stream.state.focusMode != "ignore" {
 		t.Fatalf("stream focus mode = %q, want ignore", stream.state.focusMode)
+	}
+}
+
+func TestSpeechmaticsSTTUpdateSpeakersFiltersFutureSegmentsLocally(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("speaker update write = %#v, want local-only reference update", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
+		t.Fatalf("UpdateSpeakers error = %v", err)
+	}
+
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[
+			{"text":"hello","language":"en","speaker_id":"agent","metadata":{"start_time":0.0,"end_time":0.2}},
+			{"text":"ignored","language":"en","speaker_id":"noise","metadata":{"start_time":0.2,"end_time":0.4}},
+			{"text":"other","language":"en","speaker_id":"customer","metadata":{"start_time":0.4,"end_time":0.6}}
+		]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segments: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, stream.state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want only focused speaker segment", events)
+	}
+	if got := events[0].Alternatives[0].SpeakerID; got != "agent" {
+		t.Fatalf("speaker id = %q, want agent", got)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("text = %q, want hello", got)
 	}
 }
 
@@ -1299,15 +1320,8 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	if len(vocab) != 2 || vocab[0].Content != "LiveKit" || vocab[0].SoundsLike[0] != "live kit" {
 		t.Fatalf("additional_vocab = %#v, want LiveKit sounds-like entry", vocab)
 	}
-	speakerConfig := config["speaker_config"].(map[string]interface{})
-	if got := speakerConfig["focus_speakers"].([]string); len(got) != 1 || got[0] != "agent" {
-		t.Fatalf("focus_speakers = %#v, want agent", got)
-	}
-	if got := speakerConfig["ignore_speakers"].([]string); len(got) != 1 || got[0] != "customer" {
-		t.Fatalf("ignore_speakers = %#v, want customer", got)
-	}
-	if speakerConfig["focus_mode"] != "ignore" {
-		t.Fatalf("focus_mode = %#v, want ignore", speakerConfig["focus_mode"])
+	if _, ok := config["speaker_config"]; ok {
+		t.Fatalf("speaker_config = %#v, want omitted from StartRecognition because reference SDK keeps speaker focus local", config["speaker_config"])
 	}
 	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
 	if !ok {
