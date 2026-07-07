@@ -452,8 +452,10 @@ func TestUpliftAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 }
 
 func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	var calls int
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
 		return nil, errors.New("upliftai transport failed")
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
@@ -472,6 +474,12 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after transport failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 after terminal transport failure", calls)
 	}
 }
 

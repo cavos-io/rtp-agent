@@ -699,6 +699,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		s.finalSent = true
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
