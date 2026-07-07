@@ -611,6 +611,53 @@ func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "text",
+		OutputMediumSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions text error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	textGeneration := requireUltravoxRealtimeGeneration(t, session)
+	textMessage := requireUltravoxRealtimeMessage(t, textGeneration)
+	requireUltravoxRealtimeModalities(t, textMessage.ModalitiesCh, []string{"text"})
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "listening"})
+	requireUltravoxRealtimeClosedText(t, textMessage.TextCh)
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "voice",
+		OutputMediumSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "voice",
+	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	voiceGeneration := requireUltravoxRealtimeGeneration(t, session)
+	voiceMessage := requireUltravoxRealtimeMessage(t, voiceGeneration)
+	requireUltravoxRealtimeModalities(t, voiceMessage.ModalitiesCh, []string{"audio", "text"})
+}
+
 func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

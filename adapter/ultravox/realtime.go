@@ -450,6 +450,13 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	if !options.OutputMediumSet {
 		return nil
 	}
+	s.mu.Lock()
+	if options.OutputMedium == "voice" {
+		s.audioOutput = true
+	} else if options.OutputMedium == "text" {
+		s.audioOutput = false
+	}
+	s.mu.Unlock()
 	return s.sendClientEvent(map[string]any{
 		"type":   "set_output_medium",
 		"medium": options.OutputMedium,
