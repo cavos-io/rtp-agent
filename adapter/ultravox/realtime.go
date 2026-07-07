@@ -359,12 +359,14 @@ type realtimeSession struct {
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.systemPrompt == instructions {
+		s.mu.Unlock()
 		return nil
 	}
 	s.systemPrompt = instructions
-	s.markRestartNeededLocked()
+	generation := s.markRestartNeededLocked()
+	s.mu.Unlock()
+	s.finishGeneration(generation)
 	return nil
 }
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
@@ -506,15 +508,18 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	if ultravoxRealtimeToolNameSetsEqual(s.toolNames, nextToolNames) {
+		s.mu.Unlock()
 		return nil
 	}
 	s.toolNames = nextToolNames
-	s.markRestartNeededLocked()
+	generation := s.markRestartNeededLocked()
+	s.mu.Unlock()
+	s.finishGeneration(generation)
 	return nil
 }
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
@@ -645,8 +650,11 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	}
 }
 
-func (s *realtimeSession) markRestartNeededLocked() {
+func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration {
 	s.restartCount++
+	generation := s.generation
+	s.generation = nil
+	return generation
 }
 
 func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
