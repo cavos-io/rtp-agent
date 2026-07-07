@@ -290,9 +290,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, context.Canceled
 		}
 		if speechmaticsTTSTimeoutError(err) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, speechmaticsTTSTimeoutAPIError()
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, speechmaticsTTSConnectionAPIError()
 	}
 	if s.finalReady {
 		s.finalReady = false
@@ -325,10 +325,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 					}
 					if speechmaticsTTSTimeoutError(err) {
 						s.finish()
-						return nil, llm.NewAPITimeoutError(err.Error())
+						return nil, speechmaticsTTSTimeoutAPIError()
 					}
 					s.finish()
-					return nil, llm.NewAPIConnectionError(err.Error())
+					return nil, speechmaticsTTSConnectionAPIError()
 				}
 				continue
 			}
@@ -352,10 +352,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			if speechmaticsTTSTimeoutError(err) {
 				s.finish()
-				return nil, llm.NewAPITimeoutError(err.Error())
+				return nil, speechmaticsTTSTimeoutAPIError()
 			}
 			s.finish()
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, speechmaticsTTSConnectionAPIError()
 		}
 	}
 }
@@ -424,7 +424,7 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 	})
 	if err != nil {
 		requestCancel()
-		return llm.NewAPIConnectionError(err.Error())
+		return speechmaticsTTSConnectionAPIError()
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -433,9 +433,9 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 			return context.Canceled
 		}
 		if speechmaticsTTSTimeoutError(err) {
-			return llm.NewAPITimeoutError(err.Error())
+			return speechmaticsTTSTimeoutAPIError()
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return speechmaticsTTSConnectionAPIError()
 	}
 	if resp.StatusCode == 499 {
 		resp.Body.Close()
@@ -463,6 +463,14 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 func speechmaticsTTSRetryableError(err error) bool {
 	var apiErr *llm.APIError
 	return errors.As(err, &apiErr) && apiErr.Retryable
+}
+
+func speechmaticsTTSTimeoutAPIError() error {
+	return llm.NewAPITimeoutError("")
+}
+
+func speechmaticsTTSConnectionAPIError() error {
+	return llm.NewAPIConnectionError("")
 }
 
 func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {

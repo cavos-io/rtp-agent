@@ -709,6 +709,7 @@ func TestSpeechmaticsTTSSynthesizeStartsReferenceTimeoutAtRequest(t *testing.T) 
 }
 
 func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("http://[::1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
@@ -724,6 +725,9 @@ func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "Connection error." {
+		t.Fatalf("APIConnectionError message = %q, want reference default", connectionErr.Message)
 	}
 }
 
@@ -818,6 +822,7 @@ func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 }
 
 func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -835,6 +840,9 @@ func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("APITimeoutError message = %q, want reference default", timeoutErr.Message)
 	}
 }
 
@@ -864,6 +872,7 @@ func TestSpeechmaticsTTSSynthesizeRequestCancelReturnsContextCanceled(t *testing
 }
 
 func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -885,6 +894,9 @@ func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testi
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "Connection error." {
+		t.Fatalf("APIConnectionError message = %q, want reference default", connectionErr.Message)
 	}
 }
 
