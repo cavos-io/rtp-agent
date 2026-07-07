@@ -5509,6 +5509,29 @@ func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
 	}
 }
 
+func TestConfigureProvidersPassesExplicitReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	_, err := configureProviders(AppConfig{
+		STTProvider:          providerSpeechmatics,
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+		SpeechmaticsAPIKey:   "test-speechmatics-key",
+	}, baseAgent)
+	if err != nil {
+		t.Fatalf("configureProviders() error = %v", err)
+	}
+	if baseAgent.STT == nil || baseAgent.STT.Label() != "speechmatics.STT" {
+		t.Fatalf("STT = %#v, want Speechmatics STT", baseAgent.STT)
+	}
+	vadField := reflect.ValueOf(baseAgent.STT).Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics primary VAD = nil, want explicit app VAD to force reference external endpointing")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
@@ -7814,6 +7837,35 @@ func TestConfigureSTTFallbacksPassesReferenceVADToSpeechmaticsSTT(t *testing.T) 
 	vadField := speechmaticsValue.Elem().FieldByName("vad")
 	if vadField.IsNil() {
 		t.Fatal("Speechmatics fallback VAD = nil, want app VAD for reference external endpointing")
+	}
+}
+
+func TestConfigureSTTFallbacksPassesExplicitReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	if err := configureSTTFallbacks(AppConfig{
+		STTFallbackProviders: []string{providerSpeechmatics},
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+	}, baseAgent); err != nil {
+		t.Fatalf("configureSTTFallbacks() error = %v", err)
+	}
+
+	fallbackValue := reflect.ValueOf(baseAgent.STT).Elem()
+	stts := fallbackValue.FieldByName("stts")
+	if stts.Len() != 2 {
+		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
+	}
+	speechmaticsValue := stts.Index(1).Elem()
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+		t.Fatalf("fallback STT type = %s, want %s", got, want)
+	}
+	vadField := speechmaticsValue.Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics fallback VAD = nil, want explicit app VAD to force reference external endpointing")
 	}
 }
 

@@ -3420,7 +3420,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
 		}
-		if speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) && detector != nil {
+		if speechmaticsShouldUseAppVAD(cfg, detector) {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTVAD(detector))
 		}
 		if cfg.STTInterimResults != nil {
@@ -6483,7 +6483,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTPreferCurrentSpeaker != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
-		if speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) && a.VAD != nil {
+		if speechmaticsShouldUseAppVAD(cfg, a.VAD) {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTVAD(a.VAD))
 		}
 		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
@@ -8493,6 +8493,13 @@ func speechmaticsExternalTurnDetectionMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func speechmaticsShouldUseAppVAD(cfg AppConfig, detector corevad.VAD) bool {
+	if detector == nil {
+		return false
+	}
+	return speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) || normalizeProvider(cfg.VADProvider) != ""
 }
 
 func speechmaticsTurnDetectionOptionFromConfig(cfg AppConfig) (speechmatics.SpeechmaticsSTTOption, error) {
