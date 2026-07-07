@@ -7608,6 +7608,66 @@ func TestSpeechmaticsSTTFallbackPassesReferenceTurnDetectionMode(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTFallbackVADForcesReferenceExternalTurnDetection(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	records := make(chan map[string]any, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read speechmatics start message: %v", err)
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode speechmatics start message: %v", err)
+			return
+		}
+		records <- message
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTBaseURL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+	}, providerSpeechmatics)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case message := <-records:
+		config, _ := message["transcription_config"].(map[string]any)
+		if _, ok := config["conversation_config"]; ok {
+			t.Fatalf("conversation_config = %#v, want omitted when external VAD owns turn detection", config["conversation_config"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics STT start message")
+	}
+}
+
 func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
 	type initRecord struct {

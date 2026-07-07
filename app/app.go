@@ -3396,7 +3396,7 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
 		}
-		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+		if opt, err := speechmaticsTurnDetectionOptionFromConfig(cfg); err != nil {
 			return nil, err
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
@@ -6409,7 +6409,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTOutputLocale != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
 		}
-		if opt, err := speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode); err != nil {
+		if opt, err := speechmaticsTurnDetectionOptionFromConfig(cfg); err != nil {
 			return nil, err
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
@@ -8468,6 +8468,13 @@ func speechmaticsExternalTurnDetectionMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func speechmaticsTurnDetectionOptionFromConfig(cfg AppConfig) (speechmatics.SpeechmaticsSTTOption, error) {
+	if normalizeProvider(cfg.VADProvider) != "" {
+		return nil, nil
+	}
+	return speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode)
 }
 
 func speechmaticsTurnDetectionOption(mode string) (speechmatics.SpeechmaticsSTTOption, error) {
