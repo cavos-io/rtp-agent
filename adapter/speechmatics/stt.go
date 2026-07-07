@@ -402,6 +402,15 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 }
 
 func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
+	groups, err := s.GetSpeakerIDGroups(ctx)
+	speakers := make([]SpeechmaticsSpeakerIdentifier, 0)
+	for _, group := range groups {
+		speakers = append(speakers, group...)
+	}
+	return speakers, err
+}
+
+func (s *SpeechmaticsSTT) GetSpeakerIDGroups(ctx context.Context) ([][]SpeechmaticsSpeakerIdentifier, error) {
 	if s == nil {
 		return nil, io.ErrClosedPipe
 	}
@@ -409,7 +418,7 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		return nil, nil
 	}
 	streams := s.activeStreams()
-	speakers := make([]SpeechmaticsSpeakerIdentifier, 0, len(streams))
+	groups := make([][]SpeechmaticsSpeakerIdentifier, 0, len(streams))
 	var requestErr error
 	for _, stream := range streams {
 		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)
@@ -417,16 +426,18 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		cancel()
 		if err != nil {
 			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				groups = append(groups, nil)
 				continue
 			}
 			if requestErr == nil {
 				requestErr = err
 			}
+			groups = append(groups, nil)
 			continue
 		}
-		speakers = append(speakers, streamSpeakers...)
+		groups = append(groups, streamSpeakers)
 	}
-	return speakers, requestErr
+	return groups, requestErr
 }
 
 func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, context.CancelFunc) {

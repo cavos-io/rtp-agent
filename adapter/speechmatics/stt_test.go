@@ -1611,6 +1611,49 @@ func TestSpeechmaticsSTTGetSpeakerIDsRequestsReferenceSpeakersResult(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTGetSpeakerIDGroupsPreservesReferenceStreamShape(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	for _, speakerID := range []string{"stream-1", "stream-2"} {
+		var stream *speechmaticsSTTStream
+		stream = &speechmaticsSTTStream{
+			writeJSON: func(message interface{}) error {
+				payload, ok := message.(map[string]interface{})
+				if !ok || payload["message"] != "GetSpeakers" {
+					t.Fatalf("speaker request message = %#v, want GetSpeakers", message)
+				}
+				stream.recordSpeakerResult([]SpeechmaticsSpeakerIdentifier{
+					{Label: speakerID, SpeakerID: speakerID},
+				})
+				return nil
+			},
+			closeConn: func() error {
+				return nil
+			},
+		}
+		provider.registerStream(stream)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	groups, err := provider.GetSpeakerIDGroups(ctx)
+	if err != nil {
+		t.Fatalf("GetSpeakerIDGroups error = %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("speaker groups = %#v, want one group per active reference stream", groups)
+	}
+	seen := map[string]bool{}
+	for _, group := range groups {
+		if len(group) != 1 {
+			t.Fatalf("speaker group = %#v, want one speaker", group)
+		}
+		seen[group[0].SpeakerID] = true
+	}
+	if !seen["stream-1"] || !seen["stream-2"] {
+		t.Fatalf("speaker groups = %#v, want both stream speaker ids", groups)
+	}
+}
+
 func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
 	stream := &speechmaticsSTTStream{
