@@ -604,6 +604,9 @@ func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
 
 func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		return config
+	}
 	if len(s.knownSpeakers) > 0 {
 		config["speakers"] = s.knownSpeakers
 	}

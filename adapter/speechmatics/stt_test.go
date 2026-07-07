@@ -1288,6 +1288,27 @@ func TestSpeechmaticsSTTStartMessageEnablesReferenceDiarizationByDefault(t *test
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 }
 
+func TestSpeechmaticsSTTStartMessageOmitsDiarizationConfigWhenDisabled(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTEnableDiarization(false),
+		WithSpeechmaticsSTTSpeakerSensitivity(0.7),
+		WithSpeechmaticsSTTMaxSpeakers(3),
+		WithSpeechmaticsSTTPreferCurrentSpeaker(true),
+		WithSpeechmaticsSTTKnownSpeakers([]SpeechmaticsSpeakerIdentifier{
+			{Label: "agent", SpeakerID: "spk-1"},
+		}),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	if _, ok := config["diarization"]; ok {
+		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
+	}
+	if _, ok := config["speaker_diarization_config"]; ok {
+		t.Fatalf("speaker_diarization_config = %#v, want omitted when reference diarization disabled", config["speaker_diarization_config"])
+	}
+}
+
 func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 
