@@ -3071,6 +3071,35 @@ func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTFixedLateEndOfTurnAfterEndOfUtteranceDoesNotDuplicate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+	}
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit end_of_speech")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit recognition usage")
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("late EndOfTurn stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late fixed EndOfTurn events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	var writes []map[string]interface{}
