@@ -2586,7 +2586,7 @@ func TestSpeechmaticsSTTAllowsReferenceEndOfUtteranceMaxDelayWithoutTrigger(t *t
 	}
 }
 
-func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
+func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testing.T) {
 	tests := []struct {
 		name       string
 		sampleRate int
@@ -2601,13 +2601,13 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 			dials++
-			return nil, errors.New("unexpected speechmatics stt dial")
+			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := NewSpeechmaticsSTT("test-key",
 				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
@@ -2616,15 +2616,16 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
 
 			stream, err := provider.Stream(context.Background(), "")
 			if stream != nil {
-				t.Fatalf("Stream = %#v, want nil for invalid sample rate", stream)
+				t.Fatalf("Stream = %#v, want nil on dial failure", stream)
 			}
-			if err == nil || !strings.Contains(err.Error(), "sample_rate must be 8000 or 16000") {
-				t.Fatalf("Stream error = %v, want reference sample_rate validation", err)
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
+			}
+			if dials != i+1 {
+				t.Fatalf("dials = %d, want provider dial for reference sample_rate %d", dials, tt.sampleRate)
 			}
 		})
-	}
-	if dials != 0 {
-		t.Fatalf("invalid sample-rate streams dialed %d times, want none", dials)
 	}
 }
 
