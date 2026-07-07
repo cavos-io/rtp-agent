@@ -636,6 +636,40 @@ func TestUltravoxRealtimeSessionInterruptSendsReferenceBargeIn(t *testing.T) {
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionInterruptBackpressureClosesReferenceGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hello",
+		Final:   false,
+		Ordinal: 1,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hello")
+
+	for i := 0; i < cap(session.clientEventCh); i++ {
+		session.clientEventCh <- map[string]any{"type": "queued"}
+	}
+
+	err = session.Interrupt()
+	if err == nil || !strings.Contains(err.Error(), "client event queue is full") {
+		t.Fatalf("Interrupt error = %v, want client event queue backpressure", err)
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

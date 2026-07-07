@@ -582,16 +582,14 @@ func (s *realtimeSession) Interrupt() error {
 	}
 	s.mu.Unlock()
 
-	if err := s.sendClientEvent(map[string]any{
+	err := s.sendClientEvent(map[string]any{
 		"type":          "user_text_message",
 		"text":          "",
 		"urgency":       "immediate",
 		"deferResponse": true,
-	}); err != nil {
-		return err
-	}
+	})
 	s.finishGeneration(generation)
-	return nil
+	return err
 }
 func (s *realtimeSession) Close() error {
 	var generation *ultravoxRealtimeGeneration
