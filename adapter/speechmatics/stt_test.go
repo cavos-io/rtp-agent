@@ -1267,7 +1267,9 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
 	assertSpeechmaticsConfig(t, config, "enable_partials", true)
-	assertSpeechmaticsConfig(t, config, "diarization", "none")
+	if _, ok := config["diarization"]; ok {
+		t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
+	}
 
 	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
 	config = message["transcription_config"].(map[string]interface{})

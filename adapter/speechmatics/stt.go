@@ -534,8 +534,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.enableDiarization != nil {
 		if *s.enableDiarization {
 			config["diarization"] = "speaker"
-		} else {
-			config["diarization"] = "none"
 		}
 	} else {
 		config["diarization"] = "speaker"
