@@ -1150,16 +1150,18 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 
 func (s *speechmaticsSTTStream) EndInput() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.inputEnded {
+		s.mu.Unlock()
 		return fmt.Errorf("stream input ended")
 	}
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
+			s.mu.Unlock()
 			return err
 		}
 	}
@@ -1170,16 +1172,29 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		for _, chunk := range s.audioBuf.Flush() {
 			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 				_ = s.closeLocked()
+				s.mu.Unlock()
 				return err
 			}
 			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 		}
 	}
-	if s.vadStream != nil {
-		if err := s.vadStream.EndInput(); err != nil {
-			_ = s.closeLocked()
+	vadStream := s.vadStream
+	s.mu.Unlock()
+
+	if vadStream != nil {
+		if err := vadStream.EndInput(); err != nil {
+			_ = s.Close()
 			return err
 		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	s.inputEnded = true
 	if s.waitForRecognitionStarted && !s.audioReady {

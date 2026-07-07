@@ -2314,6 +2314,54 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightVADPushFrameLikeReference(t *testin
 	}
 }
 
+func TestSpeechmaticsSTTCloseUnblocksInFlightVADEndInputLikeReference(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	vadStream.endInputStarted = make(chan struct{})
+	stream := &speechmaticsSTTStream{
+		vadStream: vadStream,
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- stream.EndInput()
+	}()
+
+	select {
+	case <-vadStream.endInputStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EndInput did not start VAD end input")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Close did not unblock in-flight VAD EndInput")
+	}
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("EndInput error = %v, want closed-pipe after Close interrupted VAD", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EndInput remained blocked after VAD Close")
+	}
+}
+
 func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	if err := provider.Close(); err != nil {
@@ -2890,13 +2938,14 @@ func (f *fakeSpeechmaticsVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeSpeechmaticsVADStream struct {
-	events      chan *vad.VADEvent
-	nextErr     error
-	nextStarted chan struct{}
-	pushStarted chan struct{}
-	pushed      []*model.AudioFrame
-	closed      bool
-	closedOnce  sync.Once
+	events          chan *vad.VADEvent
+	nextErr         error
+	nextStarted     chan struct{}
+	pushStarted     chan struct{}
+	endInputStarted chan struct{}
+	pushed          []*model.AudioFrame
+	closed          bool
+	closedOnce      sync.Once
 }
 
 func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
@@ -2917,6 +2966,13 @@ func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *fakeSpeechmaticsVADStream) Flush() error { return nil }
 func (s *fakeSpeechmaticsVADStream) EndInput() error {
+	if s.endInputStarted != nil {
+		close(s.endInputStarted)
+		s.endInputStarted = nil
+		if _, ok := <-s.events; !ok {
+			return io.ErrClosedPipe
+		}
+	}
 	s.closedOnce.Do(func() { close(s.events) })
 	return nil
 }
