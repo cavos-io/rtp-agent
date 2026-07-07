@@ -923,6 +923,16 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 		return true
 	}
+	if resp.Message == "EndOfUtterance" {
+		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
+			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+				if !s.enqueueEvent(event) {
+					return false
+				}
+			}
+		}
+		return true
+	}
 	if resp.Message == "SpeakersResult" {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
@@ -982,13 +992,17 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	case "StartOfTurn":
 		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
 	case "EndOfTurn":
-		events := []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}
-		if usage := speechmaticsRecognitionUsageEvent(state); usage != nil {
-			events = append(events, usage)
-		}
-		return events
+		return speechmaticsEndOfTurnEvents(state)
 	}
 	return nil
+}
+
+func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEvent {
+	events := []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}
+	if usage := speechmaticsRecognitionUsageEvent(state); usage != nil {
+		events = append(events, usage)
+	}
+	return events
 }
 
 func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState) *stt.SpeechEvent {

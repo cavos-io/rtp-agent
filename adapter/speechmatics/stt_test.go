@@ -2111,6 +2111,41 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+	}
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("handleResponse returned false, want stream to continue after fixed EndOfUtterance")
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("fixed EndOfUtterance did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.4 {
+		t.Fatalf("usage event = %#v, want reference recognition usage after fixed EndOfUtterance", usage)
+	}
+	if stateDuration := stream.state.speechDuration; stateDuration != 0 {
+		t.Fatalf("speech duration after EndOfUtterance = %v, want reset after usage emit", stateDuration)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	var writes []map[string]interface{}
