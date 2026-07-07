@@ -1058,6 +1058,52 @@ func TestUpliftAITTSStreamStopsAfterReferenceSegmentError(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamNoAudioKeepsReferenceAPIError(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("silent segment"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for no-audio segment", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T(%v), want reference APIError for no-audio segment", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T(%v), want base APIError not APIConnectionError for no-audio segment", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: silent segment") {
+		t.Fatalf("Next error = %q, want reference no-audio message", err.Error())
+	}
+	if got, want := httpCalls, 1; got != want {
+		t.Fatalf("HTTP calls = %d, want one silent segment request", got)
+	}
+}
+
 func TestUpliftAITTSStreamSegmentCancelReturnsContextCanceled(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {

@@ -520,6 +520,10 @@ func (s *upliftAITTSSynthesizeStream) run() {
 					_ = s.sendResult(nil, context.Canceled)
 					return
 				}
+				if upliftAIIsNoAudioError(err) {
+					_ = s.sendResult(nil, err)
+					return
+				}
 				_ = s.sendResult(nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
 				return
 			}
@@ -1751,6 +1755,11 @@ func (s *upliftAITTSChunkedStream) noAudioError() error {
 		return nil
 	}
 	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+}
+
+func upliftAIIsNoAudioError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && strings.HasPrefix(apiErr.Error(), "no audio frames were pushed for text:")
 }
 
 func upliftAITTSReadError(prefix string, err error) error {
