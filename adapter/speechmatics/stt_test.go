@@ -2629,11 +2629,10 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 	}
 }
 
-func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(t *testing.T) {
+func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachProvider(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []SpeechmaticsSTTOption
-		want string
 	}{
 		{
 			name: "focus speakers",
@@ -2641,7 +2640,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, nil, "retain"),
 			},
-			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
 		},
 		{
 			name: "ignore speakers",
@@ -2649,7 +2647,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTSpeakerFocus(nil, []string{"noise"}, "retain"),
 			},
-			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
 		},
 		{
 			name: "max speakers",
@@ -2657,7 +2654,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 				WithSpeechmaticsSTTEnableDiarization(false),
 				WithSpeechmaticsSTTMaxSpeakers(3),
 			},
-			want: "max_speakers cannot be set when enable_diarization is False",
 		},
 	}
 
@@ -2666,28 +2662,40 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
 			dials++
-			return nil, errors.New("unexpected speechmatics stt dial")
+			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2")}, tt.opts...)
 			provider := NewSpeechmaticsSTT("test-key", opts...)
+			if err := validateSpeechmaticsSTTOptions(provider); err != nil {
+				t.Fatalf("validateSpeechmaticsSTTOptions() error = %v, want reference config accepted", err)
+			}
+			message := buildSpeechmaticsSTTStartMessage(provider, "")
+			config := message["transcription_config"].(map[string]interface{})
+			if _, ok := config["diarization"]; ok {
+				t.Fatalf("diarization = %#v, want omitted when reference diarization disabled", config["diarization"])
+			}
+			if _, ok := config["speaker_diarization_config"]; ok {
+				t.Fatalf("speaker_diarization_config = %#v, want omitted when reference diarization disabled", config["speaker_diarization_config"])
+			}
 
 			stream, err := provider.Stream(context.Background(), "")
 			if stream != nil {
-				t.Fatalf("Stream = %#v, want nil for invalid disabled diarization options", stream)
+				t.Fatalf("Stream = %#v, want nil on dial failure", stream)
 			}
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Stream error = %v, want %q", err, tt.want)
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
+			}
+			if dials != i+1 {
+				t.Fatalf("dials = %d, want provider dial for reference disabled-diarization options", dials)
 			}
 		})
-	}
-	if dials != 0 {
-		t.Fatalf("invalid disabled-diarization streams dialed %d times, want none", dials)
 	}
 }
 
