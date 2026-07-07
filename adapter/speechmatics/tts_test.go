@@ -78,6 +78,35 @@ func TestSpeechmaticsTTSSynthesizeRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close = (%+v, %v), want EOF", audio, err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after provider Close before Next = %d, want none", requests)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),
