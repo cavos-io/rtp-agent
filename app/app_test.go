@@ -7453,11 +7453,15 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["max_delay"], 1.25; got != want {
 			t.Fatalf("max_delay = %#v, want %#v", got, want)
 		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+		conversationConfig, _ := config["conversation_config"].(map[string]any)
+		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.55; got != want {
 			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
 		}
-		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
-			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		if _, ok := config["end_of_utterance_silence_trigger"]; ok {
+			t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+		}
+		if _, ok := config["end_of_utterance_max_delay"]; ok {
+			t.Fatalf("end_of_utterance_max_delay sent at top level in %#v", config)
 		}
 		if got, want := config["speaker_sensitivity"], 0.7; got != want {
 			t.Fatalf("speaker_sensitivity = %#v, want %#v", got, want)

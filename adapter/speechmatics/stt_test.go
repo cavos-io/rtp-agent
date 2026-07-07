@@ -1102,8 +1102,6 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
 	assertSpeechmaticsConfig(t, config, "speaker_sensitivity", float64(0.7))
 	assertSpeechmaticsConfig(t, config, "max_speakers", 4)
 	assertSpeechmaticsConfig(t, config, "prefer_current_speaker", true)
@@ -1111,6 +1109,23 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	marks := overrides["permitted_marks"].([]string)
 	if len(marks) != 2 || marks[0] != "." || marks[1] != "?" {
 		t.Fatalf("punctuation_overrides = %#v, want permitted marks", overrides)
+	}
+}
+
+func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want map", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
+	if _, ok := config["end_of_utterance_silence_trigger"]; ok {
+		t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
 	}
 }
 

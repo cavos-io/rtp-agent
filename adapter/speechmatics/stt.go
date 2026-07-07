@@ -528,10 +528,9 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		config["max_delay"] = *s.maxDelay
 	}
 	if s.eouSilenceTrigger != nil {
-		config["end_of_utterance_silence_trigger"] = *s.eouSilenceTrigger
-	}
-	if s.eouMaxDelay != nil {
-		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+		config["conversation_config"] = map[string]interface{}{
+			"end_of_utterance_silence_trigger": *s.eouSilenceTrigger,
+		}
 	}
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
