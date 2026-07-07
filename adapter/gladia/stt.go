@@ -38,6 +38,8 @@ const (
 	defaultGladiaEnergyThreshold                   = 0.004 * 0.004
 )
 
+var gladiaRecognitionUsageInterval = 5 * time.Second
+
 type GladiaSTT struct {
 	mu                                 sync.Mutex
 	apiKey                             string
@@ -593,21 +595,23 @@ func cloneGladiaCustomSpelling(spelling map[string][]string) map[string][]string
 }
 
 type gladiaSTTStream struct {
-	owner  *GladiaSTT
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *gladiaSTTStreamState
-	audio  *audio.AudioByteStream
+	owner        *GladiaSTT
+	conn         *websocket.Conn
+	events       chan *stt.SpeechEvent
+	errCh        chan error
+	mu           sync.Mutex
+	closed       bool
+	eventsClosed bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	state        *gladiaSTTStreamState
+	audio        *audio.AudioByteStream
 
 	writeText func(map[string]any) error
 
 	energyFilter *gladiaAudioEnergyFilter
 	lastFrame    *model.AudioFrame
+	usageTimer   *time.Timer
 }
 
 func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -632,6 +636,7 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 				return err
 			}
 			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+			s.scheduleRecognitionUsageLocked()
 		}
 	}
 	if ended {
@@ -640,6 +645,7 @@ func (s *gladiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 				return err
 			}
 			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+			s.scheduleRecognitionUsageLocked()
 		}
 		if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
 			return err
@@ -686,6 +692,7 @@ func (s *gladiaSTTStream) Flush() error {
 				return err
 			}
 			s.state.audioDuration += audio.CalculateFrameDuration(chunk)
+			s.scheduleRecognitionUsageLocked()
 		}
 	}
 	if err := s.writeTextMessage(buildGladiaStopRecordingMessage()); err != nil {
@@ -706,7 +713,34 @@ func (s *gladiaSTTStream) writeTextMessage(message map[string]any) error {
 }
 
 func (s *gladiaSTTStream) emitRecognitionUsage() {
-	if s.events == nil || s.state == nil || s.state.audioDuration <= 0 {
+	s.stopRecognitionUsageTimerLocked()
+	s.emitRecognitionUsageLocked()
+}
+
+func (s *gladiaSTTStream) scheduleRecognitionUsageLocked() {
+	if s.usageTimer != nil || s.state == nil || s.state.audioDuration <= 0 || gladiaRecognitionUsageInterval <= 0 {
+		return
+	}
+	s.usageTimer = time.AfterFunc(gladiaRecognitionUsageInterval, s.emitRecognitionUsageFromTimer)
+}
+
+func (s *gladiaSTTStream) emitRecognitionUsageFromTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageTimer = nil
+	s.emitRecognitionUsageLocked()
+}
+
+func (s *gladiaSTTStream) stopRecognitionUsageTimerLocked() {
+	if s.usageTimer == nil {
+		return
+	}
+	s.usageTimer.Stop()
+	s.usageTimer = nil
+}
+
+func (s *gladiaSTTStream) emitRecognitionUsageLocked() {
+	if s.events == nil || s.eventsClosed || s.state == nil || s.state.audioDuration <= 0 {
 		return
 	}
 	duration := s.state.audioDuration
@@ -812,6 +846,7 @@ func (s *gladiaSTTStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.stopRecognitionUsageTimerLocked()
 	var err error
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
@@ -923,7 +958,13 @@ func (s *gladiaSTTStream) ensureStateLocked() *gladiaSTTStreamState {
 }
 
 func (s *gladiaSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		s.mu.Lock()
+		s.stopRecognitionUsageTimerLocked()
+		s.eventsClosed = true
+		s.mu.Unlock()
+		close(s.events)
+	}()
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {

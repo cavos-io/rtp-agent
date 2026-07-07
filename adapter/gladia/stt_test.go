@@ -499,6 +499,48 @@ func TestGladiaPushFrameChunksFlushesAndReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestGladiaPushFrameReportsReferencePeriodicUsage(t *testing.T) {
+	oldInterval := gladiaRecognitionUsageInterval
+	gladiaRecognitionUsageInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		gladiaRecognitionUsageInterval = oldInterval
+	})
+
+	var messages []map[string]any
+	stream := &gladiaSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &gladiaSTTStreamState{requestID: "session-usage"},
+		writeText: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(gladiaConstantPCMFrame(1600, 1000)); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want one audio chunk before periodic usage", len(messages))
+	}
+
+	event := readGladiaTestEvent(t, stream.events)
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %v, want recognition usage", event.Type)
+	}
+	if event.RequestID != "session-usage" {
+		t.Fatalf("request id = %q, want session-usage", event.RequestID)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("recognition usage = nil")
+	}
+	if event.RecognitionUsage.AudioDuration != 0.1 {
+		t.Fatalf("audio duration = %v, want 0.1", event.RecognitionUsage.AudioDuration)
+	}
+	if stream.state.audioDuration != 0 {
+		t.Fatalf("audio duration after periodic usage = %v, want reset", stream.state.audioDuration)
+	}
+}
+
 func TestGladiaEnergyFilterFlushesBufferedSilenceOnReferenceEnd(t *testing.T) {
 	provider := NewGladiaSTT("test-key", WithGladiaEnergyFilter(0.02, defaultGladiaEnergyThreshold))
 	var messages []map[string]any
@@ -775,6 +817,17 @@ func assertGladiaAudioChunkBytes(t *testing.T, message map[string]any, want int)
 	if len(chunk) != want {
 		t.Fatalf("chunk bytes = %d, want %d", len(chunk), want)
 	}
+}
+
+func readGladiaTestEvent(t *testing.T, ch <-chan *stt.SpeechEvent) *stt.SpeechEvent {
+	t.Helper()
+	select {
+	case event := <-ch:
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Gladia event")
+	}
+	return nil
 }
 
 func gladiaConstantPCMFrame(samples int, sample int16) *model.AudioFrame {
