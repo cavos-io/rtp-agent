@@ -352,6 +352,7 @@ type realtimeSession struct {
 	toolNames        map[string]struct{}
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
+	pendingReply     bool
 	restartCount     uint64
 	closed           bool
 	closeOnce        sync.Once
@@ -563,11 +564,19 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	if options.InstructionsSet {
 		text = "<instruction>" + options.Instructions + "</instruction>"
 	}
-	return s.sendClientEvent(map[string]any{
+	if err := s.sendClientEvent(map[string]any{
 		"type":          "user_text_message",
 		"text":          text,
 		"deferResponse": false,
-	})
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.pendingReply = true
+	}
+	s.mu.Unlock()
+	return nil
 }
 func (s *realtimeSession) Say(string) error {
 	return ultravoxRealtimeSessionUnsupported("say")
@@ -799,6 +808,8 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 	close(modalitiesCh)
 	s.generationSeq++
 	messageID := fmt.Sprintf("ultravox-turn-%d", s.generationSeq)
+	userInitiated := s.pendingReply
+	s.pendingReply = false
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
 		TextCh:       generation.textCh,
@@ -812,7 +823,7 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 			MessageCh:     generation.messageCh,
 			FunctionCh:    generation.functionCh,
 			ResponseID:    messageID,
-			UserInitiated: false,
+			UserInitiated: userInitiated,
 		},
 	}
 	select {

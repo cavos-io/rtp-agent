@@ -594,6 +594,42 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	userGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !userGeneration.UserInitiated {
+		t.Fatal("generation UserInitiated = false, want true for GenerateReply response")
+	}
+	requireUltravoxRealtimeMessage(t, userGeneration)
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	providerGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if providerGeneration.UserInitiated {
+		t.Fatal("next generation UserInitiated = true, want pending GenerateReply consumed once")
+	}
+}
+
 func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
