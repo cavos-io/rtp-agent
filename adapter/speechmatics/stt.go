@@ -414,9 +414,6 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	if s == nil {
 		return io.ErrClosedPipe
 	}
-	if s.enableDiarization != nil && !*s.enableDiarization {
-		return fmt.Errorf("diarization is not enabled")
-	}
 
 	s.mu.Lock()
 	if s.closed {
@@ -430,6 +427,10 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	if len(streams) == 0 {
 		s.mu.Unlock()
 		return nil
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		s.mu.Unlock()
+		return fmt.Errorf("diarization is not enabled")
 	}
 	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)

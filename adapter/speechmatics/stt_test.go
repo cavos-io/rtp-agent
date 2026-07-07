@@ -1958,6 +1958,23 @@ func TestSpeechmaticsSTTUpdateSpeakersWithoutStreamsMatchesReferenceNoop(t *test
 	}
 }
 
+func TestSpeechmaticsSTTUpdateSpeakersDisabledDiarizationWithoutStreamsMatchesReferenceNoop(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+
+	if err := provider.UpdateSpeakers([]string{"agent"}, []string{"noise"}, "ignore"); err != nil {
+		t.Fatalf("UpdateSpeakers without streams error = %v, want reference no-op", err)
+	}
+	if len(provider.focusSpeakers) != 0 {
+		t.Fatalf("provider focus speakers = %#v, want unchanged without active streams", provider.focusSpeakers)
+	}
+	if len(provider.ignoreSpeakers) != 0 {
+		t.Fatalf("provider ignore speakers = %#v, want unchanged without active streams", provider.ignoreSpeakers)
+	}
+	if provider.focusMode != "retain" {
+		t.Fatalf("provider focus mode = %q, want unchanged retain", provider.focusMode)
+	}
+}
+
 func TestSpeechmaticsSTTUpdateSpeakersFiltersFutureSegmentsLocally(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	stream := &speechmaticsSTTStream{
