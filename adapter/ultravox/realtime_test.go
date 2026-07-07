@@ -159,3 +159,27 @@ func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
 		t.Fatal("audio output = false, want true after output_medium=voice")
 	}
 }
+
+func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v, want reference session lifecycle", err)
+	}
+	if session == nil {
+		t.Fatal("Session = nil, want reference realtime session")
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if _, ok := <-session.EventCh(); ok {
+		t.Fatal("EventCh still open after Close")
+	}
+}

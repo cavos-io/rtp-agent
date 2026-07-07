@@ -1,11 +1,15 @@
 package ultravox
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 const (
@@ -236,7 +240,64 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	return nil, fmt.Errorf("ultravox realtime session is not implemented")
+	return &realtimeSession{
+		eventCh: make(chan llm.RealtimeEvent),
+	}, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+type realtimeSession struct {
+	eventCh   chan llm.RealtimeEvent
+	closeOnce sync.Once
+}
+
+func (s *realtimeSession) UpdateInstructions(string) error {
+	return ultravoxRealtimeSessionUnsupported("update_instructions")
+}
+func (s *realtimeSession) UpdateChatContext(*llm.ChatContext) error {
+	return ultravoxRealtimeSessionUnsupported("update_chat_context")
+}
+func (s *realtimeSession) UpdateTools([]llm.Tool) error {
+	return ultravoxRealtimeSessionUnsupported("update_tools")
+}
+func (s *realtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
+	return ultravoxRealtimeSessionUnsupported("update_options")
+}
+func (s *realtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
+	return ultravoxRealtimeSessionUnsupported("generate_reply")
+}
+func (s *realtimeSession) Say(string) error {
+	return ultravoxRealtimeSessionUnsupported("say")
+}
+func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
+	return ultravoxRealtimeSessionUnsupported("truncate")
+}
+func (s *realtimeSession) Interrupt() error {
+	return ultravoxRealtimeSessionUnsupported("interrupt")
+}
+func (s *realtimeSession) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.eventCh)
+	})
+	return nil
+}
+func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+func (s *realtimeSession) PushAudio(*model.AudioFrame) error {
+	return ultravoxRealtimeSessionUnsupported("push_audio")
+}
+func (s *realtimeSession) PushVideo(*images.VideoFrame) error {
+	return ultravoxRealtimeSessionUnsupported("push_video")
+}
+func (s *realtimeSession) CommitAudio() error {
+	return ultravoxRealtimeSessionUnsupported("commit_audio")
+}
+func (s *realtimeSession) ClearAudio() error {
+	return ultravoxRealtimeSessionUnsupported("clear_audio")
+}
+
+var _ llm.RealtimeSession = (*realtimeSession)(nil)
+
+func ultravoxRealtimeSessionUnsupported(operation string) error {
+	return errors.New(operation + " is not implemented by the Ultravox realtime session")
+}
