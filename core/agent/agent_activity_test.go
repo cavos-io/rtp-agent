@@ -7357,3 +7357,52 @@ func (f fixedWordTokenizer) Stream(string) tokenize.WordStream {
 func (f fixedWordTokenizer) FormatWords(words []string) string {
 	return strings.Join(words, " ")
 }
+
+type fakeInterruptionGate struct {
+	minSpeechMs    int
+	strongBargeMs  int
+	lastSpeechMs   int
+	lastTranscript string
+}
+
+func (g *fakeInterruptionGate) Decide(agentSpeaking bool, speechMs int, transcript string) InterruptionGateResult {
+	g.lastSpeechMs = speechMs
+	g.lastTranscript = transcript
+	if !agentSpeaking {
+		return InterruptionGateResult{Decision: InterruptionAcceptUserTurn, Reason: "agent_not_speaking"}
+	}
+	if speechMs < g.minSpeechMs {
+		return InterruptionGateResult{Decision: InterruptionIgnore, Reason: "speech_too_short"}
+	}
+	if speechMs >= g.strongBargeMs {
+		return InterruptionGateResult{Decision: InterruptionInterruptAgent, Reason: "strong_barge_in"}
+	}
+	return InterruptionGateResult{Decision: InterruptionContinueListening, Reason: "needs_more_speech"}
+}
+
+func TestAgentActivityOnVADInferenceDoneGateUsesVADDuration(t *testing.T) {
+	ag := NewAgent("test")
+	ag.VAD = &fakePipelineVAD{}
+	gate := &fakeInterruptionGate{minSpeechMs: 500, strongBargeMs: 1200}
+	ag.InterruptionGate = gate
+	session := NewAgentSession(ag, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(ag, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        1.3, // 1300ms > StrongBargeInMs(1200)
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	if gate.lastSpeechMs != 1300 {
+		t.Fatalf("gate received speechMs=%d, want 1300 (from VAD SpeechDuration fallback)", gate.lastSpeechMs)
+	}
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
