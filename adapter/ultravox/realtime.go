@@ -1049,9 +1049,9 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 }
 
 func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolInvocationEvent) {
-	arguments, err := json.Marshal(event.Parameters)
+	arguments, err := ultravoxRealtimeToolArguments(event.Parameters)
 	if err != nil {
-		arguments = []byte("{}")
+		arguments = "{}"
 	}
 
 	s.mu.Lock()
@@ -1063,7 +1063,7 @@ func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolIn
 	functionCall := &llm.FunctionCall{
 		CallID:    event.InvocationID,
 		Name:      event.ToolName,
-		Arguments: string(arguments),
+		Arguments: arguments,
 	}
 	s.mu.Unlock()
 
@@ -1072,6 +1072,42 @@ func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolIn
 	default:
 	}
 	s.finishGeneration(generation, true)
+}
+
+func ultravoxRealtimeToolArguments(parameters map[string]any) (string, error) {
+	var b strings.Builder
+	encoder := json.NewEncoder(&b)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(parameters); err != nil {
+		return "", err
+	}
+	return ultravoxRealtimePythonJSONSpacing(strings.TrimSpace(b.String())), nil
+}
+
+func ultravoxRealtimePythonJSONSpacing(value string) string {
+	var out strings.Builder
+	out.Grow(len(value) + 8)
+	inString := false
+	escaped := false
+	for _, r := range value {
+		out.WriteRune(r)
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString && (r == ':' || r == ',') {
+			out.WriteByte(' ')
+		}
+	}
+	return out.String()
 }
 
 func (s *realtimeSession) handlePlaybackClearBufferEvent() {

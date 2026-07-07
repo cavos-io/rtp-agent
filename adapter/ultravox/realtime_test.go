@@ -1381,8 +1381,11 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 		if call == nil {
 			t.Fatal("function call = nil")
 		}
-		if call.CallID != "call-7" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		if call.CallID != "call-7" || call.Name != "lookup" || call.Arguments != `{"city": "Paris"}` {
 			t.Fatalf("function call = %+v, want call-7 lookup JSON args", call)
+		}
+		if strings.Contains(call.Arguments, `":"`) {
+			t.Fatalf("function call arguments = %q, want reference json.dumps spacing", call.Arguments)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for function call")
@@ -1691,7 +1694,7 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 		if call == nil {
 			t.Fatal("function call = nil")
 		}
-		if call.CallID != "call-9" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		if call.CallID != "call-9" || call.Name != "lookup" || call.Arguments != `{"city": "Paris"}` {
 			t.Fatalf("function call = %+v, want call-9 lookup JSON args", call)
 		}
 	case <-time.After(time.Second):
