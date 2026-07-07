@@ -1110,6 +1110,10 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+		s.mu.Unlock()
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
 	vadStream := s.vadStream
 	s.mu.Unlock()
 	if vadStream != nil {
