@@ -595,12 +595,8 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
 		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
 	}
-	if s.eouMaxDelay != nil {
-		trigger := 0.5
-		if s.eouSilenceTrigger != nil {
-			trigger = *s.eouSilenceTrigger
-		}
-		if *s.eouMaxDelay <= trigger {
+	if s.eouMaxDelay != nil && s.eouSilenceTrigger != nil {
+		if *s.eouMaxDelay <= *s.eouSilenceTrigger {
 			problems = append(problems, "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger")
 		}
 	}

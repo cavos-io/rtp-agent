@@ -1435,13 +1435,6 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 			},
 			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
 		},
-		{
-			name: "eou max delay not greater than default silence trigger",
-			opts: []SpeechmaticsSTTOption{
-				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.4),
-			},
-			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
-		},
 	}
 
 	for _, tt := range tests {
@@ -1454,6 +1447,14 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 				t.Fatalf("Stream error = %v, want %q before provider dial", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestSpeechmaticsSTTAllowsReferenceEndOfUtteranceMaxDelayWithoutTrigger(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.4))
+
+	if err := validateSpeechmaticsSTTOptions(provider); err != nil {
+		t.Fatalf("validateSpeechmaticsSTTOptions() error = %v, want nil when only end_of_utterance_max_delay is set", err)
 	}
 }
 
