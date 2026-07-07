@@ -280,6 +280,24 @@ func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeStartsReferenceTimeoutAtRequest(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunked, ok := stream.(*speechmaticsTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want Speechmatics chunked stream", stream)
+	}
+	if deadline, ok := chunked.ctx.Deadline(); ok {
+		t.Fatalf("stream context deadline = %v before request, want timeout applied when Next starts provider request", deadline)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
