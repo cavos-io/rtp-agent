@@ -388,6 +388,19 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		return nil
 	}
 	s.requested = true
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	for attempt := 0; ; attempt++ {
+		err := s.openStream()
+		if err == nil || err == io.EOF || errors.Is(err, context.Canceled) {
+			return err
+		}
+		if s.emittedAudio || attempt >= maxRetry || !speechmaticsTTSRetryableError(err) {
+			return err
+		}
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) openStream() error {
 	requestCtx, requestCancel := context.WithTimeout(s.ctx, defaultSpeechmaticsTTSTimeout)
 	s.mu.Lock()
 	if s.closed || s.finalSent {
@@ -441,6 +454,11 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	s.stream = resp.Body
 	s.mu.Unlock()
 	return nil
+}
+
+func speechmaticsTTSRetryableError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && apiErr.Retryable
 }
 
 func speechmaticsTTSStatusReason(resp *http.Response) string {

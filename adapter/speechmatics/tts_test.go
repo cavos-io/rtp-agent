@@ -499,6 +499,46 @@ func TestSpeechmaticsTTSSynthesizeNonEmptyTextErrorsWithoutAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeRetriesReferenceTransientErrorBeforeAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 temporary synthesis failure",
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry to recover", err)
+	}
+	if audio == nil || audio.Frame == nil || string(audio.Frame.Data) != string([]byte{0x01, 0x02}) {
+		t.Fatalf("Next() audio = %+v, want PCM from retried request", audio)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want one retry before audio", requests)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAcceptsReferenceNoContentStatus(t *testing.T) {
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
