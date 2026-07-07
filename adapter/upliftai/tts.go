@@ -1743,7 +1743,7 @@ func (s *upliftAITTSChunkedStream) Close() error {
 			s.owner.unregisterStream(s)
 		}
 		if s.resp != nil && s.resp.Body != nil {
-			s.err = s.resp.Body.Close()
+			_ = s.resp.Body.Close()
 		}
 		if s.decoder != nil {
 			_ = s.decoder.Close()

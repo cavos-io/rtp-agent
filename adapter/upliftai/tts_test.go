@@ -69,6 +69,13 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+type upliftAICloseErrorBody struct {
+	err error
+}
+
+func (b upliftAICloseErrorBody) Read([]byte) (int, error) { return 0, io.EOF }
+func (b upliftAICloseErrorBody) Close() error             { return b.err }
+
 type upliftAIChunkReader struct {
 	chunks [][]byte
 }
@@ -3319,6 +3326,19 @@ func TestUpliftAITTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) 
 	_, err := stream.Next()
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamCloseSuppressesReferenceBodyCloseError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: upliftAICloseErrorBody{err: errors.New("body close failed")}},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want EOF", audio, err)
 	}
 }
 
