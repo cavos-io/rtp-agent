@@ -665,6 +665,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	baseURL, voiceID, outputFormat, phraseReplacementConfigID := s.owner.requestOptions()
 	s.outputFormat = outputFormat
 	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
+		s.finalSent = true
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	if upliftAIUsesSocketIO(baseURL) {

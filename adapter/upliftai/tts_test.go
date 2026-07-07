@@ -843,6 +843,9 @@ func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *test
 			if !strings.Contains(err.Error(), "unsupported output format: "+outputFormat) {
 				t.Fatalf("Next error = %q, want reference unsupported output format message", err.Error())
 			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after unsupported output format = (%#v, %v), want nil, io.EOF", audio, err)
+			}
 			if httpCalls != 0 {
 				t.Fatalf("HTTP calls = %d, want 0 before rejecting unsupported output format", httpCalls)
 			}
