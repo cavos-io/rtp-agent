@@ -476,6 +476,70 @@ func TestFireworksSTTUpdateOptionsEmitsReferenceUsageAfterSpeechEnd(t *testing.T
 	}
 }
 
+func TestFireworksSTTStreamEmitsReferencePeriodicRecognitionUsage(t *testing.T) {
+	oldInterval := fireworksRecognitionUsageInterval
+	fireworksRecognitionUsageInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		fireworksRecognitionUsageInterval = oldInterval
+	})
+
+	audioCh := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				t.Errorf("message type = %d, want binary", msgType)
+			}
+			audioCh <- append([]byte(nil), payload...)
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1600)}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if got := readFireworksTestChan(t, audioCh, errCh); len(got) != 1600 {
+		t.Fatalf("audio chunk len = %d, want 1600", len(got))
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want periodic recognition usage", err)
+	}
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %v, want recognition usage", event.Type)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("recognition usage = nil")
+	}
+	if math.Abs(event.RecognitionUsage.AudioDuration-0.05) > 1e-9 {
+		t.Fatalf("audio duration = %v, want 0.05", event.RecognitionUsage.AudioDuration)
+	}
+
+	fireworksStream, ok := stream.(*fireworksStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *fireworksStream", stream)
+	}
+	if fireworksStream.pendingAudioDuration != 0 {
+		t.Fatalf("pending audio duration after periodic flush = %v, want 0", fireworksStream.pendingAudioDuration)
+	}
+}
+
 func TestFireworksSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))

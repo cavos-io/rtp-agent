@@ -35,6 +35,8 @@ const (
 	fireworksPCMBytesPerSample = 2
 )
 
+var fireworksRecognitionUsageInterval = 10 * time.Second
+
 type FireworksSTT struct {
 	mu                     sync.Mutex
 	apiKey                 string
@@ -360,6 +362,7 @@ type fireworksStream struct {
 	mu           sync.Mutex
 	closed       bool
 	reconnecting bool
+	eventsClosed bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -367,6 +370,7 @@ type fireworksStream struct {
 	audio  bytes.Buffer
 
 	pendingAudioDuration float64
+	usageTimer           *time.Timer
 	readMessage          func() (int, []byte, error)
 }
 
@@ -374,6 +378,13 @@ func (s *fireworksStream) readLoop(conn *websocket.Conn) {
 	closeEvents := false
 	defer func() {
 		if closeEvents {
+			s.mu.Lock()
+			if s.usageTimer != nil {
+				s.usageTimer.Stop()
+				s.usageTimer = nil
+			}
+			s.eventsClosed = true
+			s.mu.Unlock()
 			if s.owner != nil {
 				s.owner.unregisterStream(s)
 			}
@@ -549,6 +560,7 @@ func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
 			return err
 		}
 		s.pendingAudioDuration += fireworksAudioDuration(len(chunk))
+		s.scheduleRecognitionUsageLocked()
 	}
 	if !flush || s.audio.Len() == 0 {
 		return nil
@@ -559,22 +571,34 @@ func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
 		return err
 	}
 	s.pendingAudioDuration += fireworksAudioDuration(len(chunk))
+	s.scheduleRecognitionUsageLocked()
 	return nil
+}
+
+func (s *fireworksStream) scheduleRecognitionUsageLocked() {
+	if s.usageTimer != nil || s.pendingAudioDuration <= 0 || fireworksRecognitionUsageInterval <= 0 {
+		return
+	}
+	s.usageTimer = time.AfterFunc(fireworksRecognitionUsageInterval, s.flushRecognitionUsage)
 }
 
 func (s *fireworksStream) flushRecognitionUsage() {
 	s.mu.Lock()
-	if s.events == nil || s.pendingAudioDuration <= 0 {
+	if s.usageTimer != nil {
+		s.usageTimer.Stop()
+		s.usageTimer = nil
+	}
+	if s.events == nil || s.eventsClosed || s.pendingAudioDuration <= 0 {
 		s.mu.Unlock()
 		return
 	}
 	duration := s.pendingAudioDuration
 	s.pendingAudioDuration = 0
-	s.mu.Unlock()
 	s.events <- &stt.SpeechEvent{
 		Type:             stt.SpeechEventRecognitionUsage,
 		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
 	}
+	s.mu.Unlock()
 }
 
 func fireworksAudioDuration(bytesLen int) float64 {
@@ -600,6 +624,10 @@ func (s *fireworksStream) closeLocked() error {
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.usageTimer != nil {
+		s.usageTimer.Stop()
+		s.usageTimer = nil
 	}
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(closeMessage))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
