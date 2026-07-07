@@ -28,6 +28,19 @@ type fakeRoomIOTextResponder struct {
 	calls []string
 }
 
+type roomIOFakeRemoteParticipantView struct {
+	identity   string
+	kind       lksdk.ParticipantKind
+	attributes map[string]string
+}
+
+func (p roomIOFakeRemoteParticipantView) SID() string                   { return "" }
+func (p roomIOFakeRemoteParticipantView) Identity() string              { return p.identity }
+func (p roomIOFakeRemoteParticipantView) Name() string                  { return "" }
+func (p roomIOFakeRemoteParticipantView) Kind() lksdk.ParticipantKind   { return p.kind }
+func (p roomIOFakeRemoteParticipantView) Metadata() string              { return "" }
+func (p roomIOFakeRemoteParticipantView) Attributes() map[string]string { return p.attributes }
+
 func (f *fakeRoomIOTextResponder) ClaimUserTurn(ctx context.Context, fn func(context.Context) error) error {
 	f.calls = append(f.calls, "claim-begin")
 	err := fn(ctx)
@@ -4173,6 +4186,36 @@ func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testin
 	}
 }
 
+func TestRoomIOSetParticipantByIdentityBeforeConnectMatchesReference(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.SetParticipant("caller-b")
+	if got, available := rio.LinkedParticipant(); got != "caller-b" || available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want configured unavailable caller-b", got, available)
+	}
+
+	if rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = true, want false for mismatched configured participant")
+	}
+	if !rio.handleParticipantConnected("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-b) = false, want true for configured participant")
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-b" || !available {
+		t.Fatalf("LinkedParticipant() after connect = (%q, %v), want available caller-b", got, available)
+	}
+}
+
+func TestRoomIOIgnoresParticipantIdentityMismatch(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if rio.handleParticipantConnected("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-b) = true, want false for configured caller-a")
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want unavailable caller-a", got, available)
+	}
+}
+
 func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testing.T) {
 	rio := &RoomIO{}
 
@@ -4244,6 +4287,26 @@ func TestRoomIOHandleParticipantConnectedSkipsUnacceptedParticipant(t *testing.T
 	}
 	if got := rio.participantIdentity(); got != "" {
 		t.Fatalf("participantIdentity() = %q, want empty", got)
+	}
+}
+
+func TestRoomIOIgnoresPublishOnBehalfParticipantForAutoLink(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.handleExistingParticipantViews([]RemoteParticipantView{
+		roomIOFakeRemoteParticipantView{
+			identity:   "agent-output",
+			kind:       lksdk.ParticipantStandard,
+			attributes: map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		},
+		roomIOFakeRemoteParticipantView{
+			identity: "caller-a",
+			kind:     lksdk.ParticipantStandard,
+		},
+	}, "agent-local")
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want available caller-a", got, available)
 	}
 }
 
@@ -4380,6 +4443,78 @@ func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T)
 	}
 }
 
+func TestRoomIODisconnectLinkedParticipantResetsAvailability(t *testing.T) {
+	rio := &RoomIO{}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() after disconnect = (%q, %v), want unavailable caller-a", got, available)
+	}
+}
+
+func TestRoomIODisconnectUnlinkedParticipantDoesNotCloseSession(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+
+	rio.handleParticipantDisconnected("caller-b", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() after unlinked disconnect = (%q, %v), want available caller-a", got, available)
+	}
+}
+
+func TestRoomIODisconnectCloseReasonsMatchReference(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason livekit.DisconnectReason
+		want   bool
+	}{
+		{"client initiated", livekit.DisconnectReason_CLIENT_INITIATED, true},
+		{"room deleted", livekit.DisconnectReason_ROOM_DELETED, true},
+		{"user rejected", livekit.DisconnectReason_USER_REJECTED, true},
+		{"duplicate identity", livekit.DisconnectReason_DUPLICATE_IDENTITY, false},
+		{"unknown", livekit.DisconnectReason_UNKNOWN_REASON, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &agent.AgentSession{}
+			rio := &RoomIO{AgentSession: session}
+			if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+				t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+			}
+
+			rio.handleParticipantDisconnected("caller-a", tt.reason)
+
+			select {
+			case ev := <-session.CloseEvents():
+				if !tt.want {
+					t.Fatalf("unexpected close event for %s: %#v", tt.reason.String(), ev)
+				}
+				if ev.Reason != agent.CloseReasonParticipantDisconnected {
+					t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+				}
+			default:
+				if tt.want {
+					t.Fatalf("session did not close for %s", tt.reason.String())
+				}
+			}
+		})
+	}
+}
+
 func TestRoomIOHandleParticipantDisconnectedSkipsCloseWhileDeletingRoom(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{
@@ -4416,6 +4551,18 @@ func TestRoomIOHandleParticipantDisconnectedAllowsLinkedParticipantReconnect(t *
 	}
 	if got := rio.participantIdentity(); got != "caller-a" {
 		t.Fatalf("participantIdentity() = %q, want caller-a", got)
+	}
+}
+
+func TestRoomIOReconnectScansExistingParticipants(t *testing.T) {
+	rio := &RoomIO{}
+
+	rio.handleExistingParticipantViews([]RemoteParticipantView{
+		roomIOFakeRemoteParticipantView{identity: "caller-a", kind: lksdk.ParticipantStandard},
+	}, "agent-local")
+
+	if got, available := rio.LinkedParticipant(); got != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want available caller-a", got, available)
 	}
 }
 
