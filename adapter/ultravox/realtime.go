@@ -291,9 +291,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 func (s *realtimeSession) Say(string) error {
 	return ultravoxRealtimeSessionUnsupported("say")
 }
-func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
-	return ultravoxRealtimeSessionUnsupported("truncate")
-}
+func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *realtimeSession) Interrupt() error {
 	return ultravoxRealtimeSessionUnsupported("interrupt")
 }

@@ -314,6 +314,26 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:      "msg-1",
+		Modalities:     []string{"audio"},
+		AudioEndMillis: 120,
+	}); err != nil {
+		t.Fatalf("Truncate error = %v, want reference no-op", err)
+	}
+}
+
 func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, want map[string]any) {
 	t.Helper()
 	select {
