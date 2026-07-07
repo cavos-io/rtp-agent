@@ -1056,6 +1056,43 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
 }
 
+func TestSpeechmaticsSTTExplicitVADForcesReferenceExternalTurnDetectionAfterLaterModeOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: newFakeSpeechmaticsVADStream()}),
+		WithSpeechmaticsSTTFixedTurnDetection(),
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+	)
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external when explicit VAD is provided", provider.turnDetectionMode)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted because explicit VAD owns endpointing", config["conversation_config"])
+	}
+
+	var controlMessages []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages = append(controlMessages, control)
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if len(controlMessages) != 1 || controlMessages[0]["message"] != "ForceEndOfUtterance" {
+		t.Fatalf("control messages = %#v, want ForceEndOfUtterance", controlMessages)
+	}
+}
+
 func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	vadStream.nextErr = errors.New("vad failed")

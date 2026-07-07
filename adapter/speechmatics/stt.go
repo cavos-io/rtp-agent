@@ -251,6 +251,9 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.vad != nil {
+		provider.turnDetectionMode = "external"
+	}
 	return provider
 }
 
