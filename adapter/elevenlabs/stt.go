@@ -529,6 +529,7 @@ type elevenLabsSTTStream struct {
 	mu                 sync.Mutex
 	closed             bool
 	inputEnded         bool
+	eventsClosed       bool
 	ctx                context.Context
 	cancel             context.CancelFunc
 	sampleRate         int
@@ -536,6 +537,7 @@ type elevenLabsSTTStream struct {
 	audioDur           float64
 	usageLastFlush     time.Time
 	usageFlushInterval time.Duration
+	usageTimer         *time.Timer
 	keepAliveInterval  time.Duration
 	state              *elevenLabsSTTStreamState
 	rateGuard          stt.SampleRateGuard
@@ -632,6 +634,7 @@ func (s *elevenLabsSTTStream) Close() error {
 	s.inputEnded = true
 	s.closed = true
 	s.cancel()
+	s.stopUsageTimerLocked()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	err := s.conn.Close()
 	s.mu.Unlock()
@@ -772,13 +775,15 @@ func (s *elevenLabsSTTStream) closeAfterWriteFailureLocked(err error) {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.stopUsageTimerLocked()
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
 }
 
 func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
-	if s.events == nil || s.audioDur <= 0 {
+	s.stopUsageTimerLocked()
+	if s.events == nil || s.eventsClosed || s.audioDur <= 0 {
 		return
 	}
 	duration := s.audioDur
@@ -795,13 +800,42 @@ func (s *elevenLabsSTTStream) addAudioDurationLocked(duration float64) {
 	if s.usageFlushInterval <= 0 {
 		s.usageFlushInterval = elevenLabsSTTUsageInterval
 	}
+	now := time.Now()
 	if s.usageLastFlush.IsZero() {
-		s.usageLastFlush = time.Now()
+		s.usageLastFlush = now
+		s.scheduleUsageTimerLocked(s.usageFlushInterval)
 		return
 	}
-	if time.Since(s.usageLastFlush) >= s.usageFlushInterval {
+	if now.Sub(s.usageLastFlush) >= s.usageFlushInterval {
 		s.emitRecognitionUsageLocked()
+		return
 	}
+	s.scheduleUsageTimerLocked(s.usageFlushInterval - now.Sub(s.usageLastFlush))
+}
+
+func (s *elevenLabsSTTStream) scheduleUsageTimerLocked(delay time.Duration) {
+	if s.usageTimer != nil || s.audioDur <= 0 || s.events == nil || s.eventsClosed {
+		return
+	}
+	if delay <= 0 {
+		delay = s.usageFlushInterval
+	}
+	s.usageTimer = time.AfterFunc(delay, s.emitRecognitionUsageFromTimer)
+}
+
+func (s *elevenLabsSTTStream) emitRecognitionUsageFromTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageTimer = nil
+	s.emitRecognitionUsageLocked()
+}
+
+func (s *elevenLabsSTTStream) stopUsageTimerLocked() {
+	if s.usageTimer == nil {
+		return
+	}
+	s.usageTimer.Stop()
+	s.usageTimer = nil
 }
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -846,7 +880,13 @@ func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 
 func (s *elevenLabsSTTStream) readLoop() {
 	defer s.unregisterFromProvider()
-	defer close(s.events)
+	defer func() {
+		s.mu.Lock()
+		s.stopUsageTimerLocked()
+		s.eventsClosed = true
+		s.mu.Unlock()
+		close(s.events)
+	}()
 	for {
 		conn, version := s.currentConn()
 		if conn == nil {

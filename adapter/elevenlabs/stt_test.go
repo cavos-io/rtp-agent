@@ -658,6 +658,45 @@ func TestElevenLabsSTTStreamPushFrameReportsPeriodicReferenceUsage(t *testing.T)
 	}
 }
 
+func TestElevenLabsSTTStreamPushFrameEmitsReferenceUsageOnTimer(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:             make(chan *stt.SpeechEvent, 1),
+		sampleRate:         16000,
+		state:              &elevenLabsSTTStreamState{language: "en"},
+		usageFlushInterval: 20 * time.Millisecond,
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after PushFrame = %d, want one 50ms chunk", len(messages))
+	}
+
+	select {
+	case usage := <-stream.events:
+		if usage.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %v, want recognition_usage", usage.Type)
+		}
+		if usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.05 {
+			t.Fatalf("recognition usage = %#v, want 0.05 audio duration", usage.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for timer recognition_usage")
+	}
+}
+
 func TestElevenLabsSTTStreamKeepAliveSendsReferenceEmptyAudioChunk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
