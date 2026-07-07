@@ -919,6 +919,11 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
+		for _, event := range speechmaticsFlushPendingRawFinals(s.state) {
+			if !s.enqueueEvent(event) {
+				return false
+			}
+		}
 		s.markClosedDrainingEvents()
 		_ = s.closeTransportOnce()
 		return false
