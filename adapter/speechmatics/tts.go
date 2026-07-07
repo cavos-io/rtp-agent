@@ -50,7 +50,7 @@ func WithSpeechmaticsTTSVoice(voice string) SpeechmaticsTTSOption {
 
 func WithSpeechmaticsTTSSampleRate(sampleRate int) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			t.sampleRate = sampleRate
 		}
 	}

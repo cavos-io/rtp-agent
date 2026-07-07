@@ -151,6 +151,23 @@ func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSSampleRate(0))
+
+	if provider.sampleRate != 0 {
+		t.Fatalf("sample rate = %d, want explicit reference sample rate 0", provider.sampleRate)
+	}
+	if got := provider.SampleRate(); got != 0 {
+		t.Fatalf("SampleRate = %d, want explicit reference sample rate 0", got)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	assertSpeechmaticsTTSQuery(t, req.URL.Query(), "output_format", "pcm_0")
+}
+
 func TestSpeechmaticsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key")
 
