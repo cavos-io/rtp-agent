@@ -2,6 +2,7 @@ package ultravox
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -274,6 +275,12 @@ type ultravoxRealtimeTranscriptEvent struct {
 
 type ultravoxRealtimeStateEvent struct {
 	State string
+}
+
+type ultravoxRealtimeToolInvocationEvent struct {
+	ToolName     string
+	InvocationID string
+	Parameters   map[string]any
 }
 
 type realtimeSession struct {
@@ -550,6 +557,32 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 		default:
 		}
 	}
+}
+
+func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolInvocationEvent) {
+	arguments, err := json.Marshal(event.Parameters)
+	if err != nil {
+		arguments = []byte("{}")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	generation := s.ensureGenerationLocked()
+	functionCall := &llm.FunctionCall{
+		CallID:    event.InvocationID,
+		Name:      event.ToolName,
+		Arguments: string(arguments),
+	}
+	s.mu.Unlock()
+
+	select {
+	case generation.functionCh <- functionCall:
+	default:
+	}
+	s.finishGeneration(generation)
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
