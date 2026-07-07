@@ -3697,6 +3697,9 @@ func TestUpliftAITTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
 }
 
 func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {

@@ -1667,6 +1667,7 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 				s.hasAudio = true
 				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
 		}
 		if len(s.pcmFrames) > 0 {
