@@ -16936,3 +16936,16 @@ func (l *appRecordingLogger) WithoutSampler() livekitlogger.Logger {
 func (l *appRecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
 	return livekitlogger.GetDiscardLogger().WithDeferredValues()
 }
+
+func TestCopyAgentRuntimeCopiesInterruptionGate(t *testing.T) {
+	gate := cavos.NewInterruptionGate()
+	src := agent.NewAgent("src")
+	src.InterruptionGate = gate
+	dst := agent.NewAgent("dst")
+
+	copyAgentRuntime(dst, src)
+
+	if dst.InterruptionGate != gate {
+		t.Fatal("copyAgentRuntime did not copy InterruptionGate")
+	}
+}
