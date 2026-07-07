@@ -589,6 +589,9 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.speakerSensitivity != nil && (*s.speakerSensitivity <= 0 || *s.speakerSensitivity >= 1.0) {
 		problems = append(problems, "speaker_sensitivity must be between 0.0 and 1.0")
 	}
+	if s.sampleRate != 8000 && s.sampleRate != 16000 {
+		problems = append(problems, "sample_rate must be 8000 or 16000")
+	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid Speechmatics STT options: %s", strings.Join(problems, ", "))
 	}

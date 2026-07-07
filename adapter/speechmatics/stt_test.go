@@ -1356,6 +1356,48 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
+	tests := []struct {
+		name       string
+		sampleRate int
+	}{
+		{name: "zero", sampleRate: 0},
+		{name: "negative", sampleRate: -1},
+		{name: "unsupported high", sampleRate: 48000},
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected speechmatics stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key",
+				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
+				WithSpeechmaticsSTTSampleRate(tt.sampleRate),
+			)
+
+			stream, err := provider.Stream(context.Background(), "")
+			if stream != nil {
+				t.Fatalf("Stream = %#v, want nil for invalid sample rate", stream)
+			}
+			if err == nil || !strings.Contains(err.Error(), "sample_rate must be 8000 or 16000") {
+				t.Fatalf("Stream error = %v, want reference sample_rate validation", err)
+			}
+		})
+	}
+	if dials != 0 {
+		t.Fatalf("invalid sample-rate streams dialed %d times, want none", dials)
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	closed := false
