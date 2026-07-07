@@ -577,6 +577,62 @@ func TestSpeechmaticsSTTReadFailureReturnsReferenceConnectionError(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTReadLoopErrorDeliveryDoesNotBlockWhenErrorQueued(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverReady := make(chan struct{})
+	closeProvider := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		close(serverReady)
+		<-closeProvider
+		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+			_ = tcpConn.SetLinger(0)
+		}
+		_ = conn.UnderlyingConn().Close()
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	smStream := stream.(*speechmaticsSTTStream)
+	t.Cleanup(func() {
+		select {
+		case <-smStream.errCh:
+		default:
+		}
+	})
+	select {
+	case <-serverReady:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive StartRecognition")
+	}
+	smStream.errCh <- errors.New("queued provider error")
+	close(closeProvider)
+
+	select {
+	case _, ok := <-smStream.events:
+		if ok {
+			t.Fatal("events yielded transcript, want cleanup close")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("read loop blocked delivering provider error with queued error")
+	}
+}
+
 func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}

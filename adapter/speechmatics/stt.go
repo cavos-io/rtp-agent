@@ -869,10 +869,10 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly")
+					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
 				}
 			} else {
-				s.errCh <- llm.NewAPIConnectionError(err.Error())
+				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
 			}
 			return
 		}
@@ -896,12 +896,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "RecognitionStarted" {
 		if err := s.markReadyForAudio(); err != nil {
-			if s.errCh != nil {
-				select {
-				case s.errCh <- err:
-				default:
-				}
-			}
+			s.enqueueError(err)
 			return false
 		}
 		return true
@@ -916,6 +911,16 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 	}
 	return true
+}
+
+func (s *speechmaticsSTTStream) enqueueError(err error) {
+	if s == nil || s.errCh == nil || err == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
+	}
 }
 
 func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
