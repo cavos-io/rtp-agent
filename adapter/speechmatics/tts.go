@@ -172,6 +172,12 @@ func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
 }
 
 func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, io.ErrClosedPipe
+	}
 	return nil, fmt.Errorf("speechmatics streaming tts is unsupported")
 }
 

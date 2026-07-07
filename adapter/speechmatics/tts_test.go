@@ -122,6 +122,21 @@ func TestSpeechmaticsTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),
