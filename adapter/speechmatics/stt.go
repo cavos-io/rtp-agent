@@ -791,6 +791,7 @@ type speechmaticsSTTStream struct {
 	closed          bool
 	inputEnded      bool
 	pendingEndInput bool
+	pendingErr      error
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -1647,6 +1648,19 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return nil, io.EOF
 	}
+	if s.pendingErr != nil {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		err := s.pendingErr
+		s.pendingErr = nil
+		s.markClosed()
+		return nil, err
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -1661,6 +1675,7 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		s.pendingErr = err
 		select {
 		case event, ok := <-s.events:
 			if ok {
@@ -1668,6 +1683,7 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
+		s.pendingErr = nil
 		s.markClosed()
 		return nil, err
 	case <-s.done:

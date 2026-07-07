@@ -889,6 +889,50 @@ func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTNextSurfacesErrorAfterQueuedTranscriptLikeReference(t *testing.T) {
+	for range 64 {
+		stream := &speechmaticsSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		streamErr := errors.New("provider close")
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{
+				{Text: "hello"},
+			},
+		}
+		stream.errCh <- streamErr
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("first Next error = %v, want queued transcript before stream error", err)
+		}
+		if event == nil || event.Alternatives[0].Text != "hello" {
+			t.Fatalf("first Next event = %#v, want queued final transcript", event)
+		}
+
+		result := make(chan error, 1)
+		go func() {
+			event, err := stream.Next()
+			if event != nil {
+				result <- fmt.Errorf("second Next event = %#v, want nil", event)
+				return
+			}
+			result <- err
+		}()
+
+		select {
+		case err := <-result:
+			if !errors.Is(err, streamErr) {
+				t.Fatalf("second Next error = %v, want queued stream error", err)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("second Next blocked after queued transcript, want stream error")
+		}
+	}
+}
+
 func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {
