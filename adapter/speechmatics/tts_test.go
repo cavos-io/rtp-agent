@@ -244,6 +244,19 @@ func TestSpeechmaticsTTSSynthesizePostsAndStreamsPCM(t *testing.T) {
 	if string(audio.Frame.Data) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
 		t.Fatalf("frame data = %#v, want complete PCM bytes", audio.Frame.Data)
 	}
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want reference request id")
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final audio = %+v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want stable request id %q", final.RequestID, audio.RequestID)
+	}
 }
 
 func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {

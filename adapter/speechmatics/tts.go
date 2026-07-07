@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/google/uuid"
 )
 
 const (
@@ -106,6 +107,7 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		baseURL:    t.baseURL,
 		voice:      t.voice,
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
 		owner:      t,
 	}
 	if !t.registerStream(stream) {
@@ -237,6 +239,7 @@ type speechmaticsTTSChunkedStream struct {
 	baseURL       string
 	voice         string
 	sampleRate    int
+	requestID     string
 	requested     bool
 	pending       []byte
 	pendingErr    error
@@ -307,6 +310,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.pendingErr = err
 			}
 			return &tts.SynthesizedAudio{
+				RequestID: s.requestID,
 				Frame: &model.AudioFrame{
 					Data:              frameData,
 					SampleRate:        uint32(s.sampleRate),
@@ -397,7 +401,7 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 	}
 	s.finalSent = true
 	s.finish()
-	return &tts.SynthesizedAudio{IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {
