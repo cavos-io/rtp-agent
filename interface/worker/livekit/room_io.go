@@ -1415,6 +1415,12 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			Participant: rp,
 		})
 	}
+	if publication != nil && publication.Source() != livekit.TrackSource_MICROPHONE {
+		return
+	}
+	if track == nil {
+		return
+	}
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}

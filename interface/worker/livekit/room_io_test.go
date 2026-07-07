@@ -3185,6 +3185,19 @@ func TestRoomIOAudioInputIgnoresDuplicateAcceptedTrack(t *testing.T) {
 	}
 }
 
+func TestRoomIOAudioInputIgnoresMismatchedTrackSource(t *testing.T) {
+	rio := &RoomIO{}
+	publication := &lksdk.RemoteTrackPublication{}
+
+	rio.onTrackSubscribed(nil, publication, nil)
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputGeneration != 0 || rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" {
+		t.Fatalf("audio input state = generation %d track %q participant %q, want inactive for unknown source", rio.audioInputGeneration, rio.audioInputTrackID, rio.audioInputParticipantID)
+	}
+}
+
 func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
 	rio := &RoomIO{}
 	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
