@@ -389,6 +389,30 @@ func TestUpliftAITTSSynthesizeRequestDeadlineReturnsAPITimeoutError(t *testing.T
 	}
 }
 
+func TestUpliftAITTSSynthesizeRequestCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
