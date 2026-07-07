@@ -7441,7 +7441,10 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["output_locale"], "en-GB"; got != want {
 			t.Fatalf("output_locale = %#v, want %#v", got, want)
 		}
-		if got, want := config["enable_partials"], false; got != want {
+		if _, ok := config["enable_partials"].(bool); !ok {
+			t.Fatalf("enable_partials = %#v, want bool", config["enable_partials"])
+		}
+		if got, want := config["enable_partials"], true; got != want {
 			t.Fatalf("enable_partials = %#v, want %#v", got, want)
 		}
 		if got, want := config["diarization"], "speaker"; got != want {

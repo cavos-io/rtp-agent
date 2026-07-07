@@ -283,6 +283,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
 			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
 			focusMode:            s.focusMode,
+			includePartials:      speechmaticsIncludePartials(s),
 		},
 		owner: s,
 	}
@@ -514,11 +515,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config := map[string]interface{}{
 		"language": language,
 	}
-	if s.includePartials != nil {
-		config["enable_partials"] = *s.includePartials
-	} else {
-		config["enable_partials"] = true
-	}
+	config["enable_partials"] = true
 	if s.domain != "" {
 		config["domain"] = s.domain
 	}
@@ -566,6 +563,13 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		},
 		"transcription_config": config,
 	}
+}
+
+func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
+	if s == nil || s.includePartials == nil {
+		return true
+	}
+	return *s.includePartials
 }
 
 func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
@@ -635,6 +639,7 @@ type speechmaticsStreamState struct {
 	focusSpeakers        []string
 	ignoreSpeakers       []string
 	focusMode            string
+	includePartials      bool
 }
 
 type smResponse struct {
@@ -741,6 +746,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	eventType := stt.SpeechEventInterimTranscript
 	if resp.Message == "AddSegment" {
 		eventType = stt.SpeechEventFinalTranscript
+	}
+	if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials {
+		return nil
 	}
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 

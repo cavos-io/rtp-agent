@@ -290,6 +290,42 @@ func TestSpeechmaticsSegmentEventsFilterReferenceSpeakers(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: false}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"partial words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial response: %v", err)
+	}
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	}
+
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"final words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+	events := speechmaticsEvents(final, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("final events = %#v, want final transcript despite include_partials=false", events)
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
@@ -1134,7 +1170,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "enable_partials", false)
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
 	assertSpeechmaticsConfig(t, config, "diarization", "none")
 
 	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
