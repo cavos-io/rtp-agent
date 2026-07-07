@@ -10,6 +10,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -332,7 +333,7 @@ func TestUltravoxRealtimeSessionUpdateInstructionsUpdatesReferenceModelPrompt(t 
 	}
 }
 
-func TestUltravoxRealtimeSessionUpdateInstructionsClosesActiveGenerationForReferenceRestart(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateInstructionsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -355,10 +356,11 @@ func TestUltravoxRealtimeSessionUpdateInstructionsClosesActiveGenerationForRefer
 	requireUltravoxRealtimeText(t, message.TextCh, "hello")
 
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
-		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference restart cleanup", err)
+		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference restart", err)
 	}
-	requireUltravoxRealtimeClosedText(t, message.TextCh)
-	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	assertUltravoxRealtimeTextOpen(t, message.TextCh)
+	assertUltravoxRealtimeAudioOpen(t, message.AudioCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(t *testing.T) {
@@ -394,7 +396,7 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	}
 }
 
-func TestUltravoxRealtimeSessionUpdateToolsClosesActiveGenerationForReferenceRestart(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateToolsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -417,10 +419,11 @@ func TestUltravoxRealtimeSessionUpdateToolsClosesActiveGenerationForReferenceRes
 	requireUltravoxRealtimeText(t, message.TextCh, "hello")
 
 	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{name: "lookup"}}); err != nil {
-		t.Fatalf("UpdateTools changed tool set error = %v, want reference restart cleanup", err)
+		t.Fatalf("UpdateTools changed tool set error = %v, want reference restart", err)
 	}
-	requireUltravoxRealtimeClosedText(t, message.TextCh)
-	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	assertUltravoxRealtimeTextOpen(t, message.TextCh)
+	assertUltravoxRealtimeAudioOpen(t, message.AudioCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
@@ -935,7 +938,7 @@ func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *t
 	}
 }
 
-func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *testing.T) {
+func TestUltravoxRealtimeSessionOutputMediumUpdateKeepsReferenceModalities(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -957,11 +960,14 @@ func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("model output medium = %q, want unchanged reference capability owner", got)
+	}
 
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 	textGeneration := requireUltravoxRealtimeGeneration(t, session)
 	textMessage := requireUltravoxRealtimeMessage(t, textGeneration)
-	requireUltravoxRealtimeModalities(t, textMessage.ModalitiesCh, []string{"text"})
+	requireUltravoxRealtimeModalities(t, textMessage.ModalitiesCh, []string{"audio", "text"})
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "listening"})
 	requireUltravoxRealtimeClosedText(t, textMessage.TextCh)
 
@@ -1072,6 +1078,157 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	})
 	requireUltravoxRealtimeClosedText(t, message.TextCh)
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
+func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hel",
+		Final:   false,
+		Ordinal: 2,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hel")
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "hello",
+		Final:   true,
+		Ordinal: 2,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != generation.ResponseID || metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want completed generation %q", metrics, generation.ResponseID)
+	}
+	if metrics.Label != "ultravox-fixie-ai/ultravox" || metrics.Metadata == nil ||
+		metrics.Metadata.ModelName != "fixie-ai/ultravox" || metrics.Metadata.ModelProvider != "Ultravox" {
+		t.Fatalf("metrics metadata = %#v, want Ultravox model metadata", metrics)
+	}
+	if metrics.TTFT < 0 || metrics.Duration < metrics.TTFT {
+		t.Fatalf("metrics timing = ttft %f duration %f, want non-negative reference timing", metrics.TTFT, metrics.Duration)
+	}
+}
+
+func TestUltravoxRealtimeSessionMetricsAnchorToRecentReferenceUserFinal(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "done",
+		Final:   true,
+		Ordinal: 4,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_4", "done", true)
+	time.Sleep(25 * time.Millisecond)
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "ok",
+		Final:   false,
+		Ordinal: 5,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "ok")
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "ok",
+		Final:   true,
+		Ordinal: 5,
+	})
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.TTFT < 0.01 {
+		t.Fatalf("metrics TTFT = %f, want anchored to recent user final transcript", metrics.TTFT)
+	}
+}
+
+func TestUltravoxRealtimeSessionInterruptEmitsReferenceCancelledMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hello",
+		Final:   false,
+		Ordinal: 1,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hello")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != generation.ResponseID || !metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want cancelled generation %q", metrics, generation.ResponseID)
+	}
+}
+
+func TestUltravoxRealtimeSessionToolOnlyGenerationSuppressesReferenceMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+		ToolName:     "lookup",
+		InvocationID: "call-7",
+		Parameters:   map[string]any{"city": "Paris"},
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case <-generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool function call")
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionGenerationCreatedDoesNotBlockProviderReceive(t *testing.T) {
@@ -1224,8 +1381,11 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 		if call == nil {
 			t.Fatal("function call = nil")
 		}
-		if call.CallID != "call-7" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		if call.CallID != "call-7" || call.Name != "lookup" || call.Arguments != `{"city": "Paris"}` {
 			t.Fatalf("function call = %+v, want call-7 lookup JSON args", call)
+		}
+		if strings.Contains(call.Arguments, `":"`) {
+			t.Fatalf("function call arguments = %q, want reference json.dumps spacing", call.Arguments)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for function call")
@@ -1534,7 +1694,7 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 		if call == nil {
 			t.Fatal("function call = nil")
 		}
-		if call.CallID != "call-9" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		if call.CallID != "call-9" || call.Name != "lookup" || call.Arguments != `{"city": "Paris"}` {
 			t.Fatalf("function call = %+v, want call-9 lookup JSON args", call)
 		}
 	case <-time.After(time.Second):
@@ -1579,6 +1739,38 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testi
 		t.Fatalf("handle transcript after unknown JSON error = %v", err)
 	}
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_5", "still connected", true)
+}
+
+func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"transcript","role":"user","medium":"voice","text":"bad","final":true,"ordinal":"bad"}`),
+		[]byte(`{not-json`),
+	} {
+		if err := session.handleServerTextMessage(payload); err != nil {
+			t.Fatalf("handle malformed JSON error = %v, want reference recv loop to continue", err)
+		}
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after malformed JSON = %#v, want no emitted event", event)
+	default:
+	}
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"transcript","role":"user","medium":"voice","text":"still connected","final":true,"ordinal":6}`)); err != nil {
+		t.Fatalf("handle transcript after malformed JSON error = %v", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_6", "still connected", true)
 }
 
 func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
@@ -1686,6 +1878,30 @@ func requireUltravoxRealtimeClosedAudio(t *testing.T, audioCh <-chan *audiomodel
 	}
 }
 
+func assertUltravoxRealtimeTextOpen(t *testing.T, textCh <-chan string) {
+	t.Helper()
+	select {
+	case _, ok := <-textCh:
+		if !ok {
+			t.Fatal("text channel closed on reference restart")
+		}
+		t.Fatal("unexpected text delta after reference restart")
+	default:
+	}
+}
+
+func assertUltravoxRealtimeAudioOpen(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) {
+	t.Helper()
+	select {
+	case _, ok := <-audioCh:
+		if !ok {
+			t.Fatal("audio channel closed on reference restart")
+		}
+		t.Fatal("unexpected audio frame after reference restart")
+	default:
+	}
+}
+
 func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSession, itemID string, transcript string, final bool) {
 	t.Helper()
 	select {
@@ -1703,6 +1919,35 @@ func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSessi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for transcript event")
+	}
+}
+
+func requireUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) *telemetry.RealtimeModelMetrics {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeMetricsCollected {
+			t.Fatalf("event type = %s, want metrics_collected", event.Type)
+		}
+		if event.Metrics == nil {
+			t.Fatal("Metrics = nil")
+		}
+		return event.Metrics
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for metrics_collected")
+	}
+	return nil
+}
+
+func assertNoUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type == llm.RealtimeEventTypeMetricsCollected {
+			t.Fatalf("unexpected metrics event = %#v", event.Metrics)
+		}
+		t.Fatalf("unexpected realtime event = %#v", event)
+	default:
 	}
 }
 

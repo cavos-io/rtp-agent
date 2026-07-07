@@ -44,9 +44,16 @@ type GradiumSTT struct {
 	temperature       *float64
 	language          string
 	dialWebsocket     gradiumSTTWebsocketDialer
+	mu                sync.Mutex
+	streams           map[*gradiumSTTStream]struct{}
 }
 
 type GradiumSTTOption func(*GradiumSTT)
+type GradiumSTTUpdateOption func(*gradiumSTTUpdateOptions)
+
+type gradiumSTTUpdateOptions struct {
+	bufferSizeSeconds *float64
+}
 
 type gradiumSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
@@ -100,6 +107,12 @@ func WithGradiumSTTBufferSizeSeconds(seconds float64) GradiumSTTOption {
 	}
 }
 
+func WithGradiumSTTUpdateBufferSizeSeconds(seconds float64) GradiumSTTUpdateOption {
+	return func(opts *gradiumSTTUpdateOptions) {
+		opts.bufferSizeSeconds = &seconds
+	}
+}
+
 func withGradiumSTTWebsocketDialer(dialer gradiumSTTWebsocketDialer) GradiumSTTOption {
 	return func(s *GradiumSTT) {
 		if dialer != nil {
@@ -122,6 +135,7 @@ func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 		vadFlush:          true,
 		language:          defaultSTTLanguage,
 		dialWebsocket:     defaultGradiumSTTWebsocketDialer,
+		streams:           make(map[*gradiumSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -139,6 +153,29 @@ func (s *GradiumSTT) InputSampleRate() uint32 {
 }
 func (s *GradiumSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
+}
+
+func (s *GradiumSTT) UpdateOptions(opts ...GradiumSTTUpdateOption) {
+	var update gradiumSTTUpdateOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&update)
+		}
+	}
+
+	var streams []*gradiumSTTStream
+	s.mu.Lock()
+	if update.bufferSizeSeconds != nil {
+		s.bufferSizeSeconds = *update.bufferSizeSeconds
+	}
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(update)
+	}
 }
 
 func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -160,12 +197,14 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &gradiumSTTStream{
-		conn:         conn,
-		events:       make(chan *stt.SpeechEvent, 100),
-		errCh:        make(chan error, 1),
-		ctx:          streamCtx,
-		cancel:       cancel,
-		audioBStream: gradiumSTTAudioByteStream(s.sampleRate, s.bufferSizeSeconds),
+		provider:          s,
+		conn:              conn,
+		events:            make(chan *stt.SpeechEvent, 100),
+		errCh:             make(chan error, 1),
+		ctx:               streamCtx,
+		cancel:            cancel,
+		audioBStream:      gradiumSTTAudioByteStream(s.sampleRate),
+		bufferSizeSeconds: s.bufferSizeSeconds,
 		state: &gradiumSTTMessageState{
 			language:       streamLanguage,
 			vadBucket:      s.vadBucket,
@@ -177,8 +216,30 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 			remainingSteps: nil,
 		},
 	}
-	go stream.readLoop()
+	s.registerStream(stream)
+	go stream.readLoop(conn)
 	return stream, nil
+}
+
+func (s *GradiumSTT) registerStream(stream *gradiumSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*gradiumSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *GradiumSTT) unregisterStream(stream *gradiumSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func defaultGradiumSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -233,6 +294,7 @@ func writeGradiumSTTMessage(conn *websocket.Conn, message map[string]any) error 
 }
 
 type gradiumSTTStream struct {
+	provider        *GradiumSTT
 	conn            *websocket.Conn
 	events          chan *stt.SpeechEvent
 	errCh           chan error
@@ -245,15 +307,29 @@ type gradiumSTTStream struct {
 	cancel context.CancelFunc
 	state  *gradiumSTTMessageState
 
-	audioBStream *audio.AudioByteStream
-	readMessage  func() (int, []byte, error)
+	audioBStream      *audio.AudioByteStream
+	readMessage       func() (int, []byte, error)
+	bufferSizeSeconds float64
+	reconnectNext     bool
 }
 
-func (s *gradiumSTTStream) readLoop() {
-	defer close(s.events)
+func (s *gradiumSTTStream) readLoop(conn *websocket.Conn) {
+	closeEvents := true
+	defer func() {
+		if closeEvents {
+			close(s.events)
+		}
+	}()
 	for {
-		msgType, message, err := s.readMessageData()
+		msgType, message, err := s.readMessageData(conn)
 		if err != nil {
+			s.mu.Lock()
+			stale := conn != nil && s.conn != conn
+			s.mu.Unlock()
+			if stale {
+				closeEvents = false
+				return
+			}
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() && !s.isClosed() {
 				continue
@@ -287,11 +363,11 @@ func (s *gradiumSTTStream) readLoop() {
 	}
 }
 
-func (s *gradiumSTTStream) readMessageData() (int, []byte, error) {
+func (s *gradiumSTTStream) readMessageData(conn *websocket.Conn) (int, []byte, error) {
 	if s.readMessage != nil {
 		return s.readMessage()
 	}
-	return s.conn.ReadMessage()
+	return conn.ReadMessage()
 }
 
 func gradiumSTTCloseStatusCode(err error) int {
@@ -311,6 +387,9 @@ func (s *gradiumSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if err := s.reconnectIfNeededLocked(); err != nil {
+		return err
+	}
 	return s.writeAudioFramesLocked(s.audioBStream.Write(frame.Data))
 }
 
@@ -320,7 +399,52 @@ func (s *gradiumSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if err := s.reconnectIfNeededLocked(); err != nil {
+		return err
+	}
 	return s.writeAudioFramesLocked(s.audioBStream.Flush())
+}
+
+func (s *gradiumSTTStream) updateOptions(update gradiumSTTUpdateOptions) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if update.bufferSizeSeconds != nil {
+		s.bufferSizeSeconds = *update.bufferSizeSeconds
+		s.reconnectNext = true
+	}
+}
+
+func (s *gradiumSTTStream) reconnectIfNeededLocked() error {
+	if !s.reconnectNext {
+		return nil
+	}
+	if s.provider == nil {
+		return io.ErrClosedPipe
+	}
+	language := defaultSTTLanguage
+	if s.state != nil && s.state.language != "" {
+		language = s.state.language
+	}
+	conn, _, err := s.provider.dialWebsocket(s.ctx, s.provider.modelEndpoint, buildGradiumSTTHeaders(s.provider))
+	if err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect gradium stt websocket: %v", err))
+	}
+	if err := writeGradiumSTTMessage(conn, buildGradiumSTTSetupForLanguage(s.provider, language)); err != nil {
+		conn.Close()
+		return err
+	}
+	oldConn := s.conn
+	s.conn = conn
+	s.audioBStream = gradiumSTTAudioByteStream(s.provider.sampleRate)
+	s.reconnectNext = false
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	go s.readLoop(conn)
+	return nil
 }
 
 func (s *gradiumSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
@@ -366,9 +490,17 @@ func (s *gradiumSTTStream) closeLocked() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = writeGradiumSTTMessage(s.conn, buildGradiumSTTCloseMessage())
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	if s.conn != nil {
+		_ = writeGradiumSTTMessage(s.conn, buildGradiumSTTCloseMessage())
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
 }
 
 func (s *gradiumSTTStream) isClosed() bool {
@@ -416,18 +548,11 @@ func (s *gradiumSTTStream) currentStartTimeOffset() float64 {
 	return s.startTimeOffset
 }
 
-func gradiumSTTAudioByteStream(sampleRate int, bufferSizeSeconds float64) *audio.AudioByteStream {
+func gradiumSTTAudioByteStream(sampleRate int) *audio.AudioByteStream {
 	if sampleRate <= 0 {
 		sampleRate = defaultSTTSampleRate
 	}
-	if bufferSizeSeconds <= 0 {
-		bufferSizeSeconds = defaultSTTBufferSeconds
-	}
-	samplesPerChannel := uint32(float64(sampleRate) * bufferSizeSeconds)
-	if samplesPerChannel == 0 {
-		samplesPerChannel = 1
-	}
-	return audio.NewAudioByteStream(uint32(sampleRate), 1, samplesPerChannel)
+	return audio.NewAudioByteStream(uint32(sampleRate), 1, 1920)
 }
 
 func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {

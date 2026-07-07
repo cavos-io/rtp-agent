@@ -530,7 +530,7 @@ func TestGradiumSTTReadTimeoutDoesNotAbortReferenceStream(t *testing.T) {
 		},
 	}
 
-	go stream.readLoop()
+	go stream.readLoop(nil)
 	t.Cleanup(func() {
 		close(releaseRead)
 	})
@@ -761,7 +761,7 @@ func TestGradiumSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
-func TestGradiumSTTPushFrameHonorsReferenceBufferSizeOption(t *testing.T) {
+func TestGradiumSTTPushFrameKeepsReferenceChunkSizeWithBufferOption(t *testing.T) {
 	audioCh := make(chan map[string]any, 1)
 	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -781,25 +781,99 @@ func TestGradiumSTTPushFrameHonorsReferenceBufferSizeOption(t *testing.T) {
 		WithGradiumSTTBufferSizeSeconds(0.16),
 		dialer,
 	)
+	if got := provider.bufferSizeSeconds; got != 0.16 {
+		t.Fatalf("provider buffer_size_seconds = %v, want stored reference option", got)
+	}
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	defer stream.Close()
+	gradiumStream, ok := stream.(*gradiumSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *gradiumSTTStream", stream)
+	}
+	if got := gradiumStream.bufferSizeSeconds; got != 0.16 {
+		t.Fatalf("stream buffer_size_seconds = %v, want stored reference option", got)
+	}
 
-	first := gradiumBytesOfLength(7678, 0x01)
+	first := gradiumBytesOfLength(3838, 0x01)
 	second := []byte{0x02, 0x03}
 	if err := stream.PushFrame(&model.AudioFrame{Data: first}); err != nil {
 		t.Fatalf("first PushFrame returned error: %v", err)
 	}
-	assertNoGradiumMessage(t, audioCh, "incomplete configured reference chunk")
+	assertNoGradiumMessage(t, audioCh, "incomplete fixed reference chunk")
 	if err := stream.PushFrame(&model.AudioFrame{Data: second}); err != nil {
 		t.Fatalf("second PushFrame returned error: %v", err)
 	}
-	audioMsg := receiveGradiumMessage(t, audioCh, "configured buffer audio")
+	audioMsg := receiveGradiumMessage(t, audioCh, "fixed reference audio")
 	want := append(append([]byte{}, first...), second...)
 	if audioMsg["type"] != "audio" || audioMsg["audio"] != base64.StdEncoding.EncodeToString(want) {
-		t.Fatalf("audio = %#v, want one 7680-byte configured reference chunk", audioMsg)
+		t.Fatalf("audio = %#v, want one fixed 3840-byte reference chunk", audioMsg)
+	}
+}
+
+func TestGradiumSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
+	setupCh := make(chan map[string]any, 2)
+	audioCh := make(chan map[string]any, 1)
+	var connMu sync.Mutex
+	connIndex := 0
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connMu.Lock()
+		connIndex++
+		index := connIndex
+		connMu.Unlock()
+
+		_, setupPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read setup %d: %v", index, err)
+			return
+		}
+		setupCh <- decodeGradiumMessage(t, setupPayload)
+
+		if index == 1 {
+			_, _, _ = conn.ReadMessage()
+			return
+		}
+
+		_, audioPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read reconnected audio: %v", err)
+			return
+		}
+		audioCh <- decodeGradiumMessage(t, audioPayload)
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	_ = receiveGradiumMessage(t, setupCh, "initial setup")
+
+	provider.UpdateOptions(WithGradiumSTTUpdateBufferSizeSeconds(0.16))
+	gradiumStream := stream.(*gradiumSTTStream)
+	gradiumStream.mu.Lock()
+	gotBufferSizeSeconds := gradiumStream.bufferSizeSeconds
+	gradiumStream.mu.Unlock()
+	if gotBufferSizeSeconds != 0.16 {
+		t.Fatalf("updated stream buffer_size_seconds = %v, want stored reference option", gotBufferSizeSeconds)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: gradiumBytesOfLength(3838, 0x01)}); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+	assertNoGradiumMessage(t, audioCh, "incomplete reconnected fixed reference chunk")
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x02, 0x03}}); err != nil {
+		t.Fatalf("second PushFrame returned error: %v", err)
+	}
+	_ = receiveGradiumMessage(t, setupCh, "reconnect setup")
+	audioMsg := receiveGradiumMessage(t, audioCh, "reconnected configured buffer audio")
+	if audioMsg["type"] != "audio" {
+		t.Fatalf("reconnected message = %#v, want audio", audioMsg)
 	}
 }
 
