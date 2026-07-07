@@ -304,7 +304,8 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			focusMode:            s.focusMode,
 			includePartials:      speechmaticsIncludePartials(s),
 		},
-		owner: s,
+		owner:                     s,
+		waitForRecognitionStarted: true,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
@@ -695,9 +696,12 @@ type speechmaticsSTTStream struct {
 	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
+	audioReady  bool
 
-	speakerResultCh  chan []SpeechmaticsSpeakerIdentifier
-	pushedSampleRate uint32
+	waitForRecognitionStarted bool
+	pendingAudioChunks        [][]byte
+	speakerResultCh           chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate          uint32
 }
 
 type speechmaticsStreamState struct {
@@ -778,6 +782,18 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		s.markClosed()
 		_ = s.closeTransport()
 		return false
+	}
+	if resp.Message == "RecognitionStarted" {
+		if err := s.markReadyForAudio(); err != nil {
+			if s.errCh != nil {
+				select {
+				case s.errCh <- err:
+				default:
+				}
+			}
+			return false
+		}
+		return true
 	}
 	if resp.Message == "SpeakersResult" {
 		s.recordSpeakerResult(resp.Speakers)
@@ -983,7 +999,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioBuf = newSpeechmaticsAudioByteStream(frame)
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
-		if err := s.writeBinaryData(chunk.Data); err != nil {
+		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1018,6 +1034,32 @@ func (s *speechmaticsSTTStream) writeJSONMessage(message interface{}) error {
 		return io.ErrClosedPipe
 	}
 	return s.conn.WriteJSON(message)
+}
+
+func (s *speechmaticsSTTStream) writeAudioChunkLocked(data []byte) error {
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingAudioChunks = append(s.pendingAudioChunks, append([]byte(nil), data...))
+		return nil
+	}
+	return s.writeBinaryData(data)
+}
+
+func (s *speechmaticsSTTStream) markReadyForAudio() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	s.audioReady = true
+	pending := s.pendingAudioChunks
+	s.pendingAudioChunks = nil
+	for _, chunk := range pending {
+		if err := s.writeBinaryData(chunk); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) Finalize() error {
@@ -1111,7 +1153,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 		s.state = &speechmaticsStreamState{}
 	}
 	for _, chunk := range s.audioBuf.Flush() {
-		if err := s.writeBinaryData(chunk.Data); err != nil {
+		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1185,6 +1227,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.pendingAudioChunks = nil
 	s.closeDone()
 	defer func() {
 		if s.owner != nil {

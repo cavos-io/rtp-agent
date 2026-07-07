@@ -784,6 +784,39 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("binary writes before RecognitionStarted = %d, want buffered audio", len(writes))
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	if len(writes) != 1 {
+		t.Fatalf("binary writes after RecognitionStarted = %d, want buffered chunk", len(writes))
+	}
+	if got := len(writes[0]); got != 3200 {
+		t.Fatalf("buffered chunk length = %d, want 3200", got)
+	}
+}
+
 func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {
