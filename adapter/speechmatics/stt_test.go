@@ -864,6 +864,40 @@ func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTGetSpeakerIDsTimesOutLikeReference(t *testing.T) {
+	oldTimeout := speechmaticsSpeakerResultTimeout
+	speechmaticsSpeakerResultTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsSpeakerResultTimeout = oldTimeout })
+
+	writes := 0
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	start := time.Now()
+	speakers, err := provider.GetSpeakerIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetSpeakerIDs error = %v, want nil timeout result", err)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("GetSpeakerIDs elapsed = %s, want bounded reference timeout", elapsed)
+	}
+	if writes != 1 {
+		t.Fatalf("GetSpeakers writes = %d, want one request before timeout", writes)
+	}
+	if len(speakers) != 0 {
+		t.Fatalf("speakers = %#v, want empty timeout result", speakers)
+	}
+}
+
 func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeJSON: func(interface{}) error {

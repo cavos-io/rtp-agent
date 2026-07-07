@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -51,6 +52,8 @@ const (
 	speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
 	speechmaticsRTURLEnv  = "SPEECHMATICS_RT_URL"
 )
+
+var speechmaticsSpeakerResultTimeout = 5 * time.Second
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -384,7 +387,9 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 	speakers := make([]SpeechmaticsSpeakerIdentifier, 0, len(streams))
 	var requestErr error
 	for _, stream := range streams {
-		streamSpeakers, err := stream.GetSpeakerIDs(ctx)
+		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)
+		streamSpeakers, err := stream.GetSpeakerIDs(streamCtx)
+		cancel()
 		if err != nil {
 			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				continue
@@ -397,6 +402,20 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		speakers = append(speakers, streamSpeakers...)
 	}
 	return speakers, requestErr
+}
+
+func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := speechmaticsSpeakerResultTimeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (s *SpeechmaticsSTT) isClosed() bool {
