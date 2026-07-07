@@ -21,6 +21,63 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
+func TestPipelineAgentStartRootsCtxUnderSessionCtx(t *testing.T) {
+	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := agent.Start(ctx, session); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	agent.mu.Lock()
+	vaCtx := agent.ctx
+	agent.mu.Unlock()
+	if vaCtx == nil {
+		t.Fatal("agent.ctx is nil after Start")
+	}
+
+	cancel()
+
+	select {
+	case <-vaCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent.ctx not cancelled when session ctx cancelled — va.ctx is not rooted under the session ctx (leak on teardown)")
+	}
+}
+
+func TestPipelineAgentBargeInResetStaysRootedUnderSessionCtx(t *testing.T) {
+	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := agent.Start(ctx, session); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	agent.mu.Lock()
+	prevCtx := agent.ctx
+	agent.resetGenerationCtxLocked()
+	newCtx := agent.ctx
+	agent.mu.Unlock()
+
+	select {
+	case <-prevCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("previous va.ctx not cancelled by barge-in reset")
+	}
+	if newCtx.Err() != nil {
+		t.Fatalf("new va.ctx already cancelled: %v", newCtx.Err())
+	}
+
+	cancel()
+	select {
+	case <-newCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("re-created va.ctx not cancelled by session-ctx teardown — barge-in reset is not rooted under the session ctx (leak)")
+	}
+}
+
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -6447,4 +6504,47 @@ func (f *fakePipelineRecognizeStream) StartTime() float64 {
 func (f *fakePipelineRecognizeStream) SetStartTime(startTime float64) {
 	f.startTime = startTime
 	f.startTimeSet = true
+}
+
+func TestPipelineAgentEmitsLLMMetricsWhenReplyContextCanceledBeforeTTS(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		model:    "test-llm",
+		provider: "test-llm-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello"}},
+			},
+		},
+	}
+	fakeTTS := &fakePipelineTTS{streamErr: context.Canceled}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, fakeTTS, chatCtx)
+	agent.session = session
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	agent.ctx = ctx
+
+	metricsCh := session.MetricsCollectedEvents()
+
+	speech := NewSpeechHandle(true, InputDetails{Modality: "audio"})
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if !drainForLLMMetrics(metricsCh) {
+		t.Fatal("expected LLM metrics to be emitted even though the reply context was canceled before TTS, got none")
+	}
+}
+
+func drainForLLMMetrics(ch <-chan MetricsCollectedEvent) bool {
+	for {
+		select {
+		case ev := <-ch:
+			if _, ok := ev.Metrics.(*telemetry.LLMMetrics); ok {
+				return true
+			}
+		default:
+			return false
+		}
+	}
 }

@@ -270,29 +270,28 @@ type AgentSession struct {
 	userState  UserState
 	agentState AgentState
 
-	mu             sync.Mutex
-	activity       *AgentActivity
-	started        bool
-	starting       bool
-	startDone      chan struct{}
-	closing        bool
-	runCtx         context.Context
-	runState       *RunResult
-	onEnterDepth   int
-	userTurnClaims int
-	userTurnDone   chan struct{}
-	idleHolds      int
-	idleDone       chan struct{}
-	userAwayTimer  *time.Timer
-	userAwayGate   func() bool
-	aecWarmupTimer *time.Timer
-	aecWarmupDone  bool
-	userdata       any
-	userdataSet    bool
-	jobContext     any
-	jobContextSet  bool
-	// UserTranscriptFilter, when non-nil, is applied before user transcript
-	// events are recorded or broadcast to RoomIO subscribers.
+	mu                      sync.Mutex
+	activity                *AgentActivity
+	started                 bool
+	starting                bool
+	startDone               chan struct{}
+	closing                 bool
+	runCtx                  context.Context
+	runCancel               context.CancelFunc
+	runState                *RunResult
+	onEnterDepth            int
+	userTurnClaims          int
+	userTurnDone            chan struct{}
+	idleHolds               int
+	idleDone                chan struct{}
+	userAwayTimer           *time.Timer
+	userAwayGate            func() bool
+	aecWarmupTimer          *time.Timer
+	aecWarmupDone           bool
+	userdata                any
+	userdataSet             bool
+	jobContext              any
+	jobContextSet           bool
 	UserTranscriptFilter    func(string) string
 	mcpServers              []llm.MCPServer
 	recordedEvents          []Event
@@ -2148,7 +2147,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 			return nil, err
 		}
 	}
-	if err := assistant.Start(ctx, s); err != nil {
+	runCtx, runCancel := context.WithCancel(ctx)
+	if err := assistant.Start(runCtx, s); err != nil {
+		runCancel()
 		if unsubscribeAvatarMetrics != nil {
 			unsubscribeAvatarMetrics()
 		}
@@ -2162,10 +2163,14 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	activity := NewAgentActivity(agent, s)
 	s.mu.Lock()
+	if s.runCancel != nil {
+		s.runCancel()
+	}
 	s.activity = activity
 	s.started = true
 	s.closing = false
-	s.runCtx = ctx
+	s.runCtx = runCtx
+	s.runCancel = runCancel
 	if s.startDone == startDone {
 		s.starting = false
 		close(startDone)
@@ -2182,9 +2187,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		ivrActivity.Start()
 	}
 
-	// Trigger periodic usage metrics reporting
 	if hasMetricsCollector {
-		go s.reportUsageLoop(ctx)
+		go s.reportUsageLoop(runCtx)
 	}
 
 	s.UpdateAgentState(AgentStateListening)
@@ -2897,6 +2901,10 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.ivrActivity = nil
 	s.started = false
 	s.clearEventListenersLocked()
+	if s.runCancel != nil {
+		s.runCancel()
+		s.runCancel = nil
+	}
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing

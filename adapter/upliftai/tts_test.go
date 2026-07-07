@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -62,12 +63,41 @@ func (upliftAIErrorReader) Read([]byte) (int, error) {
 
 func (upliftAIErrorReader) Close() error { return nil }
 
+type upliftAIDecodeErrorDecoder struct {
+	err error
+}
+
+func (d upliftAIDecodeErrorDecoder) Push([]byte) {}
+
+func (d upliftAIDecodeErrorDecoder) EndInput() {}
+
+func (d upliftAIDecodeErrorDecoder) Next() (*model.AudioFrame, error) {
+	return nil, d.err
+}
+
+func (d upliftAIDecodeErrorDecoder) Close() error { return nil }
+
 type upliftAIReadErrorBody struct {
 	err error
 }
 
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
+
+type upliftAIReadTrackingCloser struct {
+	reads  int
+	closed int
+}
+
+func (b *upliftAIReadTrackingCloser) Read([]byte) (int, error) {
+	b.reads++
+	return 0, errors.New("unexpected body read")
+}
+
+func (b *upliftAIReadTrackingCloser) Close() error {
+	b.closed++
+	return nil
+}
 
 type upliftAICloseUnblocksReadBody struct {
 	readEntered chan struct{}
@@ -157,6 +187,35 @@ func (b *upliftAIBlockingEOFBody) Read(p []byte) (int, error) {
 
 func (b *upliftAIBlockingEOFBody) Close() error {
 	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+type upliftAIBlockingErrorBody struct {
+	data    []byte
+	offset  int
+	err     error
+	release chan struct{}
+	readErr chan struct{}
+	once    sync.Once
+}
+
+func newUpliftAIBlockingErrorBody(data []byte, err error) *upliftAIBlockingErrorBody {
+	return &upliftAIBlockingErrorBody{data: data, err: err, release: make(chan struct{}), readErr: make(chan struct{})}
+}
+
+func (b *upliftAIBlockingErrorBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	<-b.release
+	close(b.readErr)
+	return 0, b.err
+}
+
+func (b *upliftAIBlockingErrorBody) Close() error {
+	b.once.Do(func() { close(b.release) })
 	return nil
 }
 
@@ -268,20 +327,22 @@ func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
 func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	oldClient := http.DefaultClient
 	var gotVoice string
+	var gotOutputFormat string
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		var payload map[string]string
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
 		gotVoice = payload["voiceId"]
+		gotOutputFormat = payload["outputFormat"]
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
 		}, nil
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	tts := NewUpliftAITTS("test-key", "")
+	tts := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
 	stream, err := tts.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
@@ -295,6 +356,9 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	}
 	if gotVoice != "voice-updated" {
 		t.Fatalf("request voice = %q, want updated voice", gotVoice)
+	}
+	if gotOutputFormat != "PCM_22050_16" {
+		t.Fatalf("request outputFormat = %q, want PCM_22050_16", gotOutputFormat)
 	}
 }
 
@@ -408,8 +472,10 @@ func TestUpliftAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 }
 
 func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	var calls int
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
 		return nil, errors.New("upliftai transport failed")
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
@@ -428,6 +494,49 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after transport failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 after terminal transport failure", calls)
+	}
+}
+
+func TestUpliftAITTSSynthesizeInvalidBaseURLIsTerminal(t *testing.T) {
+	var calls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("\x01\x02"))}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"",
+		WithUpliftAIBaseURL("https://upliftai.example/%zz"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "bad route")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for invalid base URL", audio)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after invalid base URL = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if calls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 before rejecting invalid base URL", calls)
 	}
 }
 
@@ -533,6 +642,69 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.Body != `{"error":"rate limited"}` {
 		t.Fatalf("Body = %#v, want provider body", statusErr.Body)
+	}
+}
+
+func TestUpliftAITTSSynthesizeStatusErrorIsTerminal(t *testing.T) {
+	var calls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("first Next error = %T %v, want APIStatusError", err, err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || err != io.EOF {
+		t.Fatalf("second Next = (%#v, %v), want nil, io.EOF after terminal status error", audio, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want 1 after terminal status error", calls)
+	}
+}
+
+func TestUpliftAITTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	body := &upliftAIReadTrackingCloser{}
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       body,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body closes = %d, want 1", body.closed)
 	}
 }
 
@@ -727,6 +899,9 @@ func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *test
 			}
 			if !strings.Contains(err.Error(), "unsupported output format: "+outputFormat) {
 				t.Fatalf("Next error = %q, want reference unsupported output format message", err.Error())
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after unsupported output format = (%#v, %v), want nil, io.EOF", audio, err)
 			}
 			if httpCalls != 0 {
 				t.Fatalf("HTTP calls = %d, want 0 before rejecting unsupported output format", httpCalls)
@@ -1141,6 +1316,62 @@ func TestUpliftAITTSStreamNoAudioKeepsReferenceAPIError(t *testing.T) {
 	}
 	if got, want := httpCalls, 1; got != want {
 		t.Fatalf("HTTP calls = %d, want one silent segment request", got)
+	}
+}
+
+func TestUpliftAITTSStreamGracefulEOFWithoutAudioReturnsReferenceNoAudioError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("interrupted before audio"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.audio != nil {
+			t.Fatalf("Next audio = %#v, want nil for graceful EOF without audio", got.audio)
+		}
+		var apiErr *llm.APIError
+		if !errors.As(got.err, &apiErr) {
+			t.Fatalf("Next error = %T(%v), want reference APIError for no-audio segment", got.err, got.err)
+		}
+		if !strings.Contains(got.err.Error(), "no audio frames were pushed for text: interrupted before audio") {
+			t.Fatalf("Next error = %q, want reference no-audio message", got.err.Error())
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = stream.Close()
+		select {
+		case <-resultCh:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("timed out waiting for no-audio error after graceful EOF without audio")
 	}
 }
 
@@ -2139,6 +2370,12 @@ func TestUpliftAITTSChunkedStreamSocketIOConnectPingWriteFailureIsAPIConnectionE
 	if got, want := dials, upliftAISocketIOAttempts; got != want {
 		t.Fatalf("socket.io dial count = %d, want reference reconnect attempts %d", got, want)
 	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after socket.io connect failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+	if got, want := dials, upliftAISocketIOAttempts; got != want {
+		t.Fatalf("socket.io dial count after terminal failure = %d, want %d", got, want)
+	}
 }
 
 func TestUpliftAITTSChunkedStreamSocketIOAuthWriteCancelReturnsContextCanceled(t *testing.T) {
@@ -3016,6 +3253,9 @@ func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T
 			if !strings.Contains(err.Error(), errRead.Error()) {
 				t.Fatalf("Next terminal error = %q, want original read error %q", err.Error(), errRead.Error())
 			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after MP3 read failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
 			return
 		}
 		if audio == nil {
@@ -3030,6 +3270,43 @@ func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T
 	}
 
 	t.Fatalf("read %d decoded MP3 frames without terminal read error", frames)
+}
+
+func TestUpliftAITTSChunkedStreamCompressedDecodeFailureIsTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		outputFormat string
+		wantMessage  string
+	}{
+		{name: "mp3", outputFormat: "MP3_22050_32", wantMessage: "MP3 decode failed"},
+		{name: "ogg", outputFormat: "OGG_22050_16", wantMessage: "OGG decode failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeErr := errors.New("provider compressed audio decode failed")
+			stream := &upliftAITTSChunkedStream{
+				started:      true,
+				outputFormat: tc.outputFormat,
+				decoder:      upliftAIDecodeErrorDecoder{err: decodeErr},
+				resp:         &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+			}
+			defer stream.Close()
+
+			audio, err := stream.Next()
+			if audio != nil {
+				t.Fatalf("Next audio = %#v, want nil on compressed decode failure", audio)
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next error = %T(%v), want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("Next error = %q, want %q", err.Error(), tc.wantMessage)
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after compressed decode failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
+		})
+	}
 }
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
@@ -3427,6 +3704,59 @@ func TestUpliftAITTSChunkedStreamStreamsReferenceOGGBeforeEOF(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamOGGKeepsAudioReturnedWithReadError(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+	errRead := errors.New("upliftai ogg read failed after audio")
+	body := newUpliftAIBlockingErrorBody(oggData, errRead)
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want decoded OGG frame before provider read error", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want decoded OGG frame before provider read error", audio)
+	}
+	body.Close()
+	select {
+	case <-body.readErr:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OGG provider read error")
+	}
+
+	for i := 0; i < 500; i++ {
+		audio, err = stream.Next()
+		if err != nil {
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next terminal error = %T(%v), want APIConnectionError after decoded OGG frames", err, err)
+			}
+			if !strings.Contains(err.Error(), errRead.Error()) {
+				t.Fatalf("Next terminal error = %q, want original read error %q", err.Error(), errRead.Error())
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after OGG read failure = (%#v, %v), want nil, io.EOF", audio, err)
+			}
+			return
+		}
+		if audio == nil {
+			continue
+		}
+		if audio.IsFinal {
+			t.Fatal("final marker arrived after OGG read failure, want terminal read error")
+		}
+	}
+	t.Fatal("read decoded OGG frames without terminal read error")
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
@@ -3619,6 +3949,49 @@ func TestUpliftAITTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamMP3StartupReadFailureIsTerminal(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		outputFormat: "MP3_22050_32",
+		resp:         &http.Response{Body: upliftAIErrorReader{}},
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after MP3 startup read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamULawReadFailureIsTerminal(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		outputFormat: "ULAW_8000_8",
+		resp:         &http.Response{Body: upliftAIErrorReader{}},
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after ULAW read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
 }
 
 func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
@@ -3692,6 +4065,9 @@ func TestUpliftAITTSChunkedStreamWAVNetReadTimeoutReturnsAPITimeoutError(t *test
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError for WAV response-body socket timeout", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after WAV timeout = (%#v, %v), want nil, io.EOF", audio, err)
 	}
 }
 

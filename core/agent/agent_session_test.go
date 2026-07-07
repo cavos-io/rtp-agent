@@ -1651,6 +1651,35 @@ func TestAgentSessionUsesAgentRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopCancelsRunContextWithoutParentCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.RealtimeModel = &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	session.mu.Lock()
+	runCtx := session.runCtx
+	session.mu.Unlock()
+	if runCtx == nil {
+		t.Fatal("runCtx is nil after Start")
+	}
+	if runCtx.Err() != nil {
+		t.Fatalf("runCtx already cancelled after Start: %v", runCtx.Err())
+	}
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	if runCtx.Err() == nil {
+		t.Fatal("Stop() did not cancel the session run ctx; background tasks tied to it leak until the caller cancels the start ctx")
+	}
+}
+
 func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{

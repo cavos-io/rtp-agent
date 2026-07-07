@@ -3983,6 +3983,42 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 	}
 }
 
+func TestRoomIOOnRoomDisconnectedClosesSession(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+
+	cb := rio.GetCallback()
+	if cb.OnDisconnected == nil {
+		t.Fatal("GetCallback() did not register OnDisconnected; a room-level drop must tear down the session")
+	}
+	cb.OnDisconnected()
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != agent.CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("room disconnect did not close the session")
+	}
+}
+
+func TestRoomIOOnRoomDisconnectedCanBeDisabled(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options:      RoomOptions{DisableCloseOnDisconnect: true},
+	}
+
+	rio.GetCallback().OnDisconnected()
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event with DisableCloseOnDisconnect: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOHandleParticipantDisconnectedIgnoresUnavailableConfiguredParticipant(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{
@@ -4120,6 +4156,18 @@ func TestRoomIOCloseStopsRecorder(t *testing.T) {
 
 	if !recorder.closed {
 		t.Fatal("recorder.closed = false, want RoomIO.Close to stop recorder")
+	}
+}
+
+func TestRoomIOCloseIsIdempotent(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := rio.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
 	}
 }
 

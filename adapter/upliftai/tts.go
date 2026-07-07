@@ -557,9 +557,13 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 		s.mu.Unlock()
 	}()
 
+	hasAudio := false
 	for {
 		audio, err := stream.Next()
 		if err == io.EOF {
+			if !hasAudio && strings.TrimSpace(text) != "" {
+				return (&upliftAITTSChunkedStream{text: text}).noAudioError()
+			}
 			return nil
 		}
 		if err != nil {
@@ -567,6 +571,9 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 		}
 		if audio == nil {
 			continue
+		}
+		if audio.Frame != nil {
+			hasAudio = true
 		}
 		if !s.sendResult(audio, nil) {
 			return nil
@@ -665,6 +672,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	baseURL, voiceID, outputFormat, phraseReplacementConfigID := s.owner.requestOptions()
 	s.outputFormat = outputFormat
 	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
+		s.finalSent = true
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	if upliftAIUsesSocketIO(baseURL) {
@@ -677,6 +685,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 			phraseReplacementConfigID,
 		)
 		if err != nil {
+			s.finalSent = true
 			return err
 		}
 		s.resp = &http.Response{Body: body}
@@ -693,12 +702,14 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(s.ctx, "POST", baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return err
+		s.finalSent = true
+		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		s.finalSent = true
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
@@ -708,8 +719,14 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			s.finalSent = true
+			return io.EOF
+		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		s.finalSent = true
 		return llm.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
@@ -1229,6 +1246,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 			return nil, io.EOF
 		}
 		if readErr := s.compressedReadError(); readErr != nil {
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
 		}
 		if strings.Contains(err.Error(), "decoder closed") {
@@ -1242,6 +1260,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 			}
 			return nil, io.EOF
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
 	if s.closed {
@@ -1252,6 +1271,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
+			s.finalSent = true
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
 		}
 		frame = resampled
@@ -1280,7 +1300,8 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			return nil, io.EOF
 		}
 		if strings.Contains(err.Error(), "decoder closed") {
-			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+			if readErr := s.compressedReadError(); readErr != nil {
+				s.finalSent = true
 				return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 			}
 			if s.hasAudio && !s.finalSent {
@@ -1293,9 +1314,11 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			}
 			return nil, io.EOF
 		}
-		if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+		if readErr := s.compressedReadError(); readErr != nil {
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
 	}
 	if s.closed {
@@ -1306,6 +1329,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
+			s.finalSent = true
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
 		}
 		frame = resampled
@@ -1334,6 +1358,7 @@ func (s *upliftAITTSChunkedStream) startCompressedDecoder(decoder codecs.AudioSt
 				_ = decoder.Close()
 				return nil, true, io.EOF
 			}
+			s.finalSent = true
 			_ = decoder.Close()
 			return nil, true, upliftAITTSReadError(readErrorPrefix, err)
 		}
@@ -1413,8 +1438,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || upliftAIIsTimeoutError(err) {
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
 		}
+		s.finalSent = true
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 	}
 	if s.closed {
@@ -1661,6 +1688,7 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 				s.hasAudio = true
 				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
 		}
 		if len(s.pcmFrames) > 0 {
@@ -1749,6 +1777,7 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 				s.hasAudio = true
 				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 		}
 	}
