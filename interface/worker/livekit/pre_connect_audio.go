@@ -224,6 +224,15 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 			return
 		}
 	}
+	if ok && len(ch) == 0 {
+		select {
+		case _, open := <-ch:
+			if !open {
+				ok = false
+			}
+		default:
+		}
+	}
 	if !ok || len(ch) > 0 {
 		ch = make(chan *PreConnectAudioBuffer, 1)
 		h.buffers[trackID] = ch
