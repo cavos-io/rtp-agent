@@ -9624,6 +9624,27 @@ func TestBargeInLogMemoSuppressesRepeats(t *testing.T) {
 		t.Fatal("same verdict in a new turn should log again after the reset")
 	}
 }
+func TestLegacyInterruptionGateDefersToHostPolicy(t *testing.T) {
+	decider := &classifyingBargeInDecider{decision: BargeInIgnore}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+	legacy := &fakeInterruptionGate{minSpeechMs: 500, strongBargeMs: 1200}
+	activity.Agent.InterruptionGate = legacy
+	if activity.interruptionGateSuppresses("Android", 200) {
+		t.Fatal("legacy gate vetoed a host-governed utterance")
+	}
+	if legacy.lastTranscript != "" {
+		t.Fatal("legacy gate was consulted despite an injected host policy")
+	}
+	if activity.bargeInTurnAction(BargeInIgnore, "Android") != bargeInTurnCommit {
+		t.Fatal("short non-backchannel answer must still become a user turn")
+	}
+	activity.Session.Options.BargeInDecider = nil
+	if !activity.interruptionGateSuppresses("Android", 200) {
+		t.Fatal("legacy gate should retain its short-speech veto without a host policy")
+	}
+}
+
 type fakeInterruptionGate struct {
 	minSpeechMs    int
 	strongBargeMs  int
