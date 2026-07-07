@@ -517,6 +517,46 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		ID:     "result-1",
+		CallID: "call-7",
+		Name:   "lookup",
+		Output: "Paris",
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want reference tool result event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "client_tool_result",
+		"invocationId":  "call-7",
+		"result":        "Paris",
+		"agentReaction": "speaks",
+		"responseType":  "tool-response",
+	})
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("second UpdateChatContext error = %v", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("duplicate tool result event = %#v", got)
+	default:
+	}
+}
+
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {
 	t.Helper()
 	select {

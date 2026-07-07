@@ -251,6 +251,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		inputSampleRate:  uint32(m.inputSampleRate),
 		outputSampleRate: uint32(m.outputSampleRate),
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolResults:      make(map[string]struct{}),
 	}, nil
 }
 
@@ -292,6 +293,7 @@ type realtimeSession struct {
 	outputSampleRate uint32
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
+	toolResults      map[string]struct{}
 	closed           bool
 	closeOnce        sync.Once
 }
@@ -299,8 +301,41 @@ type realtimeSession struct {
 func (s *realtimeSession) UpdateInstructions(string) error {
 	return ultravoxRealtimeSessionUnsupported("update_instructions")
 }
-func (s *realtimeSession) UpdateChatContext(*llm.ChatContext) error {
-	return ultravoxRealtimeSessionUnsupported("update_chat_context")
+func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		output, ok := item.(*llm.FunctionCallOutput)
+		if !ok || output.CallID == "" {
+			continue
+		}
+		key := output.ID
+		if key == "" {
+			key = output.CallID
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil
+		}
+		if _, ok := s.toolResults[key]; ok {
+			s.mu.Unlock()
+			continue
+		}
+		s.toolResults[key] = struct{}{}
+		s.mu.Unlock()
+		if err := s.sendClientEvent(map[string]any{
+			"type":          "client_tool_result",
+			"invocationId":  output.CallID,
+			"result":        output.Output,
+			"agentReaction": "speaks",
+			"responseType":  "tool-response",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (s *realtimeSession) UpdateTools([]llm.Tool) error {
 	return ultravoxRealtimeSessionUnsupported("update_tools")
