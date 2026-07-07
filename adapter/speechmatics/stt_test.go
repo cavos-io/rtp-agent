@@ -777,6 +777,20 @@ func TestSpeechmaticsSTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(0))
+
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want explicit reference sample rate 0", got)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	audioFormat := message["audio_format"].(map[string]interface{})
+	if audioFormat["sample_rate"] != 0 {
+		t.Fatalf("sample_rate = %#v, want explicit reference sample rate 0", audioFormat["sample_rate"])
+	}
+}
+
 func TestNewSpeechmaticsSTTUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SPEECHMATICS_API_KEY", "env-key")
 

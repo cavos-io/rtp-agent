@@ -90,7 +90,7 @@ func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			s.sampleRate = sampleRate
 		}
 	}
@@ -248,7 +248,7 @@ func (s *SpeechmaticsSTT) Provider() string {
 	return "Speechmatics"
 }
 func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
-	if s == nil || s.sampleRate <= 0 {
+	if s == nil || s.sampleRate < 0 {
 		return 16000
 	}
 	return uint32(s.sampleRate)
