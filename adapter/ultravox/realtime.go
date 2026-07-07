@@ -43,6 +43,11 @@ type RealtimeModel struct {
 }
 
 type RealtimeOption func(*RealtimeModel)
+type RealtimeUpdateOption func(*realtimeUpdateOptions)
+
+type realtimeUpdateOptions struct {
+	outputMedium *string
+}
 
 func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, error) {
 	if apiKey == "" {
@@ -175,6 +180,14 @@ func WithRealtimeFirstSpeaker(firstSpeaker string) RealtimeOption {
 	}
 }
 
+func WithRealtimeUpdateOutputMedium(outputMedium string) RealtimeUpdateOption {
+	return func(opts *realtimeUpdateOptions) {
+		if outputMedium != "" {
+			opts.outputMedium = &outputMedium
+		}
+	}
+}
+
 func (m *RealtimeModel) Label() string { return "ultravox-" + m.model }
 func (m *RealtimeModel) Model() string { return m.model }
 func (m *RealtimeModel) Provider() string {
@@ -207,6 +220,18 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		AudioOutput:             m.outputMedium == "voice",
 		ManualFunctionCalls:     false,
 		PerResponseToolChoice:   false,
+	}
+}
+
+func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
+	var update realtimeUpdateOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&update)
+		}
+	}
+	if update.outputMedium != nil {
+		m.outputMedium = *update.outputMedium
 	}
 }
 

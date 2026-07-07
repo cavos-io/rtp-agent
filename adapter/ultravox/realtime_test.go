@@ -136,3 +136,26 @@ func TestUltravoxRealtimeOptionsMatchReference(t *testing.T) {
 		t.Fatalf("first speaker = %q/%v, want FIRST_SPEAKER_AGENT/true", got, ok)
 	}
 }
+
+func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium("text"))
+	if got := model.OutputMedium(); got != "text" {
+		t.Fatalf("output medium = %q, want text after reference update_options", got)
+	}
+	if model.Capabilities().AudioOutput {
+		t.Fatal("audio output = true, want false after output_medium=text")
+	}
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium("voice"))
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("output medium = %q, want voice after reference update_options", got)
+	}
+	if !model.Capabilities().AudioOutput {
+		t.Fatal("audio output = false, want true after output_medium=voice")
+	}
+}
