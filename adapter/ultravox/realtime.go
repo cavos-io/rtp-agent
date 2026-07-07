@@ -49,6 +49,8 @@ type RealtimeModel struct {
 	enableGreetingSet   bool
 	firstSpeaker        string
 	firstSpeakerSet     bool
+	sessionsMu          sync.Mutex
+	sessions            map[*realtimeSession]struct{}
 }
 
 type RealtimeOption func(*RealtimeModel)
@@ -241,6 +243,13 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 	}
 	if update.outputMedium != nil {
 		m.outputMedium = *update.outputMedium
+		sessions := m.realtimeSessions()
+		for _, session := range sessions {
+			_ = session.UpdateOptions(llm.RealtimeSessionOptions{
+				OutputMedium:    *update.outputMedium,
+				OutputMediumSet: true,
+			})
+		}
 	}
 }
 
@@ -249,6 +258,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:          make(chan llm.RealtimeEvent, 16),
 		audioCh:          make(chan []byte, 256),
 		clientEventCh:    make(chan map[string]any, 256),
+		model:            m,
 		inputSampleRate:  uint32(m.inputSampleRate),
 		outputSampleRate: uint32(m.outputSampleRate),
 		audioOutput:      m.outputMedium == "voice",
@@ -264,10 +274,36 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 			"medium": "text",
 		}
 	}
+	m.registerRealtimeSession(session)
 	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+func (m *RealtimeModel) registerRealtimeSession(session *realtimeSession) {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	if m.sessions == nil {
+		m.sessions = make(map[*realtimeSession]struct{})
+	}
+	m.sessions[session] = struct{}{}
+}
+
+func (m *RealtimeModel) unregisterRealtimeSession(session *realtimeSession) {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	delete(m.sessions, session)
+}
+
+func (m *RealtimeModel) realtimeSessions() []*realtimeSession {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	return sessions
+}
 
 type ultravoxRealtimeGeneration struct {
 	messageCh  chan llm.MessageGeneration
@@ -305,6 +341,7 @@ type realtimeSession struct {
 	eventCh          chan llm.RealtimeEvent
 	audioCh          chan []byte
 	clientEventCh    chan map[string]any
+	model            *RealtimeModel
 	inputSampleRate  uint32
 	outputSampleRate uint32
 	audioOutput      bool
@@ -544,6 +581,9 @@ func (s *realtimeSession) Close() error {
 		s.mu.Unlock()
 	})
 	s.finishGeneration(generation)
+	if s.model != nil {
+		s.model.unregisterRealtimeSession(s)
+	}
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
