@@ -3,6 +3,7 @@ package speechmatics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -268,6 +269,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		owner: s,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, language)
@@ -312,6 +314,17 @@ func (s *SpeechmaticsSTT) Close() error {
 	return closeErr
 }
 
+func (s *SpeechmaticsSTT) Finalize() error {
+	streams := s.activeStreams()
+	var finalizeErr error
+	for _, stream := range streams {
+		if err := stream.Finalize(); err != nil && finalizeErr == nil && !errors.Is(err, io.ErrClosedPipe) {
+			finalizeErr = err
+		}
+	}
+	return finalizeErr
+}
+
 func (s *SpeechmaticsSTT) isClosed() bool {
 	if s == nil {
 		return true
@@ -345,6 +358,19 @@ func (s *SpeechmaticsSTT) unregisterStream(stream *speechmaticsSTTStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
+}
+
+func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	return streams
 }
 
 func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
@@ -432,6 +458,7 @@ type speechmaticsSTTStream struct {
 	closed bool
 
 	writeBinary func([]byte) error
+	writeJSON   func(interface{}) error
 	closeConn   func() error
 	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
@@ -718,6 +745,29 @@ func (s *speechmaticsSTTStream) writeBinaryMessage(data []byte) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
+func (s *speechmaticsSTTStream) writeJSONData(message interface{}) error {
+	if s.writeJSON != nil {
+		return s.writeJSON(message)
+	}
+	return s.writeJSONMessage(message)
+}
+
+func (s *speechmaticsSTTStream) writeJSONMessage(message interface{}) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return s.conn.WriteJSON(message)
+}
+
+func (s *speechmaticsSTTStream) Finalize() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+}
+
 func (s *speechmaticsSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -820,7 +870,7 @@ func (s *speechmaticsSTTStream) closeWebsocketConn() error {
 	if s.conn == nil {
 		return nil
 	}
-	writeErr := s.conn.WriteJSON(map[string]interface{}{"message": "EndOfStream"})
+	writeErr := s.writeJSONMessage(map[string]interface{}{"message": "EndOfStream"})
 	closeErr := s.conn.Close()
 	if writeErr != nil {
 		return writeErr

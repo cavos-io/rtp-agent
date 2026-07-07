@@ -540,6 +540,63 @@ func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("finalize writes = %d, want one active stream write", len(writes))
+	}
+	if got, want := writes[0]["message"], "ForceEndOfUtterance"; got != want {
+		t.Fatalf("finalize message = %#v, want %#v", got, want)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize after stream Close error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("finalize writes after stream Close = %d, want unchanged", len(writes))
+	}
+}
+
+func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(interface{}) error {
+			return errors.New("unexpected finalize write")
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if err := stream.Finalize(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Finalize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestSpeechmaticsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		events: make(chan *stt.SpeechEvent, 1),
