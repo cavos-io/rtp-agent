@@ -139,6 +139,8 @@ func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if query.Get("sm-app") == "" {
 		t.Fatal("sm-app query parameter is empty")
 	}
+	assertSpeechmaticsTTSQuery(t, query, "sm-sdk", "livekit-plugins-1.5.19.rc1")
+	assertSpeechmaticsTTSQuery(t, query, "sm-app", "livekit/0.2.8")
 
 	var payload map[string]string
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
@@ -147,6 +149,23 @@ func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if payload["text"] != "hello" {
 		t.Fatalf("text = %q, want hello", payload["text"])
 	}
+}
+
+func TestSpeechmaticsTTSPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSSampleRate(0))
+
+	if provider.sampleRate != 0 {
+		t.Fatalf("sample rate = %d, want explicit reference sample rate 0", provider.sampleRate)
+	}
+	if got := provider.SampleRate(); got != 0 {
+		t.Fatalf("SampleRate = %d, want explicit reference sample rate 0", got)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	assertSpeechmaticsTTSQuery(t, req.URL.Query(), "output_format", "pcm_0")
 }
 
 func TestSpeechmaticsTTSUpdateOptionsMatchesReference(t *testing.T) {
@@ -161,6 +180,27 @@ func TestSpeechmaticsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want unchanged 16000", provider.sampleRate)
+	}
+}
+
+func TestSpeechmaticsTTSAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSVoice(""))
+	if provider.voice != "" {
+		t.Fatalf("constructor voice = %q, want explicit empty reference voice", provider.voice)
+	}
+
+	provider = NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSVoice("theo"))
+	provider.UpdateOptions(WithSpeechmaticsTTSVoice(""))
+	if provider.voice != "" {
+		t.Fatalf("updated voice = %q, want explicit empty reference voice", provider.voice)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/" {
+		t.Fatalf("request path = %q, want reference empty voice path", req.URL.Path)
 	}
 }
 
@@ -188,6 +228,57 @@ func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceBaseURL(t *testing.T) {
 	}
 	if req.URL.Host != "tts.example.com" {
 		t.Fatalf("request host = %q, want constructor route", req.URL.Host)
+	}
+}
+
+func TestSpeechmaticsTTSRequestPreservesReferenceBaseURLPath(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key",
+		WithSpeechmaticsTTSVoice("theo"),
+		WithSpeechmaticsTTSBaseURL("https://tts.example.com/"),
+	)
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "//generate/theo" {
+		t.Fatalf("request path = %q, want reference base_url concatenation path", req.URL.Path)
+	}
+}
+
+func TestSpeechmaticsTTSRequestPreservesReferenceEmptyBaseURL(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL(""))
+	if provider.baseURL != "" {
+		t.Fatalf("base URL = %q, want explicit empty reference base URL", provider.baseURL)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/sarah" {
+		t.Fatalf("request path = %q, want reference empty-base path", req.URL.Path)
+	}
+	if req.URL.Scheme != "" || req.URL.Host != "" {
+		t.Fatalf("request URL = %q, want reference relative URL", req.URL.String())
+	}
+}
+
+func TestSpeechmaticsTTSRequestPreservesReferenceVoicePath(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key",
+		WithSpeechmaticsTTSVoice("custom/voice"),
+		WithSpeechmaticsTTSBaseURL("https://tts.example.com"),
+	)
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/custom/voice" {
+		t.Fatalf("request path = %q, want reference voice path concatenation", req.URL.Path)
+	}
+	if req.URL.EscapedPath() != "/generate/custom/voice" {
+		t.Fatalf("escaped request path = %q, want unescaped reference voice path", req.URL.EscapedPath())
 	}
 }
 

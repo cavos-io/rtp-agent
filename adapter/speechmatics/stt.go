@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -50,8 +51,10 @@ type SpeechmaticsSTT struct {
 }
 
 const (
-	speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
-	speechmaticsRTURLEnv  = "SPEECHMATICS_RT_URL"
+	speechmaticsAPIKeyEnv       = "SPEECHMATICS_API_KEY"
+	speechmaticsRTURLEnv        = "SPEECHMATICS_RT_URL"
+	speechmaticsSTTAppParam     = "livekit/1.5.19.rc1"
+	speechmaticsVoiceSDKVersion = "0.2.8"
 )
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
@@ -64,8 +67,9 @@ type SpeechmaticsAdditionalVocabEntry struct {
 }
 
 type SpeechmaticsSpeakerIdentifier struct {
-	Label     string `json:"label"`
-	SpeakerID string `json:"speaker_id"`
+	Label              string   `json:"label"`
+	SpeakerID          string   `json:"speaker_id,omitempty"`
+	SpeakerIdentifiers []string `json:"speaker_identifiers,omitempty"`
 }
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
@@ -78,15 +82,13 @@ func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if baseURL != "" {
-			s.baseURL = strings.TrimRight(baseURL, "/")
-		}
+		s.baseURL = baseURL
 	}
 }
 
 func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			s.sampleRate = sampleRate
 		}
 	}
@@ -218,7 +220,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	maxDelay := 2.0
 	provider := &SpeechmaticsSTT{
 		apiKey:            apiKey,
-		baseURL:           strings.TrimRight(baseURL, "/"),
+		baseURL:           baseURL,
 		language:          "en",
 		turnDetectionMode: "external",
 		sampleRate:        16000,
@@ -244,7 +246,7 @@ func (s *SpeechmaticsSTT) Provider() string {
 	return "Speechmatics"
 }
 func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
-	if s == nil || s.sampleRate <= 0 {
+	if s == nil || s.sampleRate < 0 {
 		return 16000
 	}
 	return uint32(s.sampleRate)
@@ -366,6 +368,14 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	if len(streams) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
 	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
 	if focusMode != "" {
@@ -374,10 +384,6 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	focusSpeakers = cloneSpeechmaticsStringSlice(s.focusSpeakers)
 	ignoreSpeakers = cloneSpeechmaticsStringSlice(s.ignoreSpeakers)
 	focusMode = s.focusMode
-	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
-	for stream := range s.streams {
-		streams = append(streams, stream)
-	}
 	s.mu.Unlock()
 
 	var updateErr error
@@ -480,7 +486,16 @@ func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
 }
 
 func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
-	return strings.TrimRight(s.baseURL, "/")
+	rawURL := s.baseURL
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	query.Set("sm-app", speechmaticsSTTAppParam)
+	query.Set("sm-voice-sdk", speechmaticsVoiceSDKVersion)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
@@ -498,6 +513,9 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 		return io.ErrClosedPipe
 	}
 	var problems []string
+	if s.baseURL == "" {
+		problems = append(problems, "missing Speechmatics base URL")
+	}
 	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
 		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
 	}
@@ -534,8 +552,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.enableDiarization != nil {
 		if *s.enableDiarization {
 			config["diarization"] = "speaker"
-		} else {
-			config["diarization"] = "none"
 		}
 	} else {
 		config["diarization"] = "speaker"
@@ -543,14 +559,16 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if len(s.additionalVocab) > 0 {
 		config["additional_vocab"] = s.additionalVocab
 	}
-	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
-		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
-	}
 	if s.operatingPoint != "" {
 		config["operating_point"] = s.operatingPoint
 	}
 	if s.maxDelay != nil {
 		config["max_delay"] = *s.maxDelay
+	}
+	config["enable_entities"] = false
+	config["max_delay_mode"] = "flexible"
+	config["audio_filtering_config"] = map[string]interface{}{
+		"volume_threshold": 0.0,
 	}
 	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
 		config["conversation_config"] = conversationConfig
@@ -567,6 +585,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 			"type":        "raw",
 			"encoding":    s.audioEncoding,
 			"sample_rate": s.sampleRate,
+			"chunk_size":  160,
 		},
 		"transcription_config": config,
 	}
@@ -587,11 +606,11 @@ func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) 
 
 func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
+	if s == nil || s.turnDetectionMode != "fixed" {
+		return config
+	}
 	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
 		config["end_of_utterance_silence_trigger"] = trigger
-	}
-	if s != nil && s.eouMaxDelay != nil {
-		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
 	}
 	return config
 }
@@ -605,8 +624,11 @@ func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
 
 func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		return config
+	}
 	if len(s.knownSpeakers) > 0 {
-		config["speakers"] = s.knownSpeakers
+		config["speakers"] = speechmaticsKnownSpeakerConfig(s.knownSpeakers)
 	}
 	if s.speakerSensitivity != nil {
 		config["speaker_sensitivity"] = *s.speakerSensitivity
@@ -620,12 +642,20 @@ func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{}
 	return config
 }
 
-func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {
-	return map[string]interface{}{
-		"focus_speakers":  cloneSpeechmaticsStringSlice(focusSpeakers),
-		"ignore_speakers": cloneSpeechmaticsStringSlice(ignoreSpeakers),
-		"focus_mode":      focusMode,
+func speechmaticsKnownSpeakerConfig(speakers []SpeechmaticsSpeakerIdentifier) []map[string]interface{} {
+	config := make([]map[string]interface{}, 0, len(speakers))
+	for _, speaker := range speakers {
+		identifiers := cloneSpeechmaticsStringSlice(speaker.SpeakerIdentifiers)
+		if len(identifiers) == 0 && speaker.SpeakerID != "" {
+			identifiers = []string{speaker.SpeakerID}
+		}
+		entry := map[string]interface{}{
+			"label":               speaker.Label,
+			"speaker_identifiers": identifiers,
+		}
+		config = append(config, entry)
 	}
+	return config
 }
 
 func cloneSpeechmaticsStringSlice(values []string) []string {
@@ -1075,12 +1105,7 @@ func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpe
 	s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
 	s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
 	s.state.focusMode = focusMode
-	return s.writeJSONData(map[string]interface{}{
-		"message": "SetRecognitionConfig",
-		"transcription_config": map[string]interface{}{
-			"speaker_config": speechmaticsSTTSpeakerConfig(focusSpeakers, ignoreSpeakers, focusMode),
-		},
-	})
+	return nil
 }
 
 func (s *speechmaticsSTTStream) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {

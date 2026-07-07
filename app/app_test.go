@@ -7456,15 +7456,27 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["max_delay"], 1.25; got != want {
 			t.Fatalf("max_delay = %#v, want %#v", got, want)
 		}
-		conversationConfig, _ := config["conversation_config"].(map[string]any)
-		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.55; got != want {
-			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		if got, want := config["max_delay_mode"], "flexible"; got != want {
+			t.Fatalf("max_delay_mode = %#v, want %#v", got, want)
+		}
+		audioFilteringConfig, ok := config["audio_filtering_config"].(map[string]any)
+		if !ok {
+			t.Fatalf("audio_filtering_config = %#v, want map", config["audio_filtering_config"])
+		}
+		if got, want := audioFilteringConfig["volume_threshold"], 0.0; got != want {
+			t.Fatalf("audio_filtering_config.volume_threshold = %#v, want %#v", got, want)
+		}
+		if _, ok := config["conversation_config"]; ok {
+			t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 		}
 		if _, ok := config["end_of_utterance_silence_trigger"]; ok {
 			t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
 		}
 		if _, ok := config["end_of_utterance_max_delay"]; ok {
 			t.Fatalf("end_of_utterance_max_delay sent at top level in %#v", config)
+		}
+		if _, ok := message["end_of_utterance_max_delay"]; ok {
+			t.Fatalf("end_of_utterance_max_delay sent outside transcription_config in %#v", message)
 		}
 		diarizationConfig, _ := config["speaker_diarization_config"].(map[string]any)
 		if got, want := diarizationConfig["speaker_sensitivity"], 0.7; got != want {
@@ -7492,15 +7504,8 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := fmt.Sprint(firstVocab["sounds_like"]), "[live kit livekit]"; got != want {
 			t.Fatalf("vocab sounds_like = %#v, want %q", firstVocab["sounds_like"], want)
 		}
-		speakerConfig, _ := config["speaker_config"].(map[string]any)
-		if got, want := fmt.Sprint(speakerConfig["focus_speakers"]), "[agent user]"; got != want {
-			t.Fatalf("focus_speakers = %#v, want %q", speakerConfig["focus_speakers"], want)
-		}
-		if got, want := fmt.Sprint(speakerConfig["ignore_speakers"]), "[noise]"; got != want {
-			t.Fatalf("ignore_speakers = %#v, want %q", speakerConfig["ignore_speakers"], want)
-		}
-		if got, want := speakerConfig["focus_mode"], "retain"; got != want {
-			t.Fatalf("focus_mode = %#v, want %#v", got, want)
+		if _, ok := config["speaker_config"]; ok {
+			t.Fatalf("speaker_config = %#v, want omitted because reference keeps speaker focus local", config["speaker_config"])
 		}
 		knownSpeakers, _ := diarizationConfig["speakers"].([]any)
 		if len(knownSpeakers) != 1 {
@@ -7510,8 +7515,11 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := knownSpeaker["label"], "agent"; got != want {
 			t.Fatalf("known speaker label = %#v, want %#v", got, want)
 		}
-		if got, want := knownSpeaker["speaker_id"], "spk-1"; got != want {
-			t.Fatalf("known speaker id = %#v, want %#v", got, want)
+		if got, want := fmt.Sprint(knownSpeaker["speaker_identifiers"]), "[spk-1]"; got != want {
+			t.Fatalf("known speaker identifiers = %#v, want %#v", knownSpeaker["speaker_identifiers"], want)
+		}
+		if _, ok := knownSpeaker["speaker_id"]; ok {
+			t.Fatalf("known speaker speaker_id = %#v, want omitted from provider config", knownSpeaker["speaker_id"])
 		}
 		if _, ok := config["known_speakers"]; ok {
 			t.Fatalf("known_speakers sent at top level in %#v", config)

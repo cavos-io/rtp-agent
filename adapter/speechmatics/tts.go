@@ -26,8 +26,8 @@ const (
 	defaultSpeechmaticsTTSVoice      = "sarah"
 	defaultSpeechmaticsTTSSampleRate = 16000
 	defaultSpeechmaticsTTSTimeout    = 30 * time.Second
-	speechmaticsTTSSDKParam          = "livekit-plugins-go"
-	speechmaticsTTSAppParam          = "rtp-agent"
+	speechmaticsTTSSDKParam          = "livekit-plugins-1.5.19.rc1"
+	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
 
 type SpeechmaticsTTS struct {
@@ -44,15 +44,13 @@ type SpeechmaticsTTSOption func(*SpeechmaticsTTS)
 
 func WithSpeechmaticsTTSVoice(voice string) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
-		if voice != "" {
-			t.voice = voice
-		}
+		t.voice = voice
 	}
 }
 
 func WithSpeechmaticsTTSSampleRate(sampleRate int) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			t.sampleRate = sampleRate
 		}
 	}
@@ -60,9 +58,7 @@ func WithSpeechmaticsTTSSampleRate(sampleRate int) SpeechmaticsTTSOption {
 
 func WithSpeechmaticsTTSBaseURL(baseURL string) SpeechmaticsTTSOption {
 	return func(t *SpeechmaticsTTS) {
-		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
-		}
+		t.baseURL = baseURL
 	}
 }
 
@@ -135,7 +131,7 @@ type speechmaticsTTSRequestOptions struct {
 }
 
 func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmaticsTTSRequestOptions) (*http.Request, error) {
-	u, err := url.Parse(opts.baseURL + "/generate/" + url.PathEscape(opts.voice))
+	u, err := url.Parse(opts.baseURL + "/generate/" + opts.voice)
 	if err != nil {
 		return nil, err
 	}
