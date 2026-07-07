@@ -31,6 +31,10 @@ const (
 	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
 
+var speechmaticsTTSRetryInterval = func(retryAttempt int) time.Duration {
+	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
+}
+
 type SpeechmaticsTTS struct {
 	mu         sync.Mutex
 	streams    map[*speechmaticsTTSChunkedStream]struct{}
@@ -394,8 +398,8 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		if err == nil || err == io.EOF || errors.Is(err, context.Canceled) {
 			return err
 		}
-		if !s.retryBeforeAudio(err) {
-			return err
+		if retryErr := s.prepareRetryBeforeAudio(err); retryErr != nil {
+			return retryErr
 		}
 	}
 }
@@ -461,17 +465,28 @@ func speechmaticsTTSRetryableError(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Retryable
 }
 
-func (s *speechmaticsTTSChunkedStream) retryBeforeAudio(err error) bool {
+func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
 	if s.emittedAudio || !speechmaticsTTSRetryableError(err) {
-		return false
+		return err
 	}
 	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
 	if maxRetry <= 0 || s.retryAttempt >= maxRetry {
-		return false
+		return err
 	}
+	interval := speechmaticsTTSRetryInterval(s.retryAttempt)
 	s.retryAttempt++
 	s.resetRetryableAttempt()
-	return true
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-s.ctx.Done():
+		return context.Canceled
+	}
 }
 
 func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
@@ -517,12 +532,15 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
 		err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
-		if s.retryBeforeAudio(err) {
+		if retryErr := s.prepareRetryBeforeAudio(err); retryErr == nil {
 			if openErr := s.ensureStream(); openErr != nil {
 				s.finish()
 				return nil, openErr
 			}
 			return s.Next()
+		} else if retryErr != err {
+			s.finish()
+			return nil, retryErr
 		}
 		s.finish()
 		return nil, err

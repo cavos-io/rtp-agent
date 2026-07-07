@@ -469,6 +469,7 @@ func TestSpeechmaticsTTSSynthesizeEmptyTextStillFlushesReferenceFinal(t *testing
 }
 
 func TestSpeechmaticsTTSSynthesizeNonEmptyTextErrorsWithoutAudio(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -500,6 +501,7 @@ func TestSpeechmaticsTTSSynthesizeNonEmptyTextErrorsWithoutAudio(t *testing.T) {
 }
 
 func TestSpeechmaticsTTSSynthesizeRetriesReferenceTransientErrorBeforeAudio(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	requests := 0
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -539,7 +541,53 @@ func TestSpeechmaticsTTSSynthesizeRetriesReferenceTransientErrorBeforeAudio(t *t
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeWaitsReferenceRetryInterval(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	var firstRequest time.Time
+	var secondRequest time.Time
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		switch requests {
+		case 1:
+			firstRequest = time.Now()
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 temporary synthesis failure",
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+				Request:    r,
+			}, nil
+		default:
+			secondRequest = time.Now()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+				Request:    r,
+			}, nil
+		}
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want one retry", requests)
+	}
+	if wait := secondRequest.Sub(firstRequest); wait < 90*time.Millisecond {
+		t.Fatalf("retry wait = %v, want reference first retry interval", wait)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRetriesReferenceNoAudioBeforeAudio(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	requests := 0
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -576,6 +624,7 @@ func TestSpeechmaticsTTSSynthesizeRetriesReferenceNoAudioBeforeAudio(t *testing.
 }
 
 func TestSpeechmaticsTTSSynthesizeAcceptsReferenceNoContentStatus(t *testing.T) {
+	withSpeechmaticsTTSRetryInterval(t, 0)
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -1307,4 +1356,11 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func withSpeechmaticsTTSRetryInterval(t *testing.T, interval time.Duration) {
+	t.Helper()
+	previous := speechmaticsTTSRetryInterval
+	speechmaticsTTSRetryInterval = func(int) time.Duration { return interval }
+	t.Cleanup(func() { speechmaticsTTSRetryInterval = previous })
 }
