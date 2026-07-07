@@ -705,7 +705,7 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
@@ -756,7 +756,7 @@ func (s *cartesiaTTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if err := s.flushPendingTextLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -769,7 +769,7 @@ func (s *cartesiaTTSStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if err := s.flushPendingTextLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()

@@ -674,6 +674,29 @@ func TestCartesiaTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSClosedStreamInputIsReferenceNoop(t *testing.T) {
+	stream := &cartesiaTTSStream{
+		audio: make(chan *tts.SynthesizedAudio, 1),
+		errCh: make(chan error, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("late text"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want reference no-op", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want reference no-op", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after closed input = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestCartesiaTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	providerErr := errors.New("provider failed after audio")
 	t.Run("already queued", func(t *testing.T) {
@@ -1057,8 +1080,8 @@ func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 
 	err = stream.PushText("again")
-	if !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("second PushText error = %v, want io.ErrClosedPipe", err)
+	if err != nil {
+		t.Fatalf("second PushText error = %v, want reference no-op after terminal write failure", err)
 	}
 }
 
@@ -1094,8 +1117,14 @@ func TestCartesiaTTSCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if err := stream.PushText("after close"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("after close"); err != nil {
+		t.Fatalf("PushText after provider Close = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after provider Close = %v, want reference no-op", err)
+	}
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput after provider Close = %v, want reference no-op", err)
 	}
 
 	select {
