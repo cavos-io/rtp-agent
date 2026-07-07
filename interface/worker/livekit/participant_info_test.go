@@ -422,6 +422,29 @@ func TestRoomCallbackWithHandlersPreservesReconnectedCallback(t *testing.T) {
 	}
 }
 
+func TestRoomCallbackWithHandlersPreservesReconnectingCallback(t *testing.T) {
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnReconnecting: func() {
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnReconnecting: func() {
+			handlerCalled = true
+		},
+	})
+
+	cb.OnReconnecting()
+
+	if !existingCalled {
+		t.Fatal("existing OnReconnecting callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnReconnecting callback was not called")
+	}
+}
+
 func TestRoomCallbackWithHandlersPreservesLocalTrackPublishedCallback(t *testing.T) {
 	publication := &lksdk.LocalTrackPublication{}
 	participant := &lksdk.LocalParticipant{}
@@ -452,5 +475,134 @@ func TestRoomCallbackWithHandlersPreservesLocalTrackPublishedCallback(t *testing
 	}
 	if !handlerCalled {
 		t.Fatal("handler OnLocalTrackPublished callback was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesTrackUnpublishedCallback(t *testing.T) {
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnTrackUnpublished: func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+				if gotPublication != publication || gotParticipant != participant {
+					t.Fatal("existing callback received wrong track unpublished payload")
+				}
+				existingCalled = true
+			},
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnTrackUnpublished: func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+			if gotPublication != publication || gotParticipant != participant {
+				t.Fatal("handler callback received wrong track unpublished payload")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnTrackUnpublished(publication, participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnTrackUnpublished callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnTrackUnpublished callback was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesTrackPublishedEventCallback(t *testing.T) {
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnTrackPublished: func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+				if gotPublication != publication || gotParticipant != participant {
+					t.Fatal("existing callback received wrong track published payload")
+				}
+				existingCalled = true
+			},
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnTrackPublishedEvent: func(gotPublication *lksdk.RemoteTrackPublication, gotParticipant *lksdk.RemoteParticipant) {
+			if gotPublication != publication || gotParticipant != participant {
+				t.Fatal("handler callback received wrong track published payload")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnTrackPublished(publication, participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnTrackPublished callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnTrackPublishedEvent callback was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesAttributesChangedCallback(t *testing.T) {
+	changed := map[string]string{"tier": "gold"}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnAttributesChanged: func(gotChanged map[string]string, gotParticipant lksdk.Participant) {
+				if gotChanged["tier"] != "gold" || gotParticipant != nil {
+					t.Fatal("existing callback received wrong attributes changed payload")
+				}
+				existingCalled = true
+			},
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnAttributesChanged: func(gotChanged map[string]string, gotParticipant lksdk.Participant) {
+			if gotChanged["tier"] != "gold" || gotParticipant != nil {
+				t.Fatal("handler callback received wrong attributes changed payload")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnAttributesChanged(changed, nil)
+
+	if !existingCalled {
+		t.Fatal("existing OnAttributesChanged callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnAttributesChanged callback was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesIsSpeakingChangedCallback(t *testing.T) {
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnIsSpeakingChanged: func(gotParticipant lksdk.Participant) {
+				if gotParticipant != nil {
+					t.Fatal("existing callback received wrong speaking participant")
+				}
+				existingCalled = true
+			},
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnIsSpeakingChanged: func(gotParticipant lksdk.Participant) {
+			if gotParticipant != nil {
+				t.Fatal("handler callback received wrong speaking participant")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnIsSpeakingChanged(nil)
+
+	if !existingCalled {
+		t.Fatal("existing OnIsSpeakingChanged callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnIsSpeakingChanged callback was not called")
 	}
 }

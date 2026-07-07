@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -117,6 +118,7 @@ type RoomOptions struct {
 	DisableTextInput           bool
 	DisableAudioOutput         bool
 	DisableTranscriptionOutput bool
+	TranscriptionJSONFormat    bool
 	DisableCloseOnDisconnect   bool
 	DeleteRoomOnClose          bool
 	DeleteRoom                 func(context.Context, string) error
@@ -182,6 +184,10 @@ type PlaybackFinishedEvent struct {
 	AudioSampleRate           uint32
 	AudioChannels             uint32
 	AudioLastError            string
+}
+
+type roomIOAudioInputTrack struct {
+	TrackID string
 }
 
 const (
@@ -317,6 +323,11 @@ type RoomIO struct {
 	decoder       AudioDecoder
 	encoder       AudioEncoder
 	audioDisabled bool
+
+	audioInputTrackID       string
+	audioInputParticipantID string
+	audioInputGeneration    uint64
+	audioInputTracks        map[string][]roomIOAudioInputTrack
 
 	audioPublication *lksdk.LocalTrackPublication
 	audioSubscribed  chan struct{}
@@ -845,6 +856,7 @@ func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, f
 	if rio == nil || rio.transcriptionTextPublisher == nil {
 		return
 	}
+	text = roomIOTranscriptionStreamText(text, rio.Options.TranscriptionJSONFormat)
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(final),
 		RoomIOTranscriptionSegmentIDAttribute: segmentID,
@@ -856,6 +868,21 @@ func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, f
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
+}
+
+func roomIOTranscriptionStreamText(text string, jsonFormat bool) string {
+	if !jsonFormat {
+		return text
+	}
+	payload, err := json.Marshal(struct {
+		Text string `json:"text"`
+	}{
+		Text: text,
+	})
+	if err != nil {
+		return text
+	}
+	return string(payload) + "\n"
 }
 
 func (rio *RoomIO) roomConnected() bool {
@@ -1157,6 +1184,15 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 		OnTrackSubscribed:      rio.onTrackSubscribed,
 		OnTrackUnpublished: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
 			rio.emitRoomEvent(&RoomTrackUnpublishedEvent{Publication: publication, Participant: participant})
+			trackID := ""
+			if publication != nil {
+				trackID = publication.SID()
+			}
+			participantID := ""
+			if participant != nil {
+				participantID = participant.Identity()
+			}
+			rio.handleTrackUnpublished(trackID, participantID)
 		},
 		OnTrackPublishedEvent: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
 			rio.emitRoomEvent(&RoomTrackPublishedEvent{Publication: publication, Participant: participant})
@@ -1397,6 +1433,12 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			Participant: rp,
 		})
 	}
+	if publication != nil && publication.Source() != livekit.TrackSource_MICROPHONE {
+		return
+	}
+	if track == nil {
+		return
+	}
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
@@ -1408,10 +1450,15 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 		if publication != nil {
 			trackID = publication.SID()
 		}
+		participantID := ""
 		if rp != nil {
-			rio.setUserTranscriptionTarget(trackID, rp.Identity())
+			participantID = rp.Identity()
+			rio.setUserTranscriptionTarget(trackID, participantID)
 		}
-		go rio.handleAudioTrack(track)
+		generation, activated := rio.activateAudioInputTrack(trackID, participantID)
+		if activated {
+			go rio.handleAudioTrack(track, generation)
+		}
 	}
 }
 
@@ -1492,6 +1539,100 @@ func (rio *RoomIO) clearUserTranscriptionTargetForParticipant(participantIdentit
 	rio.userTranscriptionSegmentID = ""
 }
 
+func (rio *RoomIO) handleTrackUnpublished(trackID string, participantIdentity string) {
+	if rio == nil || trackID == "" || participantIdentity == "" {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.removeAudioInputTrackLocked(trackID, participantIdentity)
+	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity {
+		rio.activateFallbackAudioInputTrackLocked(participantIdentity)
+	}
+	if rio.userTranscriptionTrackID != trackID || rio.userTranscriptionParticipantID != participantIdentity {
+		return
+	}
+	rio.userTranscriptionTrackID = ""
+	rio.userTranscriptionParticipantID = ""
+	rio.userTranscriptionSegmentID = ""
+	if rio.audioInputParticipantID == participantIdentity && rio.audioInputTrackID != "" {
+		rio.userTranscriptionTrackID = rio.audioInputTrackID
+		rio.userTranscriptionParticipantID = participantIdentity
+	}
+}
+
+func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity string) (uint64, bool) {
+	if rio == nil || trackID == "" || participantIdentity == "" {
+		return 0, false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.rememberAudioInputTrackLocked(trackID, participantIdentity)
+	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity {
+		return rio.audioInputGeneration, false
+	}
+	rio.audioInputTrackID = trackID
+	rio.audioInputParticipantID = participantIdentity
+	rio.audioInputGeneration++
+	return rio.audioInputGeneration, true
+}
+
+func (rio *RoomIO) audioInputTrackActive(generation uint64) bool {
+	if rio == nil || generation == 0 {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return !rio.closed && !rio.audioDisabled && rio.audioInputGeneration == generation
+}
+
+func (rio *RoomIO) rememberAudioInputTrackLocked(trackID string, participantIdentity string) {
+	if rio.audioInputTracks == nil {
+		rio.audioInputTracks = make(map[string][]roomIOAudioInputTrack)
+	}
+	for _, track := range rio.audioInputTracks[participantIdentity] {
+		if track.TrackID == trackID {
+			return
+		}
+	}
+	rio.audioInputTracks[participantIdentity] = append(rio.audioInputTracks[participantIdentity], roomIOAudioInputTrack{
+		TrackID: trackID,
+	})
+}
+
+func (rio *RoomIO) removeAudioInputTrackLocked(trackID string, participantIdentity string) {
+	tracks := rio.audioInputTracks[participantIdentity]
+	if len(tracks) == 0 {
+		return
+	}
+	kept := tracks[:0]
+	for _, track := range tracks {
+		if track.TrackID != trackID {
+			kept = append(kept, track)
+		}
+	}
+	if len(kept) == 0 {
+		delete(rio.audioInputTracks, participantIdentity)
+		return
+	}
+	rio.audioInputTracks[participantIdentity] = kept
+}
+
+func (rio *RoomIO) activateFallbackAudioInputTrackLocked(participantIdentity string) {
+	for _, track := range rio.audioInputTracks[participantIdentity] {
+		if track.TrackID == "" {
+			continue
+		}
+		rio.audioInputTrackID = track.TrackID
+		rio.audioInputParticipantID = participantIdentity
+		rio.audioInputGeneration++
+		return
+	}
+	rio.audioInputTrackID = ""
+	rio.audioInputParticipantID = ""
+	rio.audioInputGeneration++
+}
+
 func (rio *RoomIO) forgetConnectedParticipant(identity string) {
 	if rio == nil || identity == "" {
 		return
@@ -1522,8 +1663,11 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 	}
 }
 
-func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
+func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64) {
 	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
+		return
+	}
+	if !rio.audioInputTrackActive(generation) {
 		return
 	}
 	// First, check for and flush any pre-connect audio buffered
@@ -1533,6 +1677,9 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
+			if !rio.audioInputTrackActive(generation) {
+				return
+			}
 			for _, frame := range frames {
 				inputFrame := roomIOInputFrameFromFrame(frame)
 				if inputFrame != nil {
@@ -1546,7 +1693,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 	for {
 		rio.mu.Lock()
-		if rio.closed {
+		if rio.closed || rio.audioInputGeneration != generation {
 			rio.mu.Unlock()
 			return
 		}

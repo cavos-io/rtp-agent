@@ -2,6 +2,7 @@ package livekit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -2327,6 +2328,39 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOTranscriptionJSONFormatMatchesReference(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		Options: RoomOptions{
+			TranscriptionJSONFormat: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.publishTranscriptionTextStream("assistant transcript", "TR_agent_audio", false, "SG_json")
+
+	select {
+	case got := <-published:
+		if !strings.HasSuffix(got.text, "\n") {
+			t.Fatalf("published JSON transcription = %q, want newline-delimited JSON", got.text)
+		}
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(strings.TrimSuffix(got.text, "\n")), &payload); err != nil {
+			t.Fatalf("published JSON transcription did not decode: %v", err)
+		}
+		if payload["text"] != "assistant transcript" {
+			t.Fatalf("published JSON transcription text = %q, want assistant transcript", payload["text"])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+	default:
+		t.Fatal("JSON transcription stream was not published")
+	}
+}
+
 func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	published := make(chan roomIOPublishedText, 3)
 	packets := make(chan *livekit.Transcription, 3)
@@ -3073,6 +3107,177 @@ func TestRoomIOClearTranscriptionTargetResetsUserTranscriptionSegment(t *testing
 	}
 	if nextID == interimID {
 		t.Fatalf("segment id must reset after target cleared: both = %q", nextID)
+	}
+}
+
+func TestRoomIOHandleTrackUnpublishedClearsActiveUserTranscriptionTarget(t *testing.T) {
+	published := make(chan roomIOPublishedText, 2)
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "interim utterance",
+		IsFinal:    false,
+		Language:   "id",
+	})
+	interim := receivePublishedText(t, published, "interim utterance")
+	interimID := interim.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if interimID == "" {
+		t.Fatal("interim segment id must not be empty")
+	}
+
+	rio.handleTrackUnpublished("TR_user_audio", "caller-a")
+
+	rio.mu.Lock()
+	if rio.userTranscriptionTrackID != "" || rio.userTranscriptionParticipantID != "" || rio.userTranscriptionSegmentID != "" {
+		t.Fatalf("user transcription target after active unpublish = (%q, %q, %q), want cleared", rio.userTranscriptionTrackID, rio.userTranscriptionParticipantID, rio.userTranscriptionSegmentID)
+	}
+	rio.userTranscriptionTrackID = "TR_user_audio_new"
+	rio.userTranscriptionParticipantID = "caller-a"
+	rio.mu.Unlock()
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "next utterance",
+		IsFinal:    true,
+		Language:   "id",
+	})
+	next := receivePublishedText(t, published, "next utterance after track unpublished")
+	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if nextID == "" {
+		t.Fatal("next segment id must not be empty")
+	}
+	if nextID == interimID {
+		t.Fatalf("segment id must reset after active track unpublished: both = %q", nextID)
+	}
+}
+
+func TestRoomIOHandleTrackUnpublishedIgnoresInactiveUserTranscriptionTarget(t *testing.T) {
+	rio := &RoomIO{
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		userTranscriptionSegmentID:     "segment-a",
+	}
+
+	rio.handleTrackUnpublished("TR_other_audio", "caller-a")
+	rio.handleTrackUnpublished("TR_user_audio", "caller-b")
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.userTranscriptionTrackID != "TR_user_audio" || rio.userTranscriptionParticipantID != "caller-a" || rio.userTranscriptionSegmentID != "segment-a" {
+		t.Fatalf("user transcription target after inactive unpublish = (%q, %q, %q), want unchanged", rio.userTranscriptionTrackID, rio.userTranscriptionParticipantID, rio.userTranscriptionSegmentID)
+	}
+}
+
+func TestRoomIOAudioInputSwitchesToNewAcceptedTrack(t *testing.T) {
+	rio := &RoomIO{}
+
+	firstGeneration, firstActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !firstActivated {
+		t.Fatal("first audio input track was not activated")
+	}
+	if !rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("first audio input generation is not active after activation")
+	}
+
+	secondGeneration, secondActivated := rio.activateAudioInputTrack("TR_audio_b", "caller-a")
+	if !secondActivated {
+		t.Fatal("second audio input track was not activated")
+	}
+	if secondGeneration == firstGeneration {
+		t.Fatalf("audio input generation did not advance: both = %d", firstGeneration)
+	}
+	if rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("old audio input generation is still active after switching tracks")
+	}
+	if !rio.audioInputTrackActive(secondGeneration) {
+		t.Fatal("new audio input generation is not active after switching tracks")
+	}
+}
+
+func TestRoomIOAudioInputIgnoresDuplicateAcceptedTrack(t *testing.T) {
+	rio := &RoomIO{}
+
+	firstGeneration, firstActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !firstActivated {
+		t.Fatal("first audio input track was not activated")
+	}
+	secondGeneration, secondActivated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+
+	if secondActivated {
+		t.Fatal("duplicate active audio input track activated a new stream")
+	}
+	if secondGeneration != firstGeneration {
+		t.Fatalf("duplicate generation = %d, want existing %d", secondGeneration, firstGeneration)
+	}
+	if !rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("active audio input generation was cleared by duplicate track")
+	}
+}
+
+func TestRoomIOAudioInputIgnoresMismatchedTrackSource(t *testing.T) {
+	rio := &RoomIO{}
+	publication := &lksdk.RemoteTrackPublication{}
+
+	rio.onTrackSubscribed(nil, publication, nil)
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputGeneration != 0 || rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" {
+		t.Fatalf("audio input state = generation %d track %q participant %q, want inactive for unknown source", rio.audioInputGeneration, rio.audioInputTrackID, rio.audioInputParticipantID)
+	}
+}
+
+func TestRoomIOAudioInputTrackUnpublishedStopsActiveGeneration(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	rio.handleTrackUnpublished("TR_audio_a", "caller-a")
+
+	if rio.audioInputTrackActive(generation) {
+		t.Fatal("audio input generation is still active after matching track unpublished")
+	}
+}
+
+func TestRoomIOAudioInputTrackUnpublishedFallsBackToAvailableTrack(t *testing.T) {
+	rio := &RoomIO{}
+	firstGeneration, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("first audio input track was not activated")
+	}
+	secondGeneration, activated := rio.activateAudioInputTrack("TR_audio_b", "caller-a")
+	if !activated {
+		t.Fatal("second audio input track was not activated")
+	}
+
+	rio.handleTrackUnpublished("TR_audio_b", "caller-a")
+
+	if rio.audioInputTrackActive(secondGeneration) {
+		t.Fatal("unpublished active audio input generation is still active")
+	}
+	rio.mu.Lock()
+	activeTrack := rio.audioInputTrackID
+	activeParticipant := rio.audioInputParticipantID
+	activeGeneration := rio.audioInputGeneration
+	rio.mu.Unlock()
+	if activeTrack != "TR_audio_a" || activeParticipant != "caller-a" {
+		t.Fatalf("active audio input after fallback = (%q, %q), want previous available track", activeTrack, activeParticipant)
+	}
+	if activeGeneration <= secondGeneration {
+		t.Fatalf("fallback generation = %d, want greater than unpublished generation %d", activeGeneration, secondGeneration)
+	}
+	if !rio.audioInputTrackActive(activeGeneration) {
+		t.Fatal("fallback audio input generation is not active")
+	}
+	if rio.audioInputTrackActive(firstGeneration) {
+		t.Fatal("old audio input generation was restored instead of opening a fresh fallback generation")
 	}
 }
 
@@ -4221,6 +4426,165 @@ func TestRoomIOOnReceivesParticipantDisconnectedEvent(t *testing.T) {
 		}
 	default:
 		t.Fatal("subscriber did not receive participant_disconnected event")
+	}
+}
+
+func TestRoomIOOnReceivesConnectionStateChangedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 2)
+	unsubscribe := rio.On(RoomEventConnectionStateChanged, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	cb := rio.GetCallback()
+	cb.OnReconnecting()
+	cb.OnReconnected()
+
+	for _, want := range []string{"reconnecting", "connected"} {
+		select {
+		case ev := <-events:
+			got, ok := ev.(*RoomConnectionStateChangedEvent)
+			if !ok {
+				t.Fatalf("event = %T, want *RoomConnectionStateChangedEvent", ev)
+			}
+			if got.State != want {
+				t.Fatalf("connection state = %q, want %q", got.State, want)
+			}
+		default:
+			t.Fatalf("subscriber did not receive %q connection state event", want)
+		}
+	}
+}
+
+func TestRoomIOOnReceivesTrackSubscribedEvent(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{DisableAudioInput: true}}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackSubscribed, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	track := &webrtc.TrackRemote{}
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.onTrackSubscribed(track, publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackSubscribedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackSubscribedEvent", ev)
+		}
+		if got.Track != track || got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_subscribed event did not preserve track, publication, and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_subscribed event")
+	}
+}
+
+func TestRoomIOOnReceivesTrackPublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackPublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.GetCallback().OnTrackPublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackPublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackPublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_published event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_published event")
+	}
+}
+
+func TestRoomIOOnReceivesTrackUnpublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventTrackUnpublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.RemoteTrackPublication{}
+	participant := &lksdk.RemoteParticipant{}
+	rio.GetCallback().OnTrackUnpublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomTrackUnpublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomTrackUnpublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("track_unpublished event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive track_unpublished event")
+	}
+}
+
+func TestRoomIOOnReceivesLocalTrackPublishedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventLocalTrackPublished, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	publication := &lksdk.LocalTrackPublication{}
+	participant := &lksdk.LocalParticipant{}
+	rio.GetCallback().OnLocalTrackPublished(publication, participant)
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomLocalTrackPublishedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomLocalTrackPublishedEvent", ev)
+		}
+		if got.Publication != publication || got.Participant != participant {
+			t.Fatal("local_track_published event did not preserve publication and participant")
+		}
+	default:
+		t.Fatal("subscriber did not receive local_track_published event")
+	}
+}
+
+func TestRoomIOOnReceivesParticipantAttributesChangedEvent(t *testing.T) {
+	rio := &RoomIO{}
+	events := make(chan RoomEvent, 1)
+	unsubscribe := rio.On(RoomEventParticipantAttributesChanged, func(ev RoomEvent) {
+		events <- ev
+	})
+	defer unsubscribe()
+
+	changed := map[string]string{"tier": "gold"}
+	rio.GetCallback().OnAttributesChanged(changed, nil)
+	changed["tier"] = "mutated"
+
+	select {
+	case ev := <-events:
+		got, ok := ev.(*RoomParticipantAttributesChangedEvent)
+		if !ok {
+			t.Fatalf("event = %T, want *RoomParticipantAttributesChangedEvent", ev)
+		}
+		if got.Changed["tier"] != "gold" {
+			t.Fatalf("changed attributes = %#v, want cloned original value", got.Changed)
+		}
+	default:
+		t.Fatal("subscriber did not receive participant_attributes_changed event")
 	}
 }
 

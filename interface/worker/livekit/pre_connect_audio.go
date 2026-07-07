@@ -33,6 +33,7 @@ type PreConnectAudioHandler struct {
 
 	registered   bool
 	afterConnect bool
+	closed       bool
 }
 
 func NewPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration) *PreConnectAudioHandler {
@@ -67,6 +68,16 @@ func (h *PreConnectAudioHandler) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.closed = true
+	for trackID, ch := range h.buffers {
+		select {
+		case ch <- nil:
+			close(ch)
+		default:
+		}
+		delete(h.buffers, trackID)
+	}
+
 	if !h.registered {
 		return
 	}
@@ -79,7 +90,7 @@ func (h *PreConnectAudioHandler) handler(reader *lksdk.ByteStreamReader, partici
 }
 
 func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, participantIdentity string) {
-	attrs := reader.Info.Attributes
+	attrs := preConnectByteStreamAttributes(reader)
 	if attrs == nil {
 		logger.Logger.Warnw("pre-connect audio received but no attributes", nil, "participant", participantIdentity)
 		return
@@ -95,17 +106,20 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	channelsStr := attrs["channels"]
 	if sampleRateStr == "" || channelsStr == "" {
 		logger.Logger.Warnw("sampleRate or channels not found in pre-connect byte stream", nil)
+		h.failBuffer(trackID)
 		return
 	}
 
 	sampleRate, err := strconv.Atoi(sampleRateStr)
 	if err != nil {
 		logger.Logger.Warnw("invalid sampleRate in pre-connect byte stream", err)
+		h.failBuffer(trackID)
 		return
 	}
 	channels, err := strconv.Atoi(channelsStr)
 	if err != nil {
 		logger.Logger.Warnw("invalid channels in pre-connect byte stream", err)
+		h.failBuffer(trackID)
 		return
 	}
 
@@ -150,12 +164,25 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
 		if err != nil {
 			logger.Logger.Warnw("error reading pre-connect pcm stream", err)
+			h.failBuffer(trackID)
 			return
 		}
 		buf.Frames = append(buf.Frames, frames...)
 	}
 
 	h.publishBuffer(trackID, buf)
+}
+
+func preConnectByteStreamAttributes(reader *lksdk.ByteStreamReader) (attrs map[string]string) {
+	if reader == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			attrs = nil
+		}
+	}()
+	return reader.Info.Attributes
 }
 
 func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
@@ -187,11 +214,23 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if h.closed {
+		return
+	}
 	ch, ok := h.buffers[trackID]
 	if !ok {
 		if _, timedOut := h.timedOut[trackID]; timedOut {
 			delete(h.timedOut, trackID)
 			return
+		}
+	}
+	if ok && len(ch) == 0 {
+		select {
+		case _, open := <-ch:
+			if !open {
+				ok = false
+			}
+		default:
 		}
 	}
 	if !ok || len(ch) > 0 {
@@ -203,12 +242,20 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 	close(ch)
 }
 
+func (h *PreConnectAudioHandler) failBuffer(trackID string) {
+	h.publishBuffer(trackID, nil)
+}
+
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
 	if h.afterConnect {
 		logger.Logger.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)
 	}
 
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil
+	}
 	ch, ok := h.buffers[trackID]
 	if !ok {
 		ch = make(chan *PreConnectAudioBuffer, 1)
@@ -225,12 +272,16 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 	select {
 	case <-ctx.Done():
 		h.mu.Lock()
-		h.timedOut[trackID] = struct{}{}
+		if !h.closed {
+			h.timedOut[trackID] = struct{}{}
+		}
 		h.mu.Unlock()
 		return nil
 	case <-time.After(h.timeout):
 		h.mu.Lock()
-		h.timedOut[trackID] = struct{}{}
+		if !h.closed {
+			h.timedOut[trackID] = struct{}{}
+		}
 		h.mu.Unlock()
 		return nil
 	case buf := <-ch:

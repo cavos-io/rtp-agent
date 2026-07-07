@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestPreConnectAudioPublishFulfillsExistingWaiter(t *testing.T) {
@@ -64,6 +65,79 @@ func TestPreConnectAudioLatePublishAfterTimeoutIsNotReused(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioFailedBufferFulfillsExistingWaiter(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	received := make(chan []*model.AudioFrame, 1)
+	go func() {
+		received <- handler.WaitForData(context.Background(), "track-invalid")
+	}()
+
+	waitForPreConnectBufferWaiter(t, handler, "track-invalid")
+	handler.failBuffer("track-invalid")
+
+	select {
+	case frames := <-received:
+		if frames != nil {
+			t.Fatalf("WaitForData() failed buffer frames = %#v, want nil", frames)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForData() did not return after pre-connect audio failure")
+	}
+}
+
+func TestPreConnectAudioMissingTrackIDIgnored(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+	reader := lksdk.NewByteStreamReader(lksdk.ByteStreamInfo{}, nil)
+
+	handler.readAudioTask(reader, "caller-a")
+
+	handler.mu.Lock()
+	bufferCount := len(handler.buffers)
+	handler.mu.Unlock()
+	if bufferCount != 0 {
+		t.Fatalf("buffers len after missing trackId = %d, want 0", bufferCount)
+	}
+}
+
+func TestPreConnectAudioCloseIgnoresLateBuffer(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Millisecond)
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	handler.Close()
+	handler.publishBuffer("track-after-close", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{frame},
+	})
+
+	if frames := handler.WaitForData(context.Background(), "track-after-close"); frames != nil {
+		t.Fatalf("WaitForData() after close and late publish = %#v, want nil", frames)
+	}
+}
+
+func TestPreConnectAudioWaitAfterCloseReturnsImmediately(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.Close()
+
+	done := make(chan []*model.AudioFrame, 1)
+	go func() {
+		done <- handler.WaitForData(context.Background(), "track-after-close")
+	}()
+
+	select {
+	case frames := <-done:
+		if frames != nil {
+			t.Fatalf("WaitForData() after close = %#v, want nil", frames)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("WaitForData() blocked after handler close")
+	}
+}
+
 func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	handler := NewPreConnectAudioHandler(nil, time.Second)
 	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{
@@ -82,6 +156,29 @@ func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	}
 	if len(frames) != 0 {
 		t.Fatalf("WaitForData() stale frames len = %d, want 0", len(frames))
+	}
+}
+
+func TestPreConnectAudioDuplicateCompletedBufferResetsClosedSlot(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	newFrame := &model.AudioFrame{
+		Data:              []byte{3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	completed := make(chan *PreConnectAudioBuffer, 1)
+	close(completed)
+
+	handler.buffers["track-dup"] = completed
+	handler.publishBuffer("track-dup", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{newFrame},
+	})
+
+	frames := handler.WaitForData(context.Background(), "track-dup")
+	if len(frames) != 1 || frames[0] != newFrame {
+		t.Fatalf("WaitForData() duplicate completed closed-slot frames = %#v, want latest frame", frames)
 	}
 }
 
