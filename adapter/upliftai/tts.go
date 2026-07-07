@@ -510,6 +510,10 @@ func (s *upliftAITTSSynthesizeStream) run() {
 				return
 			}
 			if err := s.runSegment(text); err != nil {
+				if errors.Is(err, context.Canceled) {
+					_ = s.sendResult(nil, context.Canceled)
+					return
+				}
 				_ = s.sendResult(nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
 				return
 			}
