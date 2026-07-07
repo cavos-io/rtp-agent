@@ -1591,16 +1591,16 @@ func (a *AgentActivity) OnGenerationCreated(ev llm.GenerationCreatedEvent, confi
 
 	handle := NewSpeechHandle(a.AllowInterruptions(), DefaultInputDetails())
 	handle.Generation.RealtimeGeneration = &ev
-	a.Session.EmitSpeechCreated(SpeechCreatedEvent{
-		UserInitiated: false,
-		Source:        "generate_reply",
-		SpeechHandle:  handle,
-	})
 	for _, configureHandle := range configure {
 		if configureHandle != nil {
 			configureHandle(handle)
 		}
 	}
+	a.Session.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: false,
+		Source:        "generate_reply",
+		SpeechHandle:  handle,
+	})
 	if err := a.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return handle, err
 	}
