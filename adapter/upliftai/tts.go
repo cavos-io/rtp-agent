@@ -1105,6 +1105,9 @@ func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("42"+upliftAISocketIONamespace+","+string(event))); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
 	}
 	return nil
