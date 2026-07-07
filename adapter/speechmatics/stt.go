@@ -553,6 +553,9 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		config["max_delay"] = *s.maxDelay
 	}
 	config["max_delay_mode"] = "flexible"
+	config["audio_filtering_config"] = map[string]interface{}{
+		"volume_threshold": 0.0,
+	}
 	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
 		config["conversation_config"] = conversationConfig
 	}

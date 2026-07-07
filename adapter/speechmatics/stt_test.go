@@ -1273,6 +1273,11 @@ func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
 	assertSpeechmaticsConfig(t, config, "max_delay_mode", "flexible")
+	audioFilteringConfig, ok := config["audio_filtering_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("audio_filtering_config = %#v, want map", config["audio_filtering_config"])
+	}
+	assertSpeechmaticsConfig(t, audioFilteringConfig, "volume_threshold", float64(0.0))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {
