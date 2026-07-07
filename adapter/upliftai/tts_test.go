@@ -3582,6 +3582,19 @@ func TestUpliftAITTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) 
 	}
 }
 
+func TestUpliftAITTSChunkedStreamWAVReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		outputFormat: "WAV_22050_16",
+		resp:         &http.Response{Body: upliftAIReadErrorBody{err: context.Canceled}},
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation while decoding WAV", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	body := newUpliftAICloseUnblocksReadBody(io.ErrClosedPipe)
 	stream := &upliftAITTSChunkedStream{
