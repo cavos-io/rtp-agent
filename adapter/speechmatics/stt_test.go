@@ -2204,6 +2204,63 @@ func TestSpeechmaticsSTTCloseUnblocksPendingNextLikeReference(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTCloseUnblocksInFlightPushFrameLikeReference(t *testing.T) {
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	var releaseOnce sync.Once
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			close(writeStarted)
+			<-releaseWrite
+			return io.ErrClosedPipe
+		},
+		closeConn: func() error {
+			releaseOnce.Do(func() { close(releaseWrite) })
+			return nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- stream.PushFrame(&model.AudioFrame{
+			Data:              make([]byte, 3200),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1600,
+		})
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame did not start provider audio write")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseWrite) })
+		t.Fatal("Close did not unblock in-flight PushFrame")
+	}
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("PushFrame error = %v, want closed-pipe after Close interrupted write", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame remained blocked after Close")
+	}
+}
+
 func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	if err := provider.Close(); err != nil {

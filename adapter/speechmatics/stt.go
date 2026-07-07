@@ -786,6 +786,7 @@ type speechmaticsSTTStream struct {
 	errCh           chan error
 	done            chan struct{}
 	doneOnce        sync.Once
+	transportOnce   sync.Once
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -886,7 +887,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
 		s.markClosedDrainingEvents()
-		_ = s.closeTransport()
+		_ = s.closeTransportOnce()
 		return false
 	}
 	if resp.Message == "RecognitionStarted" {
@@ -1561,6 +1562,8 @@ func (n *speechmaticsSTTInputAudioNormalizer) reset() {
 }
 
 func (s *speechmaticsSTTStream) Close() error {
+	s.closeDone()
+	_ = s.closeTransportOnce()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closeLocked()
@@ -1585,22 +1588,22 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	if vadStream != nil {
 		_ = vadStream.Close()
 	}
-	if s.closeConn != nil {
-		_ = s.closeConn()
-		return nil
-	}
-	_ = s.closeTransport()
+	_ = s.closeTransportOnce()
 	return nil
 }
 
-func (s *speechmaticsSTTStream) closeTransport() error {
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	if s.closeConn != nil {
-		return s.closeConn()
-	}
-	return nil
+func (s *speechmaticsSTTStream) closeTransportOnce() error {
+	var closeErr error
+	s.transportOnce.Do(func() {
+		if s.conn != nil {
+			closeErr = s.conn.Close()
+			return
+		}
+		if s.closeConn != nil {
+			closeErr = s.closeConn()
+		}
+	})
+	return closeErr
 }
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
