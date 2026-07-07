@@ -746,7 +746,7 @@ type upliftAISocketIOClient struct {
 	apiKey  string
 
 	mu       sync.Mutex
-	writeMu  sync.Mutex
+	writeMu  chan struct{}
 	conn     upliftAISocketIOConn
 	closed   bool
 	requests map[string]*upliftAISocketIORequest
@@ -769,6 +769,7 @@ func newUpliftAISocketIOClient(baseURL string, apiKey string) *upliftAISocketIOC
 	return &upliftAISocketIOClient{
 		baseURL:  baseURL,
 		apiKey:   apiKey,
+		writeMu:  make(chan struct{}, 1),
 		requests: make(map[string]*upliftAISocketIORequest),
 	}
 }
@@ -800,9 +801,19 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 	}
 	c.mu.Unlock()
 
-	c.writeMu.Lock()
+	if err := c.lockWrite(ctx); err != nil {
+		c.finishRequest(requestID, err)
+		_ = pr.Close()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		c.unlockWrite()
+		c.finishRequest(requestID, err)
+		_ = pr.Close()
+		return nil, err
+	}
 	err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID)
-	c.writeMu.Unlock()
+	c.unlockWrite()
 	if err != nil {
 		c.finishRequest(requestID, err)
 		c.closeConn(conn, nil)
@@ -895,9 +906,12 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 		}
 		packet := string(msg)
 		if packet == "2" {
-			c.writeMu.Lock()
+			if err := c.lockWrite(context.Background()); err != nil {
+				c.closeConn(conn, nil)
+				return
+			}
 			err := conn.WriteMessage(websocket.TextMessage, []byte("3"))
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			if err != nil {
 				c.closeConn(conn, nil)
 				return
@@ -913,6 +927,25 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 			continue
 		}
 		c.handleEvent(event)
+	}
+}
+
+func (c *upliftAISocketIOClient) lockWrite(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case c.writeMu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *upliftAISocketIOClient) unlockWrite() {
+	select {
+	case <-c.writeMu:
+	default:
 	}
 }
 
