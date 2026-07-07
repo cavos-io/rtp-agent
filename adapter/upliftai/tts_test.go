@@ -69,6 +69,21 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+type upliftAIReadTrackingCloser struct {
+	reads  int
+	closed int
+}
+
+func (b *upliftAIReadTrackingCloser) Read([]byte) (int, error) {
+	b.reads++
+	return 0, errors.New("unexpected body read")
+}
+
+func (b *upliftAIReadTrackingCloser) Close() error {
+	b.closed++
+	return nil
+}
+
 type upliftAICloseUnblocksReadBody struct {
 	readEntered chan struct{}
 	closed      chan struct{}
@@ -533,6 +548,36 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.Body != `{"error":"rate limited"}` {
 		t.Fatalf("Body = %#v, want provider body", statusErr.Body)
+	}
+}
+
+func TestUpliftAITTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	body := &upliftAIReadTrackingCloser{}
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       body,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body closes = %d, want 1", body.closed)
 	}
 }
 
