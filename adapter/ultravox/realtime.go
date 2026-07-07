@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -48,6 +49,8 @@ type RealtimeModel struct {
 	enableGreetingSet   bool
 	firstSpeaker        string
 	firstSpeakerSet     bool
+	sessionsMu          sync.Mutex
+	sessions            map[*realtimeSession]struct{}
 }
 
 type RealtimeOption func(*RealtimeModel)
@@ -240,23 +243,67 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 	}
 	if update.outputMedium != nil {
 		m.outputMedium = *update.outputMedium
+		sessions := m.realtimeSessions()
+		for _, session := range sessions {
+			_ = session.UpdateOptions(llm.RealtimeSessionOptions{
+				OutputMedium:    *update.outputMedium,
+				OutputMediumSet: true,
+			})
+		}
 	}
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	return &realtimeSession{
+	session := &realtimeSession{
 		eventCh:          make(chan llm.RealtimeEvent, 16),
 		audioCh:          make(chan []byte, 256),
 		clientEventCh:    make(chan map[string]any, 256),
+		model:            m,
 		inputSampleRate:  uint32(m.inputSampleRate),
 		outputSampleRate: uint32(m.outputSampleRate),
+		audioOutput:      m.outputMedium == "voice",
+		systemPrompt:     m.systemPrompt,
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:        make(map[string]struct{}),
 		toolResults:      make(map[string]struct{}),
 		contextItems:     make(map[string]struct{}),
-	}, nil
+	}
+	if m.outputMedium == "text" {
+		session.clientEventCh <- map[string]any{
+			"type":   "set_output_medium",
+			"medium": "text",
+		}
+	}
+	m.registerRealtimeSession(session)
+	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+func (m *RealtimeModel) registerRealtimeSession(session *realtimeSession) {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	if m.sessions == nil {
+		m.sessions = make(map[*realtimeSession]struct{})
+	}
+	m.sessions[session] = struct{}{}
+}
+
+func (m *RealtimeModel) unregisterRealtimeSession(session *realtimeSession) {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	delete(m.sessions, session)
+}
+
+func (m *RealtimeModel) realtimeSessions() []*realtimeSession {
+	m.sessionsMu.Lock()
+	defer m.sessionsMu.Unlock()
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	return sessions
+}
 
 type ultravoxRealtimeGeneration struct {
 	messageCh  chan llm.MessageGeneration
@@ -294,23 +341,54 @@ type realtimeSession struct {
 	eventCh          chan llm.RealtimeEvent
 	audioCh          chan []byte
 	clientEventCh    chan map[string]any
+	model            *RealtimeModel
 	inputSampleRate  uint32
 	outputSampleRate uint32
+	audioOutput      bool
+	systemPrompt     string
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
 	generationSeq    uint64
+	toolNames        map[string]struct{}
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
+	restartCount     uint64
 	closed           bool
 	closeOnce        sync.Once
 }
 
-func (s *realtimeSession) UpdateInstructions(string) error {
-	return ultravoxRealtimeSessionUnsupported("update_instructions")
+func (s *realtimeSession) UpdateInstructions(instructions string) error {
+	s.mu.Lock()
+	if s.closed || s.systemPrompt == instructions {
+		s.mu.Unlock()
+		return nil
+	}
+	s.systemPrompt = instructions
+	if s.model != nil {
+		s.model.systemPrompt = instructions
+	}
+	generation := s.markRestartNeededLocked()
+	s.mu.Unlock()
+	s.finishGeneration(generation)
+	return nil
 }
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
+	}
+	nextContextItems := make(map[string]struct{})
+	nextToolResults := make(map[string]struct{})
+	for _, item := range chatCtx.Items {
+		switch item := item.(type) {
+		case *llm.ChatMessage:
+			if key := ultravoxRealtimeChatMessageKey(item); key != "" {
+				nextContextItems[key] = struct{}{}
+			}
+		case *llm.FunctionCallOutput:
+			if key := ultravoxRealtimeToolResultKey(item); key != "" {
+				nextToolResults[key] = struct{}{}
+			}
+		}
 	}
 	for _, item := range chatCtx.Items {
 		switch item := item.(type) {
@@ -324,6 +402,12 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			}
 		}
 	}
+	s.mu.Lock()
+	if !s.closed {
+		s.contextItems = nextContextItems
+		s.toolResults = nextToolResults
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -346,10 +430,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 		return nil
 	}
 
-	key := message.ID
-	if key == "" {
-		key = string(message.Role) + ":" + text
-	}
+	key := ultravoxRealtimeChatMessageKey(message)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -359,23 +440,27 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 		s.mu.Unlock()
 		return nil
 	}
-	s.contextItems[key] = struct{}{}
 	s.mu.Unlock()
-	return s.sendClientEvent(map[string]any{
+	if err := s.sendClientEvent(map[string]any{
 		"type":          "user_text_message",
 		"text":          eventText,
 		"deferResponse": true,
-	})
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.contextItems[key] = struct{}{}
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	if output == nil || output.CallID == "" {
 		return nil
 	}
-	key := output.ID
-	if key == "" {
-		key = output.CallID
-	}
+	key := ultravoxRealtimeToolResultKey(output)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -385,7 +470,6 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.toolResults[key] = struct{}{}
 	s.mu.Unlock()
 
 	event := map[string]any{
@@ -400,20 +484,79 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	} else {
 		event["result"] = output.Output
 	}
-	return s.sendClientEvent(event)
+	if err := s.sendClientEvent(event); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if !s.closed {
+		s.toolResults[key] = struct{}{}
+	}
+	s.mu.Unlock()
+	return nil
 }
 
-func (s *realtimeSession) UpdateTools([]llm.Tool) error {
-	return ultravoxRealtimeSessionUnsupported("update_tools")
+func ultravoxRealtimeChatMessageKey(message *llm.ChatMessage) string {
+	if message == nil {
+		return ""
+	}
+	if message.ID != "" {
+		return message.ID
+	}
+	return string(message.Role) + ":" + message.TextContent()
+}
+
+func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
+	if output == nil {
+		return ""
+	}
+	if output.ID != "" {
+		return output.ID
+	}
+	return output.CallID
+}
+
+func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	nextToolNames := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			return errors.New("ultravox realtime update tools received nil tool")
+		}
+		nextToolNames[tool.Name()] = struct{}{}
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	if ultravoxRealtimeToolNameSetsEqual(s.toolNames, nextToolNames) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.toolNames = nextToolNames
+	generation := s.markRestartNeededLocked()
+	s.mu.Unlock()
+	s.finishGeneration(generation)
+	return nil
 }
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	if !options.OutputMediumSet {
 		return nil
 	}
-	return s.sendClientEvent(map[string]any{
+	if err := s.sendClientEvent(map[string]any{
 		"type":   "set_output_medium",
 		"medium": options.OutputMedium,
-	})
+	}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if options.OutputMedium == "voice" {
+		s.audioOutput = true
+	} else if options.OutputMedium == "text" {
+		s.audioOutput = false
+	}
+	s.mu.Unlock()
+	return nil
 }
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	text := ""
@@ -439,26 +582,31 @@ func (s *realtimeSession) Interrupt() error {
 	}
 	s.mu.Unlock()
 
-	if err := s.sendClientEvent(map[string]any{
+	err := s.sendClientEvent(map[string]any{
 		"type":          "user_text_message",
 		"text":          "",
 		"urgency":       "immediate",
 		"deferResponse": true,
-	}); err != nil {
-		return err
-	}
+	})
 	s.finishGeneration(generation)
-	return nil
+	return err
 }
 func (s *realtimeSession) Close() error {
+	var generation *ultravoxRealtimeGeneration
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
+		generation = s.generation
 		s.closed = true
+		s.generation = nil
 		close(s.eventCh)
 		close(s.audioCh)
 		close(s.clientEventCh)
+		s.mu.Unlock()
 	})
+	s.finishGeneration(generation)
+	if s.model != nil {
+		s.model.unregisterRealtimeSession(s)
+	}
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
@@ -518,6 +666,25 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	default:
 		return errors.New("ultravox realtime client event queue is full")
 	}
+}
+
+func (s *realtimeSession) markRestartNeededLocked() *ultravoxRealtimeGeneration {
+	s.restartCount++
+	generation := s.generation
+	s.generation = nil
+	return generation
+}
+
+func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name := range a {
+		if _, ok := b[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
@@ -597,7 +764,15 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		})
 	case "playback_clear_buffer":
 		s.handlePlaybackClearBufferEvent()
-	case "call_started", "debug", "pong":
+	case "pong":
+		var event struct {
+			Timestamp float64 `json:"timestamp"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			return err
+		}
+		s.handlePongEvent(event.Timestamp)
+	case "call_started", "debug":
 		return nil
 	default:
 		return fmt.Errorf("unhandled Ultravox event type %q", envelope.Type)
@@ -615,20 +790,32 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 		textCh:     make(chan string, 16),
 		audioCh:    make(chan *model.AudioFrame, 16),
 	}
+	modalitiesCh := make(chan []string, 1)
+	if s.audioOutput {
+		modalitiesCh <- []string{"audio", "text"}
+	} else {
+		modalitiesCh <- []string{"text"}
+	}
+	close(modalitiesCh)
 	s.generationSeq++
 	messageID := fmt.Sprintf("ultravox-turn-%d", s.generationSeq)
 	generation.messageCh <- llm.MessageGeneration{
-		MessageID: messageID,
-		TextCh:    generation.textCh,
-		AudioCh:   generation.audioCh,
+		MessageID:    messageID,
+		TextCh:       generation.textCh,
+		AudioCh:      generation.audioCh,
+		ModalitiesCh: modalitiesCh,
 	}
 	s.generation = generation
-	s.eventCh <- llm.RealtimeEvent{
+	event := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:  generation.messageCh,
 			FunctionCh: generation.functionCh,
 		},
+	}
+	select {
+	case s.eventCh <- event:
+	default:
 	}
 	return generation
 }
@@ -781,6 +968,13 @@ func (s *realtimeSession) handlePlaybackClearBufferEvent() {
 	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}:
 	default:
 	}
+}
+
+func (s *realtimeSession) handlePongEvent(float64) {
+	_ = s.sendClientEvent(map[string]any{
+		"type":      "ping",
+		"timestamp": float64(time.Now().UnixNano()) / float64(time.Second),
+	})
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
