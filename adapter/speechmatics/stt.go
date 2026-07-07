@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -23,6 +24,7 @@ type SpeechmaticsSTT struct {
 	apiKey               string
 	baseURL              string
 	language             string
+	turnDetectionMode    string
 	sampleRate           int
 	audioEncoding        string
 	domain               string
@@ -51,6 +53,8 @@ const (
 	speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
 	speechmaticsRTURLEnv  = "SPEECHMATICS_RT_URL"
 )
+
+var speechmaticsSpeakerResultTimeout = 5 * time.Second
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -105,6 +109,12 @@ func WithSpeechmaticsSTTDomain(domain string) SpeechmaticsSTTOption {
 func WithSpeechmaticsSTTOutputLocale(outputLocale string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.outputLocale = outputLocale
+	}
+}
+
+func WithSpeechmaticsSTTFixedTurnDetection() SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.turnDetectionMode = "fixed"
 	}
 }
 
@@ -207,14 +217,15 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	}
 	maxDelay := 2.0
 	provider := &SpeechmaticsSTT{
-		apiKey:         apiKey,
-		baseURL:        strings.TrimRight(baseURL, "/"),
-		language:       "en",
-		sampleRate:     16000,
-		audioEncoding:  "pcm_s16le",
-		focusMode:      "retain",
-		operatingPoint: "enhanced",
-		maxDelay:       &maxDelay,
+		apiKey:            apiKey,
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		language:          "en",
+		turnDetectionMode: "external",
+		sampleRate:        16000,
+		audioEncoding:     "pcm_s16le",
+		focusMode:         "retain",
+		operatingPoint:    "enhanced",
+		maxDelay:          &maxDelay,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -273,10 +284,15 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
 		state: &speechmaticsStreamState{
 			language:             streamLanguage,
 			speakerActiveFormat:  s.speakerActiveFormat,
 			speakerPassiveFormat: s.speakerPassiveFormat,
+			focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
+			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+			focusMode:            s.focusMode,
+			includePartials:      speechmaticsIncludePartials(s),
 		},
 		owner: s,
 	}
@@ -384,7 +400,9 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 	speakers := make([]SpeechmaticsSpeakerIdentifier, 0, len(streams))
 	var requestErr error
 	for _, stream := range streams {
-		streamSpeakers, err := stream.GetSpeakerIDs(ctx)
+		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)
+		streamSpeakers, err := stream.GetSpeakerIDs(streamCtx)
+		cancel()
 		if err != nil {
 			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				continue
@@ -397,6 +415,20 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 		speakers = append(speakers, streamSpeakers...)
 	}
 	return speakers, requestErr
+}
+
+func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := speechmaticsSpeakerResultTimeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (s *SpeechmaticsSTT) isClosed() bool {
@@ -492,11 +524,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config := map[string]interface{}{
 		"language": language,
 	}
-	if s.includePartials != nil {
-		config["enable_partials"] = *s.includePartials
-	} else {
-		config["enable_partials"] = true
-	}
+	config["enable_partials"] = true
 	if s.domain != "" {
 		config["domain"] = s.domain
 	}
@@ -518,32 +546,20 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
 		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
 	}
-	if len(s.knownSpeakers) > 0 {
-		config["known_speakers"] = s.knownSpeakers
-	}
 	if s.operatingPoint != "" {
 		config["operating_point"] = s.operatingPoint
 	}
 	if s.maxDelay != nil {
 		config["max_delay"] = *s.maxDelay
 	}
-	if s.eouSilenceTrigger != nil {
-		config["end_of_utterance_silence_trigger"] = *s.eouSilenceTrigger
-	}
-	if s.eouMaxDelay != nil {
-		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
+		config["conversation_config"] = conversationConfig
 	}
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
 	}
-	if s.speakerSensitivity != nil {
-		config["speaker_sensitivity"] = *s.speakerSensitivity
-	}
-	if s.maxSpeakers != nil {
-		config["max_speakers"] = *s.maxSpeakers
-	}
-	if s.preferCurrentSpeaker != nil {
-		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
+	if speakerConfig := speechmaticsSTTDiarizationConfig(s); len(speakerConfig) > 0 {
+		config["speaker_diarization_config"] = speakerConfig
 	}
 	return map[string]interface{}{
 		"message": "StartRecognition",
@@ -554,6 +570,54 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		},
 		"transcription_config": config,
 	}
+}
+
+func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	if s.eouSilenceTrigger != nil {
+		return *s.eouSilenceTrigger, true
+	}
+	if s.turnDetectionMode == "fixed" {
+		return 0.5, true
+	}
+	return 0, false
+}
+
+func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+	config := make(map[string]interface{})
+	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
+		config["end_of_utterance_silence_trigger"] = trigger
+	}
+	if s != nil && s.eouMaxDelay != nil {
+		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+	}
+	return config
+}
+
+func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
+	if s == nil || s.includePartials == nil {
+		return true
+	}
+	return *s.includePartials
+}
+
+func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+	config := make(map[string]interface{})
+	if len(s.knownSpeakers) > 0 {
+		config["speakers"] = s.knownSpeakers
+	}
+	if s.speakerSensitivity != nil {
+		config["speaker_sensitivity"] = *s.speakerSensitivity
+	}
+	if s.maxSpeakers != nil {
+		config["max_speakers"] = *s.maxSpeakers
+	}
+	if s.preferCurrentSpeaker != nil {
+		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
+	}
+	return config
 }
 
 func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {
@@ -579,11 +643,13 @@ func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []Speec
 }
 
 type speechmaticsSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn     *websocket.Conn
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	done     chan struct{}
+	doneOnce sync.Once
+	mu       sync.Mutex
+	closed   bool
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -592,7 +658,8 @@ type speechmaticsSTTStream struct {
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 
-	speakerResultCh chan []SpeechmaticsSpeakerIdentifier
+	speakerResultCh  chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate uint32
 }
 
 type speechmaticsStreamState struct {
@@ -602,6 +669,10 @@ type speechmaticsStreamState struct {
 	startTime            float64
 	speakerActiveFormat  string
 	speakerPassiveFormat string
+	focusSpeakers        []string
+	ignoreSpeakers       []string
+	focusMode            string
+	includePartials      bool
 }
 
 type smResponse struct {
@@ -667,8 +738,26 @@ func (s *speechmaticsSTTStream) readLoop() {
 			continue
 		}
 		for _, event := range speechmaticsEvents(resp, s.state) {
-			s.events <- event
+			if !s.enqueueEvent(event) {
+				return
+			}
 		}
+	}
+}
+
+func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
+	if event == nil {
+		return true
+	}
+	if s.done == nil {
+		s.events <- event
+		return true
+	}
+	select {
+	case s.events <- event:
+		return true
+	case <-s.done:
+		return false
 	}
 }
 
@@ -709,11 +798,17 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	if resp.Message == "AddSegment" {
 		eventType = stt.SpeechEventFinalTranscript
 	}
+	if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials {
+		return nil
+	}
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
+		if speechmaticsSpeakerFiltered(speakerID, state) {
+			continue
+		}
 		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -729,6 +824,45 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
+	if speechmaticsSystemSpeakerID(speakerID) {
+		return true
+	}
+	if state == nil {
+		return false
+	}
+	if speechmaticsStringInSlice(speakerID, state.ignoreSpeakers) {
+		return true
+	}
+	return state.focusMode == "ignore" && len(state.focusSpeakers) > 0 && !speechmaticsStringInSlice(speakerID, state.focusSpeakers)
+}
+
+func speechmaticsSystemSpeakerID(speakerID string) bool {
+	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
+		return false
+	}
+	inner := speakerID[2 : len(speakerID)-2]
+	if len(inner) < 2 {
+		return false
+	}
+	for _, r := range inner {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func speechmaticsStringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState) string {
@@ -872,6 +1006,10 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	s.pushedSampleRate = frame.SampleRate
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
@@ -931,6 +1069,12 @@ func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpe
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	s.state.focusMode = focusMode
 	return s.writeJSONData(map[string]interface{}{
 		"message": "SetRecognitionConfig",
 		"transcription_config": map[string]interface{}{
@@ -1080,6 +1224,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.closeDone()
 	defer func() {
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
@@ -1154,7 +1299,17 @@ func (s *speechmaticsSTTStream) markClosed() {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	s.closeDone()
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}
+}
+
+func (s *speechmaticsSTTStream) closeDone() {
+	if s == nil || s.done == nil {
+		return
+	}
+	s.doneOnce.Do(func() {
+		close(s.done)
+	})
 }

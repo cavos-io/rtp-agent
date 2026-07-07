@@ -779,6 +779,47 @@ func TestSpeechmaticsTTSChunkedStreamCloseCancelsPendingRequest(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamCloseCancelsActiveResponse(t *testing.T) {
+	body := newSpeechmaticsBlockingBody()
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     body,
+		cancel:     func() {},
+		sampleRate: 24000,
+	}
+
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- nextResult{audio: audio, err: err}
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next did not start reading active Speechmatics response")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case result := <-done:
+		if result.audio != nil {
+			t.Fatalf("Next after active response Close audio = %+v, want nil", result.audio)
+		}
+		if result.err != io.EOF {
+			t.Fatalf("Next after active response Close error = %v, want EOF", result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close did not cancel active Speechmatics response read")
+	}
+}
+
 func assertSpeechmaticsTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -866,6 +907,30 @@ func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
 }
 
 func (b *speechmaticsDataThenErrorBody) Close() error {
+	return nil
+}
+
+type speechmaticsBlockingBody struct {
+	readStarted chan struct{}
+	closeDone   chan struct{}
+	closeOnce   sync.Once
+}
+
+func newSpeechmaticsBlockingBody() *speechmaticsBlockingBody {
+	return &speechmaticsBlockingBody{
+		readStarted: make(chan struct{}),
+		closeDone:   make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsBlockingBody) Read([]byte) (int, error) {
+	b.closeOnce.Do(func() { close(b.readStarted) })
+	<-b.closeDone
+	return 0, errors.New("response closed")
+}
+
+func (b *speechmaticsBlockingBody) Close() error {
+	close(b.closeDone)
 	return nil
 }
 

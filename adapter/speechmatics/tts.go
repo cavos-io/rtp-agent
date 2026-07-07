@@ -282,6 +282,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		buf := make([]byte, 4096)
 		n, err := s.stream.Read(buf)
+		if s.isClosedOrFinal() {
+			return nil, io.EOF
+		}
 		if n > 0 {
 			data := append(s.pending, buf[:n]...)
 			completeLen := len(data) - len(data)%2

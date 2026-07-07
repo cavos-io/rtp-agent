@@ -7441,7 +7441,10 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["output_locale"], "en-GB"; got != want {
 			t.Fatalf("output_locale = %#v, want %#v", got, want)
 		}
-		if got, want := config["enable_partials"], false; got != want {
+		if _, ok := config["enable_partials"].(bool); !ok {
+			t.Fatalf("enable_partials = %#v, want bool", config["enable_partials"])
+		}
+		if got, want := config["enable_partials"], true; got != want {
 			t.Fatalf("enable_partials = %#v, want %#v", got, want)
 		}
 		if got, want := config["diarization"], "speaker"; got != want {
@@ -7453,20 +7456,30 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := config["max_delay"], 1.25; got != want {
 			t.Fatalf("max_delay = %#v, want %#v", got, want)
 		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+		conversationConfig, _ := config["conversation_config"].(map[string]any)
+		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.55; got != want {
 			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
 		}
-		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
-			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		if _, ok := config["end_of_utterance_silence_trigger"]; ok {
+			t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
 		}
-		if got, want := config["speaker_sensitivity"], 0.7; got != want {
+		if _, ok := config["end_of_utterance_max_delay"]; ok {
+			t.Fatalf("end_of_utterance_max_delay sent at top level in %#v", config)
+		}
+		diarizationConfig, _ := config["speaker_diarization_config"].(map[string]any)
+		if got, want := diarizationConfig["speaker_sensitivity"], 0.7; got != want {
 			t.Fatalf("speaker_sensitivity = %#v, want %#v", got, want)
 		}
-		if got, want := config["max_speakers"], float64(3); got != want {
+		if got, want := diarizationConfig["max_speakers"], float64(3); got != want {
 			t.Fatalf("max_speakers = %#v, want %#v", got, want)
 		}
-		if got, want := config["prefer_current_speaker"], true; got != want {
+		if got, want := diarizationConfig["prefer_current_speaker"], true; got != want {
 			t.Fatalf("prefer_current_speaker = %#v, want %#v", got, want)
+		}
+		for _, key := range []string{"speaker_sensitivity", "max_speakers", "prefer_current_speaker"} {
+			if _, ok := config[key]; ok {
+				t.Fatalf("%s sent at top level in %#v", key, config)
+			}
 		}
 		vocab, _ := config["additional_vocab"].([]any)
 		if len(vocab) != 1 {
@@ -7489,9 +7502,9 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if got, want := speakerConfig["focus_mode"], "retain"; got != want {
 			t.Fatalf("focus_mode = %#v, want %#v", got, want)
 		}
-		knownSpeakers, _ := config["known_speakers"].([]any)
+		knownSpeakers, _ := diarizationConfig["speakers"].([]any)
 		if len(knownSpeakers) != 1 {
-			t.Fatalf("known_speakers length = %d, want 1", len(knownSpeakers))
+			t.Fatalf("speaker_diarization_config.speakers length = %d, want 1", len(knownSpeakers))
 		}
 		knownSpeaker, _ := knownSpeakers[0].(map[string]any)
 		if got, want := knownSpeaker["label"], "agent"; got != want {
@@ -7499,6 +7512,9 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		}
 		if got, want := knownSpeaker["speaker_id"], "spk-1"; got != want {
 			t.Fatalf("known speaker id = %#v, want %#v", got, want)
+		}
+		if _, ok := config["known_speakers"]; ok {
+			t.Fatalf("known_speakers sent at top level in %#v", config)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")

@@ -224,6 +224,108 @@ func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFilterReferenceSpeakers(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *speechmaticsStreamState
+		want  string
+	}{
+		{
+			name: "ignored speaker",
+			state: &speechmaticsStreamState{
+				ignoreSpeakers: []string{"noise"},
+			},
+			want: "agent words",
+		},
+		{
+			name: "focus ignore mode",
+			state: &speechmaticsStreamState{
+				focusSpeakers: []string{"agent"},
+				focusMode:     "ignore",
+			},
+			want: "agent words",
+		},
+		{
+			name: "wrapped system speaker",
+			state: &speechmaticsStreamState{
+				ignoreSpeakers: []string{"noise"},
+			},
+			want: "agent words",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resp smResponse
+			if err := json.Unmarshal([]byte(`{
+				"message":"AddSegment",
+				"segments":[{
+					"text":"agent words",
+					"language":"en",
+					"speaker_id":"agent",
+					"metadata":{"start_time":0.1,"end_time":0.4}
+				},{
+					"text":"noise words",
+					"language":"en",
+					"speaker_id":"noise",
+					"metadata":{"start_time":0.5,"end_time":0.8}
+				},{
+					"text":"system words",
+					"language":"en",
+					"speaker_id":"__ASSISTANT__",
+					"metadata":{"start_time":0.9,"end_time":1.2}
+				}]
+			}`), &resp); err != nil {
+				t.Fatalf("unmarshal segment response: %v", err)
+			}
+
+			events := speechmaticsEvents(resp, tt.state)
+			if len(events) != 1 || len(events[0].Alternatives) != 1 {
+				t.Fatalf("events = %#v, want one filtered transcript", events)
+			}
+			if got := events[0].Alternatives[0].Text; got != tt.want {
+				t.Fatalf("text = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: false}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"partial words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial response: %v", err)
+	}
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	}
+
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"final words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+	events := speechmaticsEvents(final, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("final events = %#v, want final transcript despite include_partials=false", events)
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
@@ -403,6 +505,81 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTCloseStopsBlockedTranscriptEnqueue(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	releaseWrites := make(chan struct{})
+	serverSent := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		<-releaseWrites
+		messages := []string{"first", "stale"}
+		for _, text := range messages {
+			if err := conn.WriteJSON(map[string]interface{}{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{{
+					"text":       text,
+					"language":   "en",
+					"speaker_id": "agent",
+					"metadata":   map[string]interface{}{"start_time": 0.1, "end_time": 0.2},
+				}},
+			}); err != nil {
+				return
+			}
+		}
+		close(serverSent)
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	smStream := stream.(*speechmaticsSTTStream)
+	smStream.events = make(chan *stt.SpeechEvent, 1)
+	close(releaseWrites)
+
+	select {
+	case <-serverSent:
+	case <-time.After(time.Second):
+		t.Fatal("server did not send queued Speechmatics transcript burst")
+	}
+
+	deadline := time.After(time.Second)
+	for len(smStream.events) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("first Speechmatics transcript did not queue")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	first := <-smStream.events
+	if got := first.Alternatives[0].Text; got != "first" {
+		t.Fatalf("first queued transcript = %q, want first", got)
+	}
+	select {
+	case stale, ok := <-smStream.events:
+		if ok {
+			t.Fatalf("stale transcript after Close = %+v, want read loop stopped", stale)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("events channel did not close after local Close stopped blocked enqueue")
+	}
+}
+
 func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &speechmaticsSTTStream{
@@ -485,6 +662,32 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 	if got := len(writes[1]); got != 800 {
 		t.Fatalf("flush chunk length = %d, want 800", got)
+	}
+}
+
+func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 9600),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
 	}
 }
 
@@ -754,6 +957,18 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	if got, want := speakerConfig["focus_mode"], "ignore"; got != want {
 		t.Fatalf("focus_mode = %#v, want %#v", got, want)
 	}
+	if stream.state == nil {
+		t.Fatal("stream state = nil, want updated local speaker filter")
+	}
+	if got := strings.Join(stream.state.focusSpeakers, ","); got != "agent" {
+		t.Fatalf("stream focus speakers = %q, want agent", got)
+	}
+	if got := strings.Join(stream.state.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("stream ignore speakers = %q, want noise", got)
+	}
+	if stream.state.focusMode != "ignore" {
+		t.Fatalf("stream focus mode = %q, want ignore", stream.state.focusMode)
+	}
 }
 
 func TestSpeechmaticsSTTUpdateSpeakersRequiresDiarization(t *testing.T) {
@@ -835,6 +1050,40 @@ func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
 	}
 	if len(speakers) != 0 {
 		t.Fatalf("speakers = %#v, want empty result for disabled diarization", speakers)
+	}
+}
+
+func TestSpeechmaticsSTTGetSpeakerIDsTimesOutLikeReference(t *testing.T) {
+	oldTimeout := speechmaticsSpeakerResultTimeout
+	speechmaticsSpeakerResultTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsSpeakerResultTimeout = oldTimeout })
+
+	writes := 0
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	start := time.Now()
+	speakers, err := provider.GetSpeakerIDs(context.Background())
+	if err != nil {
+		t.Fatalf("GetSpeakerIDs error = %v, want nil timeout result", err)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("GetSpeakerIDs elapsed = %s, want bounded reference timeout", elapsed)
+	}
+	if writes != 1 {
+		t.Fatalf("GetSpeakers writes = %d, want one request before timeout", writes)
+	}
+	if len(speakers) != 0 {
+		t.Fatalf("speakers = %#v, want empty timeout result", speakers)
 	}
 }
 
@@ -996,7 +1245,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "language", "de")
 	assertSpeechmaticsConfig(t, config, "domain", "finance")
 	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
-	assertSpeechmaticsConfig(t, config, "enable_partials", false)
+	assertSpeechmaticsConfig(t, config, "enable_partials", true)
 	assertSpeechmaticsConfig(t, config, "diarization", "none")
 
 	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
@@ -1054,9 +1303,16 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	if speakerConfig["focus_mode"] != "ignore" {
 		t.Fatalf("focus_mode = %#v, want ignore", speakerConfig["focus_mode"])
 	}
-	knownSpeakers := config["known_speakers"].([]SpeechmaticsSpeakerIdentifier)
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
+	}
+	knownSpeakers := diarizationConfig["speakers"].([]SpeechmaticsSpeakerIdentifier)
 	if len(knownSpeakers) != 1 || knownSpeakers[0].Label != "agent" || knownSpeakers[0].SpeakerID != "spk-1" {
-		t.Fatalf("known_speakers = %#v, want agent speaker id", knownSpeakers)
+		t.Fatalf("speaker_diarization_config.speakers = %#v, want agent speaker id", knownSpeakers)
+	}
+	if _, ok := config["known_speakers"]; ok {
+		t.Fatalf("known_speakers sent at top level in %#v", config)
 	}
 }
 
@@ -1076,16 +1332,63 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
-	assertSpeechmaticsConfig(t, config, "speaker_sensitivity", float64(0.7))
-	assertSpeechmaticsConfig(t, config, "max_speakers", 4)
-	assertSpeechmaticsConfig(t, config, "prefer_current_speaker", true)
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_max_delay", float64(1.8))
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
+	}
+	assertSpeechmaticsConfig(t, diarizationConfig, "speaker_sensitivity", float64(0.7))
+	assertSpeechmaticsConfig(t, diarizationConfig, "max_speakers", 4)
+	assertSpeechmaticsConfig(t, diarizationConfig, "prefer_current_speaker", true)
+	if _, ok := config["speaker_sensitivity"]; ok {
+		t.Fatalf("speaker_sensitivity sent at top level in %#v", config)
+	}
+	if _, ok := config["max_speakers"]; ok {
+		t.Fatalf("max_speakers sent at top level in %#v", config)
+	}
+	if _, ok := config["prefer_current_speaker"]; ok {
+		t.Fatalf("prefer_current_speaker sent at top level in %#v", config)
+	}
 	overrides := config["punctuation_overrides"].(map[string]interface{})
 	marks := overrides["permitted_marks"].([]string)
 	if len(marks) != 2 || marks[0] != "." || marks[1] != "?" {
 		t.Fatalf("punctuation_overrides = %#v, want permitted marks", overrides)
 	}
+}
+
+func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want map", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
+	if _, ok := config["end_of_utterance_silence_trigger"]; ok {
+		t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+	}
+}
+
+func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTFixedTurnDetection(),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want map for fixed turn detection", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
 }
 
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
