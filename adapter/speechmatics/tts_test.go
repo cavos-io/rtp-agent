@@ -252,6 +252,27 @@ func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(&chunkedReader{chunks: [][]byte{{0x01}, {0x02, 0x03}}}),

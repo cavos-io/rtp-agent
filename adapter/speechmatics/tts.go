@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -253,6 +255,9 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if speechmaticsTTSTimeoutError(err) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -269,6 +274,14 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	s.stream = resp.Body
 	s.mu.Unlock()
 	return nil
+}
+
+func speechmaticsTTSTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
