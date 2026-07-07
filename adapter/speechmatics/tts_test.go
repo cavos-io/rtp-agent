@@ -304,6 +304,31 @@ func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       speechmaticsReadErrorBody{},
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(&chunkedReader{chunks: [][]byte{{0x01}, {0x02, 0x03}}}),
@@ -568,6 +593,16 @@ func (b *speechmaticsCloseCountBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("already closed")
 	}
+	return nil
+}
+
+type speechmaticsReadErrorBody struct{}
+
+func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
+	return 0, errors.New("provider read failed")
+}
+
+func (speechmaticsReadErrorBody) Close() error {
 	return nil
 }
 

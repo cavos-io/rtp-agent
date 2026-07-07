@@ -211,7 +211,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 						s.pending = nil
 						return s.emitFinal()
 					}
-					return nil, err
+					return nil, llm.NewAPIConnectionError(err.Error())
 				}
 				continue
 			}
@@ -235,7 +235,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.pending = nil
 				return s.emitFinal()
 			}
-			return nil, err
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 	}
 }
