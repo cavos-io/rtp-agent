@@ -90,6 +90,12 @@ func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, io.ErrClosedPipe
+	}
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
 	}
@@ -269,6 +275,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		err := s.pendingErr
 		s.pendingErr = nil
 		s.finish()
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		if speechmaticsTTSTimeoutError(err) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
@@ -299,6 +308,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 						return s.emitFinal()
 					}
 					s.cancelRequest()
+					if errors.Is(err, context.Canceled) {
+						s.finish()
+						return nil, context.Canceled
+					}
 					if speechmaticsTTSTimeoutError(err) {
 						s.finish()
 						return nil, llm.NewAPITimeoutError(err.Error())
@@ -322,6 +335,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				return s.emitFinal()
 			}
 			s.cancelRequest()
+			if errors.Is(err, context.Canceled) {
+				s.finish()
+				return nil, context.Canceled
+			}
 			if speechmaticsTTSTimeoutError(err) {
 				s.finish()
 				return nil, llm.NewAPITimeoutError(err.Error())
@@ -384,11 +401,14 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 	})
 	if err != nil {
 		requestCancel()
-		return err
+		return llm.NewAPIConnectionError(err.Error())
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		requestCancel()
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		if speechmaticsTTSTimeoutError(err) {
 			return llm.NewAPITimeoutError(err.Error())
 		}

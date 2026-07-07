@@ -353,12 +353,12 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
 	if err := conn.WriteJSON(initMsg); err != nil {
-		conn.Close()
+		_ = stream.Close()
 		return nil, err
 	}
 
 	if !s.registerStream(stream) {
-		conn.Close()
+		_ = stream.Close()
 		return nil, io.ErrClosedPipe
 	}
 	go stream.readLoop()
@@ -460,11 +460,14 @@ func (s *SpeechmaticsSTT) GetSpeakerIDGroups(ctx context.Context) ([][]Speechmat
 	if s == nil {
 		return nil, io.ErrClosedPipe
 	}
-	if s.enableDiarization != nil && !*s.enableDiarization {
-		return nil, nil
-	}
 	streams := s.activeStreams()
 	groups := make([][]SpeechmaticsSpeakerIdentifier, 0, len(streams))
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		for range streams {
+			groups = append(groups, nil)
+		}
+		return groups, nil
+	}
 	var requestErr error
 	for _, stream := range streams {
 		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)
@@ -592,12 +595,8 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
 		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
 	}
-	if s.eouMaxDelay != nil {
-		trigger := 0.5
-		if s.eouSilenceTrigger != nil {
-			trigger = *s.eouSilenceTrigger
-		}
-		if *s.eouMaxDelay <= trigger {
+	if s.eouMaxDelay != nil && s.eouSilenceTrigger != nil {
+		if *s.eouMaxDelay <= *s.eouSilenceTrigger {
 			problems = append(problems, "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger")
 		}
 	}
@@ -787,6 +786,7 @@ type speechmaticsSTTStream struct {
 	errCh           chan error
 	done            chan struct{}
 	doneOnce        sync.Once
+	transportOnce   sync.Once
 	mu              sync.Mutex
 	closed          bool
 	inputEnded      bool
@@ -854,6 +854,7 @@ type smResponse struct {
 
 func (s *speechmaticsSTTStream) readLoop() {
 	defer func() {
+		s.closeVADStream()
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
@@ -867,7 +868,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 					s.errCh <- llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly")
 				}
 			} else {
-				s.errCh <- err
+				s.errCh <- llm.NewAPIConnectionError(err.Error())
 			}
 			return
 		}
@@ -886,7 +887,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
 		s.markClosedDrainingEvents()
-		_ = s.closeTransport()
+		_ = s.closeTransportOnce()
 		return false
 	}
 	if resp.Message == "RecognitionStarted" {
@@ -1087,21 +1088,34 @@ func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.Spee
 
 func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
+	if frame == nil || len(frame.Data) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	vadStream := s.vadStream
+	s.mu.Unlock()
+	if vadStream != nil {
+		if err := vadStream.PushFrame(frame); err != nil {
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
-	if frame == nil || len(frame.Data) == 0 {
-		return nil
-	}
-	if s.vadStream != nil {
-		if err := s.vadStream.PushFrame(frame); err != nil {
-			_ = s.closeLocked()
-			return err
-		}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
@@ -1136,16 +1150,18 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 
 func (s *speechmaticsSTTStream) EndInput() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		s.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
+			s.mu.Unlock()
 			return err
 		}
 	}
@@ -1156,16 +1172,29 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		for _, chunk := range s.audioBuf.Flush() {
 			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
 				_ = s.closeLocked()
+				s.mu.Unlock()
 				return err
 			}
 			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 		}
 	}
-	if s.vadStream != nil {
-		if err := s.vadStream.EndInput(); err != nil {
-			_ = s.closeLocked()
+	vadStream := s.vadStream
+	s.mu.Unlock()
+
+	if vadStream != nil {
+		if err := vadStream.EndInput(); err != nil {
+			_ = s.Close()
 			return err
 		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	s.inputEnded = true
 	if s.waitForRecognitionStarted && !s.audioReady {
@@ -1269,13 +1298,31 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 	for {
 		event, err := vadStream.Next()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			_ = s.Close()
 			return
 		}
 		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
 			if err := s.Finalize(); err != nil {
+				_ = s.Close()
 				return
 			}
 		}
+	}
+}
+
+func (s *speechmaticsSTTStream) closeVADStream() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	vadStream := s.vadStream
+	s.vadStream = nil
+	s.mu.Unlock()
+	if vadStream != nil {
+		_ = vadStream.Close()
 	}
 }
 
@@ -1351,11 +1398,11 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 func (s *speechmaticsSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
@@ -1543,6 +1590,8 @@ func (n *speechmaticsSTTInputAudioNormalizer) reset() {
 }
 
 func (s *speechmaticsSTTStream) Close() error {
+	s.closeDone()
+	_ = s.closeTransportOnce()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closeLocked()
@@ -1567,22 +1616,22 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	if vadStream != nil {
 		_ = vadStream.Close()
 	}
-	if s.closeConn != nil {
-		_ = s.closeConn()
-		return nil
-	}
-	_ = s.closeTransport()
+	_ = s.closeTransportOnce()
 	return nil
 }
 
-func (s *speechmaticsSTTStream) closeTransport() error {
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	if s.closeConn != nil {
-		return s.closeConn()
-	}
-	return nil
+func (s *speechmaticsSTTStream) closeTransportOnce() error {
+	var closeErr error
+	s.transportOnce.Do(func() {
+		if s.conn != nil {
+			closeErr = s.conn.Close()
+			return
+		}
+		if s.closeConn != nil {
+			closeErr = s.closeConn()
+		}
+	})
+	return closeErr
 }
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -1621,6 +1670,17 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		s.markClosed()
 		return nil, err
+	case <-s.done:
+		if s.shouldDrainEventsAfterClose() {
+			select {
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
+				}
+			default:
+			}
+		}
+		return nil, io.EOF
 	}
 }
 

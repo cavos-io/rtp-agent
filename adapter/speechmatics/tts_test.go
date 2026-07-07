@@ -107,6 +107,21 @@ func TestSpeechmaticsTTSProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	provider := NewSpeechmaticsTTS("")
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),
@@ -553,6 +568,25 @@ func TestSpeechmaticsTTSSynthesizeStartsReferenceTimeoutAtRequest(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeSetupErrorReturnsAPIConnectionError(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("http://[::1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on request setup error", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -635,6 +669,31 @@ func TestSpeechmaticsTTSSynthesizeTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeRequestCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, r.Context().Err()
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+	cancel()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on request cancellation", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -657,6 +716,21 @@ func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testi
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     speechmaticsReadCancelBody{},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read cancellation", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
 	}
 }
 
@@ -1042,6 +1116,16 @@ func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
 }
 
 func (speechmaticsReadErrorBody) Close() error {
+	return nil
+}
+
+type speechmaticsReadCancelBody struct{}
+
+func (speechmaticsReadCancelBody) Read([]byte) (int, error) {
+	return 0, context.Canceled
+}
+
+func (speechmaticsReadCancelBody) Close() error {
 	return nil
 }
 
