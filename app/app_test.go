@@ -7508,11 +7508,14 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if _, ok := config["conversation_config"]; ok {
 			t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 		}
-		if _, ok := config["end_of_utterance_silence_trigger"]; ok {
-			t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+		if got, want := config["end_of_utterance_mode"], "external"; got != want {
+			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
 		}
-		if _, ok := config["end_of_utterance_max_delay"]; ok {
-			t.Fatalf("end_of_utterance_max_delay sent at top level in %#v", config)
+		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
+			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
+			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
 		}
 		if _, ok := message["end_of_utterance_max_delay"]; ok {
 			t.Fatalf("end_of_utterance_max_delay sent outside transcription_config in %#v", message)
@@ -7619,12 +7622,14 @@ func TestSpeechmaticsSTTFallbackPassesReferenceTurnDetectionMode(t *testing.T) {
 	select {
 	case message := <-records:
 		config, _ := message["transcription_config"].(map[string]any)
-		conversationConfig, ok := config["conversation_config"].(map[string]any)
-		if !ok {
-			t.Fatalf("conversation_config = %#v, want fixed turn detection config", config["conversation_config"])
+		if got, want := config["end_of_utterance_mode"], "fixed"; got != want {
+			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
 		}
-		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.5; got != want {
+		if got, want := config["end_of_utterance_silence_trigger"], 0.5; got != want {
 			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		}
+		if _, ok := config["conversation_config"]; ok {
+			t.Fatalf("conversation_config = %#v, want omitted reference endpointing config", config["conversation_config"])
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")

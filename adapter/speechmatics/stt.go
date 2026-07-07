@@ -628,8 +628,8 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	config["audio_filtering_config"] = map[string]interface{}{
 		"volume_threshold": 0.0,
 	}
-	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
-		config["conversation_config"] = conversationConfig
+	for key, value := range speechmaticsEndpointingConfig(s) {
+		config[key] = value
 	}
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
@@ -649,27 +649,48 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	}
 }
 
-func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) {
-	if s == nil {
-		return 0, false
-	}
-	if s.eouSilenceTrigger != nil {
-		return *s.eouSilenceTrigger, true
-	}
-	if s.turnDetectionMode == "fixed" {
-		return 0.5, true
-	}
-	return 0, false
-}
-
-func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	config := make(map[string]interface{})
-	if s == nil || s.turnDetectionMode != "fixed" {
+	if s == nil {
 		return config
 	}
-	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
-		config["end_of_utterance_silence_trigger"] = trigger
+	mode := s.turnDetectionMode
+	trigger := 0.5
+	switch mode {
+	case "adaptive":
+		trigger = 0.7
+		config["vad_config"] = map[string]interface{}{
+			"enabled":          true,
+			"silence_duration": 0.18,
+			"threshold":        0.35,
+		}
+	case "smart_turn":
+		mode = "adaptive"
+		trigger = 0.8
+		config["vad_config"] = map[string]interface{}{
+			"enabled":          true,
+			"silence_duration": 0.18,
+			"threshold":        0.35,
+		}
+		config["smart_turn_config"] = map[string]interface{}{
+			"enabled":              true,
+			"smart_turn_threshold": 0.5,
+			"max_audio_length":     8.0,
+		}
+	case "fixed":
+	default:
+		mode = "external"
 	}
+	if s.eouSilenceTrigger != nil {
+		trigger = *s.eouSilenceTrigger
+	}
+	maxDelay := 10.0
+	if s.eouMaxDelay != nil {
+		maxDelay = *s.eouMaxDelay
+	}
+	config["end_of_utterance_mode"] = mode
+	config["end_of_utterance_silence_trigger"] = trigger
+	config["end_of_utterance_max_delay"] = maxDelay
 	return config
 }
 

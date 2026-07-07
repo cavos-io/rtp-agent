@@ -2183,17 +2183,16 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTFixedTurnDetection(),
 		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.8),
 	)
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("conversation_config = %#v, want map", config["conversation_config"])
-	}
-	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
-	if _, ok := config["end_of_utterance_silence_trigger"]; ok {
-		t.Fatalf("end_of_utterance_silence_trigger sent at top level in %#v", config)
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted for reference endpointing config", config["conversation_config"])
 	}
 }
 
@@ -2205,6 +2204,9 @@ func TestSpeechmaticsSTTExternalTurnDetectionOmitsReferenceConversationConfig(t 
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "external")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
 	if _, ok := config["conversation_config"]; ok {
 		t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 	}
@@ -2217,11 +2219,12 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testi
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("conversation_config = %#v, want map for fixed turn detection", config["conversation_config"])
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.5))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	if _, ok := config["conversation_config"]; ok {
+		t.Fatalf("conversation_config = %#v, want omitted for reference fixed turn detection", config["conversation_config"])
 	}
-	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *testing.T) {
@@ -2237,6 +2240,16 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *te
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.7))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	vadConfig, ok := config["vad_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("vad_config = %#v, want reference adaptive VAD config", config["vad_config"])
+	}
+	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
+	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testing.T) {
@@ -2252,6 +2265,23 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testi
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.8))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
+	vadConfig, ok := config["vad_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("vad_config = %#v, want reference smart-turn VAD config", config["vad_config"])
+	}
+	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
+	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
+	smartTurnConfig, ok := config["smart_turn_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("smart_turn_config = %#v, want reference smart-turn config", config["smart_turn_config"])
+	}
+	assertSpeechmaticsConfig(t, smartTurnConfig, "enabled", true)
+	assertSpeechmaticsConfig(t, smartTurnConfig, "smart_turn_threshold", float64(0.5))
+	assertSpeechmaticsConfig(t, smartTurnConfig, "max_audio_length", float64(8.0))
 }
 
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
