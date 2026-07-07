@@ -298,6 +298,7 @@ type realtimeSession struct {
 	outputSampleRate uint32
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
+	generationSeq    uint64
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
 	closed           bool
@@ -608,8 +609,10 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 		textCh:     make(chan string, 16),
 		audioCh:    make(chan *model.AudioFrame, 16),
 	}
+	s.generationSeq++
+	messageID := fmt.Sprintf("ultravox-turn-%d", s.generationSeq)
 	generation.messageCh <- llm.MessageGeneration{
-		MessageID: "ultravox-turn",
+		MessageID: messageID,
 		TextCh:    generation.textCh,
 		AudioCh:   generation.audioCh,
 	}

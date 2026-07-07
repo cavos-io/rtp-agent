@@ -492,6 +492,37 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionGenerationsUseReferenceUniqueMessageIDs(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	firstGeneration := requireUltravoxRealtimeGeneration(t, session)
+	firstMessage := requireUltravoxRealtimeMessage(t, firstGeneration)
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+	requireUltravoxRealtimeClosedText(t, firstMessage.TextCh)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	secondGeneration := requireUltravoxRealtimeGeneration(t, session)
+	secondMessage := requireUltravoxRealtimeMessage(t, secondGeneration)
+
+	if !strings.HasPrefix(firstMessage.MessageID, "ultravox-turn-") ||
+		!strings.HasPrefix(secondMessage.MessageID, "ultravox-turn-") {
+		t.Fatalf("message IDs = %q/%q, want reference ultravox-turn-* prefix", firstMessage.MessageID, secondMessage.MessageID)
+	}
+	if firstMessage.MessageID == secondMessage.MessageID {
+		t.Fatalf("message IDs both %q, want unique reference turn IDs", firstMessage.MessageID)
+	}
+}
+
 func TestUltravoxRealtimeSessionStateEventsMatchReferenceTurnLifecycle(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
