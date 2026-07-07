@@ -664,7 +664,7 @@ func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
 func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(&chunkedReader{chunks: [][]byte{{0x01}, {0x02, 0x03}}}),
-		sampleRate: 24000,
+		sampleRate: 50,
 	}
 
 	audio, err := stream.Next()
@@ -687,6 +687,34 @@ func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamUsesReferenceProgressivePCMFrames(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     io.NopCloser(bytes.NewReader(make([]byte, (320+640+1280)*2))),
+		sampleRate: 16000,
+	}
+
+	for i, wantSamples := range []uint32{320, 640, 1280} {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next frame %d error = %v", i, err)
+		}
+		if audio == nil || audio.Frame == nil || audio.IsFinal {
+			t.Fatalf("Next frame %d = %+v, want audio frame", i, audio)
+		}
+		if audio.Frame.SamplesPerChannel != wantSamples {
+			t.Fatalf("frame %d samples = %d, want reference progressive %d", i, audio.Frame.SamplesPerChannel, wantSamples)
+		}
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
 	}
 }
 
@@ -808,6 +836,20 @@ func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if err != io.EOF {
 		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCloseIgnoresReferenceProviderCloseError(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     speechmaticsCloseErrorBody{err: errors.New("body close failed")},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%+v, %v), want EOF", audio, err)
 	}
 }
 
@@ -981,6 +1023,18 @@ func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
 
 func (speechmaticsReadErrorBody) Close() error {
 	return nil
+}
+
+type speechmaticsCloseErrorBody struct {
+	err error
+}
+
+func (speechmaticsCloseErrorBody) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b speechmaticsCloseErrorBody) Close() error {
+	return b.err
 }
 
 type speechmaticsDataThenErrorBody struct {

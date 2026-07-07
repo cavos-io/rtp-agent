@@ -2265,6 +2265,32 @@ func TestPipelineAgentVADTurnDetectionIgnoresSTTEndOfSpeech(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	sttStream := &fakePipelineRecognizeStream{}
+	pipeline := NewPipelineAgent(baseAgent.VAD, &fakePipelineSTT{}, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	pipeline.sttStream = sttStream
+	session.Assistant = pipeline
+
+	pipeline.vadLoop(&fakePipelineVADStream{
+		events: []*vad.VADEvent{{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5}},
+	})
+
+	if sttStream.finalizeCount != 1 {
+		t.Fatalf("STT stream Finalize calls = %d, want 1 after VAD end-of-speech", sttStream.finalizeCount)
+	}
+}
+
 func TestPipelineAgentSTTTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeSTT
@@ -6449,6 +6475,8 @@ type fakePipelineRecognizeStream struct {
 	startTimeSet       bool
 	timingSeededCh     chan struct{}
 	timingSeededOnce   sync.Once
+	finalizeCount      int
+	finalizeErr        error
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -6469,6 +6497,11 @@ func (f *fakePipelineRecognizeStream) Close() error {
 		f.closeOnce.Do(func() { close(f.closedCh) })
 	}
 	return f.closeErr
+}
+
+func (f *fakePipelineRecognizeStream) Finalize() error {
+	f.finalizeCount++
+	return f.finalizeErr
 }
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {

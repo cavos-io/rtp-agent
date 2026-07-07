@@ -469,6 +469,7 @@ func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) bool {
 	}
 	s.streams[stream] = struct{}{}
 	stream.owner = s
+	stream.providerManagedEndpointing = speechmaticsProviderManagedEndpointing(s)
 	return true
 }
 
@@ -624,6 +625,10 @@ func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	return config
 }
 
+func speechmaticsProviderManagedEndpointing(s *SpeechmaticsSTT) bool {
+	return s != nil && (s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
+}
+
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
 	if s == nil || s.includePartials == nil {
 		return true
@@ -682,13 +687,15 @@ func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []Speec
 }
 
 type speechmaticsSTTStream struct {
-	conn     *websocket.Conn
-	events   chan *stt.SpeechEvent
-	errCh    chan error
-	done     chan struct{}
-	doneOnce sync.Once
-	mu       sync.Mutex
-	closed   bool
+	conn            *websocket.Conn
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	done            chan struct{}
+	doneOnce        sync.Once
+	mu              sync.Mutex
+	closed          bool
+	inputEnded      bool
+	pendingEndInput bool
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -696,12 +703,15 @@ type speechmaticsSTTStream struct {
 	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
+	inputAudio  speechmaticsSTTInputAudioNormalizer
 	audioReady  bool
 
-	waitForRecognitionStarted bool
-	pendingAudioChunks        [][]byte
-	speakerResultCh           chan []SpeechmaticsSpeakerIdentifier
-	pushedSampleRate          uint32
+	waitForRecognitionStarted  bool
+	pendingAudioChunks         [][]byte
+	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate           uint32
+	providerManagedEndpointing bool
+	drainEventsAfterClose      bool
 }
 
 type speechmaticsStreamState struct {
@@ -779,7 +789,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
-		s.markClosed()
+		s.markClosedDrainingEvents()
 		_ = s.closeTransport()
 		return false
 	}
@@ -985,6 +995,9 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -992,6 +1005,17 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	s.pushedSampleRate = frame.SampleRate
+	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
+	if err != nil {
+		return err
+	}
+	return s.writeAudioFrameLocked(normalizedFrame)
+}
+
+func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
@@ -1004,6 +1028,45 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+	}
+	return nil
+}
+
+func (s *speechmaticsSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if tail := s.inputAudio.flush(); tail != nil {
+		if err := s.writeAudioFrameLocked(tail); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
+	if s.audioBuf != nil {
+		if s.state == nil {
+			s.state = &speechmaticsStreamState{}
+		}
+		for _, chunk := range s.audioBuf.Flush() {
+			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	s.inputEnded = true
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingEndInput = true
+		return nil
+	}
+	if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+		_ = s.closeLocked()
+		return err
 	}
 	return nil
 }
@@ -1059,6 +1122,13 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 			return err
 		}
 	}
+	if s.pendingEndInput {
+		s.pendingEndInput = false
+		if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1067,6 +1137,9 @@ func (s *speechmaticsSTTStream) Finalize() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.providerManagedEndpointing {
+		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
 }
@@ -1146,6 +1219,15 @@ func (s *speechmaticsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if tail := s.inputAudio.flush(); tail != nil {
+		if err := s.writeAudioFrameLocked(tail); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
 	if s.audioBuf == nil {
 		return nil
 	}
@@ -1160,6 +1242,13 @@ func (s *speechmaticsSTTStream) Flush() error {
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 	}
 	return nil
+}
+
+func (s *speechmaticsSTTStream) targetSampleRate() uint32 {
+	if s == nil || s.owner == nil || s.owner.sampleRate <= 0 {
+		return 0
+	}
+	return uint32(s.owner.sampleRate)
 }
 
 func (s *speechmaticsSTTStream) StartTimeOffset() float64 {
@@ -1216,6 +1305,108 @@ func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStr
 	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
 }
 
+type speechmaticsSTTInputAudioNormalizer struct {
+	sampleRate  uint32
+	numChannels uint32
+	targetRate  uint32
+	remainder   uint64
+	lastSample  []byte
+}
+
+func (n *speechmaticsSTTInputAudioNormalizer) normalize(frame *model.AudioFrame, targetRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || targetRate == 0 || frame.SampleRate == targetRate {
+		n.reset()
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels || n.targetRate != targetRate {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.targetRate = targetRate
+		n.remainder = 0
+		n.lastSample = nil
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        targetRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	scaledSamples := uint64(samplesPerChannel)*uint64(targetRate) + n.remainder
+	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
+	n.remainder = scaledSamples % uint64(frame.SampleRate)
+	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	channelCount := int(frame.NumChannels)
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(targetRate))
+		if srcIdx >= samplesPerChannel {
+			srcIdx = samplesPerChannel - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (int(srcIdx)*channelCount + ch) * 2
+			outOffset := (int(outIdx)*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+	if n.remainder > 0 {
+		offset := int((samplesPerChannel - 1) * frame.NumChannels * 2)
+		n.lastSample = append(n.lastSample[:0], frame.Data[offset:offset+int(frame.NumChannels*2)]...)
+	} else {
+		n.lastSample = nil
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        targetRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
+func (n *speechmaticsSTTInputAudioNormalizer) flush() *model.AudioFrame {
+	if n == nil || n.remainder == 0 || len(n.lastSample) == 0 || n.targetRate == 0 || n.numChannels == 0 {
+		return nil
+	}
+	data := append([]byte(nil), n.lastSample...)
+	frame := &model.AudioFrame{
+		Data:              data,
+		SampleRate:        n.targetRate,
+		NumChannels:       n.numChannels,
+		SamplesPerChannel: 1,
+	}
+	n.remainder = 0
+	n.lastSample = nil
+	return frame
+}
+
+func (n *speechmaticsSTTInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.targetRate = 0
+	n.remainder = 0
+	n.lastSample = nil
+}
+
 func (s *speechmaticsSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1227,6 +1418,8 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.inputEnded = true
+	s.pendingEndInput = false
 	s.pendingAudioChunks = nil
 	s.closeDone()
 	defer func() {
@@ -1235,9 +1428,11 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		}
 	}()
 	if s.closeConn != nil {
-		return s.closeConn()
+		_ = s.closeConn()
+		return nil
 	}
-	return s.closeWebsocketConn()
+	_ = s.closeWebsocketConn()
+	return nil
 }
 
 func (s *speechmaticsSTTStream) closeWebsocketConn() error {
@@ -1264,6 +1459,15 @@ func (s *speechmaticsSTTStream) closeTransport() error {
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		if s.shouldDrainEventsAfterClose() {
+			select {
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
+				}
+			default:
+			}
+		}
 		return nil, io.EOF
 	}
 	select {
@@ -1307,6 +1511,33 @@ func (s *speechmaticsSTTStream) markClosed() {
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}
+}
+
+func (s *speechmaticsSTTStream) markClosedDrainingEvents() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	s.drainEventsAfterClose = true
+	s.mu.Unlock()
+	s.closeDone()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+}
+
+func (s *speechmaticsSTTStream) shouldDrainEventsAfterClose() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainEventsAfterClose
 }
 
 func (s *speechmaticsSTTStream) closeDone() {
