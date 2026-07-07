@@ -224,6 +224,72 @@ func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFilterReferenceSpeakers(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *speechmaticsStreamState
+		want  string
+	}{
+		{
+			name: "ignored speaker",
+			state: &speechmaticsStreamState{
+				ignoreSpeakers: []string{"noise"},
+			},
+			want: "agent words",
+		},
+		{
+			name: "focus ignore mode",
+			state: &speechmaticsStreamState{
+				focusSpeakers: []string{"agent"},
+				focusMode:     "ignore",
+			},
+			want: "agent words",
+		},
+		{
+			name: "wrapped system speaker",
+			state: &speechmaticsStreamState{
+				ignoreSpeakers: []string{"noise"},
+			},
+			want: "agent words",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resp smResponse
+			if err := json.Unmarshal([]byte(`{
+				"message":"AddSegment",
+				"segments":[{
+					"text":"agent words",
+					"language":"en",
+					"speaker_id":"agent",
+					"metadata":{"start_time":0.1,"end_time":0.4}
+				},{
+					"text":"noise words",
+					"language":"en",
+					"speaker_id":"noise",
+					"metadata":{"start_time":0.5,"end_time":0.8}
+				},{
+					"text":"system words",
+					"language":"en",
+					"speaker_id":"__ASSISTANT__",
+					"metadata":{"start_time":0.9,"end_time":1.2}
+				}]
+			}`), &resp); err != nil {
+				t.Fatalf("unmarshal segment response: %v", err)
+			}
+
+			events := speechmaticsEvents(resp, tt.state)
+			if len(events) != 1 || len(events[0].Alternatives) != 1 {
+				t.Fatalf("events = %#v, want one filtered transcript", events)
+			}
+			if got := events[0].Alternatives[0].Text; got != tt.want {
+				t.Fatalf("text = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
@@ -779,6 +845,18 @@ func TestSpeechmaticsSTTUpdateSpeakersUpdatesActiveStreams(t *testing.T) {
 	}
 	if got, want := speakerConfig["focus_mode"], "ignore"; got != want {
 		t.Fatalf("focus_mode = %#v, want %#v", got, want)
+	}
+	if stream.state == nil {
+		t.Fatal("stream state = nil, want updated local speaker filter")
+	}
+	if got := strings.Join(stream.state.focusSpeakers, ","); got != "agent" {
+		t.Fatalf("stream focus speakers = %q, want agent", got)
+	}
+	if got := strings.Join(stream.state.ignoreSpeakers, ","); got != "noise" {
+		t.Fatalf("stream ignore speakers = %q, want noise", got)
+	}
+	if stream.state.focusMode != "ignore" {
+		t.Fatalf("stream focus mode = %q, want ignore", stream.state.focusMode)
 	}
 }
 

@@ -280,6 +280,9 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			language:             streamLanguage,
 			speakerActiveFormat:  s.speakerActiveFormat,
 			speakerPassiveFormat: s.speakerPassiveFormat,
+			focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
+			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+			focusMode:            s.focusMode,
 		},
 		owner: s,
 	}
@@ -621,6 +624,9 @@ type speechmaticsStreamState struct {
 	startTime            float64
 	speakerActiveFormat  string
 	speakerPassiveFormat string
+	focusSpeakers        []string
+	ignoreSpeakers       []string
+	focusMode            string
 }
 
 type smResponse struct {
@@ -733,6 +739,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
+		if speechmaticsSpeakerFiltered(speakerID, state) {
+			continue
+		}
 		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -748,6 +757,45 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
+	if speechmaticsSystemSpeakerID(speakerID) {
+		return true
+	}
+	if state == nil {
+		return false
+	}
+	if speechmaticsStringInSlice(speakerID, state.ignoreSpeakers) {
+		return true
+	}
+	return state.focusMode == "ignore" && len(state.focusSpeakers) > 0 && !speechmaticsStringInSlice(speakerID, state.focusSpeakers)
+}
+
+func speechmaticsSystemSpeakerID(speakerID string) bool {
+	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
+		return false
+	}
+	inner := speakerID[2 : len(speakerID)-2]
+	if len(inner) < 2 {
+		return false
+	}
+	for _, r := range inner {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func speechmaticsStringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState) string {
@@ -954,6 +1002,12 @@ func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpe
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	s.state.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	s.state.focusMode = focusMode
 	return s.writeJSONData(map[string]interface{}{
 		"message": "SetRecognitionConfig",
 		"transcription_config": map[string]interface{}{
