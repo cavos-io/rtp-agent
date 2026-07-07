@@ -27,6 +27,7 @@ const (
 	defaultRealtimeOutputMedium     = "voice"
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
+	ultravoxGenerateReplyTimeout    = 5 * time.Second
 )
 
 type RealtimeModel struct {
@@ -358,6 +359,7 @@ type realtimeSession struct {
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
 	pendingReply     bool
+	pendingReplyAt   time.Time
 	restartCount     uint64
 	lastUserFinalAt  time.Time
 	closed           bool
@@ -584,6 +586,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	s.mu.Lock()
 	if !s.closed {
 		s.pendingReply = true
+		s.pendingReplyAt = time.Now()
 	}
 	s.mu.Unlock()
 	return nil
@@ -690,6 +693,7 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 func (s *realtimeSession) markRestartNeededLocked() {
 	s.restartCount++
 	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	if !s.audioOutput {
@@ -839,8 +843,9 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	generation.responseID = messageID
 	userInitiated := false
 	if consumePendingReply {
-		userInitiated = s.pendingReply
+		userInitiated = s.pendingReply && !s.pendingReplyAt.IsZero() && time.Since(s.pendingReplyAt) <= ultravoxGenerateReplyTimeout
 		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
 	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
