@@ -1251,6 +1251,25 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 }
 
+func TestSpeechmaticsSTTPreservesReferenceEmptyLanguage(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTLanguage(""))
+	if provider.language != "" {
+		t.Fatalf("language = %q, want explicit empty reference language", provider.language)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	if config["language"] != "" {
+		t.Fatalf("language config = %#v, want explicit empty reference language", config["language"])
+	}
+
+	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
+	config = message["transcription_config"].(map[string]interface{})
+	if config["language"] != "fr" {
+		t.Fatalf("stream language override = %#v, want fr", config["language"])
+	}
+}
+
 func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	t.Setenv("SPEECHMATICS_RT_URL", "wss://speechmatics.env/v2/")
 

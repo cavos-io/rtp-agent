@@ -74,9 +74,7 @@ type SpeechmaticsSpeakerIdentifier struct {
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 
@@ -502,7 +500,7 @@ func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
 	if language != "" {
 		return language
 	}
-	if s != nil && s.language != "" {
+	if s != nil {
 		return s.language
 	}
 	return "en"
@@ -899,7 +897,7 @@ func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState
 	if language != "" {
 		return language
 	}
-	if state != nil && state.language != "" {
+	if state != nil {
 		return state.language
 	}
 	return "en"
