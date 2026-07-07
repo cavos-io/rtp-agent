@@ -801,6 +801,10 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 }
 
 func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
+	return s.ensureGenerationLockedWithPending(true)
+}
+
+func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply bool) *ultravoxRealtimeGeneration {
 	if s.generation != nil && !s.generation.done {
 		return s.generation
 	}
@@ -819,8 +823,11 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 	close(modalitiesCh)
 	s.generationSeq++
 	messageID := fmt.Sprintf("ultravox-turn-%d", s.generationSeq)
-	userInitiated := s.pendingReply
-	s.pendingReply = false
+	userInitiated := false
+	if consumePendingReply {
+		userInitiated = s.pendingReply
+		s.pendingReply = false
+	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
 		TextCh:       generation.textCh,
@@ -967,7 +974,7 @@ func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolIn
 		s.mu.Unlock()
 		return
 	}
-	generation := s.ensureGenerationLocked()
+	generation := s.ensureGenerationLockedWithPending(false)
 	functionCall := &llm.FunctionCall{
 		CallID:    event.InvocationID,
 		Name:      event.ToolName,

@@ -1234,6 +1234,45 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+		ToolName:     "lookup",
+		InvocationID: "call-7",
+		Parameters:   map[string]any{"city": "Paris"},
+	})
+	toolGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if toolGeneration.UserInitiated {
+		t.Fatal("tool generation UserInitiated = true, want false for tool-only placeholder")
+	}
+	requireUltravoxRealtimeMessage(t, toolGeneration)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	replyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !replyGeneration.UserInitiated {
+		t.Fatal("reply generation UserInitiated = false, want pending GenerateReply preserved")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
