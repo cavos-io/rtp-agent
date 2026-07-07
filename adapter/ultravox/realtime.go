@@ -244,25 +244,36 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	return &realtimeSession{
-		eventCh:         make(chan llm.RealtimeEvent),
-		audioCh:         make(chan []byte, 256),
-		clientEventCh:   make(chan map[string]any, 256),
-		inputSampleRate: uint32(m.inputSampleRate),
-		audioStream:     coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		eventCh:          make(chan llm.RealtimeEvent, 16),
+		audioCh:          make(chan []byte, 256),
+		clientEventCh:    make(chan map[string]any, 256),
+		inputSampleRate:  uint32(m.inputSampleRate),
+		outputSampleRate: uint32(m.outputSampleRate),
+		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 	}, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
 
+type ultravoxRealtimeGeneration struct {
+	messageCh  chan llm.MessageGeneration
+	functionCh chan *llm.FunctionCall
+	textCh     chan string
+	audioCh    chan *model.AudioFrame
+	done       bool
+}
+
 type realtimeSession struct {
-	mu              sync.Mutex
-	eventCh         chan llm.RealtimeEvent
-	audioCh         chan []byte
-	clientEventCh   chan map[string]any
-	inputSampleRate uint32
-	audioStream     *coreaudio.AudioByteStream
-	closed          bool
-	closeOnce       sync.Once
+	mu               sync.Mutex
+	eventCh          chan llm.RealtimeEvent
+	audioCh          chan []byte
+	clientEventCh    chan map[string]any
+	inputSampleRate  uint32
+	outputSampleRate uint32
+	audioStream      *coreaudio.AudioByteStream
+	generation       *ultravoxRealtimeGeneration
+	closed           bool
+	closeOnce        sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(string) error {
@@ -363,6 +374,57 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	default:
 		return errors.New("ultravox realtime client event queue is full")
 	}
+}
+
+func (s *realtimeSession) handleOutputAudio(audioData []byte) {
+	if len(audioData) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	generation := s.ensureGenerationLocked()
+	frame := &model.AudioFrame{
+		Data:              append([]byte(nil), audioData...),
+		SampleRate:        s.outputSampleRate,
+		NumChannels:       ultravoxRealtimeInputChannels,
+		SamplesPerChannel: uint32(len(audioData)) / (2 * ultravoxRealtimeInputChannels),
+	}
+	s.mu.Unlock()
+
+	select {
+	case generation.audioCh <- frame:
+	default:
+	}
+}
+
+func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
+	if s.generation != nil && !s.generation.done {
+		return s.generation
+	}
+	generation := &ultravoxRealtimeGeneration{
+		messageCh:  make(chan llm.MessageGeneration, 1),
+		functionCh: make(chan *llm.FunctionCall, 1),
+		textCh:     make(chan string, 16),
+		audioCh:    make(chan *model.AudioFrame, 16),
+	}
+	generation.messageCh <- llm.MessageGeneration{
+		MessageID: "ultravox-turn",
+		TextCh:    generation.textCh,
+		AudioCh:   generation.audioCh,
+	}
+	s.generation = generation
+	s.eventCh <- llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+		},
+	}
+	return generation
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {

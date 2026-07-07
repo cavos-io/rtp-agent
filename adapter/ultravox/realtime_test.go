@@ -334,6 +334,58 @@ func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i % 251)
+	}
+	session.handleOutputAudio(audio)
+
+	var generation *llm.GenerationCreatedEvent
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeGenerationCreated {
+			t.Fatalf("event type = %s, want generation_created", event.Type)
+		}
+		generation = event.Generation
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	if generation == nil {
+		t.Fatal("generation = nil")
+	}
+
+	var message llm.MessageGeneration
+	select {
+	case message = <-generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	select {
+	case got := <-message.AudioCh:
+		if got.SampleRate != 24000 || got.NumChannels != 1 || got.SamplesPerChannel != 480 {
+			t.Fatalf("audio frame shape = rate %d channels %d samples %d, want 24000/1/480", got.SampleRate, got.NumChannels, got.SamplesPerChannel)
+		}
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("audio data = %v, want original output bytes", got.Data[:min(len(got.Data), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for output audio frame")
+	}
+}
+
 func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, want map[string]any) {
 	t.Helper()
 	select {
