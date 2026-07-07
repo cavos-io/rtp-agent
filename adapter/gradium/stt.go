@@ -203,7 +203,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		errCh:             make(chan error, 1),
 		ctx:               streamCtx,
 		cancel:            cancel,
-		audioBStream:      gradiumSTTAudioByteStream(s.sampleRate, s.bufferSizeSeconds),
+		audioBStream:      gradiumSTTAudioByteStream(s.sampleRate),
 		bufferSizeSeconds: s.bufferSizeSeconds,
 		state: &gradiumSTTMessageState{
 			language:       streamLanguage,
@@ -438,7 +438,7 @@ func (s *gradiumSTTStream) reconnectIfNeededLocked() error {
 	}
 	oldConn := s.conn
 	s.conn = conn
-	s.audioBStream = gradiumSTTAudioByteStream(s.provider.sampleRate, s.bufferSizeSeconds)
+	s.audioBStream = gradiumSTTAudioByteStream(s.provider.sampleRate)
 	s.reconnectNext = false
 	if oldConn != nil {
 		_ = oldConn.Close()
@@ -548,18 +548,11 @@ func (s *gradiumSTTStream) currentStartTimeOffset() float64 {
 	return s.startTimeOffset
 }
 
-func gradiumSTTAudioByteStream(sampleRate int, bufferSizeSeconds float64) *audio.AudioByteStream {
+func gradiumSTTAudioByteStream(sampleRate int) *audio.AudioByteStream {
 	if sampleRate <= 0 {
 		sampleRate = defaultSTTSampleRate
 	}
-	if bufferSizeSeconds <= 0 {
-		bufferSizeSeconds = defaultSTTBufferSeconds
-	}
-	samplesPerChannel := uint32(float64(sampleRate) * bufferSizeSeconds)
-	if samplesPerChannel == 0 {
-		samplesPerChannel = 1
-	}
-	return audio.NewAudioByteStream(uint32(sampleRate), 1, samplesPerChannel)
+	return audio.NewAudioByteStream(uint32(sampleRate), 1, 1920)
 }
 
 func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {
