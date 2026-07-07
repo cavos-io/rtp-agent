@@ -239,6 +239,7 @@ type speechmaticsTTSChunkedStream struct {
 	sampleRate    int
 	requested     bool
 	pending       []byte
+	pendingErr    error
 	finalReady    bool
 	finalSent     bool
 	closed        bool
@@ -260,6 +261,15 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.stream == nil {
 		return nil, io.EOF
+	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		s.finish()
+		if speechmaticsTTSTimeoutError(err) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if s.finalReady {
 		s.finalReady = false
@@ -293,6 +303,8 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				s.pending = nil
 				s.finalReady = true
+			} else if err != nil {
+				s.pendingErr = err
 			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{

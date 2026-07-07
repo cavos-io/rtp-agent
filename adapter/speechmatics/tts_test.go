@@ -443,6 +443,27 @@ func TestSpeechmaticsTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testi
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want audio before provider read error", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("first Next = %+v, want provider audio bytes", audio)
+	}
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(&chunkedReader{chunks: [][]byte{{0x01}, {0x02, 0x03}}}),
@@ -717,6 +738,24 @@ func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
 }
 
 func (speechmaticsReadErrorBody) Close() error {
+	return nil
+}
+
+type speechmaticsDataThenErrorBody struct {
+	data []byte
+	done bool
+}
+
+func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, io.EOF
+	}
+	b.done = true
+	copy(p, b.data)
+	return len(b.data), errors.New("provider read failed")
+}
+
+func (b *speechmaticsDataThenErrorBody) Close() error {
 	return nil
 }
 
