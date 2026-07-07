@@ -386,13 +386,20 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	}
 	s.toolResults[key] = struct{}{}
 	s.mu.Unlock()
-	return s.sendClientEvent(map[string]any{
+
+	event := map[string]any{
 		"type":          "client_tool_result",
 		"invocationId":  output.CallID,
-		"result":        output.Output,
 		"agentReaction": "speaks",
 		"responseType":  "tool-response",
-	})
+	}
+	if output.IsError {
+		event["errorType"] = "implementation-error"
+		event["errorMessage"] = output.Output
+	} else {
+		event["result"] = output.Output
+	}
+	return s.sendClientEvent(event)
 }
 
 func (s *realtimeSession) UpdateTools([]llm.Tool) error {

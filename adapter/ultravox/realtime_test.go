@@ -601,6 +601,47 @@ func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionToolErrorResultQueuesReferenceClientEvent(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		ID:      "result-err",
+		CallID:  "call-err",
+		Name:    "lookup",
+		Output:  "database unavailable",
+		IsError: true,
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want reference tool error result event", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		if got["type"] != "client_tool_result" ||
+			got["invocationId"] != "call-err" ||
+			got["agentReaction"] != "speaks" ||
+			got["responseType"] != "tool-response" ||
+			got["errorType"] != "implementation-error" ||
+			got["errorMessage"] != "database unavailable" {
+			t.Fatalf("tool error event = %#v, want reference error fields", got)
+		}
+		if _, ok := got["result"]; ok {
+			t.Fatalf("tool error event result = %#v, want no result field", got["result"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool error event")
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateChatContextQueuesReferenceDeferredMessages(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
