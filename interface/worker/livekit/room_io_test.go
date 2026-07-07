@@ -4206,6 +4206,45 @@ func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	}
 }
 
+func TestRoomIOWithCallbackPreservesExistingDataPacketCallback(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	existingCalled := false
+	cb := rio.WithCallback(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnDataPacket: func(packet lksdk.DataPacket, params lksdk.DataReceiveParams) {
+				dtmf, ok := packet.(*livekit.SipDTMF)
+				if !ok {
+					t.Fatalf("OnDataPacket packet = %T, want *livekit.SipDTMF", packet)
+				}
+				if dtmf.Digit != "5" {
+					t.Fatalf("OnDataPacket digit = %q, want 5", dtmf.Digit)
+				}
+				if params.SenderIdentity != "caller" {
+					t.Fatalf("OnDataPacket sender = %q, want caller", params.SenderIdentity)
+				}
+				existingCalled = true
+			},
+		},
+	})
+
+	cb.OnDataPacket(&livekit.SipDTMF{Digit: "5", Code: 5}, lksdk.DataReceiveParams{
+		SenderIdentity: "caller",
+	})
+
+	if !existingCalled {
+		t.Fatal("existing OnDataPacket callback was not called")
+	}
+	select {
+	case ev := <-session.SipDTMFEvents():
+		if ev.Digit != "5" {
+			t.Fatalf("SipDTMFEvent.Digit = %q, want 5", ev.Digit)
+		}
+	default:
+		t.Fatal("session did not receive SIP DTMF event")
+	}
+}
+
 func TestRoomIOPublishDTMFReturnsErrorWhenRoomDisconnected(t *testing.T) {
 	rio := &RoomIO{
 		Room: &lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}},

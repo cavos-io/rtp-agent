@@ -1036,14 +1036,22 @@ func (rio *RoomIO) registerTextInput() {
 }
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
-	cb := lksdk.NewRoomCallback()
-	cb.OnParticipantConnected = rio.onParticipantConnected
-	cb.OnLocalTrackSubscribed = rio.onLocalTrackSubscribed
-	cb.OnTrackSubscribed = rio.onTrackSubscribed
-	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
-	cb.OnDisconnected = rio.onRoomDisconnected
-	cb.OnDataPacket = rio.onDataPacket
-	return cb
+	return rio.WithCallback(nil)
+}
+
+func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
+	return RoomCallbackWithHandlers(cb, RoomCallbackHandlers{
+		OnDisconnected: rio.onRoomDisconnected,
+		OnParticipantConnected: func(participant RemoteParticipantView) {
+			rio.onParticipantConnected(participant.(*lksdk.RemoteParticipant))
+		},
+		OnLocalTrackSubscribed: rio.onLocalTrackSubscribed,
+		OnTrackSubscribed:      rio.onTrackSubscribed,
+		OnParticipantDisconnected: func(participant RemoteParticipantView) {
+			rio.onParticipantDisconnected(participant.(*lksdk.RemoteParticipant))
+		},
+		OnDataPacket: rio.onDataPacket,
+	})
 }
 
 func (rio *RoomIO) onRoomDisconnected() {
