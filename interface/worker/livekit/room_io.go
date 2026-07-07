@@ -183,6 +183,41 @@ type PlaybackFinishedEvent struct {
 	AudioLastError            string
 }
 
+const (
+	RoomEventDisconnected            = "disconnected"
+	RoomEventConnectionStateChanged  = "connection_state_changed"
+	RoomEventParticipantConnected    = "participant_connected"
+	RoomEventParticipantDisconnected = "participant_disconnected"
+)
+
+type RoomEvent interface {
+	Type() string
+}
+
+type RoomDisconnectedEvent struct{}
+
+func (*RoomDisconnectedEvent) Type() string { return RoomEventDisconnected }
+
+type RoomConnectionStateChangedEvent struct {
+	State string
+}
+
+func (*RoomConnectionStateChangedEvent) Type() string { return RoomEventConnectionStateChanged }
+
+type RoomParticipantConnectedEvent struct {
+	Participant *lksdk.RemoteParticipant
+}
+
+func (*RoomParticipantConnectedEvent) Type() string { return RoomEventParticipantConnected }
+
+type RoomParticipantDisconnectedEvent struct {
+	Participant *lksdk.RemoteParticipant
+}
+
+func (*RoomParticipantDisconnectedEvent) Type() string {
+	return RoomEventParticipantDisconnected
+}
+
 type RoomIOAudioOutputDiagnostics struct {
 	TrackID                     string
 	TrackPublished              bool
@@ -247,6 +282,8 @@ type RoomIO struct {
 	playbackWaiters              []chan struct{}
 	playbackStartedHandlers      []func(PlaybackStartedEvent)
 	playbackFinishedHandlers     []func(PlaybackFinishedEvent)
+	roomEventListeners           map[string]map[uint64]func(RoomEvent)
+	nextRoomEventListenerID      uint64
 
 	audioOutputPaused   bool
 	audioOutputWaiters  []chan audioOutputWaitResult
@@ -1055,6 +1092,8 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 }
 
 func (rio *RoomIO) onRoomDisconnected() {
+	rio.emitRoomEvent(&RoomDisconnectedEvent{})
+	rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "disconnected"})
 	if rio == nil || rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
 		return
 	}
@@ -1297,6 +1336,7 @@ func (rio *RoomIO) onParticipantConnected(participant *lksdk.RemoteParticipant) 
 	if participant == nil {
 		return
 	}
+	rio.emitRoomEvent(&RoomParticipantConnectedEvent{Participant: participant})
 	rio.handleParticipantConnected(
 		participant.Identity(),
 		participant.Kind(),
@@ -1309,6 +1349,7 @@ func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipan
 	if participant == nil {
 		return
 	}
+	rio.emitRoomEvent(&RoomParticipantDisconnectedEvent{Participant: participant})
 	rio.handleParticipantDisconnected(participant.Identity(), participant.DisconnectReason())
 }
 
@@ -1523,6 +1564,60 @@ func (rio *RoomIO) forwardRoomInputFrame(ctx context.Context, frame *model.Audio
 	}
 	if rio.AgentSession != nil {
 		rio.AgentSession.OnAudioFrame(ctx, frame)
+	}
+}
+
+func (rio *RoomIO) On(eventType string, callback func(RoomEvent)) func() {
+	if rio == nil || eventType == "" || callback == nil {
+		return func() {}
+	}
+	rio.mu.Lock()
+	if rio.roomEventListeners == nil {
+		rio.roomEventListeners = make(map[string]map[uint64]func(RoomEvent))
+	}
+	if rio.roomEventListeners[eventType] == nil {
+		rio.roomEventListeners[eventType] = make(map[uint64]func(RoomEvent))
+	}
+	id := rio.nextRoomEventListenerID
+	rio.nextRoomEventListenerID++
+	rio.roomEventListeners[eventType][id] = callback
+	rio.mu.Unlock()
+
+	return func() {
+		rio.mu.Lock()
+		defer rio.mu.Unlock()
+		listeners := rio.roomEventListeners[eventType]
+		if listeners == nil {
+			return
+		}
+		delete(listeners, id)
+		if len(listeners) == 0 {
+			delete(rio.roomEventListeners, eventType)
+		}
+	}
+}
+
+func (rio *RoomIO) emitRoomEvent(ev RoomEvent) {
+	if rio == nil || ev == nil {
+		return
+	}
+	rio.mu.Lock()
+	listenersByID := rio.roomEventListeners[ev.Type()]
+	listeners := make([]func(RoomEvent), 0, len(listenersByID))
+	for _, listener := range listenersByID {
+		listeners = append(listeners, listener)
+	}
+	rio.mu.Unlock()
+
+	for _, listener := range listeners {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Logger.Warnw("room event listener panicked", nil, "event", ev.Type(), "panic", recovered)
+				}
+			}()
+			listener(ev)
+		}()
 	}
 }
 
