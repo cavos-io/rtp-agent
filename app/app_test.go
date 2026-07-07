@@ -7790,6 +7790,33 @@ func TestSpeechmaticsSTTFallbackVADForcesReferenceExternalTurnDetection(t *testi
 	}
 }
 
+func TestConfigureSTTFallbacksPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	if err := configureSTTFallbacks(AppConfig{
+		STTFallbackProviders: []string{providerSpeechmatics},
+	}, baseAgent); err != nil {
+		t.Fatalf("configureSTTFallbacks() error = %v", err)
+	}
+
+	fallbackValue := reflect.ValueOf(baseAgent.STT).Elem()
+	stts := fallbackValue.FieldByName("stts")
+	if stts.Len() != 2 {
+		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
+	}
+	speechmaticsValue := stts.Index(1).Elem()
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+		t.Fatalf("fallback STT type = %s, want %s", got, want)
+	}
+	vadField := speechmaticsValue.Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics fallback VAD = nil, want app VAD for reference external endpointing")
+	}
+}
+
 func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
 	type initRecord struct {

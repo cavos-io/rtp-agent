@@ -2864,7 +2864,7 @@ func configureSTTFallbacks(cfg AppConfig, a *agent.Agent) error {
 	stts := make([]corestt.STT, 0, len(cfg.STTFallbackProviders)+1)
 	stts = append(stts, a.STT)
 	for _, provider := range cfg.STTFallbackProviders {
-		fallback, err := fallbackSTTFromProvider(cfg, provider)
+		fallback, err := fallbackSTTFromProviderWithVAD(cfg, provider, a.VAD)
 		if err != nil {
 			return err
 		}
@@ -2986,6 +2986,10 @@ func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
 }
 
 func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
+	return fallbackSTTFromProviderWithVAD(cfg, provider, nil)
+}
+
+func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector corevad.VAD) (corestt.STT, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return awsSTTFromConfig(cfg)
@@ -3415,6 +3419,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			return nil, err
 		} else if opt != nil {
 			sttOpts = append(sttOpts, opt)
+		}
+		if speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) && detector != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTVAD(detector))
 		}
 		if cfg.STTInterimResults != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
