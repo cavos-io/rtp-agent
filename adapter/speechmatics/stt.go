@@ -1427,9 +1427,11 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		}
 	}()
 	if s.closeConn != nil {
-		return s.closeConn()
+		_ = s.closeConn()
+		return nil
 	}
-	return s.closeWebsocketConn()
+	_ = s.closeWebsocketConn()
+	return nil
 }
 
 func (s *speechmaticsSTTStream) closeWebsocketConn() error {

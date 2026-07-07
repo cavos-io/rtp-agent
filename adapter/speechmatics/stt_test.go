@@ -1469,6 +1469,24 @@ func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTCloseIgnoresReferenceTransportCloseError(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		closeConn: func() error {
+			return errors.New("transport close failed")
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestSpeechmaticsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		events: make(chan *stt.SpeechEvent, 1),
