@@ -1,9 +1,13 @@
 package ultravox
 
 import (
+	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
+	"time"
 
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -134,5 +138,313 @@ func TestUltravoxRealtimeOptionsMatchReference(t *testing.T) {
 	}
 	if got, ok := model.FirstSpeaker(); !ok || got != "FIRST_SPEAKER_AGENT" {
 		t.Fatalf("first speaker = %q/%v, want FIRST_SPEAKER_AGENT/true", got, ok)
+	}
+}
+
+func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium("text"))
+	if got := model.OutputMedium(); got != "text" {
+		t.Fatalf("output medium = %q, want text after reference update_options", got)
+	}
+	if model.Capabilities().AudioOutput {
+		t.Fatal("audio output = true, want false after output_medium=text")
+	}
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium("voice"))
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("output medium = %q, want voice after reference update_options", got)
+	}
+	if !model.Capabilities().AudioOutput {
+		t.Fatal("audio output = false, want true after output_medium=voice")
+	}
+}
+
+func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v, want reference session lifecycle", err)
+	}
+	if session == nil {
+		t.Fatal("Session = nil, want reference realtime session")
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if _, ok := <-session.EventCh(); ok {
+		t.Fatal("EventCh still open after Close")
+	}
+}
+
+func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	frame := &audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio error = %v, want reference audio input accepted", err)
+	}
+
+	select {
+	case got := <-session.audioCh:
+		if !bytes.Equal(got, pcm) {
+			t.Fatalf("queued audio bytes = %v, want original 100ms PCM chunk", got[:min(len(got), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PushAudio did not queue reference 100ms PCM chunk")
+	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v, want reference no-op", err)
+	}
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v, want reference no-op", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want reference no-op", err)
+	}
+
+	resamplingModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	resamplingSessionInterface, err := resamplingModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	resamplingSession := resamplingSessionInterface.(*realtimeSession)
+	defer resamplingSession.Close()
+
+	stereo8K := make([]byte, 800*2*2)
+	left, right := int16(1000), int16(-1000)
+	for sample := 0; sample < 800; sample++ {
+		offset := sample * 4
+		binary.LittleEndian.PutUint16(stereo8K[offset:], uint16(left))
+		binary.LittleEndian.PutUint16(stereo8K[offset+2:], uint16(right))
+	}
+	if err := resamplingSession.PushAudio(&audiomodel.AudioFrame{
+		Data:              stereo8K,
+		SampleRate:        8000,
+		NumChannels:       2,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushAudio stereo 8k error = %v, want reference resample/downmix", err)
+	}
+	select {
+	case got := <-resamplingSession.audioCh:
+		want := make([]byte, 3200)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("resampled/downmixed audio bytes = %v, want 16k mono mixed silence", got[:min(len(got), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PushAudio did not queue resampled/downmixed chunk")
+	}
+}
+
+func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v, want reference user text event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "answer briefly",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply with instructions error = %v, want reference instruction event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "<instruction>answer briefly</instruction>",
+		"deferResponse": false,
+	})
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply after Close error = %v, want reference no-op", err)
+	}
+}
+
+func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:      "msg-1",
+		Modalities:     []string{"audio"},
+		AudioEndMillis: 120,
+	}); err != nil {
+		t.Fatalf("Truncate error = %v, want reference no-op", err)
+	}
+}
+
+func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i % 251)
+	}
+	session.handleOutputAudio(audio)
+
+	var generation *llm.GenerationCreatedEvent
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeGenerationCreated {
+			t.Fatalf("event type = %s, want generation_created", event.Type)
+		}
+		generation = event.Generation
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	if generation == nil {
+		t.Fatal("generation = nil")
+	}
+
+	var message llm.MessageGeneration
+	select {
+	case message = <-generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	select {
+	case got := <-message.AudioCh:
+		if got.SampleRate != 24000 || got.NumChannels != 1 || got.SamplesPerChannel != 480 {
+			t.Fatalf("audio frame shape = rate %d channels %d samples %d, want 24000/1/480", got.SampleRate, got.NumChannels, got.SamplesPerChannel)
+		}
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("audio data = %v, want original output bytes", got.Data[:min(len(got.Data), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for output audio frame")
+	}
+}
+
+func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "hello",
+		Final:   false,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello", false)
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "hello world",
+		Final:   true,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
+}
+
+func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSession, itemID string, transcript string, final bool) {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+			t.Fatalf("event type = %s, want input_audio_transcription_completed", event.Type)
+		}
+		if event.InputTranscription == nil {
+			t.Fatal("InputTranscription = nil")
+		}
+		if event.InputTranscription.ItemID != itemID ||
+			event.InputTranscription.Transcript != transcript ||
+			event.InputTranscription.IsFinal != final {
+			t.Fatalf("InputTranscription = %+v, want item=%q transcript=%q final=%v", event.InputTranscription, itemID, transcript, final)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for transcript event")
+	}
+}
+
+func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, want map[string]any) {
+	t.Helper()
+	select {
+	case got := <-session.clientEventCh:
+		for key, wantValue := range want {
+			if gotValue := got[key]; gotValue != wantValue {
+				t.Fatalf("client event %s = %#v, want %#v in %#v", key, gotValue, wantValue, got)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for client event %#v", want)
 	}
 }
