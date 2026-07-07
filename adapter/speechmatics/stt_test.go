@@ -1259,11 +1259,11 @@ func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	if !stream.isClosed() {
 		t.Fatal("stream remains open after audio write failure")
 	}
-	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(frame); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after write failure error = %v, want reference input-ended error", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after write failure error = %v, want reference input-ended error", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v", err)
@@ -1546,8 +1546,8 @@ func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	if !closed {
 		t.Fatal("stream closed = false after provider Close")
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after provider Close = %v, want reference input-ended error", err)
 	}
 }
 
@@ -1949,8 +1949,30 @@ func TestSpeechmaticsSTTCloseIgnoresReferenceTransportCloseError(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after Close error = %v, want reference input-ended error", err)
+	}
+}
+
+func TestSpeechmaticsSTTClosedStreamReportsInputEndedLikeReference(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		closeConn: func() error {
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	frame := &model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	for name, err := range map[string]error{
+		"PushFrame": stream.PushFrame(frame),
+		"Flush":     stream.Flush(),
+		"EndInput":  stream.EndInput(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "stream input ended") {
+			t.Fatalf("%s after Close error = %v, want reference input-ended error", name, err)
+		}
 	}
 }
 

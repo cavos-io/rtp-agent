@@ -1091,11 +1091,11 @@ func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.Spee
 func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -1140,11 +1140,11 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 func (s *speechmaticsSTTStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
@@ -1354,11 +1354,11 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 func (s *speechmaticsSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
