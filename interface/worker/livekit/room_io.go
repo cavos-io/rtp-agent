@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
 	"strconv"
 	"sync"
@@ -184,10 +185,15 @@ type PlaybackFinishedEvent struct {
 }
 
 const (
-	RoomEventDisconnected            = "disconnected"
-	RoomEventConnectionStateChanged  = "connection_state_changed"
-	RoomEventParticipantConnected    = "participant_connected"
-	RoomEventParticipantDisconnected = "participant_disconnected"
+	RoomEventDisconnected                 = "disconnected"
+	RoomEventConnectionStateChanged       = "connection_state_changed"
+	RoomEventParticipantConnected         = "participant_connected"
+	RoomEventParticipantDisconnected      = "participant_disconnected"
+	RoomEventParticipantAttributesChanged = "participant_attributes_changed"
+	RoomEventParticipantActive            = "participant_active"
+	RoomEventTrackUnpublished             = "track_unpublished"
+	RoomEventTrackPublished               = "track_published"
+	RoomEventLocalTrackPublished          = "local_track_published"
 )
 
 type RoomEvent interface {
@@ -217,6 +223,42 @@ type RoomParticipantDisconnectedEvent struct {
 func (*RoomParticipantDisconnectedEvent) Type() string {
 	return RoomEventParticipantDisconnected
 }
+
+type RoomParticipantAttributesChangedEvent struct {
+	Changed     map[string]string
+	Participant lksdk.Participant
+}
+
+func (*RoomParticipantAttributesChangedEvent) Type() string {
+	return RoomEventParticipantAttributesChanged
+}
+
+type RoomParticipantActiveEvent struct {
+	Participant lksdk.Participant
+}
+
+func (*RoomParticipantActiveEvent) Type() string { return RoomEventParticipantActive }
+
+type RoomTrackUnpublishedEvent struct {
+	Publication *lksdk.RemoteTrackPublication
+	Participant *lksdk.RemoteParticipant
+}
+
+func (*RoomTrackUnpublishedEvent) Type() string { return RoomEventTrackUnpublished }
+
+type RoomTrackPublishedEvent struct {
+	Publication *lksdk.RemoteTrackPublication
+	Participant *lksdk.RemoteParticipant
+}
+
+func (*RoomTrackPublishedEvent) Type() string { return RoomEventTrackPublished }
+
+type RoomLocalTrackPublishedEvent struct {
+	Publication *lksdk.LocalTrackPublication
+	Participant *lksdk.LocalParticipant
+}
+
+func (*RoomLocalTrackPublishedEvent) Type() string { return RoomEventLocalTrackPublished }
 
 type RoomIOAudioOutputDiagnostics struct {
 	TrackID                     string
@@ -1079,13 +1121,36 @@ func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 	return RoomCallbackWithHandlers(cb, RoomCallbackHandlers{
 		OnDisconnected: rio.onRoomDisconnected,
+		OnReconnecting: func() {
+			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "reconnecting"})
+		},
+		OnReconnected: func() {
+			rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
+		},
 		OnParticipantConnected: func(participant RemoteParticipantView) {
 			rio.onParticipantConnected(participant.(*lksdk.RemoteParticipant))
 		},
-		OnLocalTrackSubscribed: rio.onLocalTrackSubscribed,
-		OnTrackSubscribed:      rio.onTrackSubscribed,
 		OnParticipantDisconnected: func(participant RemoteParticipantView) {
 			rio.onParticipantDisconnected(participant.(*lksdk.RemoteParticipant))
+		},
+		OnLocalTrackPublished: func(publication *lksdk.LocalTrackPublication, participant *lksdk.LocalParticipant) {
+			rio.emitRoomEvent(&RoomLocalTrackPublishedEvent{Publication: publication, Participant: participant})
+		},
+		OnLocalTrackSubscribed: rio.onLocalTrackSubscribed,
+		OnTrackSubscribed:      rio.onTrackSubscribed,
+		OnTrackUnpublished: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+			rio.emitRoomEvent(&RoomTrackUnpublishedEvent{Publication: publication, Participant: participant})
+		},
+		OnTrackPublishedEvent: func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+			rio.emitRoomEvent(&RoomTrackPublishedEvent{Publication: publication, Participant: participant})
+		},
+		OnAttributesChanged: func(changed map[string]string, participant lksdk.Participant) {
+			rio.emitRoomEvent(&RoomParticipantAttributesChangedEvent{Changed: maps.Clone(changed), Participant: participant})
+		},
+		OnIsSpeakingChanged: func(participant lksdk.Participant) {
+			if participant != nil && participant.IsSpeaking() {
+				rio.emitRoomEvent(&RoomParticipantActiveEvent{Participant: participant})
+			}
 		},
 		OnDataPacket: rio.onDataPacket,
 	})
