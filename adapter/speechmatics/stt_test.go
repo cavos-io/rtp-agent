@@ -187,7 +187,7 @@ func TestSpeechmaticsEventsMapReferenceRawPartialTranscriptWithOffset(t *testing
 			EndTime:    0.5,
 		},
 	}
-	state := &speechmaticsStreamState{startTimeOffset: 1.25}
+	state := &speechmaticsStreamState{startTimeOffset: 1.25, includePartials: true}
 
 	events := speechmaticsEvents(resp, state)
 	if len(events) != 1 {
@@ -300,7 +300,7 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferenceLanguage(t *testing.T) {
 			EndTime:    0.2,
 		},
 	}
-	events = speechmaticsEvents(metadataOnly, &speechmaticsStreamState{language: "fr"})
+	events = speechmaticsEvents(metadataOnly, &speechmaticsStreamState{language: "fr", includePartials: true})
 	if len(events) != 1 {
 		t.Fatalf("metadata-only events = %#v, want one raw transcript event", events)
 	}
@@ -440,6 +440,32 @@ func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing
 	}
 	if len(alt.Words) != 1 || alt.Words[0].Text != "hello" {
 		t.Fatalf("words = %#v, want only middle word", alt.Words)
+	}
+}
+
+func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing.T) {
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"unstable","confidence":0.7,"speaker":"agent","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{includePartials: false}
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	}
+
+	final := partial
+	final.Message = "AddTranscript"
+	events := speechmaticsEvents(final, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("final raw transcript events = %#v, want final transcript despite include_partials false", events)
 	}
 }
 

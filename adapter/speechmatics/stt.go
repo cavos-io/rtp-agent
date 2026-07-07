@@ -1032,6 +1032,8 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 	eventType := stt.SpeechEventInterimTranscript
 	if resp.Message == "AddTranscript" {
 		eventType = stt.SpeechEventFinalTranscript
+	} else if state != nil && !state.includePartials {
+		return nil
 	}
 
 	startTimeOffset := speechmaticsStartTimeOffset(state)
