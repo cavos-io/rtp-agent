@@ -535,6 +535,7 @@ type cartesiaTTSStream struct {
 	streamHeaders http.Header
 	writeJSON     func(any) error
 	sentTokens    []string
+	pushedText    string
 	skipAlignment bool
 	pendingText   string
 	streamOptions map[string]interface{}
@@ -611,6 +612,11 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		if resp.Type == "done" || resp.Done {
 			if s.isFlushed() {
+				if !emittedAudio {
+					if pushedText := s.pushedInputText(); strings.TrimSpace(pushedText) != "" {
+						s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
+					}
+				}
 				if emittedAudio && !emittedFinal {
 					s.audio <- &tts.SynthesizedAudio{IsFinal: true}
 				}
@@ -698,6 +704,12 @@ func (s *cartesiaTTSStream) isFlushed() bool {
 	return s.flushed
 }
 
+func (s *cartesiaTTSStream) pushedInputText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pushedText
+}
+
 func (s *cartesiaTTSStream) PushText(text string) error {
 	if text == "" {
 		return nil
@@ -707,6 +719,7 @@ func (s *cartesiaTTSStream) PushText(text string) error {
 	if s.closed {
 		return nil
 	}
+	s.pushedText += text
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
