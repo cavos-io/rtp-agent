@@ -27,10 +27,17 @@ type RoomCallbackHandlers struct {
 	AutoSubscribe             string
 	OnDisconnected            func()
 	OnDisconnectedWithReason  func(lksdk.DisconnectionReason)
+	OnReconnecting            func()
+	OnReconnected             func()
 	OnParticipantConnected    func(RemoteParticipantView)
 	OnParticipantDisconnected func(RemoteParticipantView)
+	OnLocalTrackPublished     func(*lksdk.LocalTrackPublication, *lksdk.LocalParticipant)
 	OnLocalTrackSubscribed    func(*lksdk.LocalTrackPublication, *lksdk.LocalParticipant)
 	OnTrackSubscribed         func(*webrtc.TrackRemote, *lksdk.RemoteTrackPublication, *lksdk.RemoteParticipant)
+	OnTrackUnpublished        func(*lksdk.RemoteTrackPublication, *lksdk.RemoteParticipant)
+	OnTrackPublishedEvent     func(*lksdk.RemoteTrackPublication, *lksdk.RemoteParticipant)
+	OnAttributesChanged       func(map[string]string, lksdk.Participant)
+	OnIsSpeakingChanged       func(lksdk.Participant)
 	OnDataPacket              func(lksdk.DataPacket, lksdk.DataReceiveParams)
 	OnTrackSubscribeError     func(RemoteTrackSubscriptionResult)
 }
@@ -83,6 +90,26 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 	}
 
+	onReconnecting := wrapped.OnReconnecting
+	wrapped.OnReconnecting = func() {
+		if onReconnecting != nil {
+			onReconnecting()
+		}
+		if handlers.OnReconnecting != nil {
+			handlers.OnReconnecting()
+		}
+	}
+
+	onReconnected := wrapped.OnReconnected
+	wrapped.OnReconnected = func() {
+		if onReconnected != nil {
+			onReconnected()
+		}
+		if handlers.OnReconnected != nil {
+			handlers.OnReconnected()
+		}
+	}
+
 	onParticipantConnected := wrapped.OnParticipantConnected
 	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
 		if onParticipantConnected != nil {
@@ -100,6 +127,16 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 		if participant != nil && handlers.OnParticipantDisconnected != nil {
 			handlers.OnParticipantDisconnected(participant)
+		}
+	}
+
+	onLocalTrackPublished := wrapped.OnLocalTrackPublished
+	wrapped.OnLocalTrackPublished = func(publication *lksdk.LocalTrackPublication, participant *lksdk.LocalParticipant) {
+		if onLocalTrackPublished != nil {
+			onLocalTrackPublished(publication, participant)
+		}
+		if handlers.OnLocalTrackPublished != nil {
+			handlers.OnLocalTrackPublished(publication, participant)
 		}
 	}
 
@@ -123,6 +160,36 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 	}
 
+	onTrackUnpublished := wrapped.OnTrackUnpublished
+	wrapped.OnTrackUnpublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+		if onTrackUnpublished != nil {
+			onTrackUnpublished(publication, participant)
+		}
+		if handlers.OnTrackUnpublished != nil {
+			handlers.OnTrackUnpublished(publication, participant)
+		}
+	}
+
+	onAttributesChanged := wrapped.OnAttributesChanged
+	wrapped.OnAttributesChanged = func(changed map[string]string, participant lksdk.Participant) {
+		if onAttributesChanged != nil {
+			onAttributesChanged(changed, participant)
+		}
+		if handlers.OnAttributesChanged != nil {
+			handlers.OnAttributesChanged(changed, participant)
+		}
+	}
+
+	onIsSpeakingChanged := wrapped.OnIsSpeakingChanged
+	wrapped.OnIsSpeakingChanged = func(participant lksdk.Participant) {
+		if onIsSpeakingChanged != nil {
+			onIsSpeakingChanged(participant)
+		}
+		if handlers.OnIsSpeakingChanged != nil {
+			handlers.OnIsSpeakingChanged(participant)
+		}
+	}
+
 	onDataPacket := wrapped.OnDataPacket
 	wrapped.OnDataPacket = func(packet lksdk.DataPacket, params lksdk.DataReceiveParams) {
 		if onDataPacket != nil {
@@ -141,6 +208,9 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		result := SubscribeRemoteTrackIfAllowed(handlers.AutoSubscribe, publication)
 		if result.Attempted && result.Err != nil && handlers.OnTrackSubscribeError != nil {
 			handlers.OnTrackSubscribeError(result)
+		}
+		if handlers.OnTrackPublishedEvent != nil {
+			handlers.OnTrackPublishedEvent(publication, participant)
 		}
 	}
 

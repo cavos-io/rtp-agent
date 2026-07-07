@@ -398,3 +398,59 @@ func TestRoomCallbackWithHandlersPreservesTrackCallback(t *testing.T) {
 		t.Fatal("existing OnTrackPublished callback was not called")
 	}
 }
+
+func TestRoomCallbackWithHandlersPreservesReconnectedCallback(t *testing.T) {
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		OnReconnected: func() {
+			existingCalled = true
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnReconnected: func() {
+			handlerCalled = true
+		},
+	})
+
+	cb.OnReconnected()
+
+	if !existingCalled {
+		t.Fatal("existing OnReconnected callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnReconnected callback was not called")
+	}
+}
+
+func TestRoomCallbackWithHandlersPreservesLocalTrackPublishedCallback(t *testing.T) {
+	publication := &lksdk.LocalTrackPublication{}
+	participant := &lksdk.LocalParticipant{}
+	existingCalled := false
+	handlerCalled := false
+	cb := workerlivekit.RoomCallbackWithHandlers(&lksdk.RoomCallback{
+		ParticipantCallback: lksdk.ParticipantCallback{
+			OnLocalTrackPublished: func(gotPublication *lksdk.LocalTrackPublication, gotParticipant *lksdk.LocalParticipant) {
+				if gotPublication != publication || gotParticipant != participant {
+					t.Fatal("existing callback received wrong local track payload")
+				}
+				existingCalled = true
+			},
+		},
+	}, workerlivekit.RoomCallbackHandlers{
+		OnLocalTrackPublished: func(gotPublication *lksdk.LocalTrackPublication, gotParticipant *lksdk.LocalParticipant) {
+			if gotPublication != publication || gotParticipant != participant {
+				t.Fatal("handler callback received wrong local track payload")
+			}
+			handlerCalled = true
+		},
+	})
+
+	cb.OnLocalTrackPublished(publication, participant)
+
+	if !existingCalled {
+		t.Fatal("existing OnLocalTrackPublished callback was not called")
+	}
+	if !handlerCalled {
+		t.Fatal("handler OnLocalTrackPublished callback was not called")
+	}
+}
