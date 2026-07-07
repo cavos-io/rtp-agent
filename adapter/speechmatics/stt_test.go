@@ -1341,6 +1341,13 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 			},
 			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
 		},
+		{
+			name: "eou max delay not greater than default silence trigger",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.4),
+			},
+			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
+		},
 	}
 
 	for _, tt := range tests {
