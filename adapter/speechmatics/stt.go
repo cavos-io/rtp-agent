@@ -592,7 +592,8 @@ type speechmaticsSTTStream struct {
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 
-	speakerResultCh chan []SpeechmaticsSpeakerIdentifier
+	speakerResultCh  chan []SpeechmaticsSpeakerIdentifier
+	pushedSampleRate uint32
 }
 
 type speechmaticsStreamState struct {
@@ -872,6 +873,10 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	s.pushedSampleRate = frame.SampleRate
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}

@@ -488,6 +488,32 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 9600),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+}
+
 func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	stream := &speechmaticsSTTStream{
