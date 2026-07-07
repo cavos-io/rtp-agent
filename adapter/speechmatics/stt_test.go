@@ -1272,6 +1272,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
+	assertSpeechmaticsConfig(t, config, "max_delay_mode", "flexible")
 }
 
 func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {

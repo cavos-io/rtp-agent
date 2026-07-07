@@ -552,6 +552,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.maxDelay != nil {
 		config["max_delay"] = *s.maxDelay
 	}
+	config["max_delay_mode"] = "flexible"
 	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
 		config["conversation_config"] = conversationConfig
 	}
