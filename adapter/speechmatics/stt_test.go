@@ -498,6 +498,38 @@ func TestSpeechmaticsSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+			_ = tcpConn.SetLinger(0)
+		}
+		_ = conn.UnderlyingConn().Close()
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: vadStream}),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		t.Fatal("Stream error = nil, want StartRecognition write failure")
+	}
+	if !vadStream.closed {
+		t.Fatal("VAD stream closed = false after startup write failure")
+	}
+}
+
 func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -353,12 +353,12 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
 	if err := conn.WriteJSON(initMsg); err != nil {
-		conn.Close()
+		_ = stream.Close()
 		return nil, err
 	}
 
 	if !s.registerStream(stream) {
-		conn.Close()
+		_ = stream.Close()
 		return nil, io.ErrClosedPipe
 	}
 	go stream.readLoop()
