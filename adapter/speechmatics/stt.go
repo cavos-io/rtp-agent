@@ -309,7 +309,6 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
-	stream.closeConn = stream.closeWebsocketConn
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
@@ -1417,7 +1416,6 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
-	inputEnded := s.inputEnded
 	s.closed = true
 	s.inputEnded = true
 	s.pendingEndInput = false
@@ -1432,24 +1430,8 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		_ = s.closeConn()
 		return nil
 	}
-	if inputEnded {
-		_ = s.closeTransport()
-		return nil
-	}
-	_ = s.closeWebsocketConn()
+	_ = s.closeTransport()
 	return nil
-}
-
-func (s *speechmaticsSTTStream) closeWebsocketConn() error {
-	if s.conn == nil {
-		return nil
-	}
-	writeErr := s.writeJSONMessage(map[string]interface{}{"message": "EndOfStream"})
-	closeErr := s.conn.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	return closeErr
 }
 
 func (s *speechmaticsSTTStream) closeTransport() error {

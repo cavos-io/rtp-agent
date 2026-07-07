@@ -1010,6 +1010,12 @@ func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *
 			}
 			if value, _ := message["message"].(string); value != "" {
 				messages <- value
+				if value == "StartRecognition" {
+					if err := conn.WriteJSON(map[string]interface{}{"message": "RecognitionStarted"}); err != nil {
+						t.Errorf("write RecognitionStarted: %v", err)
+						return
+					}
+				}
 			}
 		}
 	})
@@ -1025,13 +1031,25 @@ func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
+		t.Fatalf("Stream error = %v", err)
 	}
-	stream := &speechmaticsSTTStream{conn: conn}
+	concrete, ok := stream.(*speechmaticsSTTStream)
+	if !ok {
+		t.Fatalf("stream %T is not *speechmaticsSTTStream", stream)
+	}
+	if got := <-messages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+	waitSpeechmaticsStreamReady(t, concrete)
 
-	if err := stream.EndInput(); err != nil {
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream %T does not implement stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
 		t.Fatalf("EndInput() error = %v", err)
 	}
 	if err := stream.Close(); err != nil {
@@ -1041,6 +1059,63 @@ func TestSpeechmaticsSTTCloseAfterEndInputDoesNotDuplicateReferenceEndStream(t *
 	got := drainSpeechmaticsControlMessages(messages)
 	if !reflect.DeepEqual(got, []string{"EndOfStream"}) {
 		t.Fatalf("control messages = %#v, want single EndOfStream", got)
+	}
+}
+
+func TestSpeechmaticsSTTCloseBeforeEndInputDoesNotSendReferenceEndStream(t *testing.T) {
+	messages := make(chan string, 3)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]interface{}
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			if value, _ := message["message"].(string); value != "" {
+				messages <- value
+				if value == "StartRecognition" {
+					if err := conn.WriteJSON(map[string]interface{}{"message": "RecognitionStarted"}); err != nil {
+						t.Errorf("write RecognitionStarted: %v", err)
+						return
+					}
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if got := <-messages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	got := drainSpeechmaticsControlMessages(messages)
+	if len(got) != 0 {
+		t.Fatalf("control messages after Close = %#v, want no EndOfStream", got)
 	}
 }
 
@@ -1056,6 +1131,21 @@ func drainSpeechmaticsControlMessages(messages <-chan string) []string {
 			return got
 		}
 	}
+}
+
+func waitSpeechmaticsStreamReady(t *testing.T, stream *speechmaticsSTTStream) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		stream.mu.Lock()
+		ready := stream.audioReady
+		stream.mu.Unlock()
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("stream did not process RecognitionStarted")
 }
 
 func TestSpeechmaticsSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
