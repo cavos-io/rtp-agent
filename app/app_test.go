@@ -5388,8 +5388,10 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsSpeechProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "speechmatics.STT" {
 		t.Fatalf("STT label = %q, want speechmatics.STT", got)
 	}
-	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
-		t.Fatalf("STT capabilities = %+v, want streaming interim diarization chunk-aligned without offline recognize", caps)
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim chunk-aligned without offline recognize", caps)
+	} else if caps.Diarization {
+		t.Fatalf("STT diarization capability = true, want false from RTP_AGENT_STT_DIARIZATION=false")
 	}
 	if got := app.Session.TTS.Label(); got != "speechmatics.TTS" {
 		t.Fatalf("TTS label = %q, want speechmatics.TTS", got)

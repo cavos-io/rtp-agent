@@ -152,6 +152,29 @@ func TestSpeechmaticsSegmentEventsApplyReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsApplyReferenceDefaults(t *testing.T) {
+	state := &speechmaticsStreamState{language: "de"}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hallo",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "hallo" || alt.Language != "de" || alt.SpeakerID != "UU" {
+		t.Fatalf("alternative = %+v, want reference language and speaker defaults", alt)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",
@@ -327,6 +350,59 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	clientClosed := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{"message": "EndOfTranscript"}); err != nil {
+			t.Errorf("write EndOfTranscript: %v", err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_, _, err = conn.ReadMessage()
+		clientClosed <- err
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	event, err := stream.Next()
+	if event != nil || err != io.EOF {
+		t.Fatalf("Next after EndOfTranscript = (%#v, %v), want EOF", event, err)
+	}
+	if active := provider.activeStreams(); len(active) != 0 {
+		t.Fatalf("active streams after EndOfTranscript = %d, want 0", len(active))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after EndOfTranscript = %v, want io.ErrClosedPipe", err)
+	}
+	select {
+	case err := <-clientClosed:
+		if err == nil {
+			t.Fatal("server read after EndOfTranscript succeeded, want client transport close")
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			t.Fatalf("server read after EndOfTranscript timed out, want client transport close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not observe client transport close after EndOfTranscript")
+	}
+}
+
 func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &speechmaticsSTTStream{
@@ -475,6 +551,11 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	if got := stt.Model(provider); got != "standard" {
 		t.Fatalf("configured model metadata = %q, want standard", got)
 	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+	if capabilities := provider.Capabilities(); capabilities.Diarization {
+		t.Fatal("Diarization with disabled option = true, want false")
+	}
 }
 
 func TestSpeechmaticsSTTExposesReferenceInputSampleRate(t *testing.T) {
@@ -518,6 +599,45 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SpeechmaticsSTTOption
+		want string
+	}{
+		{
+			name: "silence trigger too high",
+			opts: []SpeechmaticsSTTOption{WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(2.0)},
+			want: "end_of_utterance_silence_trigger must be between 0 and 2",
+		},
+		{
+			name: "max delay below minimum",
+			opts: []SpeechmaticsSTTOption{WithSpeechmaticsSTTMaxDelay(0.6)},
+			want: "max_delay must be between 0.7 and 4.0",
+		},
+		{
+			name: "eou max delay not greater than silence trigger",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.8),
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.8),
+			},
+			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://127.0.0.1:1")}, tt.opts...)
+			provider := NewSpeechmaticsSTT("test-key", opts...)
+
+			_, err := provider.Stream(context.Background(), "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream error = %v, want %q before provider dial", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	closed := false
@@ -537,6 +657,63 @@ func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("finalize writes = %d, want one active stream write", len(writes))
+	}
+	if got, want := writes[0]["message"], "ForceEndOfUtterance"; got != want {
+		t.Fatalf("finalize message = %#v, want %#v", got, want)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize after stream Close error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("finalize writes after stream Close = %d, want unchanged", len(writes))
+	}
+}
+
+func TestSpeechmaticsSTTClosedStreamFinalizeReturnsEOF(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		writeJSON: func(interface{}) error {
+			return errors.New("unexpected finalize write")
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if err := stream.Finalize(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Finalize after Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
@@ -690,6 +867,23 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	if _, err := json.Marshal(message); err != nil {
 		t.Fatalf("marshal start message: %v", err)
 	}
+}
+
+func TestSpeechmaticsSTTStartMessageEnablesReferenceDiarizationByDefault(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
+}
+
+func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
+	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {
