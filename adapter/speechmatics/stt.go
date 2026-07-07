@@ -660,25 +660,9 @@ func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	case "external":
 		return config
 	case "adaptive":
-		trigger = 0.7
-		config["vad_config"] = map[string]interface{}{
-			"enabled":          true,
-			"silence_duration": 0.18,
-			"threshold":        0.35,
-		}
+		return config
 	case "smart_turn":
-		mode = "adaptive"
-		trigger = 0.8
-		config["vad_config"] = map[string]interface{}{
-			"enabled":          true,
-			"silence_duration": 0.18,
-			"threshold":        0.35,
-		}
-		config["smart_turn_config"] = map[string]interface{}{
-			"enabled":              true,
-			"smart_turn_threshold": 0.5,
-			"max_audio_length":     8.0,
-		}
+		return config
 	case "fixed":
 		if s.eouSilenceTrigger != nil {
 			trigger = *s.eouSilenceTrigger

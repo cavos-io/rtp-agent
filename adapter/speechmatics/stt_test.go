@@ -2256,16 +2256,11 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *te
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.7))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	vadConfig, ok := config["vad_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("vad_config = %#v, want reference adaptive VAD config", config["vad_config"])
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted from reference adaptive wire config", key, config[key])
+		}
 	}
-	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
-	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testing.T) {
@@ -2281,23 +2276,41 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testi
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.8))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	vadConfig, ok := config["vad_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("vad_config = %#v, want reference smart-turn VAD config", config["vad_config"])
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted from reference smart-turn wire config", key, config[key])
+		}
 	}
-	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
-	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
-	smartTurnConfig, ok := config["smart_turn_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("smart_turn_config = %#v, want reference smart-turn config", config["smart_turn_config"])
+}
+
+func TestSpeechmaticsSTTProviderManagedTurnDetectionOmitsReferenceWireEndpointingOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  SpeechmaticsSTTOption
+	}{
+		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
+		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
 	}
-	assertSpeechmaticsConfig(t, smartTurnConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, smartTurnConfig, "smart_turn_threshold", float64(0.5))
-	assertSpeechmaticsConfig(t, smartTurnConfig, "max_audio_length", float64(8.0))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key",
+				tt.opt,
+				WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.4),
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.5),
+			)
+
+			message := buildSpeechmaticsSTTStartMessage(provider, "")
+			config := message["transcription_config"].(map[string]interface{})
+			if _, ok := config["conversation_config"]; ok {
+				t.Fatalf("conversation_config = %#v, want omitted for reference provider-managed turn detection", config["conversation_config"])
+			}
+			for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+				if _, ok := config[key]; ok {
+					t.Fatalf("%s = %#v, want omitted for reference provider-managed turn detection", key, config[key])
+				}
+			}
+		})
+	}
 }
 
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
