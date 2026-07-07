@@ -972,6 +972,11 @@ func (s *speechmaticsSTTStream) isClosed() bool {
 
 func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	switch resp.Message {
+	case "AddPartialTranscript", "AddTranscript":
+		if event := speechmaticsTranscriptEvent(resp, state); event != nil {
+			return []*stt.SpeechEvent{event}
+		}
+		return nil
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
@@ -984,6 +989,85 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 		return events
 	}
 	return nil
+}
+
+func speechmaticsTranscriptEvent(resp smResponse, state *speechmaticsStreamState) *stt.SpeechEvent {
+	eventType := stt.SpeechEventInterimTranscript
+	if resp.Message == "AddTranscript" {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+
+	startTimeOffset := speechmaticsStartTimeOffset(state)
+	transcript := ""
+	var totalConfidence float64
+	var minStart, maxEnd float64
+	hasTiming := false
+	var words []stt.TimedString
+
+	for _, result := range resp.Results {
+		if len(result.Alternatives) == 0 {
+			continue
+		}
+		alt := result.Alternatives[0]
+		startTime := result.StartTime + startTimeOffset
+		endTime := result.EndTime + startTimeOffset
+		switch result.Type {
+		case "word":
+			transcript += alt.Content + " "
+			words = append(words, stt.TimedString{
+				Text:       alt.Content,
+				StartTime:  startTime,
+				EndTime:    endTime,
+				Confidence: alt.Confidence,
+			})
+		case "punctuation":
+			if transcript != "" {
+				transcript = transcript[:len(transcript)-1] + alt.Content + " "
+			} else {
+				transcript = alt.Content + " "
+			}
+		}
+
+		totalConfidence += alt.Confidence
+		if !hasTiming {
+			minStart = startTime
+			hasTiming = true
+		}
+		maxEnd = endTime
+	}
+
+	if hasTiming {
+		if transcript != "" {
+			transcript = transcript[:len(transcript)-1]
+		}
+		return &stt.SpeechEvent{
+			Type: eventType,
+			Alternatives: []stt.SpeechData{
+				{
+					Text:       transcript,
+					Confidence: totalConfidence / float64(len(resp.Results)),
+					StartTime:  minStart,
+					EndTime:    maxEnd,
+					Words:      words,
+				},
+			},
+		}
+	}
+
+	if resp.Metadata.Transcript == "" {
+		return nil
+	}
+	return &stt.SpeechEvent{
+		Type: eventType,
+		Alternatives: []stt.SpeechData{
+			{
+				Text:       resp.Metadata.Transcript,
+				Confidence: 1.0,
+				StartTime:  resp.Metadata.StartTime + startTimeOffset,
+				EndTime:    resp.Metadata.EndTime + startTimeOffset,
+			},
+		},
+	}
 }
 
 func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {

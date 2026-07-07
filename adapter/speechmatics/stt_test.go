@@ -67,7 +67,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 		},
 	}
 
-	event := speechmaticsTranscriptEvent(resp)
+	event := speechmaticsTranscriptEvent(resp, nil)
 	if event == nil {
 		t.Fatal("speechmaticsTranscriptEvent returned nil")
 	}
@@ -89,101 +89,106 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
-func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
-	eventType := stt.SpeechEventInterimTranscript
-	if resp.Message == "AddTranscript" {
-		eventType = stt.SpeechEventFinalTranscript
-	}
-
-	transcript := ""
-	var totalConfidence float64
-	var minStart, maxEnd float64
-	hasTiming := false
-	var words []stt.TimedString
-
-	for _, result := range resp.Results {
-		if len(result.Alternatives) == 0 {
-			continue
-		}
-		alt := result.Alternatives[0]
-		switch result.Type {
-		case "word":
-			transcript += alt.Content + " "
-			words = append(words, stt.TimedString{
-				Text:       alt.Content,
-				StartTime:  result.StartTime,
-				EndTime:    result.EndTime,
-				Confidence: alt.Confidence,
-			})
-		case "punctuation":
-			if transcript != "" {
-				transcript = transcript[:len(transcript)-1] + alt.Content + " "
-			} else {
-				transcript = alt.Content + " "
-			}
-		}
-
-		totalConfidence += alt.Confidence
-		if !hasTiming {
-			minStart = result.StartTime
-			hasTiming = true
-		}
-		maxEnd = result.EndTime
-	}
-
-	if hasTiming {
-		if transcript != "" {
-			transcript = transcript[:len(transcript)-1]
-		}
-		return &stt.SpeechEvent{
-			Type: eventType,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:       transcript,
-					Confidence: totalConfidence / float64(len(resp.Results)),
-					StartTime:  minStart,
-					EndTime:    maxEnd,
-					Words:      words,
-				},
-			},
-		}
-	}
-
-	if resp.Metadata.Transcript == "" {
-		return nil
-	}
-	return &stt.SpeechEvent{
-		Type: eventType,
-		Alternatives: []stt.SpeechData{
+func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
+	resp := smResponse{
+		Message: "AddTranscript",
+		Results: []struct {
+			Alternatives []struct {
+				Content    string  `json:"content"`
+				Confidence float64 `json:"confidence"`
+			} `json:"alternatives"`
+			Type      string  `json:"type"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		}{
 			{
-				Text:       resp.Metadata.Transcript,
-				Confidence: 1.0,
-				StartTime:  resp.Metadata.StartTime,
-				EndTime:    resp.Metadata.EndTime,
+				Type:      "word",
+				StartTime: 0.1,
+				EndTime:   0.3,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+				}{{Content: "hello", Confidence: 0.92}},
+			},
+			{
+				Type:      "punctuation",
+				StartTime: 0.3,
+				EndTime:   0.3,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+				}{{Content: ",", Confidence: 1.0}},
+			},
+			{
+				Type:      "word",
+				StartTime: 0.4,
+				EndTime:   0.8,
+				Alternatives: []struct {
+					Content    string  `json:"content"`
+					Confidence float64 `json:"confidence"`
+				}{{Content: "world", Confidence: 0.88}},
 			},
 		},
 	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript fallback", events)
+	}
+	event := events[0]
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final_transcript", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "hello, world" {
+		t.Fatalf("text = %q, want punctuation-formatted transcript", got)
+	}
+	words := event.Alternatives[0].Words
+	if len(words) != 2 {
+		t.Fatalf("words = %#v, want two timed words", words)
+	}
+	if words[0].Text != "hello" || words[0].StartTime != 0.1 || words[0].EndTime != 0.3 || words[0].Confidence != 0.92 {
+		t.Fatalf("first word = %#v, want preserved word timing", words[0])
+	}
+	if words[1].Text != "world" || words[1].StartTime != 0.4 || words[1].EndTime != 0.8 || words[1].Confidence != 0.88 {
+		t.Fatalf("second word = %#v, want preserved word timing", words[1])
+	}
 }
 
-func TestSpeechmaticsEventsIgnoreReferenceRawTranscriptMessages(t *testing.T) {
-	tests := []string{"AddPartialTranscript", "AddTranscript"}
-	for _, message := range tests {
-		resp := smResponse{
-			Message: message,
-			Metadata: struct {
-				Transcript string  `json:"transcript"`
-				StartTime  float64 `json:"start_time"`
-				EndTime    float64 `json:"end_time"`
-			}{
-				Transcript: "duplicate raw transcript",
-				StartTime:  0.1,
-				EndTime:    0.4,
-			},
-		}
+func TestSpeechmaticsEventsMapReferenceRawPartialTranscriptWithOffset(t *testing.T) {
+	resp := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "partial words",
+			StartTime:  0.2,
+			EndTime:    0.5,
+		},
+	}
+	state := &speechmaticsStreamState{startTimeOffset: 1.25}
 
-		if events := speechmaticsEvents(resp, nil); len(events) != 0 {
-			t.Fatalf("%s events = %#v, want none like reference Voice SDK handler set", message, events)
-		}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw partial transcript fallback", events)
+	}
+	event := events[0]
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event.Type = %s, want interim_transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %#v, want one transcript alternative", event.Alternatives)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "partial words" {
+		t.Fatalf("text = %q, want metadata transcript", alt.Text)
+	}
+	if alt.StartTime != 1.45 || alt.EndTime != 1.75 {
+		t.Fatalf("timing = %v-%v, want start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 0 {
+		t.Fatalf("words = %#v, want none for metadata-only raw transcript", alt.Words)
 	}
 }
 
