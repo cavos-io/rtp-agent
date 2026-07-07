@@ -634,7 +634,7 @@ func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
 }
 
 func speechmaticsProviderManagedEndpointing(s *SpeechmaticsSTT) bool {
-	return s != nil && (s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
+	return s != nil && (s.turnDetectionMode == "fixed" || s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
 }
 
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {

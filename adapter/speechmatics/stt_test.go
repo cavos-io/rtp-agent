@@ -1421,6 +1421,7 @@ func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testin
 		name string
 		opt  SpeechmaticsSTTOption
 	}{
+		{name: "fixed", opt: WithSpeechmaticsSTTFixedTurnDetection()},
 		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
 		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
 	}
