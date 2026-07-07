@@ -863,6 +863,7 @@ type smResponse struct {
 			Language   string  `json:"language"`
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
+		Attaches  string  `json:"attaches_to"`
 		StartTime float64 `json:"start_time"`
 		EndTime   float64 `json:"end_time"`
 	} `json:"results"`
@@ -1009,6 +1010,7 @@ type speechmaticsRawTranscriptFragment struct {
 	kind       string
 	speakerID  string
 	language   string
+	attaches   string
 	startTime  float64
 	endTime    float64
 	confidence float64
@@ -1052,6 +1054,7 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 			kind:       result.Type,
 			speakerID:  resultSpeakerID,
 			language:   language,
+			attaches:   result.Attaches,
 			startTime:  startTime,
 			endTime:    endTime,
 			confidence: alt.Confidence,
@@ -1108,7 +1111,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	for i, fragment := range fragments {
 		if i == 0 {
 			text = fragment.text
-		} else if fragment.kind == "punctuation" {
+		} else if fragment.attaches == "previous" || fragments[i-1].attaches == "next" {
 			text += fragment.text
 		} else {
 			text += " " + fragment.text

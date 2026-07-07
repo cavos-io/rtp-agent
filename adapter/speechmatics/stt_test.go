@@ -36,6 +36,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				Language   string  `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
+			Attaches  string  `json:"attaches_to"`
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		}{
@@ -52,6 +53,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 			},
 			{
 				Type:      "punctuation",
+				Attaches:  "previous",
 				StartTime: 0.3,
 				EndTime:   0.3,
 				Alternatives: []struct {
@@ -108,6 +110,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				Language   string  `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
+			Attaches  string  `json:"attaches_to"`
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		}{
@@ -124,6 +127,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 			},
 			{
 				Type:      "punctuation",
+				Attaches:  "previous",
 				StartTime: 0.3,
 				EndTime:   0.3,
 				Alternatives: []struct {
@@ -229,6 +233,7 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferenceSpeakerFiltering(t *test
 			"alternatives":[{"content":"assistant","confidence":0.6,"speaker":"__ASSISTANT__"}]
 		},{
 			"type":"punctuation",
+			"attaches_to":"previous",
 			"start_time":0.7,
 			"end_time":0.7,
 			"alternatives":[{"content":".","confidence":1.0,"speaker":"agent"}]
@@ -358,6 +363,41 @@ func TestSpeechmaticsEventsRawTranscriptGroupsReferenceSpeakers(t *testing.T) {
 	}
 	if got := events[1].Alternatives[0].SpeakerID; got != "customer" {
 		t.Fatalf("second speaker = %q, want customer", got)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptUsesReferenceAttachSpacing(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"punctuation",
+			"attaches_to":"next",
+			"start_time":0.1,
+			"end_time":0.1,
+			"alternatives":[{"content":"¿","confidence":1.0,"speaker":"agent","language":"es"}]
+		},{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hola","confidence":0.9,"speaker":"agent","language":"es"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.3,
+			"end_time":0.3,
+			"alternatives":[{"content":"?","confidence":1.0,"speaker":"agent","language":"es"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "¿hola?" {
+		t.Fatalf("text = %q, want reference attach spacing", got)
 	}
 }
 
