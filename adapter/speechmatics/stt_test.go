@@ -445,6 +445,41 @@ func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContent(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"","confidence":0.9,"speaker":"agent","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"kept","confidence":0.8,"speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "kept" {
+		t.Fatalf("text = %q, want empty raw content skipped", alt.Text)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "kept" {
+		t.Fatalf("words = %#v, want only non-empty content word", alt.Words)
+	}
+	if alt.StartTime != 0.4 || alt.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want non-empty fragment timing", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing.T) {
 	var partial smResponse
 	if err := json.Unmarshal([]byte(`{

@@ -1071,6 +1071,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			continue
 		}
 		alt := result.Alternatives[0]
+		if alt.Content == "" {
+			continue
+		}
 		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
