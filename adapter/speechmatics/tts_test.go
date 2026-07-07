@@ -636,6 +636,35 @@ func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeStatusErrorUsesReferenceResponseReason(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 quota exhausted",
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "quota exhausted" {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
