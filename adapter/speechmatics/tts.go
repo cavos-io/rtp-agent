@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/google/uuid"
 )
 
 const (
@@ -106,6 +107,7 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		baseURL:    t.baseURL,
 		voice:      t.voice,
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
 		owner:      t,
 	}
 	if !t.registerStream(stream) {
@@ -237,9 +239,11 @@ type speechmaticsTTSChunkedStream struct {
 	baseURL       string
 	voice         string
 	sampleRate    int
+	requestID     string
 	requested     bool
 	pending       []byte
 	pendingErr    error
+	emittedAudio  bool
 	finalReady    bool
 	finalSent     bool
 	closed        bool
@@ -306,7 +310,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			} else if err != nil {
 				s.pendingErr = err
 			}
+			s.emittedAudio = true
 			return &tts.SynthesizedAudio{
+				RequestID: s.requestID,
 				Frame: &model.AudioFrame{
 					Data:              frameData,
 					SampleRate:        uint32(s.sampleRate),
@@ -365,7 +371,12 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == 499 {
+		resp.Body.Close()
+		requestCancel()
+		return io.EOF
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		requestCancel()
@@ -395,9 +406,13 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 	if s.finalSent {
 		return nil, io.EOF
 	}
+	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
+		s.finish()
+		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+	}
 	s.finalSent = true
 	s.finish()
-	return &tts.SynthesizedAudio{IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {

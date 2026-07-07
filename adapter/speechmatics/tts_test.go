@@ -244,6 +244,19 @@ func TestSpeechmaticsTTSSynthesizePostsAndStreamsPCM(t *testing.T) {
 	if string(audio.Frame.Data) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
 		t.Fatalf("frame data = %#v, want complete PCM bytes", audio.Frame.Data)
 	}
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want reference request id")
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final audio = %+v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want stable request id %q", final.RequestID, audio.RequestID)
+	}
 }
 
 func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
@@ -253,7 +266,7 @@ func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) 
 		requests++
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
 			Request:    r,
 		}, nil
 	})}
@@ -317,6 +330,72 @@ func TestSpeechmaticsTTSSynthesizeEmptyTextStillFlushesReferenceFinal(t *testing
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeNonEmptyTextErrorsWithoutAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %+v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next() error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next() error = %v, want no-audio text", err)
+	}
+}
+
+func TestSpeechmaticsTTSSynthesizeAcceptsReferenceNoContentStatus(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %+v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next() error = %T %v, want no-audio APIError after accepted 2xx status", err, err)
+	}
+	var statusErr *llm.APIStatusError
+	if errors.As(err, &statusErr) {
+		t.Fatalf("Next() error = %T %v, want accepted 2xx response to reach no-audio handling", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next() error = %v, want no-audio text", err)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -331,7 +410,7 @@ func TestSpeechmaticsTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
 			Request:    r,
 		}, nil
 	})}
@@ -394,6 +473,33 @@ func TestSpeechmaticsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       io.NopCloser(bytes.NewReader([]byte(`client closed`))),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF for reference client-closed status", err)
 	}
 }
 

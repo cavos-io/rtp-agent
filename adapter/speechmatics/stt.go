@@ -337,6 +337,68 @@ func (s *SpeechmaticsSTT) Finalize() error {
 	return finalizeErr
 }
 
+func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
+	if s == nil {
+		return io.ErrClosedPipe
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		return fmt.Errorf("diarization is not enabled")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	s.focusSpeakers = cloneSpeechmaticsStringSlice(focusSpeakers)
+	s.ignoreSpeakers = cloneSpeechmaticsStringSlice(ignoreSpeakers)
+	if focusMode != "" {
+		s.focusMode = focusMode
+	}
+	focusSpeakers = cloneSpeechmaticsStringSlice(s.focusSpeakers)
+	ignoreSpeakers = cloneSpeechmaticsStringSlice(s.ignoreSpeakers)
+	focusMode = s.focusMode
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	var updateErr error
+	for _, stream := range streams {
+		if err := stream.UpdateSpeakers(focusSpeakers, ignoreSpeakers, focusMode); err != nil && updateErr == nil && !errors.Is(err, io.ErrClosedPipe) {
+			updateErr = err
+		}
+	}
+	return updateErr
+}
+
+func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
+	if s == nil {
+		return nil, io.ErrClosedPipe
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		return nil, nil
+	}
+	streams := s.activeStreams()
+	speakers := make([]SpeechmaticsSpeakerIdentifier, 0, len(streams))
+	var requestErr error
+	for _, stream := range streams {
+		streamSpeakers, err := stream.GetSpeakerIDs(ctx)
+		if err != nil {
+			if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			if requestErr == nil {
+				requestErr = err
+			}
+			continue
+		}
+		speakers = append(speakers, streamSpeakers...)
+	}
+	return speakers, requestErr
+}
+
 func (s *SpeechmaticsSTT) isClosed() bool {
 	if s == nil {
 		return true
@@ -454,11 +516,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		config["additional_vocab"] = s.additionalVocab
 	}
 	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
-		config["speaker_config"] = map[string]interface{}{
-			"focus_speakers":  s.focusSpeakers,
-			"ignore_speakers": s.ignoreSpeakers,
-			"focus_mode":      s.focusMode,
-		}
+		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
 	}
 	if len(s.knownSpeakers) > 0 {
 		config["known_speakers"] = s.knownSpeakers
@@ -498,6 +556,28 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	}
 }
 
+func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {
+	return map[string]interface{}{
+		"focus_speakers":  cloneSpeechmaticsStringSlice(focusSpeakers),
+		"ignore_speakers": cloneSpeechmaticsStringSlice(ignoreSpeakers),
+		"focus_mode":      focusMode,
+	}
+}
+
+func cloneSpeechmaticsStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []SpeechmaticsSpeakerIdentifier {
+	if values == nil {
+		return nil
+	}
+	return append([]SpeechmaticsSpeakerIdentifier(nil), values...)
+}
+
 type speechmaticsSTTStream struct {
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
@@ -511,6 +591,8 @@ type speechmaticsSTTStream struct {
 	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
+
+	speakerResultCh chan []SpeechmaticsSpeakerIdentifier
 }
 
 type speechmaticsStreamState struct {
@@ -548,6 +630,7 @@ type smResponse struct {
 			EndTime   float64 `json:"end_time"`
 		} `json:"metadata"`
 	} `json:"segments"`
+	Speakers []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 }
 
 func (s *speechmaticsSTTStream) readLoop() {
@@ -578,6 +661,10 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if resp.Message == "EndOfTranscript" {
 			_ = s.closeTransport()
 			return
+		}
+		if resp.Message == "SpeakersResult" {
+			s.recordSpeakerResult(resp.Speakers)
+			continue
 		}
 		for _, event := range speechmaticsEvents(resp, s.state) {
 			s.events <- event
@@ -836,6 +923,74 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return io.ErrClosedPipe
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+}
+
+func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.writeJSONData(map[string]interface{}{
+		"message": "SetRecognitionConfig",
+		"transcription_config": map[string]interface{}{
+			"speaker_config": speechmaticsSTTSpeakerConfig(focusSpeakers, ignoreSpeakers, focusMode),
+		},
+	})
+}
+
+func (s *speechmaticsSTTStream) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
+	resultCh, err := s.prepareSpeakerResult()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.writeJSONData(map[string]interface{}{"message": "GetSpeakers"}); err != nil {
+		return nil, err
+	}
+	select {
+	case speakers := <-resultCh:
+		return cloneSpeechmaticsSpeakerIDs(speakers), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *speechmaticsSTTStream) prepareSpeakerResult() (chan []SpeechmaticsSpeakerIdentifier, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, io.ErrClosedPipe
+	}
+	if s.speakerResultCh == nil {
+		s.speakerResultCh = make(chan []SpeechmaticsSpeakerIdentifier, 1)
+	}
+	for {
+		select {
+		case <-s.speakerResultCh:
+		default:
+			return s.speakerResultCh, nil
+		}
+	}
+}
+
+func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeakerIdentifier) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.speakerResultCh == nil {
+		s.speakerResultCh = make(chan []SpeechmaticsSpeakerIdentifier, 1)
+	}
+	resultCh := s.speakerResultCh
+	result := cloneSpeechmaticsSpeakerIDs(speakers)
+	s.mu.Unlock()
+
+	select {
+	case resultCh <- result:
+	default:
+		<-resultCh
+		resultCh <- result
+	}
 }
 
 func (s *speechmaticsSTTStream) Flush() error {
