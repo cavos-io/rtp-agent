@@ -934,6 +934,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+				waitForLLMGenerationDone(genData)
+				if genData.StreamErr == nil {
+					va.emitLLMMetrics(session, genData)
+				}
+
 				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
 				return
