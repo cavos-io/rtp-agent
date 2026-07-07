@@ -5420,6 +5420,118 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsExternalAutoVAD(t *testing.T) {
 	}
 }
 
+func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	vadStream := newEventfulAppVADStream()
+	controlMessages := make(chan string, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]any
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			name, _ := message["message"].(string)
+			if name != "" {
+				controlMessages <- name
+			}
+			if name == "StartRecognition" {
+				if err := conn.WriteJSON(map[string]any{"message": "RecognitionStarted"}); err != nil {
+					t.Errorf("write RecognitionStarted: %v", err)
+					return
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	baseAgent := agent.NewAgent("")
+	baseAgent.VAD = &eventfulAppVAD{stream: vadStream}
+	_, err = configureProviders(AppConfig{
+		STTProvider:        providerSpeechmatics,
+		STTBaseURL:         "ws" + strings.TrimPrefix(server.URL, "http"),
+		SpeechmaticsAPIKey: "test-speechmatics-key",
+	}, baseAgent)
+	if err != nil {
+		t.Fatalf("configureProviders() error = %v", err)
+	}
+	if baseAgent.STT == nil || baseAgent.STT.Label() != "speechmatics.STT" {
+		t.Fatalf("STT = %#v, want Speechmatics STT", baseAgent.STT)
+	}
+
+	stream, err := baseAgent.STT.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := <-controlMessages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(vadStream.pushed) == 0 {
+		t.Fatal("VAD received no frames, want Speechmatics STT to use app VAD for external endpointing")
+	}
+	if got := vadStream.pushed[0]; got != frame {
+		t.Fatalf("VAD frame = %#v, want original app STT input frame", got)
+	}
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	select {
+	case got := <-controlMessages:
+		if got != "ForceEndOfUtterance" {
+			t.Fatalf("control message after VAD end = %q, want ForceEndOfUtterance", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics ForceEndOfUtterance after VAD end_of_speech")
+	}
+}
+
+func TestConfigureProvidersPassesExplicitReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	_, err := configureProviders(AppConfig{
+		STTProvider:          providerSpeechmatics,
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+		SpeechmaticsAPIKey:   "test-speechmatics-key",
+	}, baseAgent)
+	if err != nil {
+		t.Fatalf("configureProviders() error = %v", err)
+	}
+	if baseAgent.STT == nil || baseAgent.STT.Label() != "speechmatics.STT" {
+		t.Fatalf("STT = %#v, want Speechmatics STT", baseAgent.STT)
+	}
+	vadField := reflect.ValueOf(baseAgent.STT).Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics primary VAD = nil, want explicit app VAD to force reference external endpointing")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
@@ -7508,17 +7620,16 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		if _, ok := config["conversation_config"]; ok {
 			t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
 		}
-		if got, want := config["end_of_utterance_mode"], "external"; got != want {
-			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
-		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.55; got != want {
-			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
-		}
-		if got, want := config["end_of_utterance_max_delay"], 2.5; got != want {
-			t.Fatalf("end_of_utterance_max_delay = %#v, want %#v", got, want)
+		for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+			if _, ok := config[key]; ok {
+				t.Fatalf("%s = %#v, want omitted for reference external turn detection", key, config[key])
+			}
 		}
 		if _, ok := message["end_of_utterance_max_delay"]; ok {
 			t.Fatalf("end_of_utterance_max_delay sent outside transcription_config in %#v", message)
+		}
+		if _, ok := message["conversation_config"]; ok {
+			t.Fatalf("conversation_config sent outside transcription_config in %#v", message)
 		}
 		diarizationConfig, _ := config["speaker_diarization_config"].(map[string]any)
 		if got, want := diarizationConfig["speaker_sensitivity"], 0.7; got != want {
@@ -7622,14 +7733,20 @@ func TestSpeechmaticsSTTFallbackPassesReferenceTurnDetectionMode(t *testing.T) {
 	select {
 	case message := <-records:
 		config, _ := message["transcription_config"].(map[string]any)
-		if got, want := config["end_of_utterance_mode"], "fixed"; got != want {
-			t.Fatalf("end_of_utterance_mode = %#v, want %#v", got, want)
+		conversationConfig, ok := config["conversation_config"].(map[string]any)
+		if !ok {
+			t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
 		}
-		if got, want := config["end_of_utterance_silence_trigger"], 0.5; got != want {
-			t.Fatalf("end_of_utterance_silence_trigger = %#v, want %#v", got, want)
+		if got, want := conversationConfig["end_of_utterance_silence_trigger"], 0.5; got != want {
+			t.Fatalf("conversation_config.end_of_utterance_silence_trigger = %#v, want %#v", got, want)
 		}
-		if _, ok := config["conversation_config"]; ok {
-			t.Fatalf("conversation_config = %#v, want omitted reference endpointing config", config["conversation_config"])
+		for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+			if _, ok := config[key]; ok {
+				t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+			}
+		}
+		if _, ok := message["conversation_config"]; ok {
+			t.Fatalf("conversation_config sent outside transcription_config in %#v", message)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")
@@ -7693,6 +7810,62 @@ func TestSpeechmaticsSTTFallbackVADForcesReferenceExternalTurnDetection(t *testi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Speechmatics STT start message")
+	}
+}
+
+func TestConfigureSTTFallbacksPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	if err := configureSTTFallbacks(AppConfig{
+		STTFallbackProviders: []string{providerSpeechmatics},
+	}, baseAgent); err != nil {
+		t.Fatalf("configureSTTFallbacks() error = %v", err)
+	}
+
+	fallbackValue := reflect.ValueOf(baseAgent.STT).Elem()
+	stts := fallbackValue.FieldByName("stts")
+	if stts.Len() != 2 {
+		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
+	}
+	speechmaticsValue := stts.Index(1).Elem()
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+		t.Fatalf("fallback STT type = %s, want %s", got, want)
+	}
+	vadField := speechmaticsValue.Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics fallback VAD = nil, want app VAD for reference external endpointing")
+	}
+}
+
+func TestConfigureSTTFallbacksPassesExplicitReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	baseAgent := agent.NewAgent("test")
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.VAD = &eventfulAppVAD{stream: newEventfulAppVADStream()}
+
+	if err := configureSTTFallbacks(AppConfig{
+		STTFallbackProviders: []string{providerSpeechmatics},
+		STTTurnDetectionMode: "fixed",
+		VADProvider:          providerSilero,
+	}, baseAgent); err != nil {
+		t.Fatalf("configureSTTFallbacks() error = %v", err)
+	}
+
+	fallbackValue := reflect.ValueOf(baseAgent.STT).Elem()
+	stts := fallbackValue.FieldByName("stts")
+	if stts.Len() != 2 {
+		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
+	}
+	speechmaticsValue := stts.Index(1).Elem()
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+		t.Fatalf("fallback STT type = %s, want %s", got, want)
+	}
+	vadField := speechmaticsValue.Elem().FieldByName("vad")
+	if vadField.IsNil() {
+		t.Fatal("Speechmatics fallback VAD = nil, want explicit app VAD to force reference external endpointing")
 	}
 }
 
@@ -16430,6 +16603,54 @@ func (f *fakeAppVADStream) Flush() error                      { return nil }
 func (f *fakeAppVADStream) EndInput() error                   { return nil }
 func (f *fakeAppVADStream) Close() error                      { return nil }
 func (f *fakeAppVADStream) Next() (*vad.VADEvent, error)      { return nil, io.EOF }
+
+type eventfulAppVAD struct {
+	stream *eventfulAppVADStream
+}
+
+func (f *eventfulAppVAD) Label() string { return "eventful-vad" }
+func (f *eventfulAppVAD) Model() string { return "eventful-vad" }
+func (f *eventfulAppVAD) Provider() string {
+	return "fake"
+}
+func (f *eventfulAppVAD) Capabilities() vad.VADCapabilities { return vad.VADCapabilities{} }
+func (f *eventfulAppVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *eventfulAppVAD) Stream(context.Context) (vad.VADStream, error) {
+	return f.stream, nil
+}
+
+type eventfulAppVADStream struct {
+	events chan *vad.VADEvent
+	pushed []*model.AudioFrame
+	once   sync.Once
+}
+
+func newEventfulAppVADStream() *eventfulAppVADStream {
+	return &eventfulAppVADStream{events: make(chan *vad.VADEvent, 1)}
+}
+
+func (f *eventfulAppVADStream) PushFrame(frame *model.AudioFrame) error {
+	f.pushed = append(f.pushed, frame)
+	return nil
+}
+func (f *eventfulAppVADStream) Flush() error { return nil }
+func (f *eventfulAppVADStream) EndInput() error {
+	f.once.Do(func() { close(f.events) })
+	return nil
+}
+func (f *eventfulAppVADStream) Close() error {
+	f.once.Do(func() { close(f.events) })
+	return nil
+}
+func (f *eventfulAppVADStream) Next() (*vad.VADEvent, error) {
+	event, ok := <-f.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return event, nil
+}
 
 type fakeAppSTT struct{}
 

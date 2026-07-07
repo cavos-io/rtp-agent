@@ -20,6 +20,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 )
 
@@ -797,6 +798,53 @@ func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTAdaptiveTurnDetection(),
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: vadStream}),
+	)
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external when explicit VAD is provided", provider.turnDetectionMode)
+	}
+
+	var controlMessages []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages = append(controlMessages, control)
+			return nil
+		},
+	}
+	if err := stream.startVAD(context.Background()); err != nil {
+		t.Fatalf("startVAD() error = %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if got := vadStream.pushed[0]; got != frame {
+		t.Fatalf("VAD pushed frame = %#v, want original pre-normalized frame", got)
+	}
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
+}
+
 func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
@@ -1134,6 +1182,20 @@ func drainSpeechmaticsControlMessages(messages <-chan string) []string {
 	}
 }
 
+func waitForSpeechmaticsControlMessage(t *testing.T, messages *[]map[string]interface{}, want string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		for _, message := range *messages {
+			if message["message"] == want {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("control messages = %#v, want %s", *messages, want)
+}
+
 func waitSpeechmaticsStreamReady(t *testing.T, stream *speechmaticsSTTStream) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -1341,6 +1403,13 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 			},
 			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
 		},
+		{
+			name: "eou max delay not greater than default silence trigger",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.4),
+			},
+			want: "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1353,6 +1422,110 @@ func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testi
 				t.Fatalf("Stream error = %v, want %q before provider dial", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceSampleRates(t *testing.T) {
+	tests := []struct {
+		name       string
+		sampleRate int
+	}{
+		{name: "zero", sampleRate: 0},
+		{name: "negative", sampleRate: -1},
+		{name: "unsupported high", sampleRate: 48000},
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected speechmatics stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key",
+				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
+				WithSpeechmaticsSTTSampleRate(tt.sampleRate),
+			)
+
+			stream, err := provider.Stream(context.Background(), "")
+			if stream != nil {
+				t.Fatalf("Stream = %#v, want nil for invalid sample rate", stream)
+			}
+			if err == nil || !strings.Contains(err.Error(), "sample_rate must be 8000 or 16000") {
+				t.Fatalf("Stream error = %v, want reference sample_rate validation", err)
+			}
+		})
+	}
+	if dials != 0 {
+		t.Fatalf("invalid sample-rate streams dialed %d times, want none", dials)
+	}
+}
+
+func TestSpeechmaticsSTTStreamRejectsInvalidReferenceDisabledDiarizationOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SpeechmaticsSTTOption
+		want string
+	}{
+		{
+			name: "focus speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, nil, "retain"),
+			},
+			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
+		},
+		{
+			name: "ignore speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTSpeakerFocus(nil, []string{"noise"}, "retain"),
+			},
+			want: "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False",
+		},
+		{
+			name: "max speakers",
+			opts: []SpeechmaticsSTTOption{
+				WithSpeechmaticsSTTEnableDiarization(false),
+				WithSpeechmaticsSTTMaxSpeakers(3),
+			},
+			want: "max_speakers cannot be set when enable_diarization is False",
+		},
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected speechmatics stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2")}, tt.opts...)
+			provider := NewSpeechmaticsSTT("test-key", opts...)
+
+			stream, err := provider.Stream(context.Background(), "")
+			if stream != nil {
+				t.Fatalf("Stream = %#v, want nil for invalid disabled diarization options", stream)
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	if dials != 0 {
+		t.Fatalf("invalid disabled-diarization streams dialed %d times, want none", dials)
 	}
 }
 
@@ -2022,8 +2195,11 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	if audioFormat["encoding"] != "pcm_f32le" {
 		t.Fatalf("encoding = %#v, want pcm_f32le", audioFormat["encoding"])
 	}
-	if audioFormat["chunk_size"] != 160 {
-		t.Fatalf("chunk_size = %#v, want reference default 160", audioFormat["chunk_size"])
+	if _, ok := audioFormat["chunk_size"]; ok {
+		t.Fatalf("chunk_size = %#v, want omitted from reference StartRecognition audio_format", audioFormat["chunk_size"])
+	}
+	if _, ok := message["chunk_size"]; ok {
+		t.Fatalf("chunk_size sent outside audio_format in %#v", message)
 	}
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "language", "de")
@@ -2194,11 +2370,15 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceConversationEndpointingConfig(t
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
-	if _, ok := config["conversation_config"]; ok {
-		t.Fatalf("conversation_config = %#v, want omitted for reference endpointing config", config["conversation_config"])
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.6))
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+		}
 	}
 }
 
@@ -2210,11 +2390,13 @@ func TestSpeechmaticsSTTExternalTurnDetectionOmitsReferenceConversationConfig(t 
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "external")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
 	if _, ok := config["conversation_config"]; ok {
 		t.Fatalf("conversation_config = %#v, want omitted for reference external turn detection", config["conversation_config"])
+	}
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted for reference external turn detection", key, config[key])
+		}
 	}
 }
 
@@ -2225,11 +2407,15 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceFixedTurnDetectionMode(t *testi
 
 	message := buildSpeechmaticsSTTStartMessage(provider, "")
 	config := message["transcription_config"].(map[string]interface{})
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "fixed")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.5))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	if _, ok := config["conversation_config"]; ok {
-		t.Fatalf("conversation_config = %#v, want omitted for reference fixed turn detection", config["conversation_config"])
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want reference fixed endpointing object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_silence_trigger", float64(0.5))
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted outside reference conversation_config", key, config[key])
+		}
 	}
 }
 
@@ -2246,16 +2432,11 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceAdaptiveTurnDetectionMode(t *te
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.7))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	vadConfig, ok := config["vad_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("vad_config = %#v, want reference adaptive VAD config", config["vad_config"])
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted from reference adaptive wire config", key, config[key])
+		}
 	}
-	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
-	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
 }
 
 func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testing.T) {
@@ -2271,23 +2452,41 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceSmartTurnDetectionMode(t *testi
 	assertSpeechmaticsConfig(t, config, "diarization", "speaker")
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_mode", "adaptive")
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.8))
-	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(10.0))
-	vadConfig, ok := config["vad_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("vad_config = %#v, want reference smart-turn VAD config", config["vad_config"])
+	for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+		if _, ok := config[key]; ok {
+			t.Fatalf("%s = %#v, want omitted from reference smart-turn wire config", key, config[key])
+		}
 	}
-	assertSpeechmaticsConfig(t, vadConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, vadConfig, "silence_duration", float64(0.18))
-	assertSpeechmaticsConfig(t, vadConfig, "threshold", float64(0.35))
-	smartTurnConfig, ok := config["smart_turn_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("smart_turn_config = %#v, want reference smart-turn config", config["smart_turn_config"])
+}
+
+func TestSpeechmaticsSTTProviderManagedTurnDetectionOmitsReferenceWireEndpointingOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  SpeechmaticsSTTOption
+	}{
+		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
+		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
 	}
-	assertSpeechmaticsConfig(t, smartTurnConfig, "enabled", true)
-	assertSpeechmaticsConfig(t, smartTurnConfig, "smart_turn_threshold", float64(0.5))
-	assertSpeechmaticsConfig(t, smartTurnConfig, "max_audio_length", float64(8.0))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key",
+				tt.opt,
+				WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.4),
+				WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.5),
+			)
+
+			message := buildSpeechmaticsSTTStartMessage(provider, "")
+			config := message["transcription_config"].(map[string]interface{})
+			if _, ok := config["conversation_config"]; ok {
+				t.Fatalf("conversation_config = %#v, want omitted for reference provider-managed turn detection", config["conversation_config"])
+			}
+			for _, key := range []string{"end_of_utterance_mode", "end_of_utterance_silence_trigger", "end_of_utterance_max_delay", "vad_config", "smart_turn_config"} {
+				if _, ok := config[key]; ok {
+					t.Fatalf("%s = %#v, want omitted for reference provider-managed turn detection", key, config[key])
+				}
+			}
+		})
+	}
 }
 
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
@@ -2316,4 +2515,58 @@ func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
 		data = append(data, sample[:]...)
 	}
 	return data
+}
+
+type fakeSpeechmaticsVAD struct {
+	stream *fakeSpeechmaticsVADStream
+}
+
+func (f *fakeSpeechmaticsVAD) Label() string { return "fake.speechmatics.vad" }
+func (f *fakeSpeechmaticsVAD) Model() string { return "fake" }
+func (f *fakeSpeechmaticsVAD) Provider() string {
+	return "fake"
+}
+func (f *fakeSpeechmaticsVAD) Capabilities() vad.VADCapabilities {
+	return vad.VADCapabilities{UpdateInterval: 0.1}
+}
+func (f *fakeSpeechmaticsVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *fakeSpeechmaticsVAD) Stream(context.Context) (vad.VADStream, error) {
+	return f.stream, nil
+}
+
+type fakeSpeechmaticsVADStream struct {
+	events chan *vad.VADEvent
+	pushed []*model.AudioFrame
+	closed bool
+}
+
+func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
+	return &fakeSpeechmaticsVADStream{events: make(chan *vad.VADEvent, 1)}
+}
+
+func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
+	s.pushed = append(s.pushed, frame)
+	return nil
+}
+
+func (s *fakeSpeechmaticsVADStream) Flush() error { return nil }
+func (s *fakeSpeechmaticsVADStream) EndInput() error {
+	close(s.events)
+	return nil
+}
+func (s *fakeSpeechmaticsVADStream) Close() error {
+	if !s.closed {
+		s.closed = true
+		close(s.events)
+	}
+	return nil
+}
+func (s *fakeSpeechmaticsVADStream) Next() (*vad.VADEvent, error) {
+	event, ok := <-s.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return event, nil
 }

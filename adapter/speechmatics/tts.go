@@ -400,10 +400,13 @@ func (s *speechmaticsTTSChunkedStream) ensureStream() error {
 		return io.EOF
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		requestCancel()
-		return llm.NewAPIStatusError("Speechmatics TTS request failed", resp.StatusCode, "", string(respBody))
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	s.mu.Lock()
 	if s.closed || s.finalSent {

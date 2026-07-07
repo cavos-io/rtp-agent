@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	corevad "github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 )
 
@@ -47,6 +48,7 @@ type SpeechmaticsSTT struct {
 	speakerSensitivity   *float64
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
+	vad                  corevad.VAD
 	closed               bool
 	closeDone            chan struct{}
 }
@@ -216,6 +218,15 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 	}
 }
 
+func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.vad = detector
+		if detector != nil {
+			s.turnDetectionMode = "external"
+		}
+	}
+}
+
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
@@ -334,6 +345,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
+	if err := stream.startVAD(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
@@ -577,8 +592,14 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	if s.eouSilenceTrigger != nil && (*s.eouSilenceTrigger <= 0 || *s.eouSilenceTrigger >= 2) {
 		problems = append(problems, "end_of_utterance_silence_trigger must be between 0 and 2")
 	}
-	if s.eouMaxDelay != nil && s.eouSilenceTrigger != nil && *s.eouMaxDelay <= *s.eouSilenceTrigger {
-		problems = append(problems, "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger")
+	if s.eouMaxDelay != nil {
+		trigger := 0.5
+		if s.eouSilenceTrigger != nil {
+			trigger = *s.eouSilenceTrigger
+		}
+		if *s.eouMaxDelay <= trigger {
+			problems = append(problems, "end_of_utterance_max_delay must be greater than end_of_utterance_silence_trigger")
+		}
 	}
 	if s.maxSpeakers != nil && (*s.maxSpeakers <= 1 || *s.maxSpeakers > 100) {
 		problems = append(problems, "max_speakers must be between 2 and 100")
@@ -588,6 +609,17 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	}
 	if s.speakerSensitivity != nil && (*s.speakerSensitivity <= 0 || *s.speakerSensitivity >= 1.0) {
 		problems = append(problems, "speaker_sensitivity must be between 0.0 and 1.0")
+	}
+	if s.sampleRate != 8000 && s.sampleRate != 16000 {
+		problems = append(problems, "sample_rate must be 8000 or 16000")
+	}
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		if s.maxSpeakers != nil {
+			problems = append(problems, "max_speakers cannot be set when enable_diarization is False")
+		}
+		if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 {
+			problems = append(problems, "SpeakerFocusConfig.focus_speakers and SpeakerFocusConfig.ignore_speakers must be empty when enable_diarization is False")
+		}
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid Speechmatics STT options: %s", strings.Join(problems, ", "))
@@ -643,7 +675,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 			"type":        "raw",
 			"encoding":    s.audioEncoding,
 			"sample_rate": s.sampleRate,
-			"chunk_size":  160,
 		},
 		"transcription_config": config,
 	}
@@ -657,29 +688,22 @@ func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	mode := s.turnDetectionMode
 	trigger := 0.5
 	switch mode {
+	case "external":
+		return config
 	case "adaptive":
-		trigger = 0.7
-		config["vad_config"] = map[string]interface{}{
-			"enabled":          true,
-			"silence_duration": 0.18,
-			"threshold":        0.35,
-		}
+		return config
 	case "smart_turn":
-		mode = "adaptive"
-		trigger = 0.8
-		config["vad_config"] = map[string]interface{}{
-			"enabled":          true,
-			"silence_duration": 0.18,
-			"threshold":        0.35,
-		}
-		config["smart_turn_config"] = map[string]interface{}{
-			"enabled":              true,
-			"smart_turn_threshold": 0.5,
-			"max_audio_length":     8.0,
-		}
+		return config
 	case "fixed":
+		if s.eouSilenceTrigger != nil {
+			trigger = *s.eouSilenceTrigger
+		}
+		config["conversation_config"] = map[string]interface{}{
+			"end_of_utterance_silence_trigger": trigger,
+		}
+		return config
 	default:
-		mode = "external"
+		return config
 	}
 	if s.eouSilenceTrigger != nil {
 		trigger = *s.eouSilenceTrigger
@@ -775,6 +799,7 @@ type speechmaticsSTTStream struct {
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 	inputAudio  speechmaticsSTTInputAudioNormalizer
+	vadStream   corevad.VADStream
 	audioReady  bool
 
 	waitForRecognitionStarted  bool
@@ -1072,6 +1097,12 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.vadStream != nil {
+		if err := s.vadStream.PushFrame(frame); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
@@ -1128,6 +1159,12 @@ func (s *speechmaticsSTTStream) EndInput() error {
 				return err
 			}
 			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if s.vadStream != nil {
+		if err := s.vadStream.EndInput(); err != nil {
+			_ = s.closeLocked()
+			return err
 		}
 	}
 	s.inputEnded = true
@@ -1213,6 +1250,33 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+}
+
+func (s *speechmaticsSTTStream) startVAD(ctx context.Context) error {
+	if s == nil || s.owner == nil || s.owner.vad == nil {
+		return nil
+	}
+	vadStream, err := s.owner.vad.Stream(ctx)
+	if err != nil {
+		return err
+	}
+	s.vadStream = vadStream
+	go s.runVAD(vadStream)
+	return nil
+}
+
+func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
+	for {
+		event, err := vadStream.Next()
+		if err != nil {
+			return
+		}
+		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
+			if err := s.Finalize(); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
@@ -1492,12 +1556,17 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.inputEnded = true
 	s.pendingEndInput = false
 	s.pendingAudioChunks = nil
+	vadStream := s.vadStream
+	s.vadStream = nil
 	s.closeDone()
 	defer func() {
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
 	}()
+	if vadStream != nil {
+		_ = vadStream.Close()
+	}
 	if s.closeConn != nil {
 		_ = s.closeConn()
 		return nil
