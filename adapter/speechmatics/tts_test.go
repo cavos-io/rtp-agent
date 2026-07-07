@@ -139,6 +139,8 @@ func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if query.Get("sm-app") == "" {
 		t.Fatal("sm-app query parameter is empty")
 	}
+	assertSpeechmaticsTTSQuery(t, query, "sm-sdk", "livekit-plugins-1.5.19.rc1")
+	assertSpeechmaticsTTSQuery(t, query, "sm-app", "livekit/0.2.8")
 
 	var payload map[string]string
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {

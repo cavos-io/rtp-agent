@@ -26,8 +26,8 @@ const (
 	defaultSpeechmaticsTTSVoice      = "sarah"
 	defaultSpeechmaticsTTSSampleRate = 16000
 	defaultSpeechmaticsTTSTimeout    = 30 * time.Second
-	speechmaticsTTSSDKParam          = "livekit-plugins-go"
-	speechmaticsTTSAppParam          = "rtp-agent"
+	speechmaticsTTSSDKParam          = "livekit-plugins-1.5.19.rc1"
+	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
 
 type SpeechmaticsTTS struct {
