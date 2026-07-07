@@ -2,6 +2,7 @@ package ultravox
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"strings"
 	"testing"
@@ -213,6 +214,72 @@ func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testin
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+}
+
+func TestUltravoxRealtimeSessionUpdateInstructionsMarksReferenceRestart(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateInstructions("stay concise"); err != nil {
+		t.Fatalf("UpdateInstructions same prompt error = %v, want reference no-op", err)
+	}
+	if got := session.restartCount; got != 0 {
+		t.Fatalf("restart count after unchanged instructions = %d, want 0", got)
+	}
+
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions changed prompt error = %v, want reference restart", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after changed instructions = %d, want 1", got)
+	}
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions repeated prompt error = %v, want reference no-op", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after repeated instructions = %d, want 1", got)
+	}
+}
+
+func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	lookup := ultravoxRealtimeTestTool{name: "lookup"}
+	if err := session.UpdateTools([]llm.Tool{lookup}); err != nil {
+		t.Fatalf("UpdateTools lookup error = %v, want reference restart", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after adding lookup = %d, want 1", got)
+	}
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{name: "lookup"}}); err != nil {
+		t.Fatalf("UpdateTools same name error = %v, want reference no-op", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after same tool-name set = %d, want 1", got)
+	}
+	if err := session.UpdateTools([]llm.Tool{lookup, ultravoxRealtimeTestTool{name: "calendar"}}); err != nil {
+		t.Fatalf("UpdateTools changed name set error = %v, want reference restart", err)
+	}
+	if got := session.restartCount; got != 2 {
+		t.Fatalf("restart count after changed tool-name set = %d, want 2", got)
+	}
 }
 
 func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
@@ -940,4 +1007,20 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for client event %#v", want)
 	}
+}
+
+type ultravoxRealtimeTestTool struct {
+	name string
+}
+
+func (t ultravoxRealtimeTestTool) ID() string { return t.name }
+func (t ultravoxRealtimeTestTool) Name() string {
+	return t.name
+}
+func (t ultravoxRealtimeTestTool) Description() string { return "" }
+func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
+	return nil
+}
+func (t ultravoxRealtimeTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
 }

@@ -250,7 +250,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		clientEventCh:    make(chan map[string]any, 256),
 		inputSampleRate:  uint32(m.inputSampleRate),
 		outputSampleRate: uint32(m.outputSampleRate),
+		systemPrompt:     m.systemPrompt,
 		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:        make(map[string]struct{}),
 		toolResults:      make(map[string]struct{}),
 		contextItems:     make(map[string]struct{}),
 	}
@@ -303,17 +305,27 @@ type realtimeSession struct {
 	clientEventCh    chan map[string]any
 	inputSampleRate  uint32
 	outputSampleRate uint32
+	systemPrompt     string
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
 	generationSeq    uint64
+	toolNames        map[string]struct{}
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
+	restartCount     uint64
 	closed           bool
 	closeOnce        sync.Once
 }
 
-func (s *realtimeSession) UpdateInstructions(string) error {
-	return ultravoxRealtimeSessionUnsupported("update_instructions")
+func (s *realtimeSession) UpdateInstructions(instructions string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.systemPrompt == instructions {
+		return nil
+	}
+	s.systemPrompt = instructions
+	s.markRestartNeededLocked()
+	return nil
 }
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
@@ -410,8 +422,26 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	return s.sendClientEvent(event)
 }
 
-func (s *realtimeSession) UpdateTools([]llm.Tool) error {
-	return ultravoxRealtimeSessionUnsupported("update_tools")
+func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	nextToolNames := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			return errors.New("ultravox realtime update tools received nil tool")
+		}
+		nextToolNames[tool.Name()] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if ultravoxRealtimeToolNameSetsEqual(s.toolNames, nextToolNames) {
+		return nil
+	}
+	s.toolNames = nextToolNames
+	s.markRestartNeededLocked()
+	return nil
 }
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	if !options.OutputMediumSet {
@@ -525,6 +555,22 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	default:
 		return errors.New("ultravox realtime client event queue is full")
 	}
+}
+
+func (s *realtimeSession) markRestartNeededLocked() {
+	s.restartCount++
+}
+
+func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name := range a {
+		if _, ok := b[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
