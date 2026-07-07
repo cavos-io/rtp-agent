@@ -20,6 +20,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 )
 
@@ -797,6 +798,53 @@ func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTAdaptiveTurnDetection(),
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: vadStream}),
+	)
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external when explicit VAD is provided", provider.turnDetectionMode)
+	}
+
+	var controlMessages []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages = append(controlMessages, control)
+			return nil
+		},
+	}
+	if err := stream.startVAD(context.Background()); err != nil {
+		t.Fatalf("startVAD() error = %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if got := vadStream.pushed[0]; got != frame {
+		t.Fatalf("VAD pushed frame = %#v, want original pre-normalized frame", got)
+	}
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
+}
+
 func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
@@ -1132,6 +1180,20 @@ func drainSpeechmaticsControlMessages(messages <-chan string) []string {
 			return got
 		}
 	}
+}
+
+func waitForSpeechmaticsControlMessage(t *testing.T, messages *[]map[string]interface{}, want string) {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		for _, message := range *messages {
+			if message["message"] == want {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("control messages = %#v, want %s", *messages, want)
 }
 
 func waitSpeechmaticsStreamReady(t *testing.T, stream *speechmaticsSTTStream) {
@@ -2453,4 +2515,58 @@ func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
 		data = append(data, sample[:]...)
 	}
 	return data
+}
+
+type fakeSpeechmaticsVAD struct {
+	stream *fakeSpeechmaticsVADStream
+}
+
+func (f *fakeSpeechmaticsVAD) Label() string { return "fake.speechmatics.vad" }
+func (f *fakeSpeechmaticsVAD) Model() string { return "fake" }
+func (f *fakeSpeechmaticsVAD) Provider() string {
+	return "fake"
+}
+func (f *fakeSpeechmaticsVAD) Capabilities() vad.VADCapabilities {
+	return vad.VADCapabilities{UpdateInterval: 0.1}
+}
+func (f *fakeSpeechmaticsVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *fakeSpeechmaticsVAD) Stream(context.Context) (vad.VADStream, error) {
+	return f.stream, nil
+}
+
+type fakeSpeechmaticsVADStream struct {
+	events chan *vad.VADEvent
+	pushed []*model.AudioFrame
+	closed bool
+}
+
+func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
+	return &fakeSpeechmaticsVADStream{events: make(chan *vad.VADEvent, 1)}
+}
+
+func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
+	s.pushed = append(s.pushed, frame)
+	return nil
+}
+
+func (s *fakeSpeechmaticsVADStream) Flush() error { return nil }
+func (s *fakeSpeechmaticsVADStream) EndInput() error {
+	close(s.events)
+	return nil
+}
+func (s *fakeSpeechmaticsVADStream) Close() error {
+	if !s.closed {
+		s.closed = true
+		close(s.events)
+	}
+	return nil
+}
+func (s *fakeSpeechmaticsVADStream) Next() (*vad.VADEvent, error) {
+	event, ok := <-s.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return event, nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	corevad "github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
 )
 
@@ -47,6 +48,7 @@ type SpeechmaticsSTT struct {
 	speakerSensitivity   *float64
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
+	vad                  corevad.VAD
 	closed               bool
 	closeDone            chan struct{}
 }
@@ -216,6 +218,15 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 	}
 }
 
+func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.vad = detector
+		if detector != nil {
+			s.turnDetectionMode = "external"
+		}
+	}
+}
+
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
@@ -334,6 +345,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
+	if err := stream.startVAD(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
 
@@ -784,6 +799,7 @@ type speechmaticsSTTStream struct {
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 	inputAudio  speechmaticsSTTInputAudioNormalizer
+	vadStream   corevad.VADStream
 	audioReady  bool
 
 	waitForRecognitionStarted  bool
@@ -1081,6 +1097,12 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.vadStream != nil {
+		if err := s.vadStream.PushFrame(frame); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
@@ -1137,6 +1159,12 @@ func (s *speechmaticsSTTStream) EndInput() error {
 				return err
 			}
 			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if s.vadStream != nil {
+		if err := s.vadStream.EndInput(); err != nil {
+			_ = s.closeLocked()
+			return err
 		}
 	}
 	s.inputEnded = true
@@ -1222,6 +1250,33 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return nil
 	}
 	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+}
+
+func (s *speechmaticsSTTStream) startVAD(ctx context.Context) error {
+	if s == nil || s.owner == nil || s.owner.vad == nil {
+		return nil
+	}
+	vadStream, err := s.owner.vad.Stream(ctx)
+	if err != nil {
+		return err
+	}
+	s.vadStream = vadStream
+	go s.runVAD(vadStream)
+	return nil
+}
+
+func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
+	for {
+		event, err := vadStream.Next()
+		if err != nil {
+			return
+		}
+		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
+			if err := s.Finalize(); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (s *speechmaticsSTTStream) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
@@ -1501,12 +1556,17 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.inputEnded = true
 	s.pendingEndInput = false
 	s.pendingAudioChunks = nil
+	vadStream := s.vadStream
+	s.vadStream = nil
 	s.closeDone()
 	defer func() {
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
 	}()
+	if vadStream != nil {
+		_ = vadStream.Close()
+	}
 	if s.closeConn != nil {
 		_ = s.closeConn()
 		return nil
