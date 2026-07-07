@@ -2812,6 +2812,96 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *te
 	}
 }
 
+func TestSpeechmaticsSTTForcedEOUSuppressesReferencePartialSegments(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{includePartials: true},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	resp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{"text":"still talking","metadata":{"start_time":0.1,"end_time":0.4}}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal partial segment: %v", err)
+	}
+	if ok := stream.handleResponse(resp); !ok {
+		t.Fatal("AddPartialSegment stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("forced EOU partial events = %d, want suppressed reference partial", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTForcedEOURawPartialFlushesFinalOnly(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state: &speechmaticsStreamState{
+			bufferRawFinals: true,
+			includePartials: true,
+		},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	finalResp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{"type":"word","start_time":0.1,"end_time":0.4,"alternatives":[{"content":"done","confidence":0.9}]}]
+	}`), &finalResp); err != nil {
+		t.Fatalf("unmarshal final transcript: %v", err)
+	}
+	if ok := stream.handleResponse(finalResp); !ok {
+		t.Fatal("AddTranscript stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("buffered final events = %d, want none before reference follow-up partial", len(stream.events))
+	}
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	partialResp := smResponse{}
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{"type":"word","start_time":0.4,"end_time":0.6,"alternatives":[{"content":"late","confidence":0.8}]}]
+	}`), &partialResp); err != nil {
+		t.Fatalf("unmarshal partial transcript: %v", err)
+	}
+	if ok := stream.handleResponse(partialResp); !ok {
+		t.Fatal("AddPartialTranscript stopped read loop")
+	}
+	if len(stream.events) != 1 {
+		t.Fatalf("forced EOU raw partial events = %d, want only buffered final", len(stream.events))
+	}
+	event := <-stream.events
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "done" {
+		t.Fatalf("event = %#v, want buffered final transcript only", event)
+	}
+}
+
 func TestSpeechmaticsSTTProviderEndOfTurnCancelsReferenceForcedEOUTimeout(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 20 * time.Millisecond

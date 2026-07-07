@@ -966,6 +966,14 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
 	}
+	if s.forcedEOUActive() && speechmaticsPartialMessage(resp.Message) {
+		for _, event := range speechmaticsForcedEOUPartialEvents(resp, s.state) {
+			if !s.enqueueEvent(event) {
+				return false
+			}
+		}
+		return true
+	}
 	if resp.Message == "StartOfTurn" {
 		s.resetForcedEOUCompletion()
 	}
@@ -981,6 +989,17 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 	}
 	return true
+}
+
+func speechmaticsPartialMessage(message string) bool {
+	return message == "AddPartialSegment" || message == "AddPartialTranscript"
+}
+
+func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if resp.Message == "AddPartialTranscript" {
+		return speechmaticsFlushPendingRawFinals(state)
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
@@ -1743,6 +1762,15 @@ func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
 	s.forcedEOUPending = false
 	s.forcedEOUSeq++
 	return true
+}
+
+func (s *speechmaticsSTTStream) forcedEOUActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.forcedEOUPending
 }
 
 func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
