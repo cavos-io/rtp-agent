@@ -632,8 +632,7 @@ func processTelnyxSTTEvent(state *telnyxSTTStreamState, data map[string]any) ([]
 		Text:       transcript,
 		Confidence: telnyxAnyFloat(data["confidence"]),
 	}
-	isFinal, _ := data["is_final"].(bool)
-	if isFinal {
+	if telnyxTruthy(data["is_final"]) {
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{alternative}})
 		state.speaking = false
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
@@ -651,5 +650,26 @@ func telnyxAnyFloat(value any) float64 {
 		return float64(v)
 	default:
 		return 0
+	}
+}
+
+func telnyxTruthy(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	default:
+		return true
 	}
 }

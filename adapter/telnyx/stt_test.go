@@ -830,6 +830,17 @@ func TestTelnyxSTTEventsMatchReferenceLifecycle(t *testing.T) {
 	}
 	assertTelnyxSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello final")
 	assertTelnyxSTTEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+
+	events, err = processTelnyxSTTEvent(state, map[string]any{
+		"transcript": "string final",
+		"is_final":   "true",
+	})
+	if err != nil {
+		t.Fatalf("process string final: %v", err)
+	}
+	assertTelnyxSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertTelnyxSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "string final")
+	assertTelnyxSTTEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
 }
 
 func assertTelnyxSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {
