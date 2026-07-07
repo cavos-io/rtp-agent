@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -864,6 +866,48 @@ func TestSpeechmaticsSTTEndInputFlushesAndEndsReferenceInput(t *testing.T) {
 	}
 	if stream.isClosed() {
 		t.Fatal("EndInput marked stream closed, want read side open for final provider messages")
+	}
+}
+
+func TestSpeechmaticsSTTEndInputWaitsForRecognitionStartedBeforeEndStream(t *testing.T) {
+	var ordered []string
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		writeBinary: func(data []byte) error {
+			ordered = append(ordered, fmt.Sprintf("audio:%d", len(data)))
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			ordered = append(ordered, fmt.Sprintf("control:%s", control["message"]))
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(ordered) != 0 {
+		t.Fatalf("writes before RecognitionStarted = %#v, want input buffered", ordered)
+	}
+
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	want := []string{"audio:800", "control:EndOfStream"}
+	if !reflect.DeepEqual(ordered, want) {
+		t.Fatalf("writes after RecognitionStarted = %#v, want %#v", ordered, want)
 	}
 }
 

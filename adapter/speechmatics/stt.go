@@ -682,14 +682,15 @@ func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []Speec
 }
 
 type speechmaticsSTTStream struct {
-	conn       *websocket.Conn
-	events     chan *stt.SpeechEvent
-	errCh      chan error
-	done       chan struct{}
-	doneOnce   sync.Once
-	mu         sync.Mutex
-	closed     bool
-	inputEnded bool
+	conn            *websocket.Conn
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	done            chan struct{}
+	doneOnce        sync.Once
+	mu              sync.Mutex
+	closed          bool
+	inputEnded      bool
+	pendingEndInput bool
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -1033,11 +1034,15 @@ func (s *speechmaticsSTTStream) EndInput() error {
 			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 		}
 	}
+	s.inputEnded = true
+	if s.waitForRecognitionStarted && !s.audioReady {
+		s.pendingEndInput = true
+		return nil
+	}
 	if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
 		_ = s.closeLocked()
 		return err
 	}
-	s.inputEnded = true
 	return nil
 }
 
@@ -1088,6 +1093,13 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 	s.pendingAudioChunks = nil
 	for _, chunk := range pending {
 		if err := s.writeBinaryData(chunk); err != nil {
+			_ = s.closeLocked()
+			return err
+		}
+	}
+	if s.pendingEndInput {
+		s.pendingEndInput = false
+		if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
 			_ = s.closeLocked()
 			return err
 		}
@@ -1264,6 +1276,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	}
 	s.closed = true
 	s.inputEnded = true
+	s.pendingEndInput = false
 	s.pendingAudioChunks = nil
 	s.closeDone()
 	defer func() {
