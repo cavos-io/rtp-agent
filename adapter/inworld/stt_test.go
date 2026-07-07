@@ -260,6 +260,51 @@ func TestInworldSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestInworldSTTStreamReportsReferencePeriodicUsage(t *testing.T) {
+	oldInterval := inworldSTTUsageInterval
+	inworldSTTUsageInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		inworldSTTUsageInterval = oldInterval
+	})
+
+	var sent []map[string]any
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-periodic"},
+		sendMessage: func(message map[string]any) error {
+			sent = append(sent, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 160*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want audioChunk", len(sent))
+	}
+
+	select {
+	case event := <-stream.events:
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %s, want recognition_usage", event.Type)
+		}
+		if event.RequestID != "req-periodic" {
+			t.Fatalf("request id = %q, want req-periodic", event.RequestID)
+		}
+		if event.RecognitionUsage == nil || event.RecognitionUsage.AudioDuration != 0.01 {
+			t.Fatalf("recognition usage = %#v, want 0.01 audio duration", event.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for periodic recognition_usage")
+	}
+}
+
 func TestInworldSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewInworldSTT("test-key")
 	ctx, cancel := context.WithCancel(context.Background())

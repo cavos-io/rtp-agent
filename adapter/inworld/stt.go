@@ -28,6 +28,8 @@ const (
 	inworldSTTEndpoint                                = "stt/v1/transcribe:streamBidirectional"
 )
 
+var inworldSTTUsageInterval = 5 * time.Second
+
 type InworldSTT struct {
 	mu                               sync.Mutex
 	apiKey                           string
@@ -251,7 +253,9 @@ type inworldSTTStream struct {
 	errCh         chan error
 	mu            sync.Mutex
 	closed        bool
+	eventsClosed  bool
 	audioDuration float64
+	usageTimer    *time.Timer
 	sendMessage   func(map[string]any) error
 
 	ctx    context.Context
@@ -337,16 +341,44 @@ func (s *inworldSTTStream) addAudioDuration(frame *model.AudioFrame) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+	s.scheduleUsageTimerLocked()
 }
 
 func (s *inworldSTTStream) flushRecognitionUsage() {
 	s.mu.Lock()
-	duration := s.audioDuration
-	s.audioDuration = 0
+	s.stopUsageTimerLocked()
+	s.emitRecognitionUsageLocked()
 	s.mu.Unlock()
-	if duration == 0 {
+}
+
+func (s *inworldSTTStream) scheduleUsageTimerLocked() {
+	if s.usageTimer != nil || s.audioDuration <= 0 || inworldSTTUsageInterval <= 0 {
 		return
 	}
+	s.usageTimer = time.AfterFunc(inworldSTTUsageInterval, s.emitRecognitionUsageFromTimer)
+}
+
+func (s *inworldSTTStream) emitRecognitionUsageFromTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageTimer = nil
+	s.emitRecognitionUsageLocked()
+}
+
+func (s *inworldSTTStream) stopUsageTimerLocked() {
+	if s.usageTimer == nil {
+		return
+	}
+	s.usageTimer.Stop()
+	s.usageTimer = nil
+}
+
+func (s *inworldSTTStream) emitRecognitionUsageLocked() {
+	if s.events == nil || s.eventsClosed || s.audioDuration <= 0 || s.state == nil {
+		return
+	}
+	duration := s.audioDuration
+	s.audioDuration = 0
 	s.events <- &stt.SpeechEvent{
 		Type:      stt.SpeechEventRecognitionUsage,
 		RequestID: s.state.requestID,
@@ -363,6 +395,7 @@ func (s *inworldSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.stopUsageTimerLocked()
 	cancel := s.cancel
 	conn := s.conn
 	s.mu.Unlock()
@@ -426,6 +459,10 @@ func (s *inworldSTTStream) isClosed() bool {
 
 func (s *inworldSTTStream) readLoop() {
 	defer func() {
+		s.mu.Lock()
+		s.stopUsageTimerLocked()
+		s.eventsClosed = true
+		s.mu.Unlock()
 		s.unregisterFromProvider()
 		close(s.events)
 	}()
