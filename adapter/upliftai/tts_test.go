@@ -3121,6 +3121,18 @@ func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T
 	}
 }
 
+func TestUpliftAITTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: upliftAIReadErrorBody{err: context.Canceled}},
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}

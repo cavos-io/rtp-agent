@@ -1623,6 +1623,9 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 }
 
 func upliftAITTSReadError(prefix string, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
 	}
