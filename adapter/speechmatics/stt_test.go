@@ -1317,6 +1317,7 @@ func TestSpeechmaticsSTTStartMessageUsesReferencePresetDefaults(t *testing.T) {
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(2.0))
 	assertSpeechmaticsConfig(t, config, "max_delay_mode", "flexible")
+	assertSpeechmaticsConfig(t, config, "enable_entities", false)
 	audioFilteringConfig, ok := config["audio_filtering_config"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("audio_filtering_config = %#v, want map", config["audio_filtering_config"])
