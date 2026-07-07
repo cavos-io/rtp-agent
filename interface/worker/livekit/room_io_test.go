@@ -3315,6 +3315,27 @@ func TestRoomIOAudioInputTrackUnpublishedFallsBackToAvailableTrack(t *testing.T)
 	}
 }
 
+func TestRoomIOCloseClearsAudioInputPublicationState(t *testing.T) {
+	rio := &RoomIO{}
+	generation, activated := rio.activateAudioInputTrack("TR_audio_a", "caller-a")
+	if !activated {
+		t.Fatal("audio input track was not activated")
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputTrackID != "" || rio.audioInputParticipantID != "" || len(rio.audioInputTracks) != 0 {
+		t.Fatalf("audio input state after close = track %q participant %q remembered %#v, want cleared", rio.audioInputTrackID, rio.audioInputParticipantID, rio.audioInputTracks)
+	}
+	if rio.audioInputGeneration == generation {
+		t.Fatalf("audio input generation after close = %d, want advanced from active generation", rio.audioInputGeneration)
+	}
+}
+
 func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)
