@@ -674,6 +674,29 @@ func TestCartesiaTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSClosedStreamInputIsReferenceNoop(t *testing.T) {
+	stream := &cartesiaTTSStream{
+		audio: make(chan *tts.SynthesizedAudio, 1),
+		errCh: make(chan error, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushText("late text"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want reference no-op", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want reference no-op", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after closed input = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestCartesiaTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	providerErr := errors.New("provider failed after audio")
 	t.Run("already queued", func(t *testing.T) {
@@ -1057,8 +1080,8 @@ func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 
 	err = stream.PushText("again")
-	if !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("second PushText error = %v, want io.ErrClosedPipe", err)
+	if err != nil {
+		t.Fatalf("second PushText error = %v, want reference no-op after terminal write failure", err)
 	}
 }
 
@@ -1094,8 +1117,14 @@ func TestCartesiaTTSCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if err := stream.PushText("after close"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("after close"); err != nil {
+		t.Fatalf("PushText after provider Close = %v, want reference no-op", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after provider Close = %v, want reference no-op", err)
+	}
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput after provider Close = %v, want reference no-op", err)
 	}
 
 	select {
@@ -1526,6 +1555,61 @@ func TestCartesiaTTSStreamDoneAfterEndInputReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamDoneWithoutAudioReturnsReferenceNoAudioError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadTextEndInputThenDoneWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("silent turn"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for no-audio response", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T(%v), want reference APIError", err, err)
+	}
+	if !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: silent turn") {
+		t.Fatalf("Next error = %q, want reference no-audio message", apiErr.Error())
+	}
+	if !apiErr.Retryable {
+		t.Fatalf("Next APIError retryable = false, want reference retryable no-audio error")
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for no-audio server")
+	}
+}
+
 func TestCartesiaTTSStreamAudioDoneAfterEndInputEmitsFinalMarker(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1866,6 +1950,35 @@ func runCartesiaReadEndInputThenDoneWebsocketServer(conn net.Conn, errCh chan<- 
 			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
 		}),
 	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadTextEndInputThenDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer ws.Close()
+
+		for i := 0; i < 2; i++ {
+			var msg map[string]any
+			if err := ws.ReadJSON(&msg); err != nil {
+				errCh <- err
+				return
+			}
+			if msg["continue"] == false {
+				errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
+				return
+			}
+		}
+		errCh <- errors.New("end-input packet not received")
+	})}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		errCh <- err
 	}

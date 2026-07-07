@@ -27,6 +27,7 @@ const (
 	defaultRealtimeOutputMedium     = "voice"
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
+	ultravoxGenerateReplyTimeout    = 5 * time.Second
 )
 
 type RealtimeModel struct {
@@ -331,9 +332,10 @@ type ultravoxRealtimeStateEvent struct {
 }
 
 type ultravoxRealtimeToolInvocationEvent struct {
-	ToolName     string
-	InvocationID string
-	Parameters   map[string]any
+	ToolName      string
+	InvocationID  string
+	Parameters    map[string]any
+	RawParameters json.RawMessage
 }
 
 type ultravoxRealtimeServerEventEnvelope struct {
@@ -353,10 +355,12 @@ type realtimeSession struct {
 	audioStream      *coreaudio.AudioByteStream
 	generation       *ultravoxRealtimeGeneration
 	generationSeq    uint64
+	tools            []llm.Tool
 	toolNames        map[string]struct{}
 	toolResults      map[string]struct{}
 	contextItems     map[string]struct{}
 	pendingReply     bool
+	pendingReplyAt   time.Time
 	restartCount     uint64
 	lastUserFinalAt  time.Time
 	closed           bool
@@ -522,10 +526,12 @@ func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	nextToolNames := make(map[string]struct{}, len(tools))
+	nextTools := make([]llm.Tool, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
+		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
 	}
 
@@ -535,9 +541,11 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		return nil
 	}
 	if ultravoxRealtimeToolNameSetsEqual(s.toolNames, nextToolNames) {
+		s.tools = nextTools
 		s.mu.Unlock()
 		return nil
 	}
+	s.tools = nextTools
 	s.toolNames = nextToolNames
 	s.markRestartNeededLocked()
 	s.mu.Unlock()
@@ -583,6 +591,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	s.mu.Lock()
 	if !s.closed {
 		s.pendingReply = true
+		s.pendingReplyAt = time.Now()
 	}
 	s.mu.Unlock()
 	return nil
@@ -689,6 +698,7 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 func (s *realtimeSession) markRestartNeededLocked() {
 	s.restartCount++
 	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	if !s.audioOutput {
@@ -776,20 +786,22 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		s.handleStateEvent(ultravoxRealtimeStateEvent{State: event.State})
 	case "client_tool_invocation":
 		var event struct {
-			ToolName     string         `json:"toolName"`
-			InvocationID string         `json:"invocationId"`
-			Parameters   map[string]any `json:"parameters"`
+			ToolName      string          `json:"toolName"`
+			InvocationID  string          `json:"invocationId"`
+			RawParameters json.RawMessage `json:"parameters"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil
 		}
-		if event.Parameters == nil {
-			event.Parameters = map[string]any{}
+		parameters := map[string]any{}
+		if len(event.RawParameters) > 0 {
+			_ = json.Unmarshal(event.RawParameters, &parameters)
 		}
 		s.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
-			ToolName:     event.ToolName,
-			InvocationID: event.InvocationID,
-			Parameters:   event.Parameters,
+			ToolName:      event.ToolName,
+			InvocationID:  event.InvocationID,
+			Parameters:    parameters,
+			RawParameters: event.RawParameters,
 		})
 	case "playback_clear_buffer":
 		s.handlePlaybackClearBufferEvent()
@@ -836,8 +848,9 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	generation.responseID = messageID
 	userInitiated := false
 	if consumePendingReply {
-		userInitiated = s.pendingReply
+		userInitiated = s.pendingReply && !s.pendingReplyAt.IsZero() && time.Since(s.pendingReplyAt) <= ultravoxGenerateReplyTimeout
 		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
 	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
@@ -1049,7 +1062,7 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 }
 
 func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolInvocationEvent) {
-	arguments, err := ultravoxRealtimeToolArguments(event.Parameters)
+	arguments, err := ultravoxRealtimeToolArguments(event.Parameters, event.RawParameters)
 	if err != nil {
 		arguments = "{}"
 	}
@@ -1074,7 +1087,10 @@ func (s *realtimeSession) handleToolInvocationEvent(event ultravoxRealtimeToolIn
 	s.finishGeneration(generation, true)
 }
 
-func ultravoxRealtimeToolArguments(parameters map[string]any) (string, error) {
+func ultravoxRealtimeToolArguments(parameters map[string]any, rawParameters json.RawMessage) (string, error) {
+	if len(rawParameters) > 0 {
+		return ultravoxRealtimePythonJSONSpacingFromRaw(rawParameters)
+	}
 	var b strings.Builder
 	encoder := json.NewEncoder(&b)
 	encoder.SetEscapeHTML(false)
@@ -1082,6 +1098,45 @@ func ultravoxRealtimeToolArguments(parameters map[string]any) (string, error) {
 		return "", err
 	}
 	return ultravoxRealtimePythonJSONSpacing(strings.TrimSpace(b.String())), nil
+}
+
+func ultravoxRealtimePythonJSONSpacingFromRaw(raw json.RawMessage) (string, error) {
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	return ultravoxRealtimePythonJSONSpacingRaw(string(raw)), nil
+}
+
+func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
+	var out strings.Builder
+	out.Grow(len(value) + 8)
+	inString := false
+	escaped := false
+	for _, r := range value {
+		if !inString && (r == ' ' || r == '\n' || r == '\r' || r == '\t') {
+			continue
+		}
+		out.WriteRune(r)
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString && (r == ':' || r == ',') {
+			out.WriteByte(' ')
+		}
+	}
+	return out.String()
 }
 
 func ultravoxRealtimePythonJSONSpacing(value string) string {

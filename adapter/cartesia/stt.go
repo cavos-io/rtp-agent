@@ -197,7 +197,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	if language != "" {
 		streamLanguage = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
@@ -207,6 +207,10 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	if s.isClosed() {
 		conn.Close()
 		return nil, io.ErrClosedPipe
+	}
+	requestID := ""
+	if s.finalTranscriptMode == "legacy" {
+		requestID = cartesiaSTTResponseRequestID(resp)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &cartesiaSTTStream{
@@ -218,8 +222,9 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		cancel:       cancel,
 		audioBStream: newCartesiaSTTAudioByteStream(s.sampleRate, s.audioChunkDurationMS),
 		state: &cartesiaSTTStreamState{
-			language: cartesiaLanguageOrDefault(streamLanguage),
-			mode:     s.finalTranscriptMode,
+			language:  cartesiaLanguageOrDefault(streamLanguage),
+			requestID: requestID,
+			mode:      s.finalTranscriptMode,
 		},
 	}
 	stream.writeBinary = stream.writeBinaryMessage
@@ -548,7 +553,7 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -563,6 +568,7 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 		return io.ErrClosedPipe
 	}
 	s.conn = conn
+	s.state.requestID = cartesiaSTTResponseRequestID(resp)
 	s.reconnectNext = false
 	s.mu.Unlock()
 
@@ -601,7 +607,7 @@ func cartesiaSTTUnexpectedCloseEvents(state *cartesiaSTTStreamState) []*stt.Spee
 	if state.currentTranscript != "" {
 		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, state.currentTranscript))
 	}
-	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+	events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	state.speaking = false
 	state.currentTranscript = ""
 	return events
@@ -648,6 +654,13 @@ func buildCartesiaSTTHeaders(s *CartesiaSTT) http.Header {
 	return headers
 }
 
+func cartesiaSTTResponseRequestID(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	return resp.Header.Get("X-Request-Id")
+}
+
 func processCartesiaSTTEvent(state *cartesiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {
 	if requestID, _ := data["request_id"].(string); requestID != "" {
 		state.requestID = requestID
@@ -669,7 +682,7 @@ func processCartesiaAutoSTTEvent(state *cartesiaSTTStreamState, data map[string]
 		}
 		state.speaking = true
 		state.currentTranscript = ""
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID}}, nil
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}, nil
 	case "turn.update":
 		if !state.speaking {
 			return nil, nil
@@ -712,7 +725,7 @@ func processCartesiaAutoSTTEvent(state *cartesiaSTTStreamState, data map[string]
 			state.speechDuration = 0
 		}
 		events = append(events, cartesiaTranscriptEvent(stt.SpeechEventFinalTranscript, state, transcript))
-		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 		state.speaking = false
 		state.currentTranscript = ""
 		return events, nil
@@ -735,7 +748,7 @@ func processCartesiaLegacySTTEvent(state *cartesiaSTTStreamState, data map[strin
 		events := []*stt.SpeechEvent{}
 		if !state.speaking {
 			state.speaking = true
-			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: state.requestID})
+			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
 		speechData := cartesiaLegacySpeechData(state, data, text)
 		if isFinal {
@@ -746,7 +759,7 @@ func processCartesiaLegacySTTEvent(state *cartesiaSTTStreamState, data map[strin
 			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})
 			if state.speaking {
 				state.speaking = false
-				events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: state.requestID})
+				events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 			}
 		} else {
 			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript, RequestID: state.requestID, Alternatives: []stt.SpeechData{speechData}})

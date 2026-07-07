@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/hraban/opus"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -186,6 +188,52 @@ func TestPlayHandleStopWithFadeOutWaitsForPlayoutDone(t *testing.T) {
 	waitForBackgroundHandleDone(t, handle)
 	if !handle.Done() {
 		t.Fatal("Done() = false after markPlayoutDone, want true")
+	}
+}
+
+func TestBackgroundAudioStartTwiceWithoutCloseReturnsError(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	if err := player.Start(nil, nil); err == nil {
+		t.Fatal("Start() while already started returned nil error, want already-started guard")
+	}
+}
+
+func TestBackgroundAudioCloseWaitsForMixerTaskExit(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+
+	track, err := lksdk.NewLocalSampleTrack(backgroundAudioOutputCodec())
+	if err != nil {
+		t.Fatalf("NewLocalSampleTrack() error = %v", err)
+	}
+	enc, err := opus.NewEncoder(48000, 1, opus.AppAudio)
+	if err != nil {
+		t.Fatalf("opus.NewEncoder() error = %v", err)
+	}
+	player.opusEnc = enc
+	player.opusBuf = make([]byte, 4000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	player.playTasks.Add(1)
+	go player.runMixerTask(ctx, track)
+
+	closed := make(chan struct{})
+	go func() {
+		player.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return; mixer task must be tracked in playTasks and exit on context cancel")
 	}
 }
 

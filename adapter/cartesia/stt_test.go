@@ -419,6 +419,30 @@ func TestCartesiaSTTAutoEventsMapTurnLifecycle(t *testing.T) {
 	assertCartesiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestCartesiaSTTAutoBoundaryEventsOmitReferenceRequestID(t *testing.T) {
+	state := &cartesiaSTTStreamState{language: "en", mode: "auto"}
+
+	events, err := processCartesiaSTTEvent(state, map[string]any{"type": "turn.start", "request_id": "req-1"})
+	if err != nil {
+		t.Fatalf("process start: %v", err)
+	}
+	if got := events[0].RequestID; got != "" {
+		t.Fatalf("start request id = %q, want empty like reference boundary event", got)
+	}
+
+	events, err = processCartesiaSTTEvent(state, map[string]any{"type": "turn.end", "transcript": "done", "request_id": "req-1"})
+	if err != nil {
+		t.Fatalf("process end: %v", err)
+	}
+	assertCartesiaEvent(t, events, 0, stt.SpeechEventFinalTranscript, "done")
+	if got := events[0].RequestID; got != "req-1" {
+		t.Fatalf("final transcript request id = %q, want provider request id", got)
+	}
+	if got := events[1].RequestID; got != "" {
+		t.Fatalf("end-of-speech request id = %q, want empty like reference boundary event", got)
+	}
+}
+
 func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	state := &cartesiaSTTStreamState{language: "es", requestID: "req-1", mode: "legacy", speechDuration: 1.25}
 
@@ -454,6 +478,118 @@ func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	assertCartesiaEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
 	if state.requestID != "req-2" {
 		t.Fatalf("request id = %q, want req-2", state.requestID)
+	}
+}
+
+func TestCartesiaSTTLegacyBoundaryEventsOmitReferenceRequestID(t *testing.T) {
+	state := &cartesiaSTTStreamState{language: "es", mode: "legacy"}
+
+	events, err := processCartesiaSTTEvent(state, map[string]any{
+		"type":       "transcript",
+		"text":       "hola",
+		"is_final":   false,
+		"request_id": "req-1",
+	})
+	if err != nil {
+		t.Fatalf("process interim: %v", err)
+	}
+	if got := events[0].RequestID; got != "" {
+		t.Fatalf("start request id = %q, want empty like reference boundary event", got)
+	}
+	if got := events[1].RequestID; got != "req-1" {
+		t.Fatalf("interim transcript request id = %q, want provider request id", got)
+	}
+
+	events, err = processCartesiaSTTEvent(state, map[string]any{
+		"type":       "transcript",
+		"text":       "final",
+		"is_final":   true,
+		"request_id": "req-1",
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertCartesiaEvent(t, events, 0, stt.SpeechEventFinalTranscript, "final")
+	if got := events[0].RequestID; got != "req-1" {
+		t.Fatalf("final transcript request id = %q, want provider request id", got)
+	}
+	if got := events[1].RequestID; got != "" {
+		t.Fatalf("end-of-speech request id = %q, want empty like reference boundary event", got)
+	}
+}
+
+func TestCartesiaSTTLegacyStreamUsesReferenceHandshakeRequestID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	requestID := "req-handshake"
+	serverErrCh := make(chan error, 1)
+	go func() {
+		upgrader := websocket.Upgrader{}
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				header := http.Header{}
+				header.Set("X-Request-Id", requestID)
+				ws, err := upgrader.Upgrade(w, r, header)
+				if err != nil {
+					serverErrCh <- err
+					return
+				}
+				defer ws.Close()
+				if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"transcript","text":"hola","is_final":true}`)); err != nil {
+					serverErrCh <- err
+					return
+				}
+				serverErrCh <- ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			}),
+		}
+		if err := server.Serve(&singleCartesiaConnListener{conn: serverConn}); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErrCh <- err
+		}
+	}()
+
+	dialer := websocket.DefaultDialer
+	originalDialer := *dialer
+	dialer.NetDialContext = func(context.Context, string, string) (net.Conn, error) {
+		return clientConn, nil
+	}
+	t.Cleanup(func() { *dialer = originalDialer })
+
+	provider := NewCartesiaSTT("test-key",
+		WithCartesiaSTTBaseURL("http://cartesia.test"),
+		WithCartesiaSTTModel("ink-whisper"),
+		WithCartesiaSTTLanguage("es"),
+	)
+	streamIface, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer streamIface.Close()
+	stream := streamIface.(*cartesiaSTTStream)
+
+	start, err := stream.Next()
+	if err != nil {
+		t.Fatalf("start Next error = %v", err)
+	}
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start event type = %v, want start of speech", start.Type)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final.Type != stt.SpeechEventFinalTranscript || final.RequestID != requestID {
+		t.Fatalf("final event = %+v, want request id from websocket handshake", final)
+	}
+
+	select {
+	case err := <-serverErrCh:
+		if err != nil {
+			t.Fatalf("server error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket test server")
 	}
 }
 
@@ -512,6 +648,9 @@ func TestCartesiaSTTUnexpectedCloseFinalizesPartialAutoTranscript(t *testing.T) 
 	}
 	assertCartesiaEvent(t, events, 1, stt.SpeechEventFinalTranscript, "partial words")
 	assertCartesiaEvent(t, events, 2, stt.SpeechEventEndOfSpeech, "")
+	if got := events[2].RequestID; got != "" {
+		t.Fatalf("unexpected-close end-of-speech request id = %q, want empty like reference boundary event", got)
+	}
 	if state.speaking {
 		t.Fatal("speaking = true after unexpected close finalization, want false")
 	}

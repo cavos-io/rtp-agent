@@ -2775,6 +2775,113 @@ func TestUpliftAITTSChunkedStreamSerializesReferenceSocketIOWrites(t *testing.T)
 	}
 }
 
+func TestUpliftAITTSChunkedStreamCloseCancelsQueuedSocketIOWrite(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	warmStream, err := provider.Synthesize(context.Background(), "warm")
+	if err != nil {
+		t.Fatalf("warm Synthesize error = %v", err)
+	}
+	defer warmStream.Close()
+	warmResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := warmStream.Next()
+		warmResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	warmSynthesize := receiveUpliftAITestString(t, conn.writes, "warm synthesize packet")
+	warmRequestID := upliftAITestSocketIORequestID(t, warmSynthesize)
+	sendUpliftAITestSocketIOAudio(conn, warmRequestID, []byte{0x01, 0x02, 0x03, 0x04})
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + warmRequestID + `"}]`
+	warmResult := receiveUpliftAITestSocketIOResult(t, warmResultCh)
+	requireUpliftAITestSocketIOFrame(t, warmResult, "warm socket")
+	requireUpliftAITestFinal(t, warmStream, "warm socket")
+drainWarmWrites:
+	for {
+		select {
+		case <-conn.writeEntered:
+		default:
+			break drainWarmWrites
+		}
+	}
+
+	conn.deadlineMu.Lock()
+	conn.releaseWrites = make(chan struct{})
+	conn.writeBlockAfter = conn.writeCount
+	conn.deadlineMu.Unlock()
+
+	blockedStream, err := provider.Synthesize(context.Background(), "blocked")
+	if err != nil {
+		t.Fatalf("blocked Synthesize error = %v", err)
+	}
+	defer blockedStream.Close()
+	blockedResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := blockedStream.Next()
+		blockedResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	<-conn.writeEntered
+
+	queuedStream, err := provider.Synthesize(context.Background(), "queued")
+	if err != nil {
+		t.Fatalf("queued Synthesize error = %v", err)
+	}
+	queuedResultCh := make(chan error, 1)
+	go func() {
+		_, err := queuedStream.Next()
+		queuedResultCh <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if err := queuedStream.Close(); err != nil {
+		t.Fatalf("queued Close error = %v", err)
+	}
+	select {
+	case err := <-queuedResultCh:
+		if err != io.EOF {
+			t.Fatalf("queued Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("queued socket.io synthesize did not stop after stream Close")
+	}
+
+	close(conn.releaseWrites)
+	blockedSynthesize := receiveUpliftAITestString(t, conn.writes, "blocked synthesize packet")
+	blockedRequestID := upliftAITestSocketIORequestID(t, blockedSynthesize)
+	sendUpliftAITestSocketIOAudio(conn, blockedRequestID, []byte{0x05, 0x06, 0x07, 0x08})
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + blockedRequestID + `"}]`
+	blockedResult := receiveUpliftAITestSocketIOResult(t, blockedResultCh)
+	requireUpliftAITestSocketIOFrame(t, blockedResult, "blocked socket")
+	requireUpliftAITestFinal(t, blockedStream, "blocked socket")
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

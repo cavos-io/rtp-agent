@@ -396,6 +396,41 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateToolsKeepsReferenceSameNameToolState(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	lookupV1 := ultravoxRealtimeTestTool{name: "lookup", description: "old schema"}
+	if err := session.UpdateTools([]llm.Tool{lookupV1}); err != nil {
+		t.Fatalf("UpdateTools lookup v1 error = %v", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after first tool = %d, want 1", got)
+	}
+
+	lookupV2 := ultravoxRealtimeTestTool{name: "lookup", description: "new schema"}
+	if err := session.UpdateTools([]llm.Tool{lookupV2}); err != nil {
+		t.Fatalf("UpdateTools lookup v2 error = %v", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after same-name tool update = %d, want no restart", got)
+	}
+	if got := len(session.tools); got != 1 {
+		t.Fatalf("tools len = %d, want 1 updated reference tool", got)
+	}
+	if got := session.tools[0].Description(); got != "new schema" {
+		t.Fatalf("tool description = %q, want updated same-name reference tool", got)
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateToolsKeepsActiveGenerationForReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -658,6 +693,38 @@ func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGenerati
 	providerGeneration := requireUltravoxRealtimeGeneration(t, session)
 	if providerGeneration.UserInitiated {
 		t.Fatal("next generation UserInitiated = true, want pending GenerateReply consumed once")
+	}
+}
+
+func TestUltravoxRealtimeSessionGenerateReplyExpiresReferencePendingOwner(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.mu.Lock()
+	session.pendingReplyAt = time.Now().Add(-ultravoxGenerateReplyTimeout - time.Millisecond)
+	session.mu.Unlock()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	if generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true after reference GenerateReply timeout, want provider-started generation")
 	}
 }
 
@@ -1394,6 +1461,40 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionToolInvocationPreservesReferenceArgumentOrder(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-ordered","parameters":{"z":1,"a":{"b":2},"list":[3,4]}}`)); err != nil {
+		t.Fatalf("handle tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case call := <-generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil")
+		}
+		want := `{"z": 1, "a": {"b": 2}, "list": [3, 4]}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want reference json.dumps order %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function call")
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -1966,14 +2067,15 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 }
 
 type ultravoxRealtimeTestTool struct {
-	name string
+	name        string
+	description string
 }
 
 func (t ultravoxRealtimeTestTool) ID() string { return t.name }
 func (t ultravoxRealtimeTestTool) Name() string {
 	return t.name
 }
-func (t ultravoxRealtimeTestTool) Description() string { return "" }
+func (t ultravoxRealtimeTestTool) Description() string { return t.description }
 func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
 	return nil
 }
