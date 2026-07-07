@@ -61,6 +61,7 @@ const (
 )
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
+var speechmaticsForcedEOUTimeout = time.Second
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -834,6 +835,8 @@ type speechmaticsSTTStream struct {
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
 	drainEventsAfterClose      bool
+	forcedEOUPending           bool
+	forcedEOUSeq               uint64
 }
 
 type speechmaticsStreamState struct {
@@ -943,6 +946,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "EndOfUtterance" {
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
+			s.clearForcedEOU()
 			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
 				if !s.enqueueEvent(event) {
 					return false
@@ -954,6 +958,9 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "SpeakersResult" {
 		s.recordSpeakerResult(resp.Speakers)
 		return true
+	}
+	if resp.Message == "EndOfTurn" {
+		s.clearForcedEOU()
 	}
 	for _, event := range speechmaticsEvents(resp, s.state) {
 		if !s.enqueueEvent(event) {
@@ -1614,7 +1621,7 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 			}
 		}
 		if pendingFinalize {
-			if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+			if err := s.sendForceEndOfUtterance(); err != nil {
 				_ = s.Close()
 				return err
 			}
@@ -1630,18 +1637,87 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 
 func (s *speechmaticsSTTStream) Finalize() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.providerManagedEndpointing {
+		s.mu.Unlock()
 		return nil
 	}
 	if s.startupGateActiveLocked() {
 		s.pendingFinalize = true
+		s.mu.Unlock()
 		return nil
 	}
-	return s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"})
+	s.mu.Unlock()
+	return s.sendForceEndOfUtterance()
+}
+
+func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
+	if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+		return err
+	}
+	s.scheduleForcedEOUTimeout()
+	return nil
+}
+
+func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout() {
+	if s == nil || speechmaticsForcedEOUTimeout <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.closed || s.providerManagedEndpointing {
+		s.mu.Unlock()
+		return
+	}
+	if s.forcedEOUPending {
+		s.mu.Unlock()
+		return
+	}
+	s.forcedEOUPending = true
+	s.forcedEOUSeq++
+	seq := s.forcedEOUSeq
+	timeout := speechmaticsForcedEOUTimeout
+	s.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.done:
+			return
+		}
+		if !s.consumeForcedEOU(seq) {
+			return
+		}
+		for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+			if !s.enqueueEvent(event) {
+				return
+			}
+		}
+	}()
+}
+
+func (s *speechmaticsSTTStream) consumeForcedEOU(seq uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || !s.forcedEOUPending || s.forcedEOUSeq != seq {
+		return false
+	}
+	s.forcedEOUPending = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) clearForcedEOU() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.forcedEOUPending = false
+	s.forcedEOUSeq++
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) startVAD(ctx context.Context) error {

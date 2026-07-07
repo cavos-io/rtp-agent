@@ -2726,6 +2726,89 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			if got, want := payload["message"], "ForceEndOfUtterance"; got != want {
+				t.Fatalf("finalize message = %#v, want %#v", got, want)
+			}
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.25 {
+		t.Fatalf("usage event = %#v, want reference forced EOU timeout usage", usage)
+	}
+}
+
+func TestSpeechmaticsSTTProviderEndOfTurnCancelsReferenceForcedEOUTimeout(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("EndOfTurn stopped read loop")
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("provider turn event = %s, want end_of_speech", got.Type)
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("provider usage event = %s, want recognition_usage", got.Type)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(stream.events) != 0 {
+		t.Fatalf("events after provider EndOfTurn = %d, want forced EOU timeout canceled", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
 	stream := &speechmaticsSTTStream{
