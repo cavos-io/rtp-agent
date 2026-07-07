@@ -401,6 +401,48 @@ func TestSpeechmaticsEventsRawTranscriptUsesReferenceAttachSpacing(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.0,
+			"end_time":0.0,
+			"alternatives":[{"content":",","confidence":1.0,"speaker":"agent","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"agent","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"next",
+			"start_time":0.3,
+			"end_time":0.3,
+			"alternatives":[{"content":"(","confidence":1.0,"speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one transcript event", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "hello" {
+		t.Fatalf("text = %q, want reference edge punctuation trimmed", alt.Text)
+	}
+	if alt.StartTime != 0.1 || alt.EndTime != 0.3 {
+		t.Fatalf("timing = %v-%v, want trimmed fragment timing", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "hello" {
+		t.Fatalf("words = %#v, want only middle word", alt.Words)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string

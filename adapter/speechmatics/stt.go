@@ -1105,6 +1105,10 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	if len(fragments) == 0 {
 		return nil
 	}
+	fragments = speechmaticsTrimRawTranscriptEdgePunctuation(fragments)
+	if len(fragments) == 0 {
+		return nil
+	}
 	text := ""
 	var words []stt.TimedString
 	var totalConfidence float64
@@ -1143,6 +1147,16 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 			},
 		},
 	}
+}
+
+func speechmaticsTrimRawTranscriptEdgePunctuation(fragments []speechmaticsRawTranscriptFragment) []speechmaticsRawTranscriptFragment {
+	if len(fragments) > 0 && fragments[0].attaches == "previous" {
+		fragments = fragments[1:]
+	}
+	if len(fragments) > 0 && fragments[len(fragments)-1].attaches == "next" {
+		fragments = fragments[:len(fragments)-1]
+	}
+	return fragments
 }
 
 func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
