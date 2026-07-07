@@ -72,8 +72,10 @@ func (b upliftAIReadErrorBody) Close() error             { return nil }
 type upliftAICloseUnblocksReadBody struct {
 	readEntered chan struct{}
 	closed      chan struct{}
+	data        []byte
 	err         error
 	once        sync.Once
+	offset      int
 }
 
 func newUpliftAICloseUnblocksReadBody(err error) *upliftAICloseUnblocksReadBody {
@@ -84,9 +86,20 @@ func newUpliftAICloseUnblocksReadBody(err error) *upliftAICloseUnblocksReadBody 
 	}
 }
 
-func (b *upliftAICloseUnblocksReadBody) Read([]byte) (int, error) {
+func newUpliftAICloseUnblocksAudioReadBody(data []byte) *upliftAICloseUnblocksReadBody {
+	body := newUpliftAICloseUnblocksReadBody(io.EOF)
+	body.data = data
+	return body
+}
+
+func (b *upliftAICloseUnblocksReadBody) Read(p []byte) (int, error) {
 	b.once.Do(func() { close(b.readEntered) })
 	<-b.closed
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
 	return 0, b.err
 }
 
@@ -3455,6 +3468,39 @@ func TestUpliftAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	result := receiveUpliftAITestSocketIOResult(t, resultCh)
 	if result.audio != nil || result.err != io.EOF {
 		t.Fatalf("Next after Close during read = (%#v, %v), want EOF", result.audio, result.err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamCloseDuringAudioReadDropsLateFrame(t *testing.T) {
+	pcm := bytes.Repeat([]byte{0x01, 0x00}, defaultUpliftAISampleRate*20/1000)
+	body := newUpliftAICloseUnblocksAudioReadBody(pcm)
+	stream := &upliftAITTSChunkedStream{
+		text: "interrupted",
+		resp: &http.Response{Body: body},
+	}
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	select {
+	case <-body.readEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocked UpliftAI response-body audio read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close during audio read error = %v", err)
+	}
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	if result.audio != nil || result.err != io.EOF {
+		t.Fatalf("Next after Close during late audio read = (%#v, %v), want EOF without stale audio", result.audio, result.err)
 	}
 }
 

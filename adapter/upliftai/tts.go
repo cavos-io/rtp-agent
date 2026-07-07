@@ -1241,6 +1241,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
+	if s.closed {
+		s.finalSent = true
+		return nil, io.EOF
+	}
 	frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
@@ -1290,6 +1294,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
+	}
+	if s.closed {
+		s.finalSent = true
+		return nil, io.EOF
 	}
 	frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
 	if frame.SampleRate != defaultUpliftAISampleRate {
@@ -1402,6 +1410,10 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
+	}
+	if s.closed {
+		s.finalSent = true
+		return nil, io.EOF
 	}
 	if done {
 		if s.hasAudio && !s.finalSent {
@@ -1604,6 +1616,10 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
+		if s.closed {
+			s.finalSent = true
+			return nil, io.EOF
+		}
 		if n > 0 {
 			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(buf[:n])...)
 		}
@@ -1680,6 +1696,10 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
+		if s.closed {
+			s.finalSent = true
+			return nil, io.EOF
+		}
 		if n > 0 {
 			decoded := decodeUpliftAIMuLaw(buf[:n])
 			decoded = upliftAIExpandPCM16Channels(decoded, s.currentNumChannels())
