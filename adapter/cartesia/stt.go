@@ -197,7 +197,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	if language != "" {
 		streamLanguage = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
@@ -207,6 +207,10 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	if s.isClosed() {
 		conn.Close()
 		return nil, io.ErrClosedPipe
+	}
+	requestID := ""
+	if s.finalTranscriptMode == "legacy" {
+		requestID = cartesiaSTTResponseRequestID(resp)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &cartesiaSTTStream{
@@ -218,8 +222,9 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		cancel:       cancel,
 		audioBStream: newCartesiaSTTAudioByteStream(s.sampleRate, s.audioChunkDurationMS),
 		state: &cartesiaSTTStreamState{
-			language: cartesiaLanguageOrDefault(streamLanguage),
-			mode:     s.finalTranscriptMode,
+			language:  cartesiaLanguageOrDefault(streamLanguage),
+			requestID: requestID,
+			mode:      s.finalTranscriptMode,
 		},
 	}
 	stream.writeBinary = stream.writeBinaryMessage
@@ -548,7 +553,7 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -563,6 +568,7 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 		return io.ErrClosedPipe
 	}
 	s.conn = conn
+	s.state.requestID = cartesiaSTTResponseRequestID(resp)
 	s.reconnectNext = false
 	s.mu.Unlock()
 
@@ -646,6 +652,13 @@ func buildCartesiaSTTHeaders(s *CartesiaSTT) http.Header {
 	headers.Set("X-API-Key", s.apiKey)
 	headers.Set("User-Agent", "LiveKit Agents Cartesia Plugin/Go")
 	return headers
+}
+
+func cartesiaSTTResponseRequestID(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	return resp.Header.Get("X-Request-Id")
 }
 
 func processCartesiaSTTEvent(state *cartesiaSTTStreamState, data map[string]any) ([]*stt.SpeechEvent, error) {

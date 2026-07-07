@@ -518,6 +518,81 @@ func TestCartesiaSTTLegacyBoundaryEventsOmitReferenceRequestID(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTLegacyStreamUsesReferenceHandshakeRequestID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	requestID := "req-handshake"
+	serverErrCh := make(chan error, 1)
+	go func() {
+		upgrader := websocket.Upgrader{}
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				header := http.Header{}
+				header.Set("X-Request-Id", requestID)
+				ws, err := upgrader.Upgrade(w, r, header)
+				if err != nil {
+					serverErrCh <- err
+					return
+				}
+				defer ws.Close()
+				if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"transcript","text":"hola","is_final":true}`)); err != nil {
+					serverErrCh <- err
+					return
+				}
+				serverErrCh <- ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			}),
+		}
+		if err := server.Serve(&singleCartesiaConnListener{conn: serverConn}); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErrCh <- err
+		}
+	}()
+
+	dialer := websocket.DefaultDialer
+	originalDialer := *dialer
+	dialer.NetDialContext = func(context.Context, string, string) (net.Conn, error) {
+		return clientConn, nil
+	}
+	t.Cleanup(func() { *dialer = originalDialer })
+
+	provider := NewCartesiaSTT("test-key",
+		WithCartesiaSTTBaseURL("http://cartesia.test"),
+		WithCartesiaSTTModel("ink-whisper"),
+		WithCartesiaSTTLanguage("es"),
+	)
+	streamIface, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer streamIface.Close()
+	stream := streamIface.(*cartesiaSTTStream)
+
+	start, err := stream.Next()
+	if err != nil {
+		t.Fatalf("start Next error = %v", err)
+	}
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start event type = %v, want start of speech", start.Type)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final.Type != stt.SpeechEventFinalTranscript || final.RequestID != requestID {
+		t.Fatalf("final event = %+v, want request id from websocket handshake", final)
+	}
+
+	select {
+	case err := <-serverErrCh:
+		if err != nil {
+			t.Fatalf("server error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket test server")
+	}
+}
+
 func TestCartesiaSTTLegacyStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	stream := &cartesiaSTTStream{state: &cartesiaSTTStreamState{language: "es", mode: "legacy"}}
 	timing, ok := interface{}(stream).(stt.StreamTiming)
