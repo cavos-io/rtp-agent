@@ -633,7 +633,7 @@ func TestSpeechmaticsSTTReadLoopErrorDeliveryDoesNotBlockWhenErrorQueued(t *test
 	}
 }
 
-func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
+func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClosesVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +659,10 @@ func TestSpeechmaticsSTTStartupWriteFailureClosesReferenceVAD(t *testing.T) {
 			_ = stream.Close()
 		}
 		t.Fatal("Stream error = nil, want StartRecognition write failure")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 	if !vadStream.closed {
 		t.Fatal("VAD stream closed = false after startup write failure")

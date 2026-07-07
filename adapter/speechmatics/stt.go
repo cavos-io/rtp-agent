@@ -360,7 +360,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 	if err := conn.WriteJSON(initMsg); err != nil {
 		_ = stream.Close()
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if !s.registerStream(stream) {
