@@ -985,6 +985,30 @@ func TestUltravoxRealtimeSessionGenerationsUseReferenceUniqueMessageIDs(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerationCreatedCarriesReferenceMetadata(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+
+	if generation.ResponseID != message.MessageID {
+		t.Fatalf("generation response id = %q, want message id %q", generation.ResponseID, message.MessageID)
+	}
+	if generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true, want false for provider-started generation")
+	}
+}
+
 func TestUltravoxRealtimeSessionStateEventsMatchReferenceTurnLifecycle(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

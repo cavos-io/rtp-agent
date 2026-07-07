@@ -809,8 +809,10 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 	event := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
-			MessageCh:  generation.messageCh,
-			FunctionCh: generation.functionCh,
+			MessageCh:     generation.messageCh,
+			FunctionCh:    generation.functionCh,
+			ResponseID:    messageID,
+			UserInitiated: false,
 		},
 	}
 	select {
