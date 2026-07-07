@@ -2164,6 +2164,46 @@ func TestSpeechmaticsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTCloseUnblocksPendingNextLikeReference(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+		done:   make(chan struct{}),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if event != nil {
+			result <- errors.New("Next returned event after Close")
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		t.Fatalf("Next returned before Close with error %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Close did not unblock pending Next")
+	}
+}
+
 func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	if err := provider.Close(); err != nil {

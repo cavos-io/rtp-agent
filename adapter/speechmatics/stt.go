@@ -1639,6 +1639,17 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		s.markClosed()
 		return nil, err
+	case <-s.done:
+		if s.shouldDrainEventsAfterClose() {
+			select {
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
+				}
+			default:
+			}
+		}
+		return nil, io.EOF
 	}
 }
 
