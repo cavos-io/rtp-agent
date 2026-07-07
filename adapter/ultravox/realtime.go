@@ -543,6 +543,12 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	if !options.OutputMediumSet {
 		return nil
 	}
+	if err := s.sendClientEvent(map[string]any{
+		"type":   "set_output_medium",
+		"medium": options.OutputMedium,
+	}); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if options.OutputMedium == "voice" {
 		s.audioOutput = true
@@ -550,10 +556,7 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		s.audioOutput = false
 	}
 	s.mu.Unlock()
-	return s.sendClientEvent(map[string]any{
-		"type":   "set_output_medium",
-		"medium": options.OutputMedium,
-	})
+	return nil
 }
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	text := ""

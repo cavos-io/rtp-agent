@@ -770,6 +770,36 @@ func TestUltravoxRealtimeSessionOutputMediumUpdateChangesReferenceModalities(t *
 	requireUltravoxRealtimeModalities(t, voiceMessage.ModalitiesCh, []string{"audio", "text"})
 }
 
+func TestUltravoxRealtimeSessionOutputMediumBackpressureKeepsReferenceModalities(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for i := 0; i < cap(session.clientEventCh); i++ {
+		session.clientEventCh <- map[string]any{"type": "queued"}
+	}
+
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "text",
+		OutputMediumSet: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "client event queue is full") {
+		t.Fatalf("UpdateOptions error = %v, want client event queue backpressure", err)
+	}
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"audio", "text"})
+}
+
 func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
