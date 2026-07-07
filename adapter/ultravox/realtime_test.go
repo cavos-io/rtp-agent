@@ -1,9 +1,13 @@
 package ultravox
 
 import (
+	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
+	"time"
 
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -181,5 +185,90 @@ func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	}
 	if _, ok := <-session.EventCh(); ok {
 		t.Fatal("EventCh still open after Close")
+	}
+}
+
+func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	frame := &audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio error = %v, want reference audio input accepted", err)
+	}
+
+	select {
+	case got := <-session.audioCh:
+		if !bytes.Equal(got, pcm) {
+			t.Fatalf("queued audio bytes = %v, want original 100ms PCM chunk", got[:min(len(got), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PushAudio did not queue reference 100ms PCM chunk")
+	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v, want reference no-op", err)
+	}
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v, want reference no-op", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want reference no-op", err)
+	}
+
+	resamplingModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	resamplingSessionInterface, err := resamplingModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	resamplingSession := resamplingSessionInterface.(*realtimeSession)
+	defer resamplingSession.Close()
+
+	stereo8K := make([]byte, 800*2*2)
+	left, right := int16(1000), int16(-1000)
+	for sample := 0; sample < 800; sample++ {
+		offset := sample * 4
+		binary.LittleEndian.PutUint16(stereo8K[offset:], uint16(left))
+		binary.LittleEndian.PutUint16(stereo8K[offset+2:], uint16(right))
+	}
+	if err := resamplingSession.PushAudio(&audiomodel.AudioFrame{
+		Data:              stereo8K,
+		SampleRate:        8000,
+		NumChannels:       2,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushAudio stereo 8k error = %v, want reference resample/downmix", err)
+	}
+	select {
+	case got := <-resamplingSession.audioCh:
+		want := make([]byte, 3200)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("resampled/downmixed audio bytes = %v, want 16k mono mixed silence", got[:min(len(got), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PushAudio did not queue resampled/downmixed chunk")
 	}
 }

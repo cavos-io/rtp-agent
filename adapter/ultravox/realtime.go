@@ -1,12 +1,14 @@
 package ultravox
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
@@ -21,6 +23,7 @@ const (
 	defaultRealtimeOutputSampleRate = 24000
 	defaultRealtimeOutputMedium     = "voice"
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
+	ultravoxRealtimeInputChannels   = 1
 )
 
 type RealtimeModel struct {
@@ -241,15 +244,23 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	return &realtimeSession{
-		eventCh: make(chan llm.RealtimeEvent),
+		eventCh:         make(chan llm.RealtimeEvent),
+		audioCh:         make(chan []byte, 256),
+		inputSampleRate: uint32(m.inputSampleRate),
+		audioStream:     coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
 	}, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
 
 type realtimeSession struct {
-	eventCh   chan llm.RealtimeEvent
-	closeOnce sync.Once
+	mu              sync.Mutex
+	eventCh         chan llm.RealtimeEvent
+	audioCh         chan []byte
+	inputSampleRate uint32
+	audioStream     *coreaudio.AudioByteStream
+	closed          bool
+	closeOnce       sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(string) error {
@@ -278,26 +289,94 @@ func (s *realtimeSession) Interrupt() error {
 }
 func (s *realtimeSession) Close() error {
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closed = true
 		close(s.eventCh)
+		close(s.audioCh)
 	})
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
-func (s *realtimeSession) PushAudio(*model.AudioFrame) error {
-	return ultravoxRealtimeSessionUnsupported("push_audio")
+func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+
+	audioFrame, err := ultravoxRealtimeInputAudioFrame(frame, s.inputSampleRate)
+	if err != nil {
+		return err
+	}
+	if audioFrame == nil || len(audioFrame.Data) == 0 {
+		return nil
+	}
+	for _, chunk := range s.audioStream.Push(audioFrame.Data) {
+		audioData := append([]byte(nil), chunk.Data...)
+		select {
+		case s.audioCh <- audioData:
+		default:
+			return errors.New("ultravox realtime audio queue is full")
+		}
+	}
+	return nil
 }
 func (s *realtimeSession) PushVideo(*images.VideoFrame) error {
 	return ultravoxRealtimeSessionUnsupported("push_video")
 }
 func (s *realtimeSession) CommitAudio() error {
-	return ultravoxRealtimeSessionUnsupported("commit_audio")
+	return nil
 }
 func (s *realtimeSession) ClearAudio() error {
-	return ultravoxRealtimeSessionUnsupported("clear_audio")
+	return nil
 }
 
 var _ llm.RealtimeSession = (*realtimeSession)(nil)
 
 func ultravoxRealtimeSessionUnsupported(operation string) error {
 	return errors.New(operation + " is not implemented by the Ultravox realtime session")
+}
+
+func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
+	resampled, err := coreaudio.ResampleAudioFrame(frame, sampleRate)
+	if err != nil {
+		return nil, err
+	}
+	if resampled == nil || resampled.NumChannels <= ultravoxRealtimeInputChannels {
+		return resampled, nil
+	}
+	if len(resampled.Data)%2 != 0 {
+		return nil, errors.New("ultravox realtime audio input must be 16-bit PCM")
+	}
+	channels := int(resampled.NumChannels)
+	samplesPerChannel := int(resampled.SamplesPerChannel)
+	if samplesPerChannel == 0 {
+		samplesPerChannel = (len(resampled.Data) / 2) / channels
+	}
+	expectedBytes := samplesPerChannel * channels * 2
+	if len(resampled.Data) < expectedBytes {
+		return nil, errors.New("ultravox realtime audio input is shorter than declared sample count")
+	}
+
+	mono := make([]byte, samplesPerChannel*2)
+	for sample := 0; sample < samplesPerChannel; sample++ {
+		var sum int32
+		for channel := 0; channel < channels; channel++ {
+			offset := (sample*channels + channel) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(resampled.Data[offset:])))
+		}
+		binary.LittleEndian.PutUint16(mono[sample*2:], uint16(int16(sum/int32(channels))))
+	}
+	return &model.AudioFrame{
+		Data:              mono,
+		SampleRate:        sampleRate,
+		NumChannels:       ultravoxRealtimeInputChannels,
+		SamplesPerChannel: uint32(samplesPerChannel),
+		ParticipantID:     resampled.ParticipantID,
+	}, nil
 }
