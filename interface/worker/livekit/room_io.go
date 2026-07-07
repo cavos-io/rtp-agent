@@ -199,6 +199,7 @@ type roomIOAudioInputTrack struct {
 const (
 	RoomEventDisconnected                 = "disconnected"
 	RoomEventConnectionStateChanged       = "connection_state_changed"
+	RoomEventRoomMoved                    = "room_moved"
 	RoomEventParticipantConnected         = "participant_connected"
 	RoomEventParticipantDisconnected      = "participant_disconnected"
 	RoomEventParticipantAttributesChanged = "participant_attributes_changed"
@@ -223,6 +224,13 @@ type RoomConnectionStateChangedEvent struct {
 }
 
 func (*RoomConnectionStateChangedEvent) Type() string { return RoomEventConnectionStateChanged }
+
+type RoomMovedEvent struct {
+	RoomName string
+	Token    string
+}
+
+func (*RoomMovedEvent) Type() string { return RoomEventRoomMoved }
 
 type RoomParticipantConnectedEvent struct {
 	Participant *lksdk.RemoteParticipant
@@ -1190,6 +1198,9 @@ func (rio *RoomIO) WithCallback(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
 		},
 		OnReconnected: func() {
 			rio.onRoomReconnected()
+		},
+		OnRoomMoved: func(roomName string, token string) {
+			rio.emitRoomEvent(&RoomMovedEvent{RoomName: roomName, Token: token})
 		},
 		OnParticipantConnected: func(participant RemoteParticipantView) {
 			rio.onParticipantConnected(participant.(*lksdk.RemoteParticipant))
