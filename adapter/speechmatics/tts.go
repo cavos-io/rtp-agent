@@ -464,9 +464,9 @@ func (s *speechmaticsTTSChunkedStream) Close() error {
 		s.finish()
 		return nil
 	}
-	err := stream.Close()
+	_ = stream.Close()
 	s.finish()
-	return err
+	return nil
 }
 
 func (s *speechmaticsTTSChunkedStream) isClosedOrFinal() bool {

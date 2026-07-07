@@ -839,6 +839,20 @@ func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamCloseIgnoresReferenceProviderCloseError(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     speechmaticsCloseErrorBody{err: errors.New("body close failed")},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamCloseCancelsPendingRequest(t *testing.T) {
 	originalClient := http.DefaultClient
 	entered := make(chan struct{})
@@ -1009,6 +1023,18 @@ func (speechmaticsReadErrorBody) Read([]byte) (int, error) {
 
 func (speechmaticsReadErrorBody) Close() error {
 	return nil
+}
+
+type speechmaticsCloseErrorBody struct {
+	err error
+}
+
+func (speechmaticsCloseErrorBody) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b speechmaticsCloseErrorBody) Close() error {
+	return b.err
 }
 
 type speechmaticsDataThenErrorBody struct {
