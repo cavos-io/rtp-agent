@@ -1655,6 +1655,31 @@ func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTDefaultExternalLoadsReferenceSileroVAD(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want default external", provider.turnDetectionMode)
+	}
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want reference default Silero VAD")
+	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want silero.VAD", label)
+	}
+}
+
+func TestSpeechmaticsSTTExplicitNilVADOptsOutOfReferenceAutoVAD(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTVAD(nil))
+
+	if provider.vad != nil {
+		t.Fatalf("vad = %#v, want nil when caller explicitly opts out", provider.vad)
+	}
+	if provider.turnDetectionMode != "external" {
+		t.Fatalf("turn detection mode = %q, want external", provider.turnDetectionMode)
+	}
+}
+
 func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	provider := NewSpeechmaticsSTT("test-key",

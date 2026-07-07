@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -49,6 +50,7 @@ type SpeechmaticsSTT struct {
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
 	vad                  corevad.VAD
+	vadSet               bool
 	closed               bool
 	closeDone            chan struct{}
 }
@@ -222,6 +224,7 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.vad = detector
+		s.vadSet = true
 		if detector != nil {
 			s.turnDetectionMode = "external"
 		}
@@ -251,6 +254,9 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.turnDetectionMode == "external" && !provider.vadSet {
+		provider.vad = silero.NewSileroVAD()
 	}
 	if provider.vad != nil {
 		provider.turnDetectionMode = "external"
