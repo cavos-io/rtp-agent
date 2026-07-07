@@ -867,7 +867,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 					s.errCh <- llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly")
 				}
 			} else {
-				s.errCh <- err
+				s.errCh <- llm.NewAPIConnectionError(err.Error())
 			}
 			return
 		}
