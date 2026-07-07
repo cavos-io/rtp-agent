@@ -3725,6 +3725,26 @@ func TestUpliftAITTSChunkedStreamMP3StartupReadFailureIsTerminal(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamULawReadFailureIsTerminal(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		outputFormat: "ULAW_8000_8",
+		resp:         &http.Response{Body: upliftAIErrorReader{}},
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after ULAW read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	stream := &upliftAITTSChunkedStream{
 		resp: &http.Response{Body: upliftAIReadErrorBody{err: context.DeadlineExceeded}},

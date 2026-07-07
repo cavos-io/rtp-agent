@@ -1762,6 +1762,7 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 				s.hasAudio = true
 				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
+			s.finalSent = true
 			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 		}
 	}
