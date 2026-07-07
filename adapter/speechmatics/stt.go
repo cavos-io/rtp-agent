@@ -682,13 +682,14 @@ func cloneSpeechmaticsSpeakerIDs(values []SpeechmaticsSpeakerIdentifier) []Speec
 }
 
 type speechmaticsSTTStream struct {
-	conn     *websocket.Conn
-	events   chan *stt.SpeechEvent
-	errCh    chan error
-	done     chan struct{}
-	doneOnce sync.Once
-	mu       sync.Mutex
-	closed   bool
+	conn       *websocket.Conn
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	done       chan struct{}
+	doneOnce   sync.Once
+	mu         sync.Mutex
+	closed     bool
+	inputEnded bool
 
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
@@ -985,6 +986,9 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -1005,6 +1009,35 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 	}
+	return nil
+}
+
+func (s *speechmaticsSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.audioBuf != nil {
+		if s.state == nil {
+			s.state = &speechmaticsStreamState{}
+		}
+		for _, chunk := range s.audioBuf.Flush() {
+			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+				_ = s.closeLocked()
+				return err
+			}
+			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		}
+	}
+	if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+		_ = s.closeLocked()
+		return err
+	}
+	s.inputEnded = true
 	return nil
 }
 
@@ -1146,6 +1179,9 @@ func (s *speechmaticsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.audioBuf == nil {
 		return nil
 	}
@@ -1227,6 +1263,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 		return nil
 	}
 	s.closed = true
+	s.inputEnded = true
 	s.pendingAudioChunks = nil
 	s.closeDone()
 	defer func() {
