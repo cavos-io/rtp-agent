@@ -6,6 +6,7 @@ import (
 
 	lkprotocol "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 type ParticipantInfo = lkprotocol.ParticipantInfo
@@ -28,6 +29,9 @@ type RoomCallbackHandlers struct {
 	OnDisconnectedWithReason  func(lksdk.DisconnectionReason)
 	OnParticipantConnected    func(RemoteParticipantView)
 	OnParticipantDisconnected func(RemoteParticipantView)
+	OnLocalTrackSubscribed    func(*lksdk.LocalTrackPublication, *lksdk.LocalParticipant)
+	OnTrackSubscribed         func(*webrtc.TrackRemote, *lksdk.RemoteTrackPublication, *lksdk.RemoteParticipant)
+	OnDataPacket              func(lksdk.DataPacket, lksdk.DataReceiveParams)
 	OnTrackSubscribeError     func(RemoteTrackSubscriptionResult)
 }
 
@@ -96,6 +100,36 @@ func RoomCallbackWithHandlers(cb *lksdk.RoomCallback, handlers RoomCallbackHandl
 		}
 		if participant != nil && handlers.OnParticipantDisconnected != nil {
 			handlers.OnParticipantDisconnected(participant)
+		}
+	}
+
+	onLocalTrackSubscribed := wrapped.OnLocalTrackSubscribed
+	wrapped.OnLocalTrackSubscribed = func(publication *lksdk.LocalTrackPublication, participant *lksdk.LocalParticipant) {
+		if onLocalTrackSubscribed != nil {
+			onLocalTrackSubscribed(publication, participant)
+		}
+		if handlers.OnLocalTrackSubscribed != nil {
+			handlers.OnLocalTrackSubscribed(publication, participant)
+		}
+	}
+
+	onTrackSubscribed := wrapped.OnTrackSubscribed
+	wrapped.OnTrackSubscribed = func(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+		if onTrackSubscribed != nil {
+			onTrackSubscribed(track, publication, participant)
+		}
+		if handlers.OnTrackSubscribed != nil {
+			handlers.OnTrackSubscribed(track, publication, participant)
+		}
+	}
+
+	onDataPacket := wrapped.OnDataPacket
+	wrapped.OnDataPacket = func(packet lksdk.DataPacket, params lksdk.DataReceiveParams) {
+		if onDataPacket != nil {
+			onDataPacket(packet, params)
+		}
+		if handlers.OnDataPacket != nil {
+			handlers.OnDataPacket(packet, params)
 		}
 	}
 
