@@ -460,11 +460,14 @@ func (s *SpeechmaticsSTT) GetSpeakerIDGroups(ctx context.Context) ([][]Speechmat
 	if s == nil {
 		return nil, io.ErrClosedPipe
 	}
-	if s.enableDiarization != nil && !*s.enableDiarization {
-		return nil, nil
-	}
 	streams := s.activeStreams()
 	groups := make([][]SpeechmaticsSpeakerIdentifier, 0, len(streams))
+	if s.enableDiarization != nil && !*s.enableDiarization {
+		for range streams {
+			groups = append(groups, nil)
+		}
+		return groups, nil
+	}
 	var requestErr error
 	for _, stream := range streams {
 		streamCtx, cancel := speechmaticsSpeakerResultContext(ctx)

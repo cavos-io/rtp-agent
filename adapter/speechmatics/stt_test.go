@@ -1853,6 +1853,37 @@ func TestSpeechmaticsSTTGetSpeakerIDsSkipsDisabledDiarization(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTGetSpeakerIDGroupsKeepsReferenceDisabledDiarizationShape(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
+	for range 2 {
+		stream := &speechmaticsSTTStream{
+			writeJSON: func(message interface{}) error {
+				t.Fatalf("speaker request write = %#v, want none when diarization disabled", message)
+				return nil
+			},
+			closeConn: func() error {
+				return nil
+			},
+		}
+		provider.registerStream(stream)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	groups, err := provider.GetSpeakerIDGroups(ctx)
+	if err != nil {
+		t.Fatalf("GetSpeakerIDGroups error = %v, want nil for disabled diarization", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("speaker groups = %#v, want one empty group per active reference stream", groups)
+	}
+	for _, group := range groups {
+		if len(group) != 0 {
+			t.Fatalf("speaker group = %#v, want empty disabled-diarization result", group)
+		}
+	}
+}
+
 func TestSpeechmaticsSTTGetSpeakerIDsTimesOutLikeReference(t *testing.T) {
 	oldTimeout := speechmaticsSpeakerResultTimeout
 	speechmaticsSpeakerResultTimeout = 10 * time.Millisecond
