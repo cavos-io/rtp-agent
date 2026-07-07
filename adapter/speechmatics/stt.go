@@ -551,10 +551,8 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.maxDelay != nil {
 		config["max_delay"] = *s.maxDelay
 	}
-	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
-		config["conversation_config"] = map[string]interface{}{
-			"end_of_utterance_silence_trigger": trigger,
-		}
+	if conversationConfig := speechmaticsConversationConfig(s); len(conversationConfig) > 0 {
+		config["conversation_config"] = conversationConfig
 	}
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
@@ -584,6 +582,17 @@ func speechmaticsConversationSilenceTrigger(s *SpeechmaticsSTT) (float64, bool) 
 		return 0.5, true
 	}
 	return 0, false
+}
+
+func speechmaticsConversationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+	config := make(map[string]interface{})
+	if trigger, ok := speechmaticsConversationSilenceTrigger(s); ok {
+		config["end_of_utterance_silence_trigger"] = trigger
+	}
+	if s != nil && s.eouMaxDelay != nil {
+		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+	}
+	return config
 }
 
 func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {

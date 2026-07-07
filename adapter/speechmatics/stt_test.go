@@ -1257,6 +1257,11 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
+	conversationConfig, ok := config["conversation_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("conversation_config = %#v, want object", config["conversation_config"])
+	}
+	assertSpeechmaticsConfig(t, conversationConfig, "end_of_utterance_max_delay", float64(1.8))
 	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
