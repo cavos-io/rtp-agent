@@ -947,6 +947,50 @@ func TestUltravoxRealtimeSessionUpdateChatContextQueuesReferenceDeferredMessages
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateChatContextResendsReferenceReaddedItems(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "memo", Role: llm.ChatRoleUser, Text: "remember Paris"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext initial error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "remember Paris",
+		"deferResponse": true,
+	})
+
+	if err := session.UpdateChatContext(llm.NewChatContext()); err != nil {
+		t.Fatalf("UpdateChatContext empty error = %v", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected event for deletion-only context update = %#v", got)
+	default:
+	}
+
+	readded := llm.NewChatContext()
+	readded.AddMessage(llm.ChatMessageArgs{ID: "memo", Role: llm.ChatRoleUser, Text: "remember Paris"})
+	if err := session.UpdateChatContext(readded); err != nil {
+		t.Fatalf("UpdateChatContext readd error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "remember Paris",
+		"deferResponse": true,
+	})
+}
+
 func TestUltravoxRealtimeSessionPlaybackClearBufferEmitsReferenceSpeechStarted(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -334,6 +334,20 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
 	}
+	nextContextItems := make(map[string]struct{})
+	nextToolResults := make(map[string]struct{})
+	for _, item := range chatCtx.Items {
+		switch item := item.(type) {
+		case *llm.ChatMessage:
+			if key := ultravoxRealtimeChatMessageKey(item); key != "" {
+				nextContextItems[key] = struct{}{}
+			}
+		case *llm.FunctionCallOutput:
+			if key := ultravoxRealtimeToolResultKey(item); key != "" {
+				nextToolResults[key] = struct{}{}
+			}
+		}
+	}
 	for _, item := range chatCtx.Items {
 		switch item := item.(type) {
 		case *llm.ChatMessage:
@@ -346,6 +360,12 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			}
 		}
 	}
+	s.mu.Lock()
+	if !s.closed {
+		s.contextItems = nextContextItems
+		s.toolResults = nextToolResults
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -368,10 +388,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 		return nil
 	}
 
-	key := message.ID
-	if key == "" {
-		key = string(message.Role) + ":" + text
-	}
+	key := ultravoxRealtimeChatMessageKey(message)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -394,10 +411,7 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 	if output == nil || output.CallID == "" {
 		return nil
 	}
-	key := output.ID
-	if key == "" {
-		key = output.CallID
-	}
+	key := ultravoxRealtimeToolResultKey(output)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -423,6 +437,26 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 		event["result"] = output.Output
 	}
 	return s.sendClientEvent(event)
+}
+
+func ultravoxRealtimeChatMessageKey(message *llm.ChatMessage) string {
+	if message == nil {
+		return ""
+	}
+	if message.ID != "" {
+		return message.ID
+	}
+	return string(message.Role) + ":" + message.TextContent()
+}
+
+func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
+	if output == nil {
+		return ""
+	}
+	if output.ID != "" {
+		return output.ID
+	}
+	return output.CallID
 }
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
