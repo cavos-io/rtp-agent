@@ -4169,6 +4169,18 @@ func TestRoomIOCloseStopsRecorder(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseIsIdempotent(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := rio.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
 func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{AgentSession: session}
