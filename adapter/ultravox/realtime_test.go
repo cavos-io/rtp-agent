@@ -10,6 +10,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -1077,6 +1078,114 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hel",
+		Final:   false,
+		Ordinal: 2,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hel")
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "hello",
+		Final:   true,
+		Ordinal: 2,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != generation.ResponseID || metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want completed generation %q", metrics, generation.ResponseID)
+	}
+	if metrics.Label != "ultravox-fixie-ai/ultravox" || metrics.Metadata == nil ||
+		metrics.Metadata.ModelName != "fixie-ai/ultravox" || metrics.Metadata.ModelProvider != "Ultravox" {
+		t.Fatalf("metrics metadata = %#v, want Ultravox model metadata", metrics)
+	}
+	if metrics.TTFT < 0 || metrics.Duration < metrics.TTFT {
+		t.Fatalf("metrics timing = ttft %f duration %f, want non-negative reference timing", metrics.TTFT, metrics.Duration)
+	}
+}
+
+func TestUltravoxRealtimeSessionInterruptEmitsReferenceCancelledMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Delta:   "hello",
+		Final:   false,
+		Ordinal: 1,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeText(t, message.TextCh, "hello")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != generation.ResponseID || !metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want cancelled generation %q", metrics, generation.ResponseID)
+	}
+}
+
+func TestUltravoxRealtimeSessionToolOnlyGenerationSuppressesReferenceMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+		ToolName:     "lookup",
+		InvocationID: "call-7",
+		Parameters:   map[string]any{"city": "Paris"},
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case <-generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool function call")
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	assertNoUltravoxRealtimeMetrics(t, session)
+}
+
 func TestUltravoxRealtimeSessionGenerationCreatedDoesNotBlockProviderReceive(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -1706,6 +1815,35 @@ func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSessi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for transcript event")
+	}
+}
+
+func requireUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) *telemetry.RealtimeModelMetrics {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeMetricsCollected {
+			t.Fatalf("event type = %s, want metrics_collected", event.Type)
+		}
+		if event.Metrics == nil {
+			t.Fatal("Metrics = nil")
+		}
+		return event.Metrics
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for metrics_collected")
+	}
+	return nil
+}
+
+func assertNoUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type == llm.RealtimeEventTypeMetricsCollected {
+			t.Fatalf("unexpected metrics event = %#v", event.Metrics)
+		}
+		t.Fatalf("unexpected realtime event = %#v", event)
+	default:
 	}
 }
 
