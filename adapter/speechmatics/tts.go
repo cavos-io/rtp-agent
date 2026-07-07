@@ -135,7 +135,7 @@ type speechmaticsTTSRequestOptions struct {
 }
 
 func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmaticsTTSRequestOptions) (*http.Request, error) {
-	u, err := url.Parse(opts.baseURL + "/generate/" + url.PathEscape(opts.voice))
+	u, err := url.Parse(opts.baseURL + "/generate/" + opts.voice)
 	if err != nil {
 		return nil, err
 	}

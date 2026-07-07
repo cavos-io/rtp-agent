@@ -208,6 +208,24 @@ func TestSpeechmaticsTTSRequestPreservesReferenceBaseURLPath(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSRequestPreservesReferenceVoicePath(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key",
+		WithSpeechmaticsTTSVoice("custom/voice"),
+		WithSpeechmaticsTTSBaseURL("https://tts.example.com"),
+	)
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/custom/voice" {
+		t.Fatalf("request path = %q, want reference voice path concatenation", req.URL.Path)
+	}
+	if req.URL.EscapedPath() != "/generate/custom/voice" {
+		t.Fatalf("escaped request path = %q, want unescaped reference voice path", req.URL.EscapedPath())
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizePostsAndStreamsPCM(t *testing.T) {
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
