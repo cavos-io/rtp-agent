@@ -5420,6 +5420,95 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsExternalAutoVAD(t *testing.T) {
 	}
 }
 
+func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	vadStream := newEventfulAppVADStream()
+	controlMessages := make(chan string, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			var message map[string]any
+			if err := conn.ReadJSON(&message); err != nil {
+				return
+			}
+			name, _ := message["message"].(string)
+			if name != "" {
+				controlMessages <- name
+			}
+			if name == "StartRecognition" {
+				if err := conn.WriteJSON(map[string]any{"message": "RecognitionStarted"}); err != nil {
+					t.Errorf("write RecognitionStarted: %v", err)
+					return
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	baseAgent := agent.NewAgent("")
+	baseAgent.VAD = &eventfulAppVAD{stream: vadStream}
+	_, err = configureProviders(AppConfig{
+		STTProvider:        providerSpeechmatics,
+		STTBaseURL:         "ws" + strings.TrimPrefix(server.URL, "http"),
+		SpeechmaticsAPIKey: "test-speechmatics-key",
+	}, baseAgent)
+	if err != nil {
+		t.Fatalf("configureProviders() error = %v", err)
+	}
+	if baseAgent.STT == nil || baseAgent.STT.Label() != "speechmatics.STT" {
+		t.Fatalf("STT = %#v, want Speechmatics STT", baseAgent.STT)
+	}
+
+	stream, err := baseAgent.STT.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := <-controlMessages; got != "StartRecognition" {
+		t.Fatalf("first control message = %q, want StartRecognition", got)
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(vadStream.pushed) == 0 {
+		t.Fatal("VAD received no frames, want Speechmatics STT to use app VAD for external endpointing")
+	}
+	if got := vadStream.pushed[0]; got != frame {
+		t.Fatalf("VAD frame = %#v, want original app STT input frame", got)
+	}
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	select {
+	case got := <-controlMessages:
+		if got != "ForceEndOfUtterance" {
+			t.Fatalf("control message after VAD end = %q, want ForceEndOfUtterance", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics ForceEndOfUtterance after VAD end_of_speech")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
@@ -16435,6 +16524,54 @@ func (f *fakeAppVADStream) Flush() error                      { return nil }
 func (f *fakeAppVADStream) EndInput() error                   { return nil }
 func (f *fakeAppVADStream) Close() error                      { return nil }
 func (f *fakeAppVADStream) Next() (*vad.VADEvent, error)      { return nil, io.EOF }
+
+type eventfulAppVAD struct {
+	stream *eventfulAppVADStream
+}
+
+func (f *eventfulAppVAD) Label() string { return "eventful-vad" }
+func (f *eventfulAppVAD) Model() string { return "eventful-vad" }
+func (f *eventfulAppVAD) Provider() string {
+	return "fake"
+}
+func (f *eventfulAppVAD) Capabilities() vad.VADCapabilities { return vad.VADCapabilities{} }
+func (f *eventfulAppVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
+func (f *eventfulAppVAD) Stream(context.Context) (vad.VADStream, error) {
+	return f.stream, nil
+}
+
+type eventfulAppVADStream struct {
+	events chan *vad.VADEvent
+	pushed []*model.AudioFrame
+	once   sync.Once
+}
+
+func newEventfulAppVADStream() *eventfulAppVADStream {
+	return &eventfulAppVADStream{events: make(chan *vad.VADEvent, 1)}
+}
+
+func (f *eventfulAppVADStream) PushFrame(frame *model.AudioFrame) error {
+	f.pushed = append(f.pushed, frame)
+	return nil
+}
+func (f *eventfulAppVADStream) Flush() error { return nil }
+func (f *eventfulAppVADStream) EndInput() error {
+	f.once.Do(func() { close(f.events) })
+	return nil
+}
+func (f *eventfulAppVADStream) Close() error {
+	f.once.Do(func() { close(f.events) })
+	return nil
+}
+func (f *eventfulAppVADStream) Next() (*vad.VADEvent, error) {
+	event, ok := <-f.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return event, nil
+}
 
 type fakeAppSTT struct{}
 

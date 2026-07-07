@@ -6476,6 +6476,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTPreferCurrentSpeaker != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
+		if speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) && a.VAD != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTVAD(a.VAD))
+		}
 		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
 	case providerSpitch:
 		a.STT = spitch.NewSpitchSTT(cfg.SpitchAPIKey)
