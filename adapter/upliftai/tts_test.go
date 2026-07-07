@@ -312,20 +312,22 @@ func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
 func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	oldClient := http.DefaultClient
 	var gotVoice string
+	var gotOutputFormat string
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		var payload map[string]string
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
 		gotVoice = payload["voiceId"]
+		gotOutputFormat = payload["outputFormat"]
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("")),
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
 		}, nil
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	tts := NewUpliftAITTS("test-key", "")
+	tts := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
 	stream, err := tts.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
@@ -339,6 +341,9 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	}
 	if gotVoice != "voice-updated" {
 		t.Fatalf("request voice = %q, want updated voice", gotVoice)
+	}
+	if gotOutputFormat != "PCM_22050_16" {
+		t.Fatalf("request outputFormat = %q, want PCM_22050_16", gotOutputFormat)
 	}
 }
 
