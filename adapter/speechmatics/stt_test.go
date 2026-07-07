@@ -382,6 +382,9 @@ func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	if active := provider.activeStreams(); len(active) != 0 {
 		t.Fatalf("active streams after EndOfTranscript = %d, want 0", len(active))
 	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after EndOfTranscript = %v, want io.ErrClosedPipe", err)
+	}
 }
 
 func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {

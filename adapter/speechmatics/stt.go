@@ -952,8 +952,10 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				s.markClosed()
 				return nil, err
 			default:
+				s.markClosed()
 				return nil, io.EOF
 			}
 		}
@@ -966,6 +968,23 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
+		s.markClosed()
 		return nil, err
+	}
+}
+
+func (s *speechmaticsSTTStream) markClosed() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	s.mu.Unlock()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
 	}
 }
