@@ -164,6 +164,39 @@ func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "text",
+		OutputMediumSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions output medium error = %v, want reference set_output_medium event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
+		t.Fatalf("UpdateOptions empty error = %v, want reference no-op for unset output medium", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected client event for empty UpdateOptions = %#v", got)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

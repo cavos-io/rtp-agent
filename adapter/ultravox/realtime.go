@@ -406,8 +406,14 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 func (s *realtimeSession) UpdateTools([]llm.Tool) error {
 	return ultravoxRealtimeSessionUnsupported("update_tools")
 }
-func (s *realtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
-	return ultravoxRealtimeSessionUnsupported("update_options")
+func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	if !options.OutputMediumSet {
+		return nil
+	}
+	return s.sendClientEvent(map[string]any{
+		"type":   "set_output_medium",
+		"medium": options.OutputMedium,
+	})
 }
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	text := ""
