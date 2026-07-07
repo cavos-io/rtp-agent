@@ -540,9 +540,6 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
 		config["speaker_config"] = speechmaticsSTTSpeakerConfig(s.focusSpeakers, s.ignoreSpeakers, s.focusMode)
 	}
-	if len(s.knownSpeakers) > 0 {
-		config["known_speakers"] = s.knownSpeakers
-	}
 	if s.operatingPoint != "" {
 		config["operating_point"] = s.operatingPoint
 	}
@@ -557,14 +554,8 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	if s.punctuation != nil {
 		config["punctuation_overrides"] = s.punctuation
 	}
-	if s.speakerSensitivity != nil {
-		config["speaker_sensitivity"] = *s.speakerSensitivity
-	}
-	if s.maxSpeakers != nil {
-		config["max_speakers"] = *s.maxSpeakers
-	}
-	if s.preferCurrentSpeaker != nil {
-		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
+	if speakerConfig := speechmaticsSTTDiarizationConfig(s); len(speakerConfig) > 0 {
+		config["speaker_diarization_config"] = speakerConfig
 	}
 	return map[string]interface{}{
 		"message": "StartRecognition",
@@ -575,6 +566,23 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		},
 		"transcription_config": config,
 	}
+}
+
+func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+	config := make(map[string]interface{})
+	if len(s.knownSpeakers) > 0 {
+		config["speakers"] = s.knownSpeakers
+	}
+	if s.speakerSensitivity != nil {
+		config["speaker_sensitivity"] = *s.speakerSensitivity
+	}
+	if s.maxSpeakers != nil {
+		config["max_speakers"] = *s.maxSpeakers
+	}
+	if s.preferCurrentSpeaker != nil {
+		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
+	}
+	return config
 }
 
 func speechmaticsSTTSpeakerConfig(focusSpeakers []string, ignoreSpeakers []string, focusMode string) map[string]interface{} {

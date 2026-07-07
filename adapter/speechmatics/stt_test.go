@@ -1192,9 +1192,16 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	if speakerConfig["focus_mode"] != "ignore" {
 		t.Fatalf("focus_mode = %#v, want ignore", speakerConfig["focus_mode"])
 	}
-	knownSpeakers := config["known_speakers"].([]SpeechmaticsSpeakerIdentifier)
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
+	}
+	knownSpeakers := diarizationConfig["speakers"].([]SpeechmaticsSpeakerIdentifier)
 	if len(knownSpeakers) != 1 || knownSpeakers[0].Label != "agent" || knownSpeakers[0].SpeakerID != "spk-1" {
-		t.Fatalf("known_speakers = %#v, want agent speaker id", knownSpeakers)
+		t.Fatalf("speaker_diarization_config.speakers = %#v, want agent speaker id", knownSpeakers)
+	}
+	if _, ok := config["known_speakers"]; ok {
+		t.Fatalf("known_speakers sent at top level in %#v", config)
 	}
 }
 
@@ -1214,9 +1221,22 @@ func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
 	config := message["transcription_config"].(map[string]interface{})
 	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
 	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
-	assertSpeechmaticsConfig(t, config, "speaker_sensitivity", float64(0.7))
-	assertSpeechmaticsConfig(t, config, "max_speakers", 4)
-	assertSpeechmaticsConfig(t, config, "prefer_current_speaker", true)
+	diarizationConfig, ok := config["speaker_diarization_config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("speaker_diarization_config = %#v, want object", config["speaker_diarization_config"])
+	}
+	assertSpeechmaticsConfig(t, diarizationConfig, "speaker_sensitivity", float64(0.7))
+	assertSpeechmaticsConfig(t, diarizationConfig, "max_speakers", 4)
+	assertSpeechmaticsConfig(t, diarizationConfig, "prefer_current_speaker", true)
+	if _, ok := config["speaker_sensitivity"]; ok {
+		t.Fatalf("speaker_sensitivity sent at top level in %#v", config)
+	}
+	if _, ok := config["max_speakers"]; ok {
+		t.Fatalf("max_speakers sent at top level in %#v", config)
+	}
+	if _, ok := config["prefer_current_speaker"]; ok {
+		t.Fatalf("prefer_current_speaker sent at top level in %#v", config)
+	}
 	overrides := config["punctuation_overrides"].(map[string]interface{})
 	marks := overrides["permitted_marks"].([]string)
 	if len(marks) != 2 || marks[0] != "." || marks[1] != "?" {
