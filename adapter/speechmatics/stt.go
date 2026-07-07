@@ -864,6 +864,7 @@ type smResponse struct {
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
 		Attaches  string  `json:"attaches_to"`
+		IsEOS     bool    `json:"is_eos"`
 		StartTime float64 `json:"start_time"`
 		EndTime   float64 `json:"end_time"`
 	} `json:"results"`
@@ -1011,6 +1012,7 @@ type speechmaticsRawTranscriptFragment struct {
 	speakerID  string
 	language   string
 	attaches   string
+	isEOS      bool
 	startTime  float64
 	endTime    float64
 	confidence float64
@@ -1057,6 +1059,7 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 			speakerID:  resultSpeakerID,
 			language:   language,
 			attaches:   result.Attaches,
+			isEOS:      result.IsEOS,
 			startTime:  startTime,
 			endTime:    endTime,
 			confidence: alt.Confidence,
@@ -1092,7 +1095,7 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	var events []*stt.SpeechEvent
 	groupStart := 0
 	for i := 1; i <= len(fragments); i++ {
-		if i < len(fragments) && fragments[i].speakerID == fragments[groupStart].speakerID {
+		if i < len(fragments) && fragments[i].speakerID == fragments[groupStart].speakerID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
 			continue
 		}
 		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {
@@ -1101,6 +1104,10 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 		groupStart = i
 	}
 	return events
+}
+
+func speechmaticsSplitRawTranscriptAtEOS(eventType stt.SpeechEventType, fragment speechmaticsRawTranscriptFragment) bool {
+	return eventType == stt.SpeechEventFinalTranscript && fragment.isEOS
 }
 
 func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) *stt.SpeechEvent {

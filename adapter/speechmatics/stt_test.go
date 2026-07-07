@@ -37,6 +37,7 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			Attaches  string  `json:"attaches_to"`
+			IsEOS     bool    `json:"is_eos"`
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		}{
@@ -111,6 +112,7 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			Attaches  string  `json:"attaches_to"`
+			IsEOS     bool    `json:"is_eos"`
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
 		}{
@@ -466,6 +468,59 @@ func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing
 	events := speechmaticsEvents(final, state)
 	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("final raw transcript events = %#v, want final transcript despite include_partials false", events)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"is_eos":false,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.3,
+			"end_time":0.3,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"is_eos":false,
+			"alternatives":[{"content":"next","confidence":0.8,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.6,
+			"end_time":0.6,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw eos transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want one final transcript per reference EOS sentence", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello." {
+		t.Fatalf("first text = %q, want first EOS sentence", got)
+	}
+	if got := events[1].Alternatives[0].Text; got != "next." {
+		t.Fatalf("second text = %q, want second EOS sentence", got)
+	}
+	if events[0].Alternatives[0].StartTime != 0.1 || events[0].Alternatives[0].EndTime != 0.3 {
+		t.Fatalf("first timing = %v-%v, want first sentence timing", events[0].Alternatives[0].StartTime, events[0].Alternatives[0].EndTime)
+	}
+	if events[1].Alternatives[0].StartTime != 0.4 || events[1].Alternatives[0].EndTime != 0.6 {
+		t.Fatalf("second timing = %v-%v, want second sentence timing", events[1].Alternatives[0].StartTime, events[1].Alternatives[0].EndTime)
 	}
 }
 
