@@ -1313,6 +1313,60 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	}
 }
 
+func TestSpeechmaticsCloseUnblocksReferenceVADStartupDrain(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	vadStream.pushStarted = make(chan struct{})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted: true,
+		vadStream:                 vadStream,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	readyDone := make(chan struct{})
+	go func() {
+		stream.handleResponse(smResponse{Message: "RecognitionStarted"})
+		close(readyDone)
+	}()
+	select {
+	case <-vadStream.pushStarted:
+	case <-time.After(time.Second):
+		t.Fatal("VAD startup drain did not begin")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- stream.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		vadStream.events <- &vad.VADEvent{}
+		<-readyDone
+		err := <-closeDone
+		t.Fatalf("Close() blocked behind pending VAD startup drain, later error = %v", err)
+	}
+	select {
+	case <-readyDone:
+	case <-time.After(time.Second):
+		t.Fatal("RecognitionStarted handler stayed blocked after Close")
+	}
+}
+
 func TestSpeechmaticsSTTEndInputFlushesAndEndsReferenceInput(t *testing.T) {
 	var writes [][]byte
 	var controlMessages []map[string]interface{}

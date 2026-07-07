@@ -824,6 +824,7 @@ type speechmaticsSTTStream struct {
 	pendingAudioChunks         [][]byte
 	pendingVADFrames           []*model.AudioFrame
 	pendingVADEndInput         bool
+	drainingStartup            bool
 	speakerResultCh            chan []SpeechmaticsSpeakerIdentifier
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
@@ -1140,7 +1141,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	vadStream := s.vadStream
-	bufferVAD := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	bufferVAD := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVAD {
 		s.pendingVADFrames = append(s.pendingVADFrames, frame)
 	}
@@ -1222,7 +1223,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		}
 	}
 	vadStream := s.vadStream
-	bufferVADEndInput := vadStream != nil && s.waitForRecognitionStarted && !s.audioReady
+	bufferVADEndInput := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVADEndInput {
 		s.pendingVADEndInput = true
 	}
@@ -1244,7 +1245,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		return io.ErrClosedPipe
 	}
 	s.inputEnded = true
-	if s.waitForRecognitionStarted && !s.audioReady {
+	if s.startupGateActiveLocked() {
 		s.pendingEndInput = true
 		return nil
 	}
@@ -1284,62 +1285,85 @@ func (s *speechmaticsSTTStream) writeJSONMessage(message interface{}) error {
 }
 
 func (s *speechmaticsSTTStream) writeAudioChunkLocked(data []byte) error {
-	if s.waitForRecognitionStarted && !s.audioReady {
+	if s.startupGateActiveLocked() {
 		s.pendingAudioChunks = append(s.pendingAudioChunks, append([]byte(nil), data...))
 		return nil
 	}
 	return s.writeBinaryData(data)
 }
 
+func (s *speechmaticsSTTStream) startupGateActiveLocked() bool {
+	return s.waitForRecognitionStarted && (!s.audioReady || s.drainingStartup)
+}
+
 func (s *speechmaticsSTTStream) markReadyForAudio() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	s.audioReady = true
-	pendingVADFrames := s.pendingVADFrames
-	pendingVADEndInput := s.pendingVADEndInput
-	vadStream := s.vadStream
-	s.pendingVADFrames = nil
-	s.pendingVADEndInput = false
-	if vadStream != nil {
-		for _, frame := range pendingVADFrames {
-			if err := vadStream.PushFrame(frame); err != nil {
-				_ = s.closeLocked()
-				return err
-			}
+	s.drainingStartup = true
+	s.mu.Unlock()
+
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.drainingStartup = false
+			s.mu.Unlock()
+			return io.ErrClosedPipe
 		}
-		if pendingVADEndInput {
-			if err := vadStream.EndInput(); err != nil {
-				_ = s.closeLocked()
-				return err
-			}
-		}
-	}
-	pending := s.pendingAudioChunks
-	s.pendingAudioChunks = nil
-	for _, chunk := range pending {
-		if err := s.writeBinaryData(chunk); err != nil {
-			_ = s.closeLocked()
-			return err
-		}
-	}
-	if s.pendingFinalize {
+		pendingVADFrames := s.pendingVADFrames
+		pendingVADEndInput := s.pendingVADEndInput
+		pendingAudio := s.pendingAudioChunks
+		pendingFinalize := s.pendingFinalize
+		pendingEndInput := s.pendingEndInput
+		vadStream := s.vadStream
+		s.pendingVADFrames = nil
+		s.pendingVADEndInput = false
+		s.pendingAudioChunks = nil
 		s.pendingFinalize = false
-		if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
-			_ = s.closeLocked()
-			return err
-		}
-	}
-	if s.pendingEndInput {
 		s.pendingEndInput = false
-		if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
-			_ = s.closeLocked()
-			return err
+		if len(pendingVADFrames) == 0 && !pendingVADEndInput && len(pendingAudio) == 0 && !pendingFinalize && !pendingEndInput {
+			s.drainingStartup = false
+			s.mu.Unlock()
+			return nil
+		}
+		s.mu.Unlock()
+
+		if vadStream != nil {
+			for _, frame := range pendingVADFrames {
+				if err := vadStream.PushFrame(frame); err != nil {
+					_ = s.Close()
+					return err
+				}
+			}
+			if pendingVADEndInput {
+				if err := vadStream.EndInput(); err != nil {
+					_ = s.Close()
+					return err
+				}
+			}
+		}
+		for _, chunk := range pendingAudio {
+			if err := s.writeBinaryData(chunk); err != nil {
+				_ = s.Close()
+				return err
+			}
+		}
+		if pendingFinalize {
+			if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+				_ = s.Close()
+				return err
+			}
+		}
+		if pendingEndInput {
+			if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+				_ = s.Close()
+				return err
+			}
 		}
 	}
-	return nil
 }
 
 func (s *speechmaticsSTTStream) Finalize() error {
@@ -1351,7 +1375,7 @@ func (s *speechmaticsSTTStream) Finalize() error {
 	if s.providerManagedEndpointing {
 		return nil
 	}
-	if s.waitForRecognitionStarted && !s.audioReady {
+	if s.startupGateActiveLocked() {
 		s.pendingFinalize = true
 		return nil
 	}
@@ -1685,6 +1709,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.pendingAudioChunks = nil
 	s.pendingVADFrames = nil
 	s.pendingVADEndInput = false
+	s.drainingStartup = false
 	vadStream := s.vadStream
 	s.vadStream = nil
 	s.closeDone()
