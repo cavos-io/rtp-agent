@@ -246,6 +246,24 @@ func TestSpeechmaticsTTSRequestPreservesReferenceBaseURLPath(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSRequestPreservesReferenceEmptyBaseURL(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL(""))
+	if provider.baseURL != "" {
+		t.Fatalf("base URL = %q, want explicit empty reference base URL", provider.baseURL)
+	}
+
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Path != "/generate/sarah" {
+		t.Fatalf("request path = %q, want reference empty-base path", req.URL.Path)
+	}
+	if req.URL.Scheme != "" || req.URL.Host != "" {
+		t.Fatalf("request URL = %q, want reference relative URL", req.URL.String())
+	}
+}
+
 func TestSpeechmaticsTTSRequestPreservesReferenceVoicePath(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("custom/voice"),
