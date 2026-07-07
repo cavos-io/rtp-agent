@@ -1270,6 +1270,19 @@ func TestSpeechmaticsSTTPreservesReferenceEmptyLanguage(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTPreservesReferenceEmptyAudioEncoding(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAudioEncoding(""))
+	if provider.audioEncoding != "" {
+		t.Fatalf("audioEncoding = %q, want explicit empty reference encoding", provider.audioEncoding)
+	}
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	audioFormat := message["audio_format"].(map[string]interface{})
+	if audioFormat["encoding"] != "" {
+		t.Fatalf("encoding = %#v, want explicit empty reference encoding", audioFormat["encoding"])
+	}
+}
+
 func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	t.Setenv("SPEECHMATICS_RT_URL", "wss://speechmatics.env/v2/")
 

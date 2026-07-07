@@ -94,9 +94,7 @@ func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
 
 func WithSpeechmaticsSTTAudioEncoding(encoding string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
-		if encoding != "" {
-			s.audioEncoding = encoding
-		}
+		s.audioEncoding = encoding
 	}
 }
 
