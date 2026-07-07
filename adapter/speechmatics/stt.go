@@ -847,6 +847,8 @@ type speechmaticsStreamState struct {
 	ignoreSpeakers       []string
 	focusMode            string
 	includePartials      bool
+	wordDelimiter        string
+	wordDelimiterSet     bool
 	bufferRawFinals      bool
 	pendingRawFinals     []*stt.SpeechEvent
 }
@@ -882,6 +884,9 @@ type smResponse struct {
 			EndTime   float64 `json:"end_time"`
 		} `json:"metadata"`
 	} `json:"segments"`
+	LanguagePackInfo struct {
+		WordDelimiter *string `json:"word_delimiter"`
+	} `json:"language_pack_info"`
 	Speakers []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 }
 
@@ -929,6 +934,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return false
 	}
 	if resp.Message == "RecognitionStarted" {
+		s.recordRecognitionStarted(resp)
 		if err := s.markReadyForAudio(); err != nil {
 			s.enqueueError(err)
 			return false
@@ -955,6 +961,17 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 	}
 	return true
+}
+
+func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
+	if s == nil || resp.LanguagePackInfo.WordDelimiter == nil {
+		return
+	}
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.wordDelimiter = *resp.LanguagePackInfo.WordDelimiter
+	s.state.wordDelimiterSet = true
 }
 
 func (s *speechmaticsSTTStream) enqueueError(err error) {
@@ -1171,7 +1188,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 		} else if fragment.attaches == "previous" || fragments[i-1].attaches == "next" {
 			text += fragment.text
 		} else {
-			text += " " + fragment.text
+			text += speechmaticsRawWordDelimiter(state) + fragment.text
 		}
 		totalConfidence += fragment.confidence
 		if fragment.kind == "word" {
@@ -1200,6 +1217,13 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 			},
 		},
 	}
+}
+
+func speechmaticsRawWordDelimiter(state *speechmaticsStreamState) string {
+	if state != nil && state.wordDelimiterSet {
+		return state.wordDelimiter
+	}
+	return " "
 }
 
 func speechmaticsRawTranscriptSpeakerActive(speakerID string, state *speechmaticsStreamState) *bool {

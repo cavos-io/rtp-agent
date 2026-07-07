@@ -446,6 +446,56 @@ func TestSpeechmaticsEventsRawTranscriptUsesReferenceAttachSpacing(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptUsesReferenceWordDelimiter(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.2,
+			"alternatives":[{"content":"私","confidence":0.9,"speaker":"agent","language":"ja"}]
+		},{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.4,
+			"alternatives":[{"content":"です","confidence":0.9,"speaker":"agent","language":"ja"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "ja", wordDelimiter: "", wordDelimiterSet: true})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "私です" {
+		t.Fatalf("text = %q, want reference language-pack word delimiter", got)
+	}
+}
+
+func TestSpeechmaticsRecognitionStartedStoresReferenceWordDelimiter(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		state: &speechmaticsStreamState{},
+	}
+	delimiter := ""
+
+	if keepReading := stream.handleResponse(smResponse{
+		Message: "RecognitionStarted",
+		LanguagePackInfo: struct {
+			WordDelimiter *string `json:"word_delimiter"`
+		}{WordDelimiter: &delimiter},
+	}); !keepReading {
+		t.Fatal("RecognitionStarted stopped read loop")
+	}
+	if stream.state.wordDelimiter != "" {
+		t.Fatalf("word delimiter = %q, want empty reference delimiter", stream.state.wordDelimiter)
+	}
+	if !stream.state.wordDelimiterSet {
+		t.Fatal("word delimiter set = false, want present empty reference delimiter")
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptTrimsReferenceEdgePunctuation(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
