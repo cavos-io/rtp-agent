@@ -386,6 +386,55 @@ func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "hello",
+		Final:   false,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello", false)
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "hello world",
+		Final:   true,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
+}
+
+func requireUltravoxRealtimeTranscriptEvent(t *testing.T, session *realtimeSession, itemID string, transcript string, final bool) {
+	t.Helper()
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+			t.Fatalf("event type = %s, want input_audio_transcription_completed", event.Type)
+		}
+		if event.InputTranscription == nil {
+			t.Fatal("InputTranscription = nil")
+		}
+		if event.InputTranscription.ItemID != itemID ||
+			event.InputTranscription.Transcript != transcript ||
+			event.InputTranscription.IsFinal != final {
+			t.Fatalf("InputTranscription = %+v, want item=%q transcript=%q final=%v", event.InputTranscription, itemID, transcript, final)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for transcript event")
+	}
+}
+
 func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, want map[string]any) {
 	t.Helper()
 	select {

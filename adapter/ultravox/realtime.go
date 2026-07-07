@@ -263,6 +263,14 @@ type ultravoxRealtimeGeneration struct {
 	done       bool
 }
 
+type ultravoxRealtimeTranscriptEvent struct {
+	Role    string
+	Text    string
+	Delta   string
+	Final   bool
+	Ordinal int
+}
+
 type realtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
@@ -425,6 +433,29 @@ func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
 		},
 	}
 	return generation
+}
+
+func (s *realtimeSession) handleTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
+	if event.Role != "user" || event.Text == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	realtimeEvent := llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     fmt.Sprintf("msg_user_%d", event.Ordinal),
+			Transcript: event.Text,
+			IsFinal:    event.Final,
+		},
+	}
+	select {
+	case s.eventCh <- realtimeEvent:
+	default:
+	}
 }
 
 func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
