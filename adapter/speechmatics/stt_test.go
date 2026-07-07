@@ -2809,6 +2809,50 @@ func TestSpeechmaticsSTTProviderEndOfTurnCancelsReferenceForcedEOUTimeout(t *tes
 	}
 }
 
+func TestSpeechmaticsSTTForcedEOUEndsOnReferenceEndOfUtteranceAck(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+
+	var event *stt.SpeechEvent
+	select {
+	case event = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("EndOfUtterance ACK did not emit end_of_speech")
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %s, want end_of_speech", event.Type)
+	}
+	var usage *stt.SpeechEvent
+	select {
+	case usage = <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("EndOfUtterance ACK did not emit recognition usage")
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.3 {
+		t.Fatalf("usage event = %#v, want reference forced EOU ACK usage", usage)
+	}
+}
+
 func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
 	stream := &speechmaticsSTTStream{

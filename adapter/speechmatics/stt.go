@@ -952,6 +952,12 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 					return false
 				}
 			}
+		} else if s.consumeCurrentForcedEOU() {
+			for _, event := range speechmaticsEndOfTurnEvents(s.state) {
+				if !s.enqueueEvent(event) {
+					return false
+				}
+			}
 		}
 		return true
 	}
@@ -1707,6 +1713,20 @@ func (s *speechmaticsSTTStream) consumeForcedEOU(seq uint64) bool {
 		return false
 	}
 	s.forcedEOUPending = false
+	return true
+}
+
+func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || !s.forcedEOUPending {
+		return false
+	}
+	s.forcedEOUPending = false
+	s.forcedEOUSeq++
 	return true
 }
 
