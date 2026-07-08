@@ -596,6 +596,17 @@ func TestUltravoxRealtimeToolPayloadsUseRawFunctionSchemaLikeReference(t *testin
 	}
 }
 
+func TestUltravoxRealtimeToolPayloadsUseReferenceRawSchemaMissingDescription(t *testing.T) {
+	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawSchemaNoDescriptionTool{}})
+	tool, ok := payloads[0]["temporaryTool"].(map[string]any)
+	if !ok {
+		t.Fatalf("temporaryTool = %#v, want map", payloads[0]["temporaryTool"])
+	}
+	if description, ok := tool["description"]; !ok || description != nil {
+		t.Fatalf("description = %#v/%v, want reference nil from raw schema", description, ok)
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -5159,6 +5170,29 @@ func (ultravoxRealtimeRawSchemaTool) ParseFunctionTools(string) (map[string]inte
 				"query": map[string]interface{}{"type": "string"},
 			},
 			"required": []string{"query"},
+		},
+	}, nil
+}
+
+type ultravoxRealtimeRawSchemaNoDescriptionTool struct{}
+
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) ID() string   { return "raw_no_desc" }
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) Name() string { return "raw_no_desc" }
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) Description() string {
+	return "fallback description"
+}
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawSchemaNoDescriptionTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name": "raw_no_desc",
+		"parameters": map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
 		},
 	}, nil
 }

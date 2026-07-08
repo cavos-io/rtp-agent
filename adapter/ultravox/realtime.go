@@ -1596,18 +1596,16 @@ func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	return payloads
 }
 
-func ultravoxRealtimeToolSchema(tool llm.Tool) (string, string, map[string]any) {
+func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any) {
 	name := tool.Name()
-	description := tool.Description()
+	var description any = tool.Description()
 	parameters := llm.ToolParameters(tool)
 	if rawTool, ok := tool.(ultravoxRealtimeRawToolSchemaParser); ok {
 		if schema, err := rawTool.ParseFunctionTools("ultravox"); err == nil {
 			if rawName, ok := schema["name"].(string); ok {
 				name = rawName
 			}
-			if rawDescription, ok := schema["description"].(string); ok {
-				description = rawDescription
-			}
+			description = schema["description"]
 			if rawParameters, ok := schema["parameters"].(map[string]any); ok {
 				parameters = rawParameters
 			}
