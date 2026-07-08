@@ -1191,6 +1191,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			Type         json.RawMessage              `json:"type"`
 			StartTime    json.RawMessage              `json:"start_time"`
 			EndTime      json.RawMessage              `json:"end_time"`
+			Volume       json.RawMessage              `json:"volume"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1223,6 +1224,13 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.EndTime) == "null" {
 				return fmt.Errorf("results[%d].end_time must be a number", i)
+			}
+			if raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript" {
+				if len(result.Volume) > 0 && string(result.Volume) != "null" {
+					if _, err := speechmaticsUnmarshalReferenceFloat(result.Volume); err != nil {
+						return fmt.Errorf("results[%d].volume must be a number", i)
+					}
+				}
 			}
 			if len(result.Alternatives) == 0 {
 				continue
