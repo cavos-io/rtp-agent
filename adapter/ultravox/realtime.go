@@ -797,9 +797,12 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil
 		}
+		if event.ToolName == "" || event.InvocationID == "" || len(event.RawParameters) == 0 {
+			return nil
+		}
 		parameters := map[string]any{}
-		if len(event.RawParameters) > 0 {
-			_ = json.Unmarshal(event.RawParameters, &parameters)
+		if err := json.Unmarshal(event.RawParameters, &parameters); err != nil {
+			return nil
 		}
 		s.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
 			ToolName:      event.ToolName,
