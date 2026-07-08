@@ -793,6 +793,39 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyBuffersBeyondOldClientEventLimit(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	const oldDropLimit = 256
+	if cap(session.clientEventCh) <= oldDropLimit {
+		t.Fatalf("client event queue cap = %d, want above old 256-event limit", cap(session.clientEventCh))
+	}
+	for i := 0; i < oldDropLimit; i++ {
+		session.clientEventCh <- map[string]any{"type": "queued"}
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v, want reference unbounded client event queue", err)
+	}
+	for i := 0; i < oldDropLimit; i++ {
+		<-session.clientEventCh
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+}
+
 func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGeneration(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
