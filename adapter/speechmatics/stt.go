@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1034,6 +1035,43 @@ type smAlternative struct {
 	Tags       []string `json:"tags,omitempty"`
 }
 
+func (a *smAlternative) UnmarshalJSON(data []byte) error {
+	type alternative smAlternative
+	var raw struct {
+		alternative
+		Confidence json.RawMessage `json:"confidence"`
+		Tags       json.RawMessage `json:"tags"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = smAlternative(raw.alternative)
+	if len(raw.Confidence) > 0 {
+		confidence, err := speechmaticsUnmarshalReferenceFloat(raw.Confidence)
+		if err != nil {
+			return fmt.Errorf("confidence: %w", err)
+		}
+		a.Confidence = &confidence
+	}
+	if len(raw.Tags) == 0 {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal(raw.Tags, &tags); err == nil {
+		a.Tags = tags
+		return nil
+	}
+	var tag string
+	if err := json.Unmarshal(raw.Tags, &tag); err != nil {
+		return err
+	}
+	a.Tags = []string{tag}
+	if strings.Contains(tag, "disfluency") && tag != "disfluency" {
+		a.Tags = append(a.Tags, "disfluency")
+	}
+	return nil
+}
+
 type smResult struct {
 	Alternatives []smAlternative `json:"alternatives"`
 	Type         string          `json:"type"`
@@ -1041,6 +1079,72 @@ type smResult struct {
 	IsEOS        bool            `json:"is_eos"`
 	StartTime    float64         `json:"start_time"`
 	EndTime      float64         `json:"end_time"`
+}
+
+func (r *smResult) UnmarshalJSON(data []byte) error {
+	type result smResult
+	var raw struct {
+		result
+		StartTime json.RawMessage `json:"start_time"`
+		EndTime   json.RawMessage `json:"end_time"`
+		IsEOS     json.RawMessage `json:"is_eos"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = smResult(raw.result)
+	var err error
+	if len(raw.StartTime) > 0 {
+		r.StartTime, err = speechmaticsUnmarshalReferenceFloat(raw.StartTime)
+		if err != nil {
+			return fmt.Errorf("start_time: %w", err)
+		}
+	}
+	if len(raw.EndTime) > 0 {
+		r.EndTime, err = speechmaticsUnmarshalReferenceFloat(raw.EndTime)
+		if err != nil {
+			return fmt.Errorf("end_time: %w", err)
+		}
+	}
+	if len(raw.IsEOS) > 0 {
+		r.IsEOS, err = speechmaticsUnmarshalReferenceBool(raw.IsEOS)
+		if err != nil {
+			return fmt.Errorf("is_eos: %w", err)
+		}
+	}
+	return nil
+}
+
+func speechmaticsUnmarshalReferenceFloat(data []byte) (float64, error) {
+	var value float64
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return false, err
+	}
+	value, err := strconv.ParseBool(text)
+	if err != nil {
+		return false, err
+	}
+	return value, nil
 }
 
 type smResponse struct {
@@ -1087,6 +1191,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			Alternatives []map[string]json.RawMessage `json:"alternatives"`
 			IsEOS        json.RawMessage              `json:"is_eos"`
 			Attaches     json.RawMessage              `json:"attaches_to"`
+			Type         json.RawMessage              `json:"type"`
+			StartTime    json.RawMessage              `json:"start_time"`
+			EndTime      json.RawMessage              `json:"end_time"`
+			Volume       json.RawMessage              `json:"volume"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1108,6 +1216,25 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 				string(result.Attaches) == "null" {
 				return fmt.Errorf("results[%d].attaches_to must be a string", i)
 			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Type) == "null" {
+				return fmt.Errorf("results[%d].type must be a string", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.StartTime) == "null" {
+				return fmt.Errorf("results[%d].start_time must be a number", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.EndTime) == "null" {
+				return fmt.Errorf("results[%d].end_time must be a number", i)
+			}
+			if raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript" {
+				if len(result.Volume) > 0 && string(result.Volume) != "null" {
+					if _, err := speechmaticsUnmarshalReferenceFloat(result.Volume); err != nil {
+						return fmt.Errorf("results[%d].volume must be a number", i)
+					}
+				}
+			}
 			if len(result.Alternatives) == 0 {
 				continue
 			}
@@ -1122,6 +1249,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.Alternatives[0]["confidence"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["direction"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
 			}
 			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
 			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
