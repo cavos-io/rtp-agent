@@ -1089,6 +1089,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			Attaches     json.RawMessage              `json:"attaches_to"`
 			Type         json.RawMessage              `json:"type"`
 			StartTime    json.RawMessage              `json:"start_time"`
+			EndTime      json.RawMessage              `json:"end_time"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1117,6 +1118,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.StartTime) == "null" {
 				return fmt.Errorf("results[%d].start_time must be a number", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.EndTime) == "null" {
+				return fmt.Errorf("results[%d].end_time must be a number", i)
 			}
 			if len(result.Alternatives) == 0 {
 				continue
