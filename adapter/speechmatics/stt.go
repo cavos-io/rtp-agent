@@ -1141,6 +1141,13 @@ func (s *speechmaticsSTTStream) readLoop() {
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			if json.Valid(message) {
+				if speechmaticsDataMessage(message) {
+					_ = s.closeTransportOnce()
+					s.prepareDrainPendingRawFinals()
+					s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid Speechmatics message: %v", err)))
+					s.markClosedDrainingEvents()
+					return
+				}
 				continue
 			}
 			_ = s.closeTransportOnce()
@@ -1153,6 +1160,23 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if !s.handleResponse(resp) {
 			return
 		}
+	}
+}
+
+func speechmaticsDataMessage(data []byte) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	var message string
+	if err := json.Unmarshal(raw["message"], &message); err != nil {
+		return false
+	}
+	switch message {
+	case "AddPartialSegment", "AddSegment", "AddPartialTranscript", "AddTranscript", "SpeakersResult":
+		return true
+	default:
+		return false
 	}
 }
 
