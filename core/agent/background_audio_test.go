@@ -203,6 +203,34 @@ func TestBackgroundAudioStartTwiceWithoutCloseReturnsError(t *testing.T) {
 	}
 }
 
+func TestBackgroundAudioStartDuringCloseWaitReturnsError(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	player.playTasks.Add(1)
+
+	closed := make(chan struct{})
+	go func() {
+		player.Close()
+		close(closed)
+	}()
+
+	<-ctx.Done()
+
+	if err := player.Start(nil, nil); err == nil {
+		t.Fatal("Start() while Close drains tasks returned nil error, want already-started guard")
+	}
+
+	player.playTasks.Done()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after pending task finished")
+	}
+}
+
 func TestBackgroundAudioCloseWaitsForMixerTaskExit(t *testing.T) {
 	player := NewBackgroundAudioPlayer(nil, nil)
 
