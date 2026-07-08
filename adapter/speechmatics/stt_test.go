@@ -5141,6 +5141,60 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutAndNewStartDoesNotDupl
 	}
 }
 
+func TestSpeechmaticsSTTStaleForcedEOUAckAfterNewTranscriptDoesNotEndTurn(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = time.Second
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25, turnHasTranscript: true},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "StartOfTurn"}); !ok {
+		t.Fatal("StartOfTurn stopped read loop")
+	}
+	if got := readSpeechmaticsTestEvent(t, stream.events); got.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("new turn event = %s, want start_of_speech", got.Type)
+	}
+
+	var newTranscript smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"new words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.3,"end_time":0.6}
+		}]
+	}`), &newTranscript); err != nil {
+		t.Fatalf("unmarshal new transcript: %v", err)
+	}
+	if ok := stream.handleResponse(newTranscript); !ok {
+		t.Fatal("AddSegment stopped read loop")
+	}
+	if got := readSpeechmaticsTestEvent(t, stream.events); got.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("new transcript event = %s, want final transcript", got.Type)
+	}
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("stale EndOfUtterance stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("stale EndOfUtterance after new transcript events = %d, want no turn end", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTForcedEOUSuppressesReferencePartialSegments(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = time.Second

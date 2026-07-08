@@ -1199,6 +1199,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "StartOfTurn" {
 		s.reopenLocalEndpointingTurn()
+		s.clearForcedEOU()
 		s.markCompletedEOUNewTurnStarted()
 	}
 	if speechmaticsTranscriptMessage(resp.Message) {
