@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -358,6 +359,15 @@ type ultravoxRealtimeServerEventEnvelope struct {
 type ultravoxRealtimeOutboundMessage struct {
 	Audio []byte
 	Event map[string]any
+}
+
+const (
+	ultravoxRealtimeWebsocketTextFrame   = websocket.TextMessage
+	ultravoxRealtimeWebsocketBinaryFrame = websocket.BinaryMessage
+)
+
+type ultravoxRealtimeWebsocketWriter interface {
+	WriteMessage(messageType int, data []byte) error
 }
 
 type realtimeSession struct {
@@ -793,6 +803,20 @@ type ultravoxRealtimeConnectionError string
 func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
 
 const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+
+func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter, message ultravoxRealtimeOutboundMessage) error {
+	if len(message.Audio) > 0 {
+		return writer.WriteMessage(ultravoxRealtimeWebsocketBinaryFrame, message.Audio)
+	}
+	if message.Event == nil {
+		return nil
+	}
+	data, err := json.Marshal(message.Event)
+	if err != nil {
+		return err
+	}
+	return writer.WriteMessage(ultravoxRealtimeWebsocketTextFrame, data)
+}
 
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	payloads := make([]map[string]any, 0, len(tools))

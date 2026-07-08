@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -783,6 +784,41 @@ func TestUltravoxRealtimeSessionOutboundQueuePreservesReferenceMessageOrder(t *t
 	third := requireUltravoxRealtimeOutbound(t, session)
 	if !bytes.Equal(third.Audio, secondPCM) || third.Event != nil {
 		t.Fatalf("third outbound = %#v, want second audio bytes", third)
+	}
+}
+
+func TestUltravoxRealtimeOutboundMessageSerializesReferenceFrames(t *testing.T) {
+	writer := &ultravoxRealtimeTestWebsocketWriter{}
+	audio := []byte{0x01, 0x02, 0x03}
+	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Audio: audio}); err != nil {
+		t.Fatalf("write audio outbound error = %v", err)
+	}
+	event := map[string]any{
+		"type":          "user_text_message",
+		"text":          "<instruction>respond now</instruction>",
+		"deferResponse": false,
+	}
+	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Event: event}); err != nil {
+		t.Fatalf("write event outbound error = %v", err)
+	}
+
+	if len(writer.frames) != 2 {
+		t.Fatalf("websocket frame count = %d, want audio then text", len(writer.frames))
+	}
+	if writer.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(writer.frames[0].data, audio) {
+		t.Fatalf("first websocket frame = %#v, want binary audio", writer.frames[0])
+	}
+	if writer.frames[1].typ != ultravoxRealtimeWebsocketTextFrame {
+		t.Fatalf("second websocket frame type = %d, want text", writer.frames[1].typ)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(writer.frames[1].data, &got); err != nil {
+		t.Fatalf("event websocket JSON = %q failed decode: %v", writer.frames[1].data, err)
+	}
+	for key, want := range event {
+		if got[key] != want {
+			t.Fatalf("event JSON %s = %#v, want %#v in %s", key, got[key], want, writer.frames[1].data)
+		}
 	}
 }
 
@@ -2706,6 +2742,23 @@ func requireUltravoxRealtimeOutbound(t *testing.T, session *realtimeSession) ult
 		t.Fatal("timed out waiting for outbound websocket message")
 		return ultravoxRealtimeOutboundMessage{}
 	}
+}
+
+type ultravoxRealtimeTestWebsocketFrame struct {
+	typ  int
+	data []byte
+}
+
+type ultravoxRealtimeTestWebsocketWriter struct {
+	frames []ultravoxRealtimeTestWebsocketFrame
+}
+
+func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte) error {
+	w.frames = append(w.frames, ultravoxRealtimeTestWebsocketFrame{
+		typ:  typ,
+		data: append([]byte(nil), data...),
+	})
+	return nil
 }
 
 type ultravoxRealtimeTestTool struct {
