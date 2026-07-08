@@ -49,6 +49,7 @@ const (
 
 var ultravoxRealtimeMonotonicStart = time.Now()
 var ultravoxRealtimeAutoStartDefault = true
+var ultravoxRealtimeGenerateReplyQueuedForTest func(*realtimeSession)
 
 type RealtimeModel struct {
 	apiKey              string
@@ -1079,21 +1080,30 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	if options.InstructionsSet {
 		text = "<instruction>" + options.Instructions + "</instruction>"
 	}
-	if err := s.sendClientEvent(map[string]any{
+	event := map[string]any{
 		"type":          "user_text_message",
 		"text":          text,
 		"deferResponse": false,
-	}); err != nil {
-		return err
 	}
 	s.mu.Lock()
-	if !s.closed {
-		s.pendingReply = true
-		s.pendingReplyAt = time.Now()
-		s.pendingReplySeq++
-		s.startGenerateReplyTimerLocked(s.pendingReplySeq)
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
 	}
-	s.mu.Unlock()
+	s.pendingReply = true
+	s.pendingReplyAt = time.Now()
+	s.pendingReplySeq++
+	s.startGenerateReplyTimerLocked(s.pendingReplySeq)
+	if err := s.enqueueClientEventLocked(event); err != nil {
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
+		s.stopGenerateReplyTimerLocked()
+		return err
+	}
+	if ultravoxRealtimeGenerateReplyQueuedForTest != nil {
+		ultravoxRealtimeGenerateReplyQueuedForTest(s)
+	}
 	return nil
 }
 func (s *realtimeSession) Say(string) error {

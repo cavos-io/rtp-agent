@@ -1739,6 +1739,42 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyMarksReferencePendingBeforeQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	oldHook := ultravoxRealtimeGenerateReplyQueuedForTest
+	defer func() { ultravoxRealtimeGenerateReplyQueuedForTest = oldHook }()
+
+	var sawPending bool
+	var sawPendingAt bool
+	ultravoxRealtimeGenerateReplyQueuedForTest = func(s *realtimeSession) {
+		sawPending = s.pendingReply
+		sawPendingAt = !s.pendingReplyAt.IsZero()
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	if !sawPending || !sawPendingAt {
+		t.Fatalf("pending at enqueue = %v/%v, want reference pending future set before client event send", sawPending, sawPendingAt)
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerateReplyBuffersBeyondOldClientEventLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
