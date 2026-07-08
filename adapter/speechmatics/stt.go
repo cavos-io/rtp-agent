@@ -1020,6 +1020,7 @@ type speechmaticsStreamState struct {
 	pendingRawFinals           []*stt.SpeechEvent
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
+	latestRawPartialEvents     []*stt.SpeechEvent
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
 }
@@ -1291,13 +1292,21 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
+		speechmaticsClearLatestRawPartialEvents(state)
 		events := speechmaticsFlushPendingRawFinals(state)
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		return events
 	case "EndOfTurn":
+		defer speechmaticsClearLatestRawPartialEvents(state)
 		return speechmaticsEndOfTurnEvents(state)
 	}
 	return nil
+}
+
+func speechmaticsClearLatestRawPartialEvents(state *speechmaticsStreamState) {
+	if state != nil {
+		state.latestRawPartialEvents = nil
+	}
 }
 
 func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1376,7 +1385,14 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 		return events
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
-	events = append(events, speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)...)
+	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
+	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
+		return events
+	}
+	if state != nil && len(partials) > 0 {
+		state.latestRawPartialEvents = partials
+	}
+	events = append(events, partials...)
 	return events
 }
 
@@ -1737,6 +1753,19 @@ func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
 		}
 	}
 	return false
+}
+
+func speechmaticsTranscriptEventSlicesSame(left, right []*stt.SpeechEvent) bool {
+	if len(left) == 0 || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] == nil || right[i] == nil || left[i].Type != right[i].Type ||
+			!speechmaticsTranscriptEventsSameTextTimingAndIdentity(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func speechmaticsTranscriptEventsSameTextTimingAndIdentity(left, right *stt.SpeechEvent) bool {

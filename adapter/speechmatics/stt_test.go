@@ -586,6 +586,53 @@ func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing
 	}
 }
 
+func TestSpeechmaticsEventsRawPartialSuppressesReferenceUnchangedView(t *testing.T) {
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"same","confidence":0.7,"speaker":"agent","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{includePartials: true}
+
+	if events := speechmaticsEvents(partial, state); len(events) != 1 {
+		t.Fatalf("first partial events = %#v, want reference new partial view", events)
+	}
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("second unchanged partial events = %#v, want suppressed reference unchanged view", events)
+	}
+}
+
+func TestSpeechmaticsEventsRawPartialEmitsSameTextAfterReferenceTurnBoundary(t *testing.T) {
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"same","confidence":0.7,"speaker":"agent","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{includePartials: true}
+
+	if events := speechmaticsEvents(partial, state); len(events) != 1 {
+		t.Fatalf("first partial events = %#v, want reference new partial view", events)
+	}
+	_ = speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if events := speechmaticsEvents(partial, state); len(events) != 1 {
+		t.Fatalf("same text after turn boundary = %#v, want new reference partial view", events)
+	}
+}
+
 func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.T) {
 	var final smResponse
 	if err := json.Unmarshal([]byte(`{
