@@ -4696,6 +4696,40 @@ func TestSpeechmaticsRawTranscriptMatchesReferenceStringTagSubstringDisfluency(t
 	}
 }
 
+func TestSpeechmaticsRawTranscriptAcceptsReferenceObjectDisfluencyTags(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	payload := []byte(`{
+		"message": "AddTranscript",
+		"results": [
+			{
+				"type": "word",
+				"start_time": 0,
+				"end_time": 0.2,
+				"alternatives": [
+					{
+						"content": "uh",
+						"tags": {"disfluency": true}
+					}
+				]
+			}
+		]
+	}`)
+	var resp smResponse
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	for _, want := range []string{"has_disfluency", "starts_with_disfluency", "ends_with_disfluency"} {
+		if !speechmaticsStringInSlice(want, state.latestSegmentAnnotation) {
+			t.Fatalf("latest raw annotation = %#v, want object-tag reference %s", state.latestSegmentAnnotation, want)
+		}
+	}
+}
+
 func TestSpeechmaticsRawTranscriptRecordsReferencePenultimateDisfluencyBeforeEOS(t *testing.T) {
 	state := &speechmaticsStreamState{}
 	resp := smResponse{Message: "AddTranscript"}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1063,7 +1064,16 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 	}
 	var tag string
 	if err := json.Unmarshal(raw.Tags, &tag); err != nil {
-		return err
+		var tagMap map[string]json.RawMessage
+		if mapErr := json.Unmarshal(raw.Tags, &tagMap); mapErr != nil {
+			return err
+		}
+		a.Tags = make([]string, 0, len(tagMap))
+		for key := range tagMap {
+			a.Tags = append(a.Tags, key)
+		}
+		sort.Strings(a.Tags)
+		return nil
 	}
 	a.Tags = []string{tag}
 	if strings.Contains(tag, "disfluency") && tag != "disfluency" {
