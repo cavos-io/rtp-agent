@@ -76,7 +76,7 @@ func WithTelnyxSTTInterimResults(interimResults bool) TelnyxSTTOption {
 
 func WithTelnyxSTTSampleRate(sampleRate int) TelnyxSTTOption {
 	return func(s *TelnyxSTT) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			s.sampleRate = sampleRate
 		}
 	}
@@ -107,7 +107,7 @@ func (s *TelnyxSTT) Provider() string {
 }
 
 func (s *TelnyxSTT) InputSampleRate() uint32 {
-	if s == nil || s.sampleRate <= 0 {
+	if s == nil || s.sampleRate < 0 {
 		return defaultTelnyxSTTSampleRate
 	}
 	return uint32(s.sampleRate)

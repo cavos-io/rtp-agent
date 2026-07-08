@@ -59,6 +59,24 @@ func TestTelnyxSTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTSampleRate(0))
+
+	if provider.sampleRate != 0 {
+		t.Fatalf("sample rate = %d, want explicit reference sample rate 0", provider.sampleRate)
+	}
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate() = %d, want explicit reference sample rate 0", got)
+	}
+	header := createTelnyxStreamingWAVHeader(provider.sampleRate, telnyxSTTNumChannels)
+	if sampleRate := binary.LittleEndian.Uint32(header[24:28]); sampleRate != 0 {
+		t.Fatalf("WAV sample rate = %d, want explicit reference sample rate 0", sampleRate)
+	}
+	if byteRate := binary.LittleEndian.Uint32(header[28:32]); byteRate != 0 {
+		t.Fatalf("WAV byte rate = %d, want explicit reference byte rate 0", byteRate)
+	}
+}
+
 func TestTelnyxSTTInterimResultsOptionMatchesReference(t *testing.T) {
 	provider := NewTelnyxSTT("test-key", WithTelnyxSTTInterimResults(false))
 
