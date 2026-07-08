@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +244,259 @@ func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testin
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+}
+
+func TestUltravoxRealtimeSessionCreateCallRequestMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeModel("fixie-ai/ultravox-llama3.3-70b"),
+		WithRealtimeVoice("Jessica"),
+		WithRealtimeBaseURL("https://ultravox.example/api/"),
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeInputSampleRate(8000),
+		WithRealtimeOutputSampleRate(48000),
+		WithRealtimeTemperature(0.2),
+		WithRealtimeLanguageHint("es"),
+		WithRealtimeMaxDuration("30m"),
+		WithRealtimeTimeExceededMessage("done"),
+		WithRealtimeEnableGreetingPrompt(false),
+		WithRealtimeFirstSpeaker("FIRST_SPEAKER_AGENT"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{
+		name:        "lookup_weather",
+		description: "Lookup weather",
+		parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{
+					"type":        "string",
+					"description": "City name",
+				},
+				"unit": map[string]any{
+					"enum":        []any{"c", "f"},
+					"description": "Temperature unit",
+				},
+			},
+			"required": []any{"city"},
+		},
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	gotURL, gotHeaders, gotPayload := session.createCallRequest()
+	if gotURL != "https://ultravox.example/api/calls?enableGreetingPrompt=false" {
+		t.Fatalf("create-call URL = %q, want reference URL with greeting query", gotURL)
+	}
+	wantHeaders := map[string]string{
+		"User-Agent":   "LiveKit Agents",
+		"X-API-Key":    "test-key",
+		"Content-Type": "application/json",
+	}
+	if !reflect.DeepEqual(gotHeaders, wantHeaders) {
+		t.Fatalf("headers = %#v, want %#v", gotHeaders, wantHeaders)
+	}
+
+	wantPayload := map[string]any{
+		"systemPrompt": "stay concise",
+		"model":        "fixie-ai/ultravox-llama3.3-70b",
+		"voice":        "Jessica",
+		"medium": map[string]any{
+			"serverWebSocket": map[string]any{
+				"inputSampleRate":    8000,
+				"outputSampleRate":   48000,
+				"clientBufferSizeMs": 30000,
+			},
+		},
+		"selectedTools": []map[string]any{
+			{
+				"temporaryTool": map[string]any{
+					"modelToolName": "lookup_weather",
+					"description":   "Lookup weather",
+					"dynamicParameters": []map[string]any{
+						{
+							"name":     "city",
+							"location": "PARAMETER_LOCATION_BODY",
+							"schema": map[string]any{
+								"type":        "string",
+								"description": "City name",
+							},
+							"required": true,
+						},
+						{
+							"name":     "unit",
+							"location": "PARAMETER_LOCATION_BODY",
+							"schema": map[string]any{
+								"type":        "string",
+								"description": "Temperature unit",
+							},
+							"required": false,
+						},
+					},
+					"client": map[string]any{},
+				},
+			},
+		},
+		"temperature":         0.2,
+		"languageHint":        "es",
+		"maxDuration":         "30m",
+		"timeExceededMessage": "done",
+		"firstSpeaker":        "FIRST_SPEAKER_AGENT",
+	}
+	if !reflect.DeepEqual(gotPayload, wantPayload) {
+		t.Fatalf("payload = %#v, want %#v", gotPayload, wantPayload)
+	}
+}
+
+func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
+	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
+	if err != nil {
+		t.Fatalf("joinUrl parse error = %v, want nil", err)
+	}
+	if got != "wss://ultravox.example/join" {
+		t.Fatalf("joinUrl = %q, want reference response URL", got)
+	}
+
+	for _, body := range []string{
+		`{}`,
+		`{"joinUrl":""}`,
+	} {
+		if _, err := ultravoxRealtimeCreateCallJoinURL([]byte(body)); err == nil || err.Error() != "Ultravox call created, but no joinUrl received." {
+			t.Fatalf("joinUrl parse error for %s = %v, want reference missing joinUrl error", body, err)
+		}
+	}
+}
+
+func TestUltravoxRealtimeSessionCreateCallPostsReferenceRequest(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("https://ultravox.example/api/"),
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeEnableGreetingPrompt(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	got, err := session.createCall(context.Background(), doer)
+	if err != nil {
+		t.Fatalf("createCall error = %v, want nil", err)
+	}
+	if got != "wss://ultravox.example/join" {
+		t.Fatalf("joinUrl = %q, want reference joinUrl", got)
+	}
+	if doer.request == nil {
+		t.Fatal("createCall did not issue HTTP request")
+	}
+	if doer.request.Method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", doer.request.Method)
+	}
+	if gotURL := doer.request.URL.String(); gotURL != "https://ultravox.example/api/calls?enableGreetingPrompt=false" {
+		t.Fatalf("URL = %q, want reference create-call URL", gotURL)
+	}
+	if gotHeader := doer.request.Header.Get("User-Agent"); gotHeader != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", gotHeader)
+	}
+	if gotHeader := doer.request.Header.Get("X-API-Key"); gotHeader != "test-key" {
+		t.Fatalf("X-API-Key = %q, want API key", gotHeader)
+	}
+	if gotHeader := doer.request.Header.Get("Content-Type"); gotHeader != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", gotHeader)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(doer.requestBody, &payload); err != nil {
+		t.Fatalf("request JSON = %q failed decode: %v", doer.requestBody, err)
+	}
+	if payload["systemPrompt"] != "stay concise" || payload["model"] != "fixie-ai/ultravox" || payload["voice"] != "Mark" {
+		t.Fatalf("request payload core fields = %#v, want reference model prompt voice", payload)
+	}
+}
+
+func TestUltravoxRealtimeModelDialsReferenceJoinURL(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	wantConn := &ultravoxRealtimeTestWebsocketConn{}
+	var gotEndpoint string
+	var gotHeaders http.Header
+	model.dialWebsocket = func(_ context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		gotEndpoint = endpoint
+		gotHeaders = headers
+		return wantConn, nil
+	}
+
+	gotConn, err := model.dialRealtimeWebsocket(context.Background(), "wss://ultravox.example/join")
+	if err != nil {
+		t.Fatalf("dialRealtimeWebsocket error = %v, want nil", err)
+	}
+	if gotConn != wantConn {
+		t.Fatalf("websocket conn = %#v, want fake connection", gotConn)
+	}
+	if gotEndpoint != "wss://ultravox.example/join" {
+		t.Fatalf("websocket endpoint = %q, want reference joinUrl", gotEndpoint)
+	}
+	if len(gotHeaders) != 0 {
+		t.Fatalf("websocket headers = %#v, want reference ws_connect without extra headers", gotHeaders)
+	}
+}
+
+func TestUltravoxRealtimeSessionConnectsReferenceCreateCallToWebsocket(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	wantConn := &ultravoxRealtimeTestWebsocketConn{}
+	var gotEndpoint string
+	model.dialWebsocket = func(_ context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		gotEndpoint = endpoint
+		if len(headers) != 0 {
+			t.Fatalf("websocket headers = %#v, want reference empty headers", headers)
+		}
+		return wantConn, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+
+	gotConn, err := session.connectRealtimeWebsocket(context.Background(), doer)
+	if err != nil {
+		t.Fatalf("connectRealtimeWebsocket error = %v, want nil", err)
+	}
+	if gotConn != wantConn {
+		t.Fatalf("connection = %#v, want websocket conn from dialer", gotConn)
+	}
+	if doer.request == nil || doer.request.Method != http.MethodPost {
+		t.Fatalf("create-call request = %#v, want POST before websocket dial", doer.request)
+	}
+	if gotEndpoint != "wss://ultravox.example/join" {
+		t.Fatalf("websocket endpoint = %q, want joinUrl from create-call response", gotEndpoint)
+	}
 }
 
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
@@ -595,6 +852,164 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("PushAudio did not queue resampled/downmixed chunk")
+	}
+}
+
+func TestUltravoxRealtimeSessionOutboundQueuePreservesReferenceMessageOrder(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	firstPCM := make([]byte, 3200)
+	secondPCM := make([]byte, 3200)
+	for i := range firstPCM {
+		firstPCM[i] = byte(i % 251)
+		secondPCM[i] = byte((i + 17) % 251)
+	}
+	firstFrame := &audiomodel.AudioFrame{
+		Data:              firstPCM,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	secondFrame := &audiomodel.AudioFrame{
+		Data:              secondPCM,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+
+	if err := session.PushAudio(firstFrame); err != nil {
+		t.Fatalf("first PushAudio error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "respond now",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.PushAudio(secondFrame); err != nil {
+		t.Fatalf("second PushAudio error = %v", err)
+	}
+
+	first := requireUltravoxRealtimeOutbound(t, session)
+	if !bytes.Equal(first.Audio, firstPCM) || first.Event != nil {
+		t.Fatalf("first outbound = %#v, want first audio bytes", first)
+	}
+	second := requireUltravoxRealtimeOutbound(t, session)
+	if second.Audio != nil || second.Event["type"] != "user_text_message" || second.Event["text"] != "<instruction>respond now</instruction>" {
+		t.Fatalf("second outbound = %#v, want reference user_text_message event", second)
+	}
+	third := requireUltravoxRealtimeOutbound(t, session)
+	if !bytes.Equal(third.Audio, secondPCM) || third.Event != nil {
+		t.Fatalf("third outbound = %#v, want second audio bytes", third)
+	}
+}
+
+func TestUltravoxRealtimeOutboundMessageSerializesReferenceFrames(t *testing.T) {
+	writer := &ultravoxRealtimeTestWebsocketWriter{}
+	audio := []byte{0x01, 0x02, 0x03}
+	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Audio: audio}); err != nil {
+		t.Fatalf("write audio outbound error = %v", err)
+	}
+	event := map[string]any{
+		"type":          "user_text_message",
+		"text":          "<instruction>respond now</instruction>",
+		"deferResponse": false,
+	}
+	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Event: event}); err != nil {
+		t.Fatalf("write event outbound error = %v", err)
+	}
+
+	if len(writer.frames) != 2 {
+		t.Fatalf("websocket frame count = %d, want audio then text", len(writer.frames))
+	}
+	if writer.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(writer.frames[0].data, audio) {
+		t.Fatalf("first websocket frame = %#v, want binary audio", writer.frames[0])
+	}
+	if writer.frames[1].typ != ultravoxRealtimeWebsocketTextFrame {
+		t.Fatalf("second websocket frame type = %d, want text", writer.frames[1].typ)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(writer.frames[1].data, &got); err != nil {
+		t.Fatalf("event websocket JSON = %q failed decode: %v", writer.frames[1].data, err)
+	}
+	for key, want := range event {
+		if got[key] != want {
+			t.Fatalf("event JSON %s = %#v, want %#v in %s", key, got[key], want, writer.frames[1].data)
+		}
+	}
+}
+
+func TestUltravoxRealtimeSessionSendTaskWritesReferenceOutboundStream(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+
+	writer := &ultravoxRealtimeTestWebsocketWriter{}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.sendOutboundMessages(writer)
+	}()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "respond now",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("send task error = %v, want nil after channel close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send task did not exit after session Close")
+	}
+	if len(writer.frames) != 2 {
+		t.Fatalf("websocket frame count = %d, want audio then client event", len(writer.frames))
+	}
+	if writer.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(writer.frames[0].data, pcm) {
+		t.Fatalf("first websocket frame = %#v, want binary audio", writer.frames[0])
+	}
+	if writer.frames[1].typ != ultravoxRealtimeWebsocketTextFrame {
+		t.Fatalf("second websocket frame type = %d, want text", writer.frames[1].typ)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(writer.frames[1].data, &event); err != nil {
+		t.Fatalf("client event frame JSON = %q failed decode: %v", writer.frames[1].data, err)
+	}
+	if event["type"] != "user_text_message" || event["text"] != "<instruction>respond now</instruction>" {
+		t.Fatalf("client event frame = %#v, want reference user_text_message", event)
 	}
 }
 
@@ -2509,9 +2924,81 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 	}
 }
 
+func requireUltravoxRealtimeOutbound(t *testing.T, session *realtimeSession) ultravoxRealtimeOutboundMessage {
+	t.Helper()
+	select {
+	case got := <-session.outboundCh:
+		return got
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for outbound websocket message")
+		return ultravoxRealtimeOutboundMessage{}
+	}
+}
+
+type ultravoxRealtimeTestWebsocketFrame struct {
+	typ  int
+	data []byte
+}
+
+type ultravoxRealtimeTestWebsocketWriter struct {
+	frames []ultravoxRealtimeTestWebsocketFrame
+}
+
+func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte) error {
+	w.frames = append(w.frames, ultravoxRealtimeTestWebsocketFrame{
+		typ:  typ,
+		data: append([]byte(nil), data...),
+	})
+	return nil
+}
+
+type ultravoxRealtimeTestWebsocketConn struct {
+	ultravoxRealtimeTestWebsocketWriter
+}
+
+func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
+	return 0, nil, io.EOF
+}
+
+func (c *ultravoxRealtimeTestWebsocketConn) Close() error {
+	return nil
+}
+
+type ultravoxRealtimeTestHTTPDoer struct {
+	request        *http.Request
+	requestBody    []byte
+	responseStatus int
+	responseBody   string
+	err            error
+}
+
+func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	d.request = req
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		d.requestBody = body
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	status := d.responseStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(d.responseBody)),
+		Header:     make(http.Header),
+	}, nil
+}
+
 type ultravoxRealtimeTestTool struct {
 	name        string
 	description string
+	parameters  map[string]any
 }
 
 func (t ultravoxRealtimeTestTool) ID() string { return t.name }
@@ -2520,7 +3007,7 @@ func (t ultravoxRealtimeTestTool) Name() string {
 }
 func (t ultravoxRealtimeTestTool) Description() string { return t.description }
 func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
-	return nil
+	return t.parameters
 }
 func (t ultravoxRealtimeTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil

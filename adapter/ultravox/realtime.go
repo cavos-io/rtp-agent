@@ -1,11 +1,16 @@
 package ultravox
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -28,8 +34,10 @@ const (
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
+	ultravoxClientBufferSizeMs      = 30000
 	ultravoxClientEventQueueSize    = 2048
 	ultravoxRealtimeEventQueueSize  = 2048
+	ultravoxOutboundQueueSize       = 2048
 	ultravoxFunctionCallQueueSize   = 2048
 	ultravoxTextDeltaQueueSize      = 2048
 	ultravoxOutputAudioQueueSize    = 2048
@@ -56,6 +64,7 @@ type RealtimeModel struct {
 	enableGreetingSet   bool
 	firstSpeaker        string
 	firstSpeakerSet     bool
+	dialWebsocket       ultravoxRealtimeWebsocketDialer
 	sessionsMu          sync.Mutex
 	sessions            map[*realtimeSession]struct{}
 }
@@ -85,6 +94,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		outputSampleRate: defaultRealtimeOutputSampleRate,
 		firstSpeaker:     defaultRealtimeFirstSpeaker,
 		firstSpeakerSet:  true,
+		dialWebsocket:    defaultUltravoxRealtimeWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(model)
@@ -265,6 +275,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
 		audioCh:              make(chan []byte, 256),
 		clientEventCh:        make(chan map[string]any, ultravoxClientEventQueueSize),
+		outboundCh:           make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
 		model:                m,
 		inputSampleRate:      uint32(m.inputSampleRate),
 		outputSampleRate:     uint32(m.outputSampleRate),
@@ -277,10 +288,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		contextItems:         make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
-		session.clientEventCh <- map[string]any{
+		event := map[string]any{
 			"type":   "set_output_medium",
 			"medium": "text",
 		}
+		session.mu.Lock()
+		_ = session.enqueueClientEventLocked(event)
+		session.mu.Unlock()
 	}
 	m.registerRealtimeSession(session)
 	return session, nil
@@ -348,11 +362,38 @@ type ultravoxRealtimeServerEventEnvelope struct {
 	Type string `json:"type"`
 }
 
+type ultravoxRealtimeOutboundMessage struct {
+	Audio []byte
+	Event map[string]any
+}
+
+const (
+	ultravoxRealtimeWebsocketTextFrame   = websocket.TextMessage
+	ultravoxRealtimeWebsocketBinaryFrame = websocket.BinaryMessage
+)
+
+type ultravoxRealtimeWebsocketWriter interface {
+	WriteMessage(messageType int, data []byte) error
+}
+
+type ultravoxRealtimeWebsocketConn interface {
+	ultravoxRealtimeWebsocketWriter
+	ReadMessage() (messageType int, p []byte, err error)
+	Close() error
+}
+
+type ultravoxRealtimeWebsocketDialer func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error)
+
+type ultravoxRealtimeHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type realtimeSession struct {
 	mu                   sync.Mutex
 	eventCh              chan llm.RealtimeEvent
 	audioCh              chan []byte
 	clientEventCh        chan map[string]any
+	outboundCh           chan ultravoxRealtimeOutboundMessage
 	model                *RealtimeModel
 	inputSampleRate      uint32
 	outputSampleRate     uint32
@@ -640,6 +681,7 @@ func (s *realtimeSession) Close() error {
 		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)
+		close(s.outboundCh)
 		s.mu.Unlock()
 		s.finishGeneration(generation, true)
 		close(s.eventCh)
@@ -678,6 +720,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
 	select {
 	case s.audioCh <- audioData:
+		s.enqueueOutboundAudioLocked(audioData)
 		return
 	default:
 	}
@@ -693,6 +736,7 @@ func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
 		default:
 			next <- audioData
 			s.audioCh = next
+			s.enqueueOutboundAudioLocked(audioData)
 			return
 		}
 	}
@@ -710,6 +754,253 @@ func (s *realtimeSession) ClearAudio() error {
 
 var _ llm.RealtimeSession = (*realtimeSession)(nil)
 
+func (s *realtimeSession) createCallRequest() (string, map[string]string, map[string]any) {
+	s.mu.Lock()
+	tools := append([]llm.Tool(nil), s.tools...)
+	systemPrompt := s.systemPrompt
+	inputSampleRate := int(s.inputSampleRate)
+	outputSampleRate := int(s.outputSampleRate)
+	s.mu.Unlock()
+
+	m := s.model
+	createCallURL := strings.TrimRight(m.baseURL, "/") + "/calls"
+	if enableGreeting, ok := m.EnableGreetingPrompt(); ok && !enableGreeting {
+		createCallURL += "?enableGreetingPrompt=false"
+	}
+	headers := map[string]string{
+		"User-Agent":   "LiveKit Agents",
+		"X-API-Key":    m.apiKey,
+		"Content-Type": "application/json",
+	}
+	payload := map[string]any{
+		"systemPrompt": systemPrompt,
+		"model":        m.model,
+		"voice":        m.voice,
+		"medium": map[string]any{
+			"serverWebSocket": map[string]any{
+				"inputSampleRate":    inputSampleRate,
+				"outputSampleRate":   outputSampleRate,
+				"clientBufferSizeMs": ultravoxClientBufferSizeMs,
+			},
+		},
+		"selectedTools": ultravoxRealtimeToolPayloads(tools),
+	}
+	if temperature, ok := m.Temperature(); ok {
+		payload["temperature"] = temperature
+	}
+	if languageHint, ok := m.LanguageHint(); ok {
+		payload["languageHint"] = languageHint
+	}
+	if maxDuration, ok := m.MaxDuration(); ok {
+		payload["maxDuration"] = maxDuration
+	}
+	if timeExceededMessage, ok := m.TimeExceededMessage(); ok {
+		payload["timeExceededMessage"] = timeExceededMessage
+	}
+	if firstSpeaker, ok := m.FirstSpeaker(); ok {
+		payload["firstSpeaker"] = firstSpeaker
+	}
+	return createCallURL, headers, payload
+}
+
+func ultravoxRealtimeCreateCallJoinURL(data []byte) (string, error) {
+	var response struct {
+		JoinURL string `json:"joinUrl"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return "", err
+	}
+	if response.JoinURL == "" {
+		return "", ultravoxRealtimeMissingJoinURLError
+	}
+	return response.JoinURL, nil
+}
+
+type ultravoxRealtimeConnectionError string
+
+func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
+
+const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+
+func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
+	createCallURL, headers, payload := s.createCallRequest()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createCallURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("ultravox create call failed: HTTP %d", resp.StatusCode)
+	}
+	return ultravoxRealtimeCreateCallJoinURL(data)
+}
+
+func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client ultravoxRealtimeHTTPDoer) (ultravoxRealtimeWebsocketConn, error) {
+	joinURL, err := s.createCall(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	return s.model.dialRealtimeWebsocket(ctx, joinURL)
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
+	return m.dialWebsocket(ctx, joinURL, http.Header{})
+}
+
+func defaultUltravoxRealtimeWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter, message ultravoxRealtimeOutboundMessage) error {
+	if len(message.Audio) > 0 {
+		return writer.WriteMessage(ultravoxRealtimeWebsocketBinaryFrame, message.Audio)
+	}
+	if message.Event == nil {
+		return nil
+	}
+	data, err := json.Marshal(message.Event)
+	if err != nil {
+		return err
+	}
+	return writer.WriteMessage(ultravoxRealtimeWebsocketTextFrame, data)
+}
+
+func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
+	for message := range s.outboundCh {
+		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
+	payloads := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		payloads = append(payloads, map[string]any{
+			"temporaryTool": map[string]any{
+				"modelToolName":     tool.Name(),
+				"description":       tool.Description(),
+				"dynamicParameters": ultravoxRealtimeToolDynamicParameters(tool),
+				"client":            map[string]any{},
+			},
+		})
+	}
+	return payloads
+}
+
+func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
+	parameters := llm.ToolParameters(tool)
+	properties, _ := parameters["properties"].(map[string]any)
+	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
+
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	dynamicParameters := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		prop, _ := properties[name].(map[string]any)
+		schema := any(prop)
+		if _, ok := prop["type"]; !ok {
+			schemaMap := map[string]any{
+				"type": ultravoxRealtimeParameterType(prop),
+			}
+			if description, ok := prop["description"]; ok && description != "" {
+				schemaMap["description"] = description
+			}
+			schema = schemaMap
+		}
+		_, isRequired := required[name]
+		dynamicParameters = append(dynamicParameters, map[string]any{
+			"name":     name,
+			"location": "PARAMETER_LOCATION_BODY",
+			"schema":   schema,
+			"required": isRequired,
+		})
+	}
+	return dynamicParameters
+}
+
+func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
+	set := make(map[string]struct{})
+	switch values := required.(type) {
+	case []string:
+		for _, value := range values {
+			set[value] = struct{}{}
+		}
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok {
+				set[name] = struct{}{}
+			}
+		}
+	}
+	return set
+}
+
+func ultravoxRealtimeParameterType(prop map[string]any) string {
+	if typ, ok := prop["type"].(string); ok {
+		return typ
+	}
+	if _, ok := prop["enum"]; ok {
+		return "string"
+	}
+	if _, ok := prop["items"]; ok {
+		return "array"
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		if typ := ultravoxRealtimeVariantType(prop[key]); typ != "" {
+			return typ
+		}
+	}
+	return "string"
+}
+
+func ultravoxRealtimeVariantType(value any) string {
+	switch variants := value.(type) {
+	case []any:
+		for _, variant := range variants {
+			if schema, ok := variant.(map[string]any); ok {
+				if typ, ok := schema["type"].(string); ok {
+					return typ
+				}
+			}
+		}
+	case []map[string]any:
+		for _, schema := range variants {
+			if typ, ok := schema["type"].(string); ok {
+				return typ
+			}
+		}
+	}
+	return ""
+}
+
 func ultravoxRealtimeSessionUnsupported(operation string) error {
 	return errors.New(operation + " is not implemented by the Ultravox realtime session")
 }
@@ -720,8 +1011,13 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	if s.closed {
 		return nil
 	}
+	return s.enqueueClientEventLocked(event)
+}
+
+func (s *realtimeSession) enqueueClientEventLocked(event map[string]any) error {
 	select {
 	case s.clientEventCh <- event:
+		s.enqueueOutboundEventLocked(event)
 		return nil
 	default:
 		return errors.New("ultravox realtime client event queue is full")
@@ -736,14 +1032,58 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.stopGenerateReplyTimerLocked()
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
+	close(s.outboundCh)
+	s.outboundCh = make(chan ultravoxRealtimeOutboundMessage, cap(s.outboundCh))
 	if !s.audioOutput {
-		s.clientEventCh <- map[string]any{
+		_ = s.enqueueClientEventLocked(map[string]any{
 			"type":   "set_output_medium",
 			"medium": "text",
-		}
+		})
 	}
 	close(s.audioCh)
 	s.audioCh = make(chan []byte, cap(s.audioCh))
+}
+
+func (s *realtimeSession) enqueueOutboundAudioLocked(audioData []byte) {
+	s.enqueueOutboundMessageLocked(ultravoxRealtimeOutboundMessage{Audio: append([]byte(nil), audioData...)})
+}
+
+func (s *realtimeSession) enqueueOutboundEventLocked(event map[string]any) {
+	s.enqueueOutboundMessageLocked(ultravoxRealtimeOutboundMessage{Event: cloneUltravoxRealtimeMap(event)})
+}
+
+func (s *realtimeSession) enqueueOutboundMessageLocked(message ultravoxRealtimeOutboundMessage) {
+	select {
+	case s.outboundCh <- message:
+		return
+	default:
+	}
+	nextCap := cap(s.outboundCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan ultravoxRealtimeOutboundMessage, nextCap)
+	for {
+		select {
+		case queued := <-s.outboundCh:
+			next <- queued
+		default:
+			next <- message
+			s.outboundCh = next
+			return
+		}
+	}
+}
+
+func cloneUltravoxRealtimeMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
