@@ -820,7 +820,10 @@ type ultravoxRealtimeConnectionError string
 
 func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
 
-const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+const (
+	ultravoxRealtimeMissingJoinURLError      ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
+)
 
 func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
 	createCallURL, headers, payload := s.createCallRequest()
@@ -858,6 +861,72 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 	return s.model.dialRealtimeWebsocket(ctx, joinURL)
 }
 
+func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
+	conn, err := s.connectRealtimeWebsocket(ctx, client)
+	if err != nil {
+		return err
+	}
+	return s.runRealtimeConnection(conn)
+}
+
+func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil
+		}
+		restartCount := s.restartCount
+		s.mu.Unlock()
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.runRealtimeOnce(ctx, client); err != nil {
+			s.emitRealtimeModelError(err, false)
+			return nil
+		}
+
+		s.mu.Lock()
+		closed := s.closed
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if closed || !restarted {
+			return nil
+		}
+	}
+}
+
+func (s *realtimeSession) emitRealtimeModelError(err error, recoverable bool) {
+	label := ""
+	if s.model != nil {
+		label = s.model.Label()
+	}
+	event := llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewRealtimeModelError(label, ultravoxRealtimeAPIError(err), recoverable),
+	}
+	select {
+	case s.eventCh <- event:
+	default:
+	}
+}
+
+func ultravoxRealtimeAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiError *llm.APIError
+	if errors.As(err, &apiError) {
+		return err
+	}
+	var connectionErr ultravoxRealtimeConnectionError
+	if errors.As(err, &connectionErr) {
+		return llm.NewAPIConnectionError(string(connectionErr))
+	}
+	return llm.NewAPIConnectionError("Connection failed: " + err.Error())
+}
+
 func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
 	return m.dialWebsocket(ctx, joinURL, http.Header{})
 }
@@ -885,12 +954,68 @@ func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter
 }
 
 func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
-	for message := range s.outboundCh {
+	s.mu.Lock()
+	outboundCh := s.outboundCh
+	restartCount := s.restartCount
+	s.mu.Unlock()
+	return s.sendOutboundMessagesFrom(writer, outboundCh, restartCount)
+}
+
+func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
+	for message := range outboundCh {
+		s.mu.Lock()
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocketConn) error {
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				return ultravoxRealtimeUnexpectedWebsocketClose
+			}
+			return err
+		}
+		switch messageType {
+		case ultravoxRealtimeWebsocketTextFrame:
+			if err := s.handleServerTextMessage(data); err != nil {
+				return err
+			}
+		case ultravoxRealtimeWebsocketBinaryFrame:
+			s.handleOutputAudio(data)
+		}
+	}
+}
+
+func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
+	defer conn.Close()
+	sendErrCh := make(chan error, 1)
+	receiveErrCh := make(chan error, 1)
+	go func() {
+		sendErrCh <- s.sendOutboundMessages(conn)
+	}()
+	go func() {
+		receiveErrCh <- s.receiveRealtimeMessages(conn)
+	}()
+	select {
+	case err := <-sendErrCh:
+		return err
+	case err := <-receiveErrCh:
+		return err
+	}
 }
 
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
