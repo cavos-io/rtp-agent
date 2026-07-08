@@ -97,8 +97,9 @@ func TestNewUltravoxRealtimeModelRequiresAPIKey(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "")
 
 	_, err := NewRealtimeModel("")
-	if err == nil || !strings.Contains(err.Error(), "ULTRAVOX_API_KEY") {
-		t.Fatalf("NewRealtimeModel error = %v, want missing key guidance", err)
+	want := "Ultravox API key is required. Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
+	if err == nil || err.Error() != want {
+		t.Fatalf("NewRealtimeModel error = %v, want %q", err, want)
 	}
 }
 

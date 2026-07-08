@@ -92,7 +92,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		apiKey = os.Getenv("ULTRAVOX_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("ultravox API key is required. Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable")
+		return nil, ultravoxRealtimeMissingAPIKeyError{}
 	}
 	model := &RealtimeModel{
 		apiKey:           apiKey,
@@ -113,6 +113,12 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 	}
 	model.audioOutput = model.outputMedium == "voice"
 	return model, nil
+}
+
+type ultravoxRealtimeMissingAPIKeyError struct{}
+
+func (ultravoxRealtimeMissingAPIKeyError) Error() string {
+	return "Ultravox API key is required. Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
 }
 
 func WithRealtimeModel(model string) RealtimeOption {
