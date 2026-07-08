@@ -27,6 +27,8 @@ const (
 	defaultSpeechmaticsTTSVoice      = "sarah"
 	defaultSpeechmaticsTTSSampleRate = 16000
 	defaultSpeechmaticsTTSTimeout    = 30 * time.Second
+	speechmaticsTTSSlowFlushAfter    = 150 * time.Millisecond
+	speechmaticsTTSSlowFlushMargin   = 20 * time.Millisecond
 	speechmaticsTTSSDKParam          = "livekit-plugins-1.5.19.rc1"
 	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
@@ -272,10 +274,19 @@ type speechmaticsTTSChunkedStream struct {
 	pendingAudio  []*tts.SynthesizedAudio
 	pendingTail   *model.AudioFrame
 	pendingErr    error
+	readResultCh  chan speechmaticsTTSReadResult
+	tailFlushAt   time.Time
+	sentStartedAt time.Time
+	sentDuration  time.Duration
 	emittedAudio  bool
 	finalReady    bool
 	finalSent     bool
 	closed        bool
+}
+
+type speechmaticsTTSReadResult struct {
+	data []byte
+	err  error
 }
 
 func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -320,17 +331,20 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	for {
-		buf := make([]byte, 4096)
-		n, err := s.stream.Read(buf)
+		data, err, flushedTail := s.readChunkOrFlushTail()
 		if s.isClosedOrFinal() {
 			return nil, io.EOF
+		}
+		if flushedTail {
+			s.queueHeldTailAudio()
+			return s.emitAudio(s.popPendingAudio())
 		}
 		if errors.Is(err, context.Canceled) {
 			s.finishCanceled()
 			return nil, context.Canceled
 		}
-		if n > 0 {
-			frames := s.pcmStream().Push(buf[:n])
+		if len(data) > 0 {
+			frames := s.pcmStream().Push(data)
 			if err == io.EOF {
 				frames = append(frames, s.pcmStream().Flush()...)
 				s.queuePCMFrames(frames)
@@ -412,6 +426,62 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bool) {
+	stream := s.stream
+	if stream == nil {
+		return nil, io.EOF, false
+	}
+	if s.readResultCh == nil {
+		ch := make(chan speechmaticsTTSReadResult, 1)
+		s.readResultCh = ch
+		go func() {
+			buf := make([]byte, 4096)
+			n, err := stream.Read(buf)
+			var data []byte
+			if n > 0 {
+				data = append([]byte(nil), buf[:n]...)
+			}
+			ch <- speechmaticsTTSReadResult{data: data, err: err}
+		}()
+	}
+	ch := s.readResultCh
+	var done <-chan struct{}
+	if s.ctx != nil {
+		done = s.ctx.Done()
+	}
+	var timer *time.Timer
+	if s.pendingTail != nil && !s.tailFlushAt.IsZero() {
+		delay := time.Until(s.tailFlushAt)
+		if delay <= 0 {
+			return nil, nil, true
+		}
+		timer = time.NewTimer(delay)
+		defer timer.Stop()
+	}
+	if timer == nil {
+		select {
+		case result := <-ch:
+			if s.readResultCh == ch {
+				s.readResultCh = nil
+			}
+			return result.data, result.err, false
+		case <-done:
+			return nil, io.EOF, false
+		}
+	}
+	select {
+	case result := <-ch:
+		if s.readResultCh == ch {
+			s.readResultCh = nil
+		}
+		return result.data, result.err, false
+	case <-timer.C:
+		return nil, nil, true
+	case <-done:
+		return nil, io.EOF, false
+	}
+}
+
 func (s *speechmaticsTTSChunkedStream) closeTerminalResponse() {
 	s.cancelRequest()
 	s.mu.Lock()
@@ -467,6 +537,7 @@ func (s *speechmaticsTTSChunkedStream) queueHeldTailAudio() {
 		Frame:     s.pendingTail,
 	})
 	s.pendingTail = nil
+	s.resetSlowFlush()
 }
 
 func (s *speechmaticsTTSChunkedStream) popPendingAudio() *tts.SynthesizedAudio {
@@ -532,6 +603,9 @@ func (s *speechmaticsTTSChunkedStream) emitAudio(audio *tts.SynthesizedAudio) (*
 	}
 	if audio.Frame != nil {
 		s.emittedAudio = true
+		if !audio.IsFinal {
+			s.recordNonFinalAudioSent(audio.Frame)
+		}
 	}
 	if audio.IsFinal {
 		if !s.markFinalSent() {
@@ -540,6 +614,33 @@ func (s *speechmaticsTTSChunkedStream) emitAudio(audio *tts.SynthesizedAudio) (*
 		s.finish()
 	}
 	return audio, nil
+}
+
+func (s *speechmaticsTTSChunkedStream) recordNonFinalAudioSent(frame *model.AudioFrame) {
+	if frame == nil || frame.SampleRate == 0 {
+		return
+	}
+	now := time.Now()
+	if s.sentStartedAt.IsZero() {
+		s.sentStartedAt = now
+	}
+	s.sentDuration += time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
+	if s.pendingTail == nil || s.sentDuration <= speechmaticsTTSSlowFlushAfter {
+		s.tailFlushAt = time.Time{}
+		return
+	}
+	delay := s.sentDuration - time.Since(s.sentStartedAt) - speechmaticsTTSSlowFlushMargin
+	if delay <= 0 {
+		s.tailFlushAt = now
+		return
+	}
+	s.tailFlushAt = now.Add(delay)
+}
+
+func (s *speechmaticsTTSChunkedStream) resetSlowFlush() {
+	s.tailFlushAt = time.Time{}
+	s.sentStartedAt = time.Time{}
+	s.sentDuration = 0
 }
 
 func (s *speechmaticsTTSChunkedStream) ensureStream() error {
@@ -611,6 +712,8 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 	}
 	s.requestID = lkmath.ShortUUID("")
 	s.stream = resp.Body
+	s.readResultCh = nil
+	s.resetSlowFlush()
 	s.mu.Unlock()
 	return nil
 }
@@ -675,6 +778,8 @@ func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
 	s.pendingAudio = nil
 	s.pendingTail = nil
 	s.pendingErr = nil
+	s.readResultCh = nil
+	s.resetSlowFlush()
 	s.finalReady = false
 	s.requestID = ""
 	s.mu.Unlock()
