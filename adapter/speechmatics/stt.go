@@ -1101,6 +1101,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if len(result.Alternatives) == 0 {
 				continue
 			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["tags"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].tags must be an array", i)
+			}
 			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
 			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
 		}
