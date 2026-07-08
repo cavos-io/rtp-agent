@@ -1336,6 +1336,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 	}
 
 	if len(fragments) > 0 {
+		speechmaticsRecordLatestRawTranscriptAnnotation(state, eventType, fragments)
 		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
 	}
 	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
@@ -1362,6 +1363,18 @@ func speechmaticsAlternativeConfidence(confidence *float64) float64 {
 		return 1.0
 	}
 	return *confidence
+}
+
+func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamState, eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment) {
+	if state == nil || eventType != stt.SpeechEventFinalTranscript || len(fragments) == 0 {
+		return
+	}
+	annotations := []string{speechmaticsAnnotationEndsWithFinal}
+	if fragments[len(fragments)-1].isEOS {
+		annotations = append(annotations, speechmaticsAnnotationEndsWithEOS)
+	}
+	state.latestSegmentAnnotationSet = true
+	state.latestSegmentAnnotation = annotations
 }
 
 func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) []*stt.SpeechEvent {
