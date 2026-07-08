@@ -1065,7 +1065,30 @@ type smResponse struct {
 	LanguagePackInfo struct {
 		WordDelimiter *string `json:"word_delimiter"`
 	} `json:"language_pack_info"`
-	Speakers []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	segmentSpeakerIDPresent []bool
+}
+
+func (r *smResponse) UnmarshalJSON(data []byte) error {
+	type response smResponse
+	var decoded response
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw struct {
+		Segments []map[string]json.RawMessage `json:"segments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Segments) > 0 {
+		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
+		for i, segment := range raw.Segments {
+			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
+		}
+	}
+	*r = smResponse(decoded)
+	return nil
 }
 
 func (s *speechmaticsSTTStream) readLoop() {
@@ -1446,7 +1469,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if alt.Content == "" {
 			continue
 		}
-		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
+		resultSpeakerID := speechmaticsRawSpeakerID(alt.SpeakerID)
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
@@ -1701,8 +1724,8 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
-	for _, segment := range resp.Segments {
-		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
+	for i, segment := range resp.Segments {
+		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID, speechmaticsSegmentSpeakerIDPresent(resp, i))
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
 		}
@@ -1860,8 +1883,19 @@ func speechmaticsRawFragmentLanguage(language string) string {
 	return "en"
 }
 
-func speechmaticsSegmentSpeakerID(speakerID string) string {
+func speechmaticsRawSpeakerID(speakerID string) string {
 	if speakerID != "" {
+		return speakerID
+	}
+	return "UU"
+}
+
+func speechmaticsSegmentSpeakerIDPresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentSpeakerIDPresent) && resp.segmentSpeakerIDPresent[index]
+}
+
+func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
+	if present || speakerID != "" {
 		return speakerID
 	}
 	return "UU"
