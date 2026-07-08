@@ -1066,6 +1066,7 @@ type smResponse struct {
 		WordDelimiter *string `json:"word_delimiter"`
 	} `json:"language_pack_info"`
 	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
 }
 
@@ -1082,8 +1083,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(raw.Segments) > 0 {
+		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			_, decoded.segmentIsActivePresent[i] = segment["is_active"]
 			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
 		}
 	}
@@ -1671,7 +1674,11 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 		}
 	}
 	speakerID := fragments[0].speakerID
-	text = speechmaticsFormattedSegmentText(text, speakerID, speechmaticsRawTranscriptSpeakerActive(speakerID, state), state)
+	active := true
+	if rawActive := speechmaticsRawTranscriptSpeakerActive(speakerID, state); rawActive != nil {
+		active = *rawActive
+	}
+	text = speechmaticsFormattedSegmentText(text, speakerID, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -1730,7 +1737,7 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
-		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
+		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -1894,6 +1901,17 @@ func speechmaticsSegmentSpeakerIDPresent(resp smResponse, index int) bool {
 	return index >= 0 && index < len(resp.segmentSpeakerIDPresent) && resp.segmentSpeakerIDPresent[index]
 }
 
+func speechmaticsSegmentIsActivePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentIsActivePresent) && resp.segmentIsActivePresent[index]
+}
+
+func speechmaticsSegmentIsActive(isActive *bool, present bool) bool {
+	if isActive != nil {
+		return *isActive
+	}
+	return !present
+}
+
 func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
 	if present || speakerID != "" {
 		return speakerID
@@ -1901,12 +1919,8 @@ func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
 	return "UU"
 }
 
-func speechmaticsFormattedSegmentText(text, speakerID string, isActive *bool, state *speechmaticsStreamState) string {
+func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state *speechmaticsStreamState) string {
 	format := ""
-	active := true
-	if isActive != nil {
-		active = *isActive
-	}
 	if state != nil {
 		if active {
 			format = state.speakerActiveFormat
