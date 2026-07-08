@@ -1071,6 +1071,7 @@ type smResponse struct {
 	segmentLanguagePresent  []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
+	segmentSpeakerIDNull    []bool
 }
 
 func (r *smResponse) UnmarshalJSON(data []byte) error {
@@ -1080,20 +1081,47 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var raw struct {
-		Results []struct {
+		Message  string          `json:"message"`
+		Metadata json.RawMessage `json:"metadata"`
+		Results  []struct {
 			Alternatives []map[string]json.RawMessage `json:"alternatives"`
+			IsEOS        json.RawMessage              `json:"is_eos"`
+			Attaches     json.RawMessage              `json:"attaches_to"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Metadata) == "null" {
+		return fmt.Errorf("metadata must be an object")
+	}
 	if len(raw.Results) > 0 {
 		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
 		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
 		for i, result := range raw.Results {
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.IsEOS) == "null" {
+				return fmt.Errorf("results[%d].is_eos must be a bool", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Attaches) == "null" {
+				return fmt.Errorf("results[%d].attaches_to must be a string", i)
+			}
 			if len(result.Alternatives) == 0 {
 				continue
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["tags"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].tags must be an array", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["language"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].language must be a string", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["confidence"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
 			}
 			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
 			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
@@ -1103,7 +1131,11 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.segmentLanguagePresent = make([]bool, len(raw.Segments))
 		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
+		decoded.segmentSpeakerIDNull = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			if text, ok := segment["text"]; ok && string(text) == "null" {
+				decoded.Segments[i].Text = "None"
+			}
 			if metadata, ok := segment["metadata"]; ok && string(metadata) == "null" {
 				return fmt.Errorf("segments[%d].metadata must be an object", i)
 			}
@@ -1113,6 +1145,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			_, decoded.segmentLanguagePresent[i] = segment["language"]
 			_, decoded.segmentIsActivePresent[i] = segment["is_active"]
 			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
+			if speakerID, ok := segment["speaker_id"]; ok && string(speakerID) == "null" {
+				decoded.segmentSpeakerIDNull[i] = true
+			}
 		}
 	}
 	*r = smResponse(decoded)
@@ -1796,7 +1831,11 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
-		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
+		formatSpeakerID := speakerID
+		if speechmaticsSegmentSpeakerIDNull(resp, i) {
+			formatSpeakerID = "None"
+		}
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -1974,6 +2013,10 @@ func speechmaticsRawSpeakerID(speakerID string, present bool) string {
 
 func speechmaticsSegmentSpeakerIDPresent(resp smResponse, index int) bool {
 	return index >= 0 && index < len(resp.segmentSpeakerIDPresent) && resp.segmentSpeakerIDPresent[index]
+}
+
+func speechmaticsSegmentSpeakerIDNull(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentSpeakerIDNull) && resp.segmentSpeakerIDNull[index]
 }
 
 func speechmaticsSegmentIsActivePresent(resp smResponse, index int) bool {

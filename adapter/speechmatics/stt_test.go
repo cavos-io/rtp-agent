@@ -1204,6 +1204,29 @@ func TestSpeechmaticsSegmentEventsApplyReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceNullText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":null,
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "None" {
+		t.Fatalf("text = %q, want reference formatted null text", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsPreserveReferenceEmptyLanguage(t *testing.T) {
 	state := &speechmaticsStreamState{language: "de"}
 	var resp smResponse
@@ -1334,6 +1357,32 @@ func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 		if got := event.Alternatives[0].Text; got != want[i] {
 			t.Fatalf("event[%d] text = %q, want %q", i, got, want[i])
 		}
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceNullSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"null speaker",
+			"language":"en",
+			"speaker_id":null,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@None: null speaker" {
+		t.Fatalf("text = %q, want reference formatted null speaker id", got)
 	}
 }
 
@@ -2164,6 +2213,453 @@ func TestSpeechmaticsSTTMalformedRecognizedMessageClosesReferenceStream(t *testi
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event = %#v, want nil after malformed recognized message", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawMetadataClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message":  "AddTranscript",
+			"metadata": nil,
+			"results": []map[string]interface{}{
+				{
+					"type":       "word",
+					"start_time": 0.0,
+					"end_time":   0.2,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":  "corrupt",
+							"language": "en",
+							"speaker":  "S1",
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-metadata AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript metadata", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawTagsClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"metadata": map[string]interface{}{
+				"start_time": 0.0,
+				"end_time":   0.2,
+			},
+			"results": []map[string]interface{}{
+				{
+					"type":       "word",
+					"start_time": 0.0,
+					"end_time":   0.2,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":  "corrupt",
+							"language": "en",
+							"speaker":  "S1",
+							"tags":     nil,
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-tags AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript tags", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawLanguageClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"metadata": map[string]interface{}{
+				"start_time": 0.0,
+				"end_time":   0.2,
+			},
+			"results": []map[string]interface{}{
+				{
+					"type":       "word",
+					"start_time": 0.0,
+					"end_time":   0.2,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":  "corrupt",
+							"language": nil,
+							"speaker":  "S1",
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-language AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript language", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawConfidenceClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"metadata": map[string]interface{}{
+				"start_time": 0.0,
+				"end_time":   0.2,
+			},
+			"results": []map[string]interface{}{
+				{
+					"type":       "word",
+					"start_time": 0.0,
+					"end_time":   0.2,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":    "corrupt",
+							"language":   "en",
+							"speaker":    "S1",
+							"confidence": nil,
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-confidence AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript confidence", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawIsEOSClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"metadata": map[string]interface{}{
+				"start_time": 0.0,
+				"end_time":   0.2,
+			},
+			"results": []map[string]interface{}{
+				{
+					"type":       "word",
+					"start_time": 0.0,
+					"end_time":   0.2,
+					"is_eos":     nil,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":    "corrupt",
+							"language":   "en",
+							"speaker":    "S1",
+							"confidence": 0.9,
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-is-eos AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript is_eos", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullRawAttachesToClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"metadata": map[string]interface{}{
+				"start_time": 0.0,
+				"end_time":   0.2,
+			},
+			"results": []map[string]interface{}{
+				{
+					"type":        "punctuation",
+					"start_time":  0.0,
+					"end_time":    0.2,
+					"attaches_to": nil,
+					"alternatives": []map[string]interface{}{
+						{
+							"content":    ".",
+							"language":   "en",
+							"speaker":    "S1",
+							"confidence": 1.0,
+						},
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write null-attaches-to AddTranscript: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null raw transcript attaches_to", event)
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
