@@ -2599,6 +2599,39 @@ func TestUltravoxRealtimeSessionToolInvocationEmitsReferenceFunctionCall(t *test
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionToolInvocationAcceptsReferenceEmptyStringFields(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"","invocationId":"","parameters":{}}`)); err != nil {
+		t.Fatalf("handle empty-string tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case call := <-generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil")
+		}
+		if call.CallID != "" || call.Name != "" || call.Arguments != `{}` {
+			t.Fatalf("function call = %+v, want reference empty string fields and empty JSON args", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty-string function call")
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionToolInvocationBuffersBeyondOldDropLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

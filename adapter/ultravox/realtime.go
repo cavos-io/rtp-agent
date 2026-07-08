@@ -1371,14 +1371,14 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		s.handleStateEvent(ultravoxRealtimeStateEvent{State: event.State})
 	case "client_tool_invocation":
 		var event struct {
-			ToolName      string          `json:"toolName"`
-			InvocationID  string          `json:"invocationId"`
+			ToolName      *string         `json:"toolName"`
+			InvocationID  *string         `json:"invocationId"`
 			RawParameters json.RawMessage `json:"parameters"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil
 		}
-		if event.ToolName == "" || event.InvocationID == "" || len(event.RawParameters) == 0 {
+		if event.ToolName == nil || event.InvocationID == nil || len(event.RawParameters) == 0 {
 			return nil
 		}
 		parameters := map[string]any{}
@@ -1389,8 +1389,8 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 			return nil
 		}
 		s.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
-			ToolName:      event.ToolName,
-			InvocationID:  event.InvocationID,
+			ToolName:      *event.ToolName,
+			InvocationID:  *event.InvocationID,
 			Parameters:    parameters,
 			RawParameters: event.RawParameters,
 		})
