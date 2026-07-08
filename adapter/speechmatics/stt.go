@@ -1237,6 +1237,69 @@ func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
 	return value, nil
 }
 
+func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number != 0, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text != "", nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return len(list) > 0, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return len(object) > 0, nil
+	}
+	return false, fmt.Errorf("unsupported truthy bool")
+}
+
+func speechmaticsNormalizeSegmentIsActive(data []byte) ([]byte, error) {
+	var raw struct {
+		Segments []map[string]json.RawMessage `json:"segments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Segments) == 0 {
+		return data, err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, err
+	}
+	changed := false
+	for i, segment := range raw.Segments {
+		isActive, ok := segment["is_active"]
+		if !ok || string(isActive) == "null" {
+			continue
+		}
+		value, err := speechmaticsUnmarshalReferenceTruthyBool(isActive)
+		if err != nil {
+			return nil, fmt.Errorf("segments[%d].is_active: %w", i, err)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		segment["is_active"] = encoded
+		changed = true
+	}
+	if !changed {
+		return data, nil
+	}
+	segments, err := json.Marshal(raw.Segments)
+	if err != nil {
+		return nil, err
+	}
+	top["segments"] = segments
+	return json.Marshal(top)
+}
+
 type smResponse struct {
 	Message  string `json:"message"`
 	Metadata struct {
@@ -1270,6 +1333,11 @@ type smResponse struct {
 }
 
 func (r *smResponse) UnmarshalJSON(data []byte) error {
+	var err error
+	data, err = speechmaticsNormalizeSegmentIsActive(data)
+	if err != nil {
+		return err
+	}
 	type response smResponse
 	var decoded response
 	if err := json.Unmarshal(data, &decoded); err != nil {
