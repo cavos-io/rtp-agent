@@ -32,6 +32,7 @@ const (
 	ultravoxClientBufferSizeMs      = 30000
 	ultravoxClientEventQueueSize    = 2048
 	ultravoxRealtimeEventQueueSize  = 2048
+	ultravoxOutboundQueueSize       = 2048
 	ultravoxFunctionCallQueueSize   = 2048
 	ultravoxTextDeltaQueueSize      = 2048
 	ultravoxOutputAudioQueueSize    = 2048
@@ -267,6 +268,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
 		audioCh:              make(chan []byte, 256),
 		clientEventCh:        make(chan map[string]any, ultravoxClientEventQueueSize),
+		outboundCh:           make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
 		model:                m,
 		inputSampleRate:      uint32(m.inputSampleRate),
 		outputSampleRate:     uint32(m.outputSampleRate),
@@ -279,10 +281,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		contextItems:         make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
-		session.clientEventCh <- map[string]any{
+		event := map[string]any{
 			"type":   "set_output_medium",
 			"medium": "text",
 		}
+		session.mu.Lock()
+		_ = session.enqueueClientEventLocked(event)
+		session.mu.Unlock()
 	}
 	m.registerRealtimeSession(session)
 	return session, nil
@@ -350,11 +355,17 @@ type ultravoxRealtimeServerEventEnvelope struct {
 	Type string `json:"type"`
 }
 
+type ultravoxRealtimeOutboundMessage struct {
+	Audio []byte
+	Event map[string]any
+}
+
 type realtimeSession struct {
 	mu                   sync.Mutex
 	eventCh              chan llm.RealtimeEvent
 	audioCh              chan []byte
 	clientEventCh        chan map[string]any
+	outboundCh           chan ultravoxRealtimeOutboundMessage
 	model                *RealtimeModel
 	inputSampleRate      uint32
 	outputSampleRate     uint32
@@ -642,6 +653,7 @@ func (s *realtimeSession) Close() error {
 		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)
+		close(s.outboundCh)
 		s.mu.Unlock()
 		s.finishGeneration(generation, true)
 		close(s.eventCh)
@@ -680,6 +692,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
 	select {
 	case s.audioCh <- audioData:
+		s.enqueueOutboundAudioLocked(audioData)
 		return
 	default:
 	}
@@ -695,6 +708,7 @@ func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
 		default:
 			next <- audioData
 			s.audioCh = next
+			s.enqueueOutboundAudioLocked(audioData)
 			return
 		}
 	}
@@ -898,8 +912,13 @@ func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	if s.closed {
 		return nil
 	}
+	return s.enqueueClientEventLocked(event)
+}
+
+func (s *realtimeSession) enqueueClientEventLocked(event map[string]any) error {
 	select {
 	case s.clientEventCh <- event:
+		s.enqueueOutboundEventLocked(event)
 		return nil
 	default:
 		return errors.New("ultravox realtime client event queue is full")
@@ -914,14 +933,58 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.stopGenerateReplyTimerLocked()
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
+	close(s.outboundCh)
+	s.outboundCh = make(chan ultravoxRealtimeOutboundMessage, cap(s.outboundCh))
 	if !s.audioOutput {
-		s.clientEventCh <- map[string]any{
+		_ = s.enqueueClientEventLocked(map[string]any{
 			"type":   "set_output_medium",
 			"medium": "text",
-		}
+		})
 	}
 	close(s.audioCh)
 	s.audioCh = make(chan []byte, cap(s.audioCh))
+}
+
+func (s *realtimeSession) enqueueOutboundAudioLocked(audioData []byte) {
+	s.enqueueOutboundMessageLocked(ultravoxRealtimeOutboundMessage{Audio: append([]byte(nil), audioData...)})
+}
+
+func (s *realtimeSession) enqueueOutboundEventLocked(event map[string]any) {
+	s.enqueueOutboundMessageLocked(ultravoxRealtimeOutboundMessage{Event: cloneUltravoxRealtimeMap(event)})
+}
+
+func (s *realtimeSession) enqueueOutboundMessageLocked(message ultravoxRealtimeOutboundMessage) {
+	select {
+	case s.outboundCh <- message:
+		return
+	default:
+	}
+	nextCap := cap(s.outboundCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan ultravoxRealtimeOutboundMessage, nextCap)
+	for {
+		select {
+		case queued := <-s.outboundCh:
+			next <- queued
+		default:
+			next <- message
+			s.outboundCh = next
+			return
+		}
+	}
+}
+
+func cloneUltravoxRealtimeMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {

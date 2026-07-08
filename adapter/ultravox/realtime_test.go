@@ -728,6 +728,64 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 	}
 }
 
+func TestUltravoxRealtimeSessionOutboundQueuePreservesReferenceMessageOrder(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	firstPCM := make([]byte, 3200)
+	secondPCM := make([]byte, 3200)
+	for i := range firstPCM {
+		firstPCM[i] = byte(i % 251)
+		secondPCM[i] = byte((i + 17) % 251)
+	}
+	firstFrame := &audiomodel.AudioFrame{
+		Data:              firstPCM,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	secondFrame := &audiomodel.AudioFrame{
+		Data:              secondPCM,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+
+	if err := session.PushAudio(firstFrame); err != nil {
+		t.Fatalf("first PushAudio error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "respond now",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.PushAudio(secondFrame); err != nil {
+		t.Fatalf("second PushAudio error = %v", err)
+	}
+
+	first := requireUltravoxRealtimeOutbound(t, session)
+	if !bytes.Equal(first.Audio, firstPCM) || first.Event != nil {
+		t.Fatalf("first outbound = %#v, want first audio bytes", first)
+	}
+	second := requireUltravoxRealtimeOutbound(t, session)
+	if second.Audio != nil || second.Event["type"] != "user_text_message" || second.Event["text"] != "<instruction>respond now</instruction>" {
+		t.Fatalf("second outbound = %#v, want reference user_text_message event", second)
+	}
+	third := requireUltravoxRealtimeOutbound(t, session)
+	if !bytes.Equal(third.Audio, secondPCM) || third.Event != nil {
+		t.Fatalf("third outbound = %#v, want second audio bytes", third)
+	}
+}
+
 func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -2636,6 +2694,17 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for client event %#v", want)
+	}
+}
+
+func requireUltravoxRealtimeOutbound(t *testing.T, session *realtimeSession) ultravoxRealtimeOutboundMessage {
+	t.Helper()
+	select {
+	case got := <-session.outboundCh:
+		return got
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for outbound websocket message")
+		return ultravoxRealtimeOutboundMessage{}
 	}
 }
 
