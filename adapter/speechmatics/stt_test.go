@@ -3534,12 +3534,54 @@ func TestSpeechmaticsSTTFinalizeAfterProviderCloseDoesNotWriteStaleControl(t *te
 	}
 }
 
-func TestSpeechmaticsSTTFinalizeSkipsReferenceProviderManagedTurnModes(t *testing.T) {
+func TestSpeechmaticsSTTFinalizeFixedModeEmitsReferenceLocalTurnEnd(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 2),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("finalize write = %#v, want local reference finalization for fixed mode", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	end := readSpeechmaticsTestEvent(t, stream.events)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("first event = %#v, want fixed-mode end_of_speech", end)
+	}
+	usage := readSpeechmaticsTestEvent(t, stream.events)
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.4 {
+		t.Fatalf("second event = %#v, want fixed-mode recognition usage", usage)
+	}
+}
+
+func readSpeechmaticsTestEvent(t *testing.T, events <-chan *stt.SpeechEvent) *stt.SpeechEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Speechmatics event")
+	}
+	return nil
+}
+
+func TestSpeechmaticsSTTFinalizeSkipsReferenceVADManagedTurnModes(t *testing.T) {
 	tests := []struct {
 		name string
 		opt  SpeechmaticsSTTOption
 	}{
-		{name: "fixed", opt: WithSpeechmaticsSTTFixedTurnDetection()},
 		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
 		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
 	}

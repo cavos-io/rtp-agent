@@ -1759,7 +1759,15 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return io.ErrClosedPipe
 	}
 	if s.providerManagedEndpointing {
+		fixedMode := s.owner != nil && s.owner.turnDetectionMode == "fixed"
 		s.mu.Unlock()
+		if fixedMode {
+			for _, event := range s.fixedEOUEndEvents() {
+				if !s.enqueueEvent(event) {
+					return io.EOF
+				}
+			}
+		}
 		return nil
 	}
 	if s.startupGateActiveLocked() {
