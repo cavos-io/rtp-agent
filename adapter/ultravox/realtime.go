@@ -859,6 +859,16 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			}
 		}
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	hasCreate := ultravoxRealtimeHasNewKey(s.contextItems, nextContextItems) || ultravoxRealtimeHasNewKey(s.toolResults, nextToolResults)
+	s.mu.Unlock()
+	if !hasCreate {
+		return nil
+	}
 	for _, item := range chatCtx.Items {
 		switch item := item.(type) {
 		case *llm.ChatMessage:
@@ -878,6 +888,15 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+func ultravoxRealtimeHasNewKey(current map[string]struct{}, next map[string]struct{}) bool {
+	for key := range next {
+		if _, ok := current[key]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error {

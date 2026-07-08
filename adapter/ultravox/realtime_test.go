@@ -3397,7 +3397,7 @@ func TestUltravoxRealtimeSessionUpdateChatContextQueuesReferenceDeferredMessages
 	}
 }
 
-func TestUltravoxRealtimeSessionUpdateChatContextResendsReferenceReaddedItems(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateChatContextKeepsReferenceIgnoredDeletions(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -3428,17 +3428,23 @@ func TestUltravoxRealtimeSessionUpdateChatContextResendsReferenceReaddedItems(t 
 		t.Fatalf("unexpected event for deletion-only context update = %#v", got)
 	default:
 	}
+	session.mu.Lock()
+	_, keptContext := session.contextItems["memo"]
+	session.mu.Unlock()
+	if !keptContext {
+		t.Fatal("deletion-only context update cleared remembered item, want reference ignored deletion")
+	}
 
 	readded := llm.NewChatContext()
 	readded.AddMessage(llm.ChatMessageArgs{ID: "memo", Role: llm.ChatRoleUser, Text: "remember Paris"})
 	if err := session.UpdateChatContext(readded); err != nil {
 		t.Fatalf("UpdateChatContext readd error = %v", err)
 	}
-	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-		"type":          "user_text_message",
-		"text":          "remember Paris",
-		"deferResponse": true,
-	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("readded context event = %#v, want no resend after reference ignored deletion", got)
+	default:
+	}
 }
 
 func TestUltravoxRealtimeSessionUpdateChatContextBuffersFullReferenceClientQueue(t *testing.T) {
