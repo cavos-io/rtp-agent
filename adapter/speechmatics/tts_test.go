@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -32,6 +33,15 @@ func assertSpeechmaticsTTSReferenceFinalMarker(t *testing.T, audio *tts.Synthesi
 	}
 	if !bytes.Equal(audio.Frame.Data, make([]byte, int(wantSamples)*2)) {
 		t.Fatalf("final marker data = %v, want 10ms zero silence", audio.Frame.Data)
+	}
+}
+
+func speechmaticsTTSFrame(sampleRate int, samples uint32) *model.AudioFrame {
+	return &model.AudioFrame{
+		Data:              make([]byte, samples*2),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: samples,
 	}
 }
 
@@ -1436,6 +1446,32 @@ func TestSpeechmaticsTTSChunkedStreamFlushesReferenceSlowTailBeforeEOF(t *testin
 		}
 	case <-time.After(350 * time.Millisecond):
 		t.Fatal("slow Speechmatics TTS tail was not flushed before EOF like reference AudioEmitter")
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamReadyChunkCancelsReferenceSlowTailFlush(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:       io.NopCloser(bytes.NewReader(nil)),
+		sampleRate:   6000,
+		requestID:    "ready-chunk",
+		pendingTail:  speechmaticsTTSFrame(6000, 60),
+		tailFlushAt:  time.Now().Add(-time.Millisecond),
+		readResultCh: make(chan speechmaticsTTSReadResult, 1),
+	}
+	stream.readResultCh <- speechmaticsTTSReadResult{data: make([]byte, 240), err: nil}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next = %+v, want non-final merged frame", audio)
+	}
+	if audio.Frame.SamplesPerChannel != 120 {
+		t.Fatalf("samples = %d, want ready provider chunk to merge with held tail before delayed flush", audio.Frame.SamplesPerChannel)
+	}
+	if stream.pendingTail == nil {
+		t.Fatal("pendingTail = nil, want new 10ms tail held after ready chunk")
 	}
 }
 
