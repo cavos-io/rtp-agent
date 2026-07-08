@@ -2352,6 +2352,9 @@ func ultravoxRealtimeJSONNumberByte(c byte) bool {
 }
 
 func ultravoxRealtimeNormalizePythonJSONNumber(token string) string {
+	if token == "-0" {
+		return "0"
+	}
 	if !strings.ContainsAny(token, ".eE") {
 		return token
 	}

@@ -3501,6 +3501,34 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNumberArguments
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNegativeZeroIntegerArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-negative-zero","parameters":{"offset":-0,"floatOffset":-0.0}}`)); err != nil {
+		t.Fatalf("handle negative-zero tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"offset": 0, "floatOffset": -0.0}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps negative-zero normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for negative-zero function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
