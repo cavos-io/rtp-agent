@@ -429,6 +429,35 @@ func TestUltravoxRealtimeSessionCreateCallPostsReferenceRequest(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeModelDialsReferenceJoinURL(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	wantConn := &ultravoxRealtimeTestWebsocketConn{}
+	var gotEndpoint string
+	var gotHeaders http.Header
+	model.dialWebsocket = func(_ context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		gotEndpoint = endpoint
+		gotHeaders = headers
+		return wantConn, nil
+	}
+
+	gotConn, err := model.dialRealtimeWebsocket(context.Background(), "wss://ultravox.example/join")
+	if err != nil {
+		t.Fatalf("dialRealtimeWebsocket error = %v, want nil", err)
+	}
+	if gotConn != wantConn {
+		t.Fatalf("websocket conn = %#v, want fake connection", gotConn)
+	}
+	if gotEndpoint != "wss://ultravox.example/join" {
+		t.Fatalf("websocket endpoint = %q, want reference joinUrl", gotEndpoint)
+	}
+	if len(gotHeaders) != 0 {
+		t.Fatalf("websocket headers = %#v, want reference ws_connect without extra headers", gotHeaders)
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
 		WithRealtimeSystemPrompt("stay concise"),
@@ -2879,6 +2908,18 @@ func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte)
 		typ:  typ,
 		data: append([]byte(nil), data...),
 	})
+	return nil
+}
+
+type ultravoxRealtimeTestWebsocketConn struct {
+	ultravoxRealtimeTestWebsocketWriter
+}
+
+func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
+	return 0, nil, io.EOF
+}
+
+func (c *ultravoxRealtimeTestWebsocketConn) Close() error {
 	return nil
 }
 

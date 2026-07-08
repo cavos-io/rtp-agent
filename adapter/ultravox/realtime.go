@@ -64,6 +64,7 @@ type RealtimeModel struct {
 	enableGreetingSet   bool
 	firstSpeaker        string
 	firstSpeakerSet     bool
+	dialWebsocket       ultravoxRealtimeWebsocketDialer
 	sessionsMu          sync.Mutex
 	sessions            map[*realtimeSession]struct{}
 }
@@ -93,6 +94,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		outputSampleRate: defaultRealtimeOutputSampleRate,
 		firstSpeaker:     defaultRealtimeFirstSpeaker,
 		firstSpeakerSet:  true,
+		dialWebsocket:    defaultUltravoxRealtimeWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(model)
@@ -373,6 +375,14 @@ const (
 type ultravoxRealtimeWebsocketWriter interface {
 	WriteMessage(messageType int, data []byte) error
 }
+
+type ultravoxRealtimeWebsocketConn interface {
+	ultravoxRealtimeWebsocketWriter
+	ReadMessage() (messageType int, p []byte, err error)
+	Close() error
+}
+
+type ultravoxRealtimeWebsocketDialer func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error)
 
 type ultravoxRealtimeHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -838,6 +848,18 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 		return "", fmt.Errorf("ultravox create call failed: HTTP %d", resp.StatusCode)
 	}
 	return ultravoxRealtimeCreateCallJoinURL(data)
+}
+
+func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
+	return m.dialWebsocket(ctx, joinURL, http.Header{})
+}
+
+func defaultUltravoxRealtimeWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter, message ultravoxRealtimeOutboundMessage) error {
