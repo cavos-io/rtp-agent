@@ -1057,9 +1057,15 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 	if len(raw.Tags) == 0 {
 		return nil
 	}
-	var tags []string
-	if err := json.Unmarshal(raw.Tags, &tags); err == nil {
-		a.Tags = tags
+	var tagItems []json.RawMessage
+	if err := json.Unmarshal(raw.Tags, &tagItems); err == nil {
+		a.Tags = make([]string, 0, len(tagItems))
+		for _, item := range tagItems {
+			var tag string
+			if err := json.Unmarshal(item, &tag); err == nil {
+				a.Tags = append(a.Tags, tag)
+			}
+		}
 		return nil
 	}
 	var tag string
