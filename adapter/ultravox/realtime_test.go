@@ -1061,6 +1061,42 @@ func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionDropsMalformedReferenceOutputAudio(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleOutputAudio([]byte{1, 2, 3})
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after malformed output audio = %#v, want reference drop", event)
+	default:
+	}
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i % 251)
+	}
+	session.handleOutputAudio(audio)
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case got := <-message.AudioCh:
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("audio after malformed chunk = %v, want later valid output", got.Data[:min(len(got.Data), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid output audio after malformed chunk did not emit")
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
