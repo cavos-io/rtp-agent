@@ -1970,6 +1970,34 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyIgnoresReferencePerResponseTools(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Tools:      []llm.Tool{ultravoxRealtimeTestTool{name: "lookup"}},
+		ToolChoice: "required",
+	}); err != nil {
+		t.Fatalf("GenerateReply with per-response tools error = %v, want reference ignore", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+	if len(session.tools) != 0 || len(session.toolNames) != 0 {
+		t.Fatalf("session tools = %d/%d, want reference per-response tools ignored without session mutation", len(session.tools), len(session.toolNames))
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerateReplyMarksReferencePendingBeforeQueue(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
