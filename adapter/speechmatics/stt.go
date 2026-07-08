@@ -917,6 +917,7 @@ type speechmaticsSTTStream struct {
 	forcedEOUCompleted         bool
 	fixedEOUCompleted          bool
 	localEndpointingEOUSeq     uint64
+	localEndpointingTurnClosed bool
 }
 
 type speechmaticsStreamState struct {
@@ -1008,6 +1009,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
+		s.closeLocalEndpointingTurn()
 		for _, event := range s.flushPendingRawFinalEvents() {
 			if !s.enqueueEvent(event) {
 				return false
@@ -1058,9 +1060,11 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return true
 	}
 	if resp.Message == "StartOfTurn" {
+		s.reopenLocalEndpointingTurn()
 		s.resetCompletedEOU()
 	}
 	if resp.Message == "EndOfTurn" {
+		s.closeLocalEndpointingTurn()
 		if s.consumeCompletedForcedEOU() || s.consumeCompletedFixedEOU() {
 			return true
 		}
@@ -2014,6 +2018,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		}
 		switch event.Type {
 		case corevad.VADEventStartOfSpeech:
+			s.reopenLocalEndpointingTurn()
 			s.cancelLocalEndpointingForceEndOfUtterance()
 		case corevad.VADEventEndOfSpeech:
 			s.scheduleLocalEndpointingForceEndOfUtterance()
@@ -2030,7 +2035,7 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 		delay = speechmaticsLocalEndpointingDelay(s.owner)
 	}
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.localEndpointingTurnClosed {
 		s.mu.Unlock()
 		return
 	}
@@ -2082,6 +2087,25 @@ func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
 	}
 	s.mu.Lock()
 	s.localEndpointingEOUSeq++
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsSTTStream) closeLocalEndpointingTurn() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localEndpointingTurnClosed = true
+	s.localEndpointingEOUSeq++
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localEndpointingTurnClosed = false
 	s.mu.Unlock()
 }
 
