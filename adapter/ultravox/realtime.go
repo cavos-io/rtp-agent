@@ -853,7 +853,11 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("ultravox create call failed: HTTP %d", resp.StatusCode)
+		reason := http.StatusText(resp.StatusCode)
+		if reason == "" {
+			reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return "", llm.NewAPIError(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, reason), nil, false)
 	}
 	return ultravoxRealtimeCreateCallJoinURL(data)
 }

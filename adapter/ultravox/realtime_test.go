@@ -3077,6 +3077,42 @@ func TestUltravoxRealtimeSessionRestartLoopEmitsReferenceConnectionError(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionRestartLoopMapsReferenceHTTPStatusError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.runRealtimeRestartLoop(context.Background(), &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusServiceUnavailable,
+		responseBody:   `service unavailable`,
+	}); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var apiErr *llm.APIError
+		if !errors.As(modelErr, &apiErr) || apiErr.Error() != "HTTP 503: Service Unavailable" {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference APIError HTTP status", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference HTTP status error event")
+	}
+}
+
 func TestUltravoxRealtimeSessionRetriesReferenceRecoverableConnectionError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
