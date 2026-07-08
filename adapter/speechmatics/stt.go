@@ -1104,6 +1104,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			if text, ok := segment["text"]; ok && string(text) == "null" {
+				decoded.Segments[i].Text = "None"
+			}
 			if metadata, ok := segment["metadata"]; ok && string(metadata) == "null" {
 				return fmt.Errorf("segments[%d].metadata must be an object", i)
 			}
