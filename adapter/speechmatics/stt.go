@@ -1066,6 +1066,9 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	a.Tags = []string{tag}
+	if strings.Contains(tag, "disfluency") && tag != "disfluency" {
+		a.Tags = append(a.Tags, "disfluency")
+	}
 	return nil
 }
 
