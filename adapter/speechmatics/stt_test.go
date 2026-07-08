@@ -690,6 +690,42 @@ func TestSpeechmaticsEventsMetadataPartialAfterFinalTrimsReferenceDuplicate(t *t
 	}
 }
 
+func TestSpeechmaticsEventsZeroTimingMetadataPartialAfterFinalTrimsReferenceDuplicate(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	final := smResponse{
+		Message: "AddTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "hello",
+		},
+	}
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before following partial = %#v, want buffered final", events)
+	}
+
+	partial := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "hello",
+		},
+	}
+
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want only buffered final transcript without stale zero-timing metadata partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want buffered final hello", events[0])
+	}
+}
+
 func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true, speechDuration: 0.75}
 	var final smResponse

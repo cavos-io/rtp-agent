@@ -1365,16 +1365,45 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 
 func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	var events []*stt.SpeechEvent
+	var flushedFinals []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
-		events = append(events, state.pendingRawFinals...)
+		flushedFinals = append(flushedFinals, state.pendingRawFinals...)
+		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	}
 	if state != nil && !state.includePartials {
 		return events
 	}
-	events = append(events, speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)...)
+	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
+	events = append(events, speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)...)
 	return events
+}
+
+func speechmaticsDropDuplicateTranscriptPartials(partials, finals []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(partials) == 0 || len(finals) == 0 {
+		return partials
+	}
+	kept := partials[:0]
+	for _, partial := range partials {
+		if speechmaticsTranscriptDuplicatesAny(partial, finals) {
+			continue
+		}
+		kept = append(kept, partial)
+	}
+	return kept
+}
+
+func speechmaticsTranscriptDuplicatesAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
+	if event == nil {
+		return false
+	}
+	for _, candidate := range candidates {
+		if speechmaticsTranscriptEventsSameTextTimingAndIdentity(event, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamState, eventType stt.SpeechEventType) []*stt.SpeechEvent {
@@ -1702,6 +1731,20 @@ func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
 			if leftAlt.StartTime < rightAlt.EndTime && rightAlt.StartTime < leftAlt.EndTime {
 				return true
 			}
+			if speechmaticsTranscriptAlternativesSameTimingAndIdentity(leftAlt, rightAlt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func speechmaticsTranscriptEventsSameTextTimingAndIdentity(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	for _, leftAlt := range left.Alternatives {
+		for _, rightAlt := range right.Alternatives {
 			if speechmaticsTranscriptAlternativesSameTimingAndIdentity(leftAlt, rightAlt) {
 				return true
 			}
