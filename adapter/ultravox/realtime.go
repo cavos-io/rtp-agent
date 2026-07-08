@@ -28,6 +28,7 @@ const (
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
+	ultravoxRealtimeEventQueueSize  = 2048
 	ultravoxTextDeltaQueueSize      = 2048
 	ultravoxOutputAudioQueueSize    = 2048
 )
@@ -259,7 +260,7 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &realtimeSession{
-		eventCh:              make(chan llm.RealtimeEvent, 16),
+		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
 		audioCh:              make(chan []byte, 256),
 		clientEventCh:        make(chan map[string]any, 256),
 		model:                m,
