@@ -1307,7 +1307,7 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
-	if len(audioData) == 0 || len(audioData)%(2*ultravoxRealtimeInputChannels) != 0 {
+	if len(audioData) == 0 {
 		return
 	}
 

@@ -1704,7 +1704,7 @@ func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.
 	}
 }
 
-func TestUltravoxRealtimeSessionDropsMalformedReferenceOutputAudio(t *testing.T) {
+func TestUltravoxRealtimeSessionForwardsReferenceOddSizedOutputAudio(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -1716,27 +1716,30 @@ func TestUltravoxRealtimeSessionDropsMalformedReferenceOutputAudio(t *testing.T)
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
-	session.handleOutputAudio([]byte{1, 2, 3})
-	select {
-	case event := <-session.EventCh():
-		t.Fatalf("event after malformed output audio = %#v, want reference drop", event)
-	default:
-	}
-
-	audio := make([]byte, 960)
-	for i := range audio {
-		audio[i] = byte(i % 251)
-	}
+	audio := []byte{1, 2, 3}
 	session.handleOutputAudio(audio)
 	generation := requireUltravoxRealtimeGeneration(t, session)
 	message := requireUltravoxRealtimeMessage(t, generation)
 	select {
 	case got := <-message.AudioCh:
+		if got.SampleRate != 24000 || got.NumChannels != 1 || got.SamplesPerChannel != 1 {
+			t.Fatalf("odd audio frame shape = rate %d channels %d samples %d, want reference 24000/1/1", got.SampleRate, got.NumChannels, got.SamplesPerChannel)
+		}
+		if len(got.Data) != len(audio) {
+			t.Fatalf("odd output audio length = %d, want preserved provider byte length %d", len(got.Data), len(audio))
+		}
 		if !bytes.Equal(got.Data, audio) {
-			t.Fatalf("audio after malformed chunk = %v, want later valid output", got.Data[:min(len(got.Data), 8)])
+			t.Fatalf("odd output audio = %v, want reference-preserved provider bytes %v", got.Data, audio)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("valid output audio after malformed chunk did not emit")
+		t.Fatal("timed out waiting for reference odd-sized output audio")
+	}
+
+	session.handleOutputAudio(nil)
+	select {
+	case got := <-message.AudioCh:
+		t.Fatalf("nil output audio queued = %#v, want reference wrapper to ignore empty data", got)
+	default:
 	}
 }
 
