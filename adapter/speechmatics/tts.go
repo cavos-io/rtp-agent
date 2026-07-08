@@ -587,7 +587,7 @@ func speechmaticsTTSTimeoutError(err error) bool {
 }
 
 func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
-	if s.finalSent {
+	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
@@ -605,9 +605,21 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		s.finish()
 		return nil, err
 	}
-	s.finalSent = true
+	if !s.markFinalSent() {
+		return nil, io.EOF
+	}
 	s.finish()
 	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
+}
+
+func (s *speechmaticsTTSChunkedStream) markFinalSent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.finalSent {
+		return false
+	}
+	s.finalSent = true
+	return true
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {

@@ -1336,6 +1336,34 @@ func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamConcurrentCloseAndFinalNext(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		stream := &speechmaticsTTSChunkedStream{
+			finalReady: true,
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = stream.Next()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = stream.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		if audio, err := stream.Next(); audio != nil || err != io.EOF {
+			t.Fatalf("Next after concurrent Close = (%+v, %v), want EOF", audio, err)
+		}
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamCloseIgnoresReferenceProviderCloseError(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     speechmaticsCloseErrorBody{err: errors.New("body close failed")},
