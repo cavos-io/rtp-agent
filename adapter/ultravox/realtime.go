@@ -1629,7 +1629,10 @@ func ultravoxRealtimeToolPayloadsE(tools []llm.Tool) ([]map[string]any, error) {
 		if tool == nil {
 			continue
 		}
-		name, description, parameters, rawSchema := ultravoxRealtimeToolSchema(tool)
+		name, description, parameters, rawSchema, err := ultravoxRealtimeToolSchemaE(tool)
+		if err != nil {
+			return nil, err
+		}
 		dynamicParameters, err := ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters, !rawSchema, rawSchema)
 		if err != nil {
 			return nil, err
@@ -1647,6 +1650,11 @@ func ultravoxRealtimeToolPayloadsE(tools []llm.Tool) ([]map[string]any, error) {
 }
 
 func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any, bool) {
+	name, description, parameters, rawSchema, _ := ultravoxRealtimeToolSchemaE(tool)
+	return name, description, parameters, rawSchema
+}
+
+func ultravoxRealtimeToolSchemaE(tool llm.Tool) (string, any, map[string]any, bool, error) {
 	name := tool.Name()
 	var description any = tool.Description()
 	parameters := llm.ToolParameters(tool)
@@ -1658,12 +1666,18 @@ func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any, boo
 				name = rawName
 			}
 			description = schema["description"]
-			if rawParameters, ok := schema["parameters"].(map[string]any); ok {
-				parameters = rawParameters
+			if rawParameters, ok := schema["parameters"]; ok {
+				parameterMap, ok := rawParameters.(map[string]any)
+				if !ok {
+					return name, description, nil, rawSchema, errors.New("'properties'")
+				}
+				parameters = parameterMap
+			} else {
+				parameters = map[string]any{}
 			}
 		}
 	}
-	return name, description, parameters, rawSchema
+	return name, description, parameters, rawSchema, nil
 }
 
 func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
