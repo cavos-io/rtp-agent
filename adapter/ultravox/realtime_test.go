@@ -296,7 +296,19 @@ func TestUltravoxRealtimeModelUpdateOptionsPropagatesReferenceSessions(t *testin
 	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
 }
 
-func TestUltravoxRealtimeModelUpdateOptionsRejectsInvalidReferenceOutputMedium(t *testing.T) {
+func TestUltravoxRealtimeModelUpdateOptionsMatchesReferenceInvalidOutputMediumOrdering(t *testing.T) {
+	modelWithoutSession, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel without session error = %v", err)
+	}
+	modelWithoutSession.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
+	if got := modelWithoutSession.OutputMedium(); got != "" {
+		t.Fatalf("output medium without session = %q, want reference invalid value stored before capability update", got)
+	}
+	if modelWithoutSession.Capabilities().AudioOutput {
+		t.Fatal("audio output without session = true, want false after invalid output_medium updates capability")
+	}
+
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -309,11 +321,11 @@ func TestUltravoxRealtimeModelUpdateOptionsRejectsInvalidReferenceOutputMedium(t
 	defer session.Close()
 
 	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
-	if got := model.OutputMedium(); got != "voice" {
-		t.Fatalf("output medium = %q, want unchanged voice after invalid reference output_medium update", got)
+	if got := model.OutputMedium(); got != "" {
+		t.Fatalf("output medium = %q, want reference invalid value stored before session validation", got)
 	}
 	if !model.Capabilities().AudioOutput {
-		t.Fatal("audio output = false, want unchanged true after invalid output_medium update")
+		t.Fatal("audio output = false, want unchanged true because active session validation prevents capability update")
 	}
 	select {
 	case got := <-session.clientEventCh:

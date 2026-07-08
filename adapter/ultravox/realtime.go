@@ -59,6 +59,7 @@ type RealtimeModel struct {
 	baseURL             string
 	systemPrompt        string
 	outputMedium        string
+	audioOutput         bool
 	inputSampleRate     int
 	outputSampleRate    int
 	temperature         float64
@@ -110,6 +111,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 	for _, opt := range opts {
 		opt(model)
 	}
+	model.audioOutput = model.outputMedium == "voice"
 	return model, nil
 }
 
@@ -234,7 +236,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		TurnDetection:           true,
 		UserTranscription:       true,
 		AutoToolReplyGeneration: true,
-		AudioOutput:             m.outputMedium == "voice",
+		AudioOutput:             m.audioOutput,
 		ManualFunctionCalls:     false,
 		PerResponseToolChoice:   false,
 	}
@@ -248,17 +250,17 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 		}
 	}
 	if update.outputMedium != nil {
-		if !ultravoxRealtimeValidOutputMedium(*update.outputMedium) {
-			return
-		}
 		m.outputMedium = *update.outputMedium
 		sessions := m.realtimeSessions()
 		for _, session := range sessions {
-			_ = session.updateOptions(llm.RealtimeSessionOptions{
+			if err := session.updateOptions(llm.RealtimeSessionOptions{
 				OutputMedium:    *update.outputMedium,
 				OutputMediumSet: true,
-			}, true)
+			}, true); err != nil {
+				return
+			}
 		}
+		m.audioOutput = m.outputMedium == "voice"
 	}
 }
 
