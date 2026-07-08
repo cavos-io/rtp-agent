@@ -2280,6 +2280,9 @@ func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	if !s.closed {
 		s.forcedEOUCompleted = true
 	}
+	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
+		return nil
+	}
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 
@@ -2293,7 +2296,14 @@ func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 		s.fixedEOUCompleted = true
 		s.localEndpointingTurnClosed = true
 	}
+	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
+		return nil
+	}
 	return speechmaticsEndOfTurnEvents(s.state)
+}
+
+func speechmaticsHasReferenceTurnEndEvidence(state *speechmaticsStreamState) bool {
+	return state != nil && (state.speechDuration > 0 || len(state.pendingRawFinals) > 0)
 }
 
 func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {

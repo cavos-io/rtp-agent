@@ -4688,6 +4688,41 @@ func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeTimeoutWithoutSpeechSuppressesReferenceEndOfTurn(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{},
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			if got, want := payload["message"], "ForceEndOfUtterance"; got != want {
+				t.Fatalf("finalize message = %#v, want %#v", got, want)
+			}
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	select {
+	case event := <-stream.events:
+		t.Fatalf("forced EOU timeout without speech emitted %#v, want no reference end_of_speech", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
