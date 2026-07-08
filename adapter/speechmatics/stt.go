@@ -67,9 +67,23 @@ var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
 
 const speechmaticsMinEndOfTurnDelay = 10 * time.Millisecond
-const speechmaticsAdaptiveVADStoppedPenalty = 0.2
+const (
+	speechmaticsAdaptiveVADStoppedPenalty         = 0.2
+	speechmaticsAdaptiveNoEOSPenalty              = 2.0
+	speechmaticsAdaptiveFinalEOSPenalty           = 0.5
+	speechmaticsAnnotationEndsWithFinal           = "ends_with_final"
+	speechmaticsAnnotationEndsWithEOS             = "ends_with_eos"
+	speechmaticsAnnotationEndsWithDisfluency      = "ends_with_disfluency"
+	speechmaticsAnnotationHasDisfluency           = "has_disfluency"
+	speechmaticsAdaptiveEndsWithDisfluencyPenalty = 2.5
+	speechmaticsAdaptiveHasDisfluencyPenalty      = 1.1
+)
 
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
+	return speechmaticsLocalEndpointingDelayWithAnnotations(s, nil)
+}
+
+func speechmaticsLocalEndpointingDelayWithAnnotations(s *SpeechmaticsSTT, annotations []string) time.Duration {
 	if s == nil {
 		return 0
 	}
@@ -80,6 +94,7 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 			delay = *s.eouSilenceTrigger
 		}
 		delay *= speechmaticsAdaptiveVADStoppedPenalty
+		delay *= speechmaticsAdaptiveAnnotationPenalty(annotations)
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
@@ -96,6 +111,27 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 	default:
 		return 0
 	}
+}
+
+func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
+	if len(annotations) == 0 {
+		return 1.0
+	}
+	penalty := 1.0
+	if speechmaticsStringInSlice(speechmaticsAnnotationEndsWithDisfluency, annotations) {
+		penalty *= speechmaticsAdaptiveEndsWithDisfluencyPenalty
+	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationHasDisfluency, annotations) {
+		penalty *= speechmaticsAdaptiveHasDisfluencyPenalty
+	}
+	if !speechmaticsStringInSlice(speechmaticsAnnotationEndsWithEOS, annotations) {
+		penalty *= speechmaticsAdaptiveNoEOSPenalty
+	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationEndsWithFinal, annotations) &&
+		speechmaticsStringInSlice(speechmaticsAnnotationEndsWithEOS, annotations) {
+		penalty *= speechmaticsAdaptiveFinalEOSPenalty
+	}
+	return penalty
 }
 
 func speechmaticsClampLocalEndpointingDelay(seconds float64) time.Duration {
@@ -942,21 +978,23 @@ type speechmaticsSTTStream struct {
 }
 
 type speechmaticsStreamState struct {
-	language             string
-	speechDuration       float64
-	audioSecondsSent     float64
-	startTimeOffset      float64
-	startTime            float64
-	speakerActiveFormat  string
-	speakerPassiveFormat string
-	focusSpeakers        []string
-	ignoreSpeakers       []string
-	focusMode            string
-	includePartials      bool
-	wordDelimiter        string
-	wordDelimiterSet     bool
-	bufferRawFinals      bool
-	pendingRawFinals     []*stt.SpeechEvent
+	language                   string
+	speechDuration             float64
+	audioSecondsSent           float64
+	startTimeOffset            float64
+	startTime                  float64
+	speakerActiveFormat        string
+	speakerPassiveFormat       string
+	focusSpeakers              []string
+	ignoreSpeakers             []string
+	focusMode                  string
+	includePartials            bool
+	wordDelimiter              string
+	wordDelimiterSet           bool
+	bufferRawFinals            bool
+	pendingRawFinals           []*stt.SpeechEvent
+	latestSegmentAnnotationSet bool
+	latestSegmentAnnotation    []string
 }
 
 type smResponse struct {
@@ -1437,6 +1475,7 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
 		}
+		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
 		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -1452,6 +1491,14 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
+	if state == nil || (isActive != nil && !*isActive) {
+		return
+	}
+	state.latestSegmentAnnotationSet = true
+	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
 }
 
 func speechmaticsSegmentHasFinal(annotation []string) bool {
@@ -2072,7 +2119,7 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 	}
 	delay := time.Duration(0)
 	if s.providerManagedEndpointing {
-		delay = speechmaticsLocalEndpointingDelay(s.owner)
+		delay = s.localEndpointingDelay()
 	}
 	s.mu.Lock()
 	if s.closed || s.localEndpointingTurnClosed {
@@ -2096,6 +2143,23 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 		}
 		s.sendScheduledLocalEndpointingForceEndOfUtterance(seq)
 	}()
+}
+
+func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	annotationsSet := s.state != nil && s.state.latestSegmentAnnotationSet
+	var annotations []string
+	if annotationsSet {
+		annotations = cloneSpeechmaticsStringSlice(s.state.latestSegmentAnnotation)
+	}
+	s.mu.Unlock()
+	if annotationsSet {
+		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations)
+	}
+	return speechmaticsLocalEndpointingDelay(s.owner)
 }
 
 func (s *speechmaticsSTTStream) sendScheduledLocalEndpointingForceEndOfUtterance(seq uint64) {

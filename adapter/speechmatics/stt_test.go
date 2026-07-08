@@ -1841,6 +1841,99 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceStoppedPenalty(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPenalties(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+
+	tests := []struct {
+		name        string
+		annotation  []string
+		want        time.Duration
+		description string
+	}{
+		{
+			name:        "final eos",
+			annotation:  []string{"ends_with_final", "ends_with_eos"},
+			want:        70 * time.Millisecond,
+			description: "reference final sentence penalty halves the VAD-stopped delay",
+		},
+		{
+			name:        "no eos",
+			annotation:  []string{"has_final"},
+			want:        280 * time.Millisecond,
+			description: "reference missing-EOS penalty doubles the VAD-stopped delay",
+		},
+		{
+			name:        "disfluency no eos",
+			annotation:  []string{"has_disfluency"},
+			want:        308 * time.Millisecond,
+			description: "reference disfluency and missing-EOS penalties compound",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &speechmaticsSTTStream{
+				owner: provider,
+				state: &speechmaticsStreamState{
+					latestSegmentAnnotationSet: true,
+					latestSegmentAnnotation:    tt.annotation,
+				},
+			}
+			if got := stream.localEndpointingDelay(); got != tt.want {
+				t.Fatalf("local endpointing delay = %s, want %s: %s", got, tt.want, tt.description)
+			}
+		})
+	}
+}
+
+func TestSpeechmaticsSegmentEventsRecordReferenceActiveSegmentAnnotations(t *testing.T) {
+	inactive := false
+	active := true
+	state := &speechmaticsStreamState{}
+	resp := smResponse{Message: "AddSegment"}
+	resp.Segments = append(resp.Segments, struct {
+		Text       string   `json:"text"`
+		Language   string   `json:"language"`
+		SpeakerID  string   `json:"speaker_id"`
+		IsActive   *bool    `json:"is_active"`
+		Annotation []string `json:"annotation"`
+		Metadata   struct {
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		} `json:"metadata"`
+	}{
+		Text:       "background",
+		IsActive:   &inactive,
+		Annotation: []string{"has_final"},
+	})
+	resp.Segments = append(resp.Segments, struct {
+		Text       string   `json:"text"`
+		Language   string   `json:"language"`
+		SpeakerID  string   `json:"speaker_id"`
+		IsActive   *bool    `json:"is_active"`
+		Annotation []string `json:"annotation"`
+		Metadata   struct {
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		} `json:"metadata"`
+	}{
+		Text:       "done.",
+		IsActive:   &active,
+		Annotation: []string{"ends_with_final", "ends_with_eos"},
+	})
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want both segment transcript events", len(events))
+	}
+	if !state.latestSegmentAnnotationSet {
+		t.Fatal("latest segment annotation not recorded")
+	}
+	if got, want := state.latestSegmentAnnotation, []string{"ends_with_final", "ends_with_eos"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("latest segment annotation = %#v, want active reference annotation %#v", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMinimumDelay(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdaptiveTurnDetection(),
