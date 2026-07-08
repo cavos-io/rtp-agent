@@ -1077,16 +1077,14 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
-					if !s.enqueuePendingRawFinalEvents() {
-						return
-					}
+					s.prepareDrainPendingRawFinals()
 					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
+					s.markClosedDrainingEvents()
 				}
 			} else {
-				if !s.enqueuePendingRawFinalEvents() {
-					return
-				}
+				s.prepareDrainPendingRawFinals()
 				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
+				s.markClosedDrainingEvents()
 			}
 			return
 		}
@@ -1178,21 +1176,6 @@ func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStre
 		return speechmaticsFlushPendingRawFinals(state)
 	}
 	return nil
-}
-
-func (s *speechmaticsSTTStream) flushPendingRawFinalEvents() []*stt.SpeechEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return speechmaticsFlushPendingRawFinals(s.state)
-}
-
-func (s *speechmaticsSTTStream) enqueuePendingRawFinalEvents() bool {
-	for _, event := range s.flushPendingRawFinalEvents() {
-		if !s.enqueueEvent(event) {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *speechmaticsSTTStream) forcedEOUPartialEvents(resp smResponse) []*stt.SpeechEvent {
@@ -2717,6 +2700,11 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		if event, ok := s.nextDrainedEvent(); ok {
 			return event, nil
 		}
+		if s.pendingErr != nil {
+			err := s.pendingErr
+			s.pendingErr = nil
+			return nil, err
+		}
 		select {
 		case err := <-s.errCh:
 			return nil, err
@@ -2731,6 +2719,9 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 				return event, nil
 			}
 		default:
+		}
+		if event, ok := s.nextDrainedEvent(); ok {
+			return event, nil
 		}
 		err := s.pendingErr
 		s.pendingErr = nil
@@ -2758,6 +2749,9 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 				return event, nil
 			}
 		default:
+		}
+		if event, ok := s.nextDrainedEvent(); ok {
+			return event, nil
 		}
 		s.pendingErr = nil
 		s.markClosed()

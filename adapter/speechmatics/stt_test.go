@@ -1263,6 +1263,118 @@ func TestSpeechmaticsSTTUnexpectedCloseDrainsPendingRawFinalBeforeError(t *testi
 	}
 }
 
+func TestSpeechmaticsSTTUnexpectedCloseQueuesPendingRawFinalWhenEventsFull(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverReady := make(chan struct{})
+	releaseMessages := make(chan struct{})
+	serverClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		close(serverReady)
+		<-releaseMessages
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{{
+				"text":       "already queued",
+				"language":   "en",
+				"speaker_id": "S1",
+			}},
+		}); err != nil {
+			t.Errorf("write AddSegment: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"results": []map[string]interface{}{{
+				"type":       "word",
+				"start_time": 0.2,
+				"end_time":   0.5,
+				"alternatives": []map[string]interface{}{{
+					"content":    "pending final",
+					"confidence": 0.9,
+					"speaker":    "S1",
+					"language":   "en",
+				}},
+			}},
+		}); err != nil {
+			t.Errorf("write AddTranscript: %v", err)
+			return
+		}
+		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+			_ = tcpConn.SetLinger(0)
+		}
+		_ = conn.UnderlyingConn().Close()
+		close(serverClosed)
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	smStream := stream.(*speechmaticsSTTStream)
+	smStream.events = make(chan *stt.SpeechEvent, 1)
+
+	select {
+	case <-serverReady:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive StartRecognition")
+	}
+	close(releaseMessages)
+	select {
+	case <-serverClosed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close Speechmatics connection")
+	}
+
+	deadline := time.After(100 * time.Millisecond)
+	for {
+		if active := provider.activeStreams(); len(active) == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("unexpected close cleanup blocked on full events channel while flushing pending raw final")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want queued transcript before close error", err)
+	}
+	if got := event.Alternatives[0].Text; got != "already queued" {
+		t.Fatalf("first transcript = %q, want queued transcript before pending raw final", got)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want pending raw final before close error", err)
+	}
+	if got := event.Alternatives[0].Text; got != "pending final" {
+		t.Fatalf("second transcript = %q, want pending raw final", got)
+	}
+	event, err = stream.Next()
+	if event != nil {
+		t.Fatalf("third Next event = %#v, want terminal error", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("third Next error = %T %v, want APIConnectionError after drained transcripts", err, err)
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesReferenceVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
