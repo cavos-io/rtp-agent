@@ -1255,35 +1255,42 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if len(result.Alternatives) == 0 {
 				continue
 			}
-			var alternatives []map[string]json.RawMessage
-			if err := json.Unmarshal(result.Alternatives, &alternatives); err != nil {
+			var alternativeItems []json.RawMessage
+			if err := json.Unmarshal(result.Alternatives, &alternativeItems); err != nil {
 				return fmt.Errorf("results[%d].alternatives must be an array", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				len(alternatives) == 0 {
+				len(alternativeItems) == 0 {
 				return fmt.Errorf("results[%d].alternatives must contain at least one alternative", i)
 			}
-			if len(alternatives) == 0 {
+			if len(alternativeItems) == 0 {
 				continue
 			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(alternativeItems[0]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0] must be an object", i)
+			}
+			var alternative map[string]json.RawMessage
+			if err := json.Unmarshal(alternativeItems[0], &alternative); err != nil {
+				return fmt.Errorf("results[%d].alternatives[0] must be an object: %w", i, err)
+			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(alternatives[0]["tags"]) == "null" {
+				string(alternative["tags"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].tags must be an array", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(alternatives[0]["language"]) == "null" {
+				string(alternative["language"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].language must be a string", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(alternatives[0]["confidence"]) == "null" {
+				string(alternative["confidence"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(alternatives[0]["direction"]) == "null" {
+				string(alternative["direction"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
 			}
-			_, decoded.rawLanguagePresent[i] = alternatives[0]["language"]
-			_, decoded.rawSpeakerPresent[i] = alternatives[0]["speaker"]
+			_, decoded.rawLanguagePresent[i] = alternative["language"]
+			_, decoded.rawSpeakerPresent[i] = alternative["speaker"]
 		}
 	}
 	if len(raw.Segments) > 0 {
