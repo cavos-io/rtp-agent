@@ -46,6 +46,8 @@ const (
 	ultravoxOutputAudioQueueSize    = 2048
 )
 
+var ultravoxRealtimeMonotonicStart = time.Now()
+
 type RealtimeModel struct {
 	apiKey              string
 	model               string
@@ -1832,7 +1834,7 @@ func (s *realtimeSession) handlePlaybackClearBufferEvent() {
 func (s *realtimeSession) handlePongEvent(float64) {
 	_ = s.sendClientEvent(map[string]any{
 		"type":      "ping",
-		"timestamp": float64(time.Now().UnixNano()) / float64(time.Second),
+		"timestamp": time.Since(ultravoxRealtimeMonotonicStart).Seconds(),
 	})
 }
 

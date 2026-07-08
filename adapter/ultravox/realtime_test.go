@@ -3404,6 +3404,9 @@ func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
 		if !ok || timestamp <= 0 {
 			t.Fatalf("pong response timestamp = %#v, want positive float64", got["timestamp"])
 		}
+		if timestamp > 1_000_000_000 {
+			t.Fatalf("pong response timestamp = %f, want reference monotonic perf_counter-style seconds, not Unix epoch seconds", timestamp)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for reference ping after pong")
 	}
