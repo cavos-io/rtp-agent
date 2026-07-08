@@ -1565,6 +1565,52 @@ func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGenerati
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplySpeakingConsumesReferenceActiveGenerationPending(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	activeGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if activeGeneration.UserInitiated {
+		t.Fatal("active generation UserInitiated = true, want provider-started setup")
+	}
+	requireUltravoxRealtimeMessage(t, activeGeneration)
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "speaking"})
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeSpeechStopped {
+			t.Fatalf("event type = %s, want speech_stopped", event.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech_stopped")
+	}
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "listening"})
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	nextGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if nextGeneration.UserInitiated {
+		t.Fatal("next generation UserInitiated = true, want speaking event to consume active-generation pending reply")
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerateReplyExpiresReferencePendingOwner(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

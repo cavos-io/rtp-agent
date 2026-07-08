@@ -1680,6 +1680,11 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 		}
 		if s.generation == nil || s.generation.done {
 			s.ensureGenerationLocked()
+		} else if s.pendingReply {
+			s.pendingReply = false
+			s.pendingReplyAt = time.Time{}
+			s.pendingReplySeq++
+			s.stopGenerateReplyTimerLocked()
 		}
 		event := llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeSpeechStopped,
