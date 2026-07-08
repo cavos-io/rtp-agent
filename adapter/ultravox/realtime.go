@@ -49,6 +49,7 @@ const (
 
 var ultravoxRealtimeMonotonicStart = time.Now()
 var ultravoxRealtimeAutoStartDefault = true
+var ultravoxRealtimeGenerateReplyQueuedForTest func(*realtimeSession)
 
 type RealtimeModel struct {
 	apiKey              string
@@ -250,6 +251,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 		}
 	}
 	if update.outputMedium != nil {
+		if !ultravoxRealtimeValidOutputMedium(*update.outputMedium) {
+			return
+		}
 		m.outputMedium = *update.outputMedium
 		sessions := m.realtimeSessions()
 		for _, session := range sessions {
@@ -1021,6 +1025,9 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
+		if _, exists := nextToolNames[tool.Name()]; exists {
+			return fmt.Errorf("duplicate function name: %s", tool.Name())
+		}
 		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
 	}
@@ -1048,6 +1055,9 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 	if !options.OutputMediumSet {
 		return nil
 	}
+	if !ultravoxRealtimeValidOutputMedium(options.OutputMedium) {
+		return fmt.Errorf("ultravox realtime output medium must be voice or text")
+	}
 	if err := s.sendClientEvent(map[string]any{
 		"type":   "set_output_medium",
 		"medium": options.OutputMedium,
@@ -1063,26 +1073,40 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 	s.mu.Unlock()
 	return nil
 }
+
+func ultravoxRealtimeValidOutputMedium(outputMedium string) bool {
+	return outputMedium == "voice" || outputMedium == "text"
+}
+
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	text := ""
 	if options.InstructionsSet {
 		text = "<instruction>" + options.Instructions + "</instruction>"
 	}
-	if err := s.sendClientEvent(map[string]any{
+	event := map[string]any{
 		"type":          "user_text_message",
 		"text":          text,
 		"deferResponse": false,
-	}); err != nil {
-		return err
 	}
 	s.mu.Lock()
-	if !s.closed {
-		s.pendingReply = true
-		s.pendingReplyAt = time.Now()
-		s.pendingReplySeq++
-		s.startGenerateReplyTimerLocked(s.pendingReplySeq)
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
 	}
-	s.mu.Unlock()
+	s.pendingReply = true
+	s.pendingReplyAt = time.Now()
+	s.pendingReplySeq++
+	s.startGenerateReplyTimerLocked(s.pendingReplySeq)
+	if err := s.enqueueClientEventLocked(event); err != nil {
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
+		s.stopGenerateReplyTimerLocked()
+		return err
+	}
+	if ultravoxRealtimeGenerateReplyQueuedForTest != nil {
+		ultravoxRealtimeGenerateReplyQueuedForTest(s)
+	}
 	return nil
 }
 func (s *realtimeSession) Say(string) error {
@@ -1211,6 +1235,11 @@ func (s *realtimeSession) ClearAudio() error {
 var _ llm.RealtimeSession = (*realtimeSession)(nil)
 
 func (s *realtimeSession) createCallRequest() (string, map[string]string, map[string]any) {
+	createCallURL, headers, payload, _ := s.createCallRequestE()
+	return createCallURL, headers, payload
+}
+
+func (s *realtimeSession) createCallRequestE() (string, map[string]string, map[string]any, error) {
 	s.mu.Lock()
 	tools := append([]llm.Tool(nil), s.tools...)
 	systemPrompt := s.systemPrompt
@@ -1228,6 +1257,10 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 		"X-API-Key":    m.apiKey,
 		"Content-Type": "application/json",
 	}
+	toolPayloads, err := ultravoxRealtimeToolPayloadsE(tools)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	payload := map[string]any{
 		"systemPrompt": systemPrompt,
 		"model":        m.model,
@@ -1239,7 +1272,7 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 				"clientBufferSizeMs": ultravoxClientBufferSizeMs,
 			},
 		},
-		"selectedTools": ultravoxRealtimeToolPayloads(tools),
+		"selectedTools": toolPayloads,
 	}
 	if temperature, ok := m.Temperature(); ok {
 		payload["temperature"] = temperature
@@ -1256,7 +1289,7 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 	if firstSpeaker, ok := m.FirstSpeaker(); ok {
 		payload["firstSpeaker"] = firstSpeaker
 	}
-	return createCallURL, headers, payload
+	return createCallURL, headers, payload, nil
 }
 
 func ultravoxRealtimeCreateCallJoinURL(data []byte) (string, error) {
@@ -1281,14 +1314,20 @@ const (
 	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
 )
 
-var errUltravoxRealtimeReconnectAfterSend = errors.New("ultravox realtime reconnect after send error")
+var (
+	errUltravoxRealtimeReconnectAfterSend    = errors.New("ultravox realtime reconnect after send error")
+	errUltravoxRealtimeReconnectAfterReceive = errors.New("ultravox realtime reconnect after receive error")
+)
 
 type ultravoxRealtimeRawToolSchemaParser interface {
 	ParseFunctionTools(format string) (map[string]interface{}, error)
 }
 
 func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
-	createCallURL, headers, payload := s.createCallRequest()
+	createCallURL, headers, payload, err := s.createCallRequestE()
+	if err != nil {
+		return "", err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -1343,6 +1382,7 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return nil
 		}
 		restartCount := s.restartCount
+		s.restartPending = false
 		s.mu.Unlock()
 
 		if err := ctx.Err(); err != nil {
@@ -1352,7 +1392,7 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
+			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
 				continue
 			}
 			recoverable := ultravoxRealtimeRecoverableError(err)
@@ -1527,7 +1567,7 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 			if errors.As(err, &closeErr) {
 				return ultravoxRealtimeUnexpectedWebsocketClose
 			}
-			return err
+			return errUltravoxRealtimeReconnectAfterReceive
 		}
 		switch messageType {
 		case ultravoxRealtimeWebsocketTextFrame:
@@ -1582,49 +1622,84 @@ func (s *realtimeSession) runRealtimeConnectionWithContext(parent context.Contex
 }
 
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
+	payloads, _ := ultravoxRealtimeToolPayloadsE(tools)
+	return payloads
+}
+
+func ultravoxRealtimeToolPayloadsE(tools []llm.Tool) ([]map[string]any, error) {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
 			continue
 		}
-		name, description, parameters := ultravoxRealtimeToolSchema(tool)
+		name, description, parameters, rawSchema, err := ultravoxRealtimeToolSchemaE(tool)
+		if err != nil {
+			return nil, err
+		}
+		dynamicParameters, err := ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters, !rawSchema, rawSchema)
+		if err != nil {
+			return nil, err
+		}
 		payloads = append(payloads, map[string]any{
 			"temporaryTool": map[string]any{
 				"modelToolName":     name,
 				"description":       description,
-				"dynamicParameters": ultravoxRealtimeToolDynamicParametersFromSchema(parameters),
+				"dynamicParameters": dynamicParameters,
 				"client":            map[string]any{},
 			},
 		})
 	}
-	return payloads
+	return payloads, nil
 }
 
-func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any) {
+func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any, bool) {
+	name, description, parameters, rawSchema, _ := ultravoxRealtimeToolSchemaE(tool)
+	return name, description, parameters, rawSchema
+}
+
+func ultravoxRealtimeToolSchemaE(tool llm.Tool) (string, any, map[string]any, bool, error) {
 	name := tool.Name()
 	var description any = tool.Description()
 	parameters := llm.ToolParameters(tool)
+	rawSchema := false
 	if rawTool, ok := tool.(ultravoxRealtimeRawToolSchemaParser); ok {
-		if schema, err := rawTool.ParseFunctionTools("ultravox"); err == nil {
-			if rawName, ok := schema["name"].(string); ok {
-				name = rawName
+		schema, err := rawTool.ParseFunctionTools("ultravox")
+		if err != nil {
+			return name, description, nil, true, err
+		}
+		rawSchema = true
+		if rawName, ok := schema["name"].(string); ok {
+			name = rawName
+		}
+		description = schema["description"]
+		if rawParameters, ok := schema["parameters"]; ok {
+			parameterMap, ok := rawParameters.(map[string]any)
+			if !ok {
+				return name, description, nil, rawSchema, errors.New("'properties'")
 			}
-			description = schema["description"]
-			if rawParameters, ok := schema["parameters"].(map[string]any); ok {
-				parameters = rawParameters
-			}
+			parameters = parameterMap
+		} else {
+			parameters = map[string]any{}
 		}
 	}
-	return name, description, parameters
+	return name, description, parameters, rawSchema, nil
 }
 
 func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
-	_, _, parameters := ultravoxRealtimeToolSchema(tool)
-	return ultravoxRealtimeToolDynamicParametersFromSchema(parameters)
+	_, _, parameters, rawSchema := ultravoxRealtimeToolSchema(tool)
+	return ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema, rawSchema)
 }
 
-func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) []map[string]any {
+func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters map[string]any, relaxNullableRequired bool, preserveTypeSchema bool) []map[string]any {
+	dynamicParameters, _ := ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters, relaxNullableRequired, preserveTypeSchema)
+	return dynamicParameters
+}
+
+func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters map[string]any, relaxNullableRequired bool, preserveTypeSchema bool) ([]map[string]any, error) {
 	properties, _ := parameters["properties"].(map[string]any)
+	if properties == nil {
+		return nil, errors.New("'properties'")
+	}
 	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
 
 	names := ultravoxRealtimeToolParameterNames(parameters, properties)
@@ -1632,9 +1707,15 @@ func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) 
 	dynamicParameters := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		prop, _ := properties[name].(map[string]any)
-		schema := ultravoxRealtimeToolParameterSchema(prop)
+		if prop == nil {
+			return nil, errors.New("'properties'")
+		}
+		if err := ultravoxRealtimeReferenceParameterSchemaError(prop); err != nil {
+			return nil, err
+		}
+		schema := ultravoxRealtimeToolParameterSchema(prop, preserveTypeSchema)
 		_, isRequired := required[name]
-		if isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
+		if relaxNullableRequired && isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
 			isRequired = false
 		}
 		dynamicParameters = append(dynamicParameters, map[string]any{
@@ -1644,10 +1725,45 @@ func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) 
 			"required": isRequired,
 		})
 	}
-	return dynamicParameters
+	return dynamicParameters, nil
 }
 
-func ultravoxRealtimeToolParameterSchema(prop map[string]any) any {
+func ultravoxRealtimeReferenceParameterSchemaError(prop map[string]any) error {
+	if _, ok := prop["type"]; ok {
+		return nil
+	}
+	if _, ok := prop["enum"]; ok {
+		return nil
+	}
+	if _, ok := prop["items"]; ok {
+		return nil
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		variants, _ := prop[key].([]any)
+		for _, variant := range variants {
+			schema, ok := variant.(map[string]any)
+			if !ok {
+				continue
+			}
+			value, ok := schema["type"]
+			if !ok {
+				continue
+			}
+			if _, ok := value.(string); !ok {
+				return errors.New("")
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+func ultravoxRealtimeToolParameterSchema(prop map[string]any, preserveTypeSchema bool) any {
+	if preserveTypeSchema {
+		if _, ok := prop["type"]; ok {
+			return prop
+		}
+	}
 	if typ := ultravoxRealtimeNonNullType(prop["type"]); typ != "" {
 		if _, nullable := prop["type"].([]string); nullable {
 			return ultravoxRealtimeMinimalParameterSchema(prop, typ)
@@ -1715,6 +1831,8 @@ func ultravoxRealtimeToolParameterNames(parameters map[string]any, properties ma
 func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
 	set := make(map[string]struct{})
 	switch values := required.(type) {
+	case string:
+		set[values] = struct{}{}
 	case []string:
 		for _, value := range values {
 			set[value] = struct{}{}
@@ -1724,6 +1842,10 @@ func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
 			if name, ok := value.(string); ok {
 				set[name] = struct{}{}
 			}
+		}
+	case map[string]any:
+		for name := range values {
+			set[name] = struct{}{}
 		}
 	}
 	return set
@@ -2153,9 +2275,7 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 			if s.chatCtx == nil {
 				s.chatCtx = llm.NewChatContext()
 			}
-			if s.chatCtx.GetByID(itemID) == nil {
-				s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: itemID, Role: llm.ChatRoleUser, Text: event.Text})
-			}
+			s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: itemID, Role: llm.ChatRoleUser, Text: event.Text})
 		}
 	}
 	realtimeEvent := llm.RealtimeEvent{

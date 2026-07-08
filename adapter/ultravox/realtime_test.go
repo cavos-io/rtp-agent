@@ -248,7 +248,7 @@ func TestUltravoxRealtimeModelUpdateOptionsPropagatesReferenceSessions(t *testin
 	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
 }
 
-func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t *testing.T) {
+func TestUltravoxRealtimeModelUpdateOptionsRejectsInvalidReferenceOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -261,21 +261,22 @@ func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t
 	defer session.Close()
 
 	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
-	if got := model.OutputMedium(); got != "" {
-		t.Fatalf("output medium = %q, want explicit empty reference output_medium", got)
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("output medium = %q, want unchanged voice after invalid reference output_medium update", got)
 	}
-	if model.Capabilities().AudioOutput {
-		t.Fatal("audio output = true, want false after empty output_medium")
+	if !model.Capabilities().AudioOutput {
+		t.Fatal("audio output = false, want unchanged true after invalid output_medium update")
 	}
-	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-		"type":   "set_output_medium",
-		"medium": "",
-	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected client event for invalid output_medium update = %#v", got)
+	default:
+	}
 
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 	generation := requireUltravoxRealtimeGeneration(t, session)
 	message := requireUltravoxRealtimeMessage(t, generation)
-	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
+	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"audio", "text"})
 }
 
 func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *testing.T) {
@@ -307,6 +308,18 @@ func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *test
 	select {
 	case got := <-session.clientEventCh:
 		t.Fatalf("unexpected client event for empty UpdateOptions = %#v", got)
+	default:
+	}
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "",
+		OutputMediumSet: true,
+	}); err == nil {
+		t.Fatal("UpdateOptions invalid output medium error = nil, want reference set_output_medium validation error")
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected client event for invalid UpdateOptions = %#v", got)
 	default:
 	}
 }
@@ -604,6 +617,52 @@ func TestUltravoxRealtimeToolPayloadsUseReferenceRawSchemaMissingDescription(t *
 	}
 	if description, ok := tool["description"]; !ok || description != nil {
 		t.Fatalf("description = %#v/%v, want reference nil from raw schema", description, ok)
+	}
+}
+
+func TestUltravoxRealtimeToolPayloadsKeepReferenceRawNullableRequired(t *testing.T) {
+	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawNullableRequiredTool{}})
+	tool, ok := payloads[0]["temporaryTool"].(map[string]any)
+	if !ok {
+		t.Fatalf("temporaryTool = %#v, want map", payloads[0]["temporaryTool"])
+	}
+	params, ok := tool["dynamicParameters"].([]map[string]any)
+	if !ok || len(params) != 1 {
+		t.Fatalf("dynamicParameters = %#v, want one raw parameter", tool["dynamicParameters"])
+	}
+	if params[0]["name"] != "query" {
+		t.Fatalf("raw nullable parameter name = %#v, want query", params[0]["name"])
+	}
+	if params[0]["required"] != true {
+		t.Fatalf("raw nullable parameter required = %#v, want reference required true", params[0]["required"])
+	}
+	schema, ok := params[0]["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw nullable parameter schema = %#v, want map", params[0]["schema"])
+	}
+	if !reflect.DeepEqual(schema["type"], []interface{}{"string", "null"}) {
+		t.Fatalf("raw nullable parameter schema type = %#v, want reference raw type list", schema["type"])
+	}
+	if schema["description"] != "Search text" {
+		t.Fatalf("raw nullable parameter schema description = %#v, want reference raw description", schema["description"])
+	}
+}
+
+func TestUltravoxRealtimeToolPayloadsUseReferenceRawRequiredMapping(t *testing.T) {
+	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawRequiredMapTool{}})
+	tool, ok := payloads[0]["temporaryTool"].(map[string]any)
+	if !ok {
+		t.Fatalf("temporaryTool = %#v, want map", payloads[0]["temporaryTool"])
+	}
+	params, ok := tool["dynamicParameters"].([]map[string]any)
+	if !ok || len(params) != 1 {
+		t.Fatalf("dynamicParameters = %#v, want one raw parameter", tool["dynamicParameters"])
+	}
+	if params[0]["name"] != "query" {
+		t.Fatalf("raw required-map parameter name = %#v, want query", params[0]["name"])
+	}
+	if params[0]["required"] != true {
+		t.Fatalf("raw required-map parameter required = %#v, want reference membership true", params[0]["required"])
 	}
 }
 
@@ -922,7 +981,7 @@ func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *test
 	})
 }
 
-func TestUltravoxRealtimeSessionRestartKeepsReferenceEmptyOutputMediumUnset(t *testing.T) {
+func TestUltravoxRealtimeSessionRestartIgnoresInvalidReferenceOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -935,16 +994,17 @@ func TestUltravoxRealtimeSessionRestartKeepsReferenceEmptyOutputMediumUnset(t *t
 	defer session.Close()
 
 	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
-	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-		"type":   "set_output_medium",
-		"medium": "",
-	})
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("invalid output-medium event = %#v, want no provider control event", event)
+	default:
+	}
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
 		t.Fatalf("UpdateInstructions error = %v", err)
 	}
 	select {
 	case event := <-session.clientEventCh:
-		t.Fatalf("restart output-medium event = %#v, want no text fallback for empty reference output_medium", event)
+		t.Fatalf("restart output-medium event = %#v, want no invalid or text fallback output_medium event", event)
 	default:
 	}
 }
@@ -1072,6 +1132,32 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	}
 	if got := session.restartCount; got != 1 {
 		t.Fatalf("restart count after changed tool-name set while restart pending = %d, want 1 reference restart signal", got)
+	}
+}
+
+func TestUltravoxRealtimeSessionUpdateToolsRejectsReferenceDuplicateNames(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{
+		ultravoxRealtimeTestTool{name: "lookup", description: "first"},
+		ultravoxRealtimeTestTool{name: "lookup", description: "second"},
+	}); err == nil || err.Error() != "duplicate function name: lookup" {
+		t.Fatalf("UpdateTools duplicate error = %v, want reference duplicate function name", err)
+	}
+	if got := session.restartCount; got != 0 {
+		t.Fatalf("restart count after duplicate tools = %d, want no reference restart", got)
+	}
+	if got := len(session.tools); got != 0 {
+		t.Fatalf("stored tools after duplicate = %d, want unchanged empty tool set", got)
 	}
 }
 
@@ -1704,6 +1790,42 @@ func TestUltravoxRealtimeSessionGenerateReplyQueuesReferenceUserTextMessage(t *t
 	}
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
 		t.Fatalf("GenerateReply after Close error = %v, want reference no-op", err)
+	}
+}
+
+func TestUltravoxRealtimeSessionGenerateReplyMarksReferencePendingBeforeQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	oldHook := ultravoxRealtimeGenerateReplyQueuedForTest
+	defer func() { ultravoxRealtimeGenerateReplyQueuedForTest = oldHook }()
+
+	var sawPending bool
+	var sawPendingAt bool
+	ultravoxRealtimeGenerateReplyQueuedForTest = func(s *realtimeSession) {
+		sawPending = s.pendingReply
+		sawPendingAt = !s.pendingReplyAt.IsZero()
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	if !sawPending || !sawPendingAt {
+		t.Fatalf("pending at enqueue = %v/%v, want reference pending future set before client event send", sawPending, sawPendingAt)
 	}
 }
 
@@ -2753,6 +2875,25 @@ func TestUltravoxRealtimeSessionFinalUserTranscriptMarksReferenceChatContext(t *
 		Ordinal: 7,
 	})
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
+	session.handleUserTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "corrected world",
+		Final:   true,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "corrected world", true)
+
+	var transcriptTexts []string
+	for _, item := range session.chatCtx.Items {
+		message, ok := item.(*llm.ChatMessage)
+		if !ok || message.ID != "msg_user_7" {
+			continue
+		}
+		transcriptTexts = append(transcriptTexts, message.TextContent())
+	}
+	if got, want := strings.Join(transcriptTexts, "|"), "hello world|corrected world"; got != want {
+		t.Fatalf("duplicate transcript chat context = %q, want reference append-only %q", got, want)
+	}
 
 	ctx := llm.NewChatContext()
 	ctx.AddMessage(llm.ChatMessageArgs{ID: "msg_user_7", Role: llm.ChatRoleUser, Text: "hello world"})
@@ -4619,6 +4760,190 @@ func TestUltravoxRealtimeSessionRestartLoopEmitsReferenceConnectionError(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallRejectsReferenceMalformedRawToolSchema(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeRawMissingPropertiesTool{}}); err != nil {
+		t.Fatalf("UpdateTools malformed raw tool error = %v, want stored until create-call like reference", err)
+	}
+	model.dialWebsocket = func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	if doer.request != nil {
+		t.Fatalf("create-call request = %#v, want reference tool parse failure before HTTP request", doer.request)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: 'properties'" {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference raw tool schema KeyError", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference raw tool schema error event")
+	}
+}
+
+func TestUltravoxRealtimeSessionCreateCallRejectsReferenceMissingRawParameters(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeRawMissingParametersTool{}}); err != nil {
+		t.Fatalf("UpdateTools missing raw parameters tool error = %v, want stored until create-call like reference", err)
+	}
+	model.dialWebsocket = func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	if doer.request != nil {
+		t.Fatalf("create-call request = %#v, want reference missing raw parameters failure before HTTP request", doer.request)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: 'properties'" {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference raw parameters KeyError", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference raw parameters error event")
+	}
+}
+
+func TestUltravoxRealtimeSessionCreateCallRejectsReferenceRawParserError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeRawParserErrorTool{}}); err != nil {
+		t.Fatalf("UpdateTools raw parser error tool error = %v, want stored until create-call like reference", err)
+	}
+	model.dialWebsocket = func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	if doer.request != nil {
+		t.Fatalf("create-call request = %#v, want raw parser failure before HTTP request", doer.request)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: raw parser unavailable" {
+			t.Fatalf("RealtimeModelError unwrap = %v, want raw parser failure", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for raw parser error event")
+	}
+}
+
+func TestUltravoxRealtimeSessionCreateCallRejectsReferenceMalformedRawAnyOfType(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeRawMalformedAnyOfTool{}}); err != nil {
+		t.Fatalf("UpdateTools malformed raw anyOf tool error = %v, want stored until create-call like reference", err)
+	}
+	model.dialWebsocket = func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	if doer.request != nil {
+		t.Fatalf("create-call request = %#v, want reference malformed anyOf failure before HTTP request", doer.request)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: " {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference raw anyOf AssertionError", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference raw anyOf schema error event")
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartLoopMapsReferenceHTTPStatusError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -4705,6 +5030,58 @@ func TestUltravoxRealtimeSessionRetriesReferenceRecoverableConnectionError(t *te
 	}
 }
 
+func TestUltravoxRealtimeSessionRecoverableRetryClearsReferencePendingRestart(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+	session.recoverableErrorDelay = 0
+
+	if err := session.UpdateInstructions("retry prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if !session.restartPending {
+		t.Fatal("restartPending = false before retry, want pending reference restart signal")
+	}
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		errs:           []error{ultravoxRealtimeTestTimeoutError("temporary timeout"), nil},
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return conn, nil
+	}
+
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want nil after recoverable retry", err)
+	}
+	session.mu.Lock()
+	pending := session.restartPending
+	restartCount := session.restartCount
+	session.mu.Unlock()
+	if pending {
+		t.Fatal("restartPending = true after recoverable retry, want reference restart signal cleared for next session")
+	}
+	if restartCount != 1 {
+		t.Fatalf("restartCount after retry = %d, want original restart signal retained", restartCount)
+	}
+
+	if err := session.UpdateInstructions("later prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions error = %v", err)
+	}
+	if session.restartCount != 2 {
+		t.Fatalf("restartCount after later restart = %d, want new restart accepted", session.restartCount)
+	}
+}
+
 func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -4786,6 +5163,72 @@ func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) 
 	select {
 	case event := <-session.EventCh():
 		t.Fatalf("event after send-error reconnect = %#v, want no fatal error event", event)
+	default:
+	}
+}
+
+func TestUltravoxRealtimeSessionReconnectsAfterReferenceReceiveError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	firstConn := &ultravoxRealtimeTestWebsocketConn{readErr: errors.New("socket read failed")}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
+	conns := []*ultravoxRealtimeTestWebsocketConn{firstConn, secondConn}
+	dialCh := make(chan int, 2)
+	var dialCount int
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		if dialCount >= len(conns) {
+			t.Fatalf("unexpected extra websocket dial %d", dialCount+1)
+		}
+		conn := conns[dialCount]
+		dialCount++
+		dialCh <- dialCount
+		return conn, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeRestartLoop(context.Background(), doer)
+	}()
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-dialCh:
+			if got != want {
+				t.Fatalf("dial marker = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for websocket dial %d", want)
+		}
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeRestartLoop error = %v, want nil after reference receive-error reconnect", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not exit after reconnect drained")
+	}
+	if doer.requestCount != 2 {
+		t.Fatalf("create-call count = %d, want reconnect create-call after receive error", doer.requestCount)
+	}
+	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
+		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after receive-error reconnect = %#v, want no fatal error event", event)
 	default:
 	}
 }
@@ -5277,6 +5720,149 @@ func (ultravoxRealtimeRawSchemaNoDescriptionTool) ParseFunctionTools(string) (ma
 		"parameters": map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
+		},
+	}, nil
+}
+
+type ultravoxRealtimeRawNullableRequiredTool struct{}
+
+func (ultravoxRealtimeRawNullableRequiredTool) ID() string          { return "raw_nullable" }
+func (ultravoxRealtimeRawNullableRequiredTool) Name() string        { return "raw_nullable" }
+func (ultravoxRealtimeRawNullableRequiredTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawNullableRequiredTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawNullableRequiredTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawNullableRequiredTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_nullable",
+		"description": "raw nullable schema",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        []interface{}{"string", "null"},
+					"description": "Search text",
+				},
+			},
+			"required": []string{"query"},
+		},
+	}, nil
+}
+
+type ultravoxRealtimeRawRequiredMapTool struct{}
+
+func (ultravoxRealtimeRawRequiredMapTool) ID() string          { return "raw_required_map" }
+func (ultravoxRealtimeRawRequiredMapTool) Name() string        { return "raw_required_map" }
+func (ultravoxRealtimeRawRequiredMapTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawRequiredMapTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawRequiredMapTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawRequiredMapTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_required_map",
+		"description": "raw required map schema",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string"},
+			},
+			"required": map[string]interface{}{"query": true},
+		},
+	}, nil
+}
+
+type ultravoxRealtimeRawMissingPropertiesTool struct{}
+
+func (ultravoxRealtimeRawMissingPropertiesTool) ID() string          { return "raw_missing_props" }
+func (ultravoxRealtimeRawMissingPropertiesTool) Name() string        { return "raw_missing_props" }
+func (ultravoxRealtimeRawMissingPropertiesTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawMissingPropertiesTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawMissingPropertiesTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawMissingPropertiesTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_missing_props",
+		"description": "raw missing properties schema",
+		"parameters":  map[string]interface{}{"type": "object"},
+	}, nil
+}
+
+type ultravoxRealtimeRawMissingParametersTool struct{}
+
+func (ultravoxRealtimeRawMissingParametersTool) ID() string          { return "raw_missing_params" }
+func (ultravoxRealtimeRawMissingParametersTool) Name() string        { return "raw_missing_params" }
+func (ultravoxRealtimeRawMissingParametersTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawMissingParametersTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+}
+func (ultravoxRealtimeRawMissingParametersTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawMissingParametersTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_missing_params",
+		"description": "raw missing parameters",
+	}, nil
+}
+
+type ultravoxRealtimeRawParserErrorTool struct{}
+
+func (ultravoxRealtimeRawParserErrorTool) ID() string          { return "raw_parser_error" }
+func (ultravoxRealtimeRawParserErrorTool) Name() string        { return "raw_parser_error" }
+func (ultravoxRealtimeRawParserErrorTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawParserErrorTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+}
+func (ultravoxRealtimeRawParserErrorTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawParserErrorTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return nil, errors.New("raw parser unavailable")
+}
+
+type ultravoxRealtimeRawMalformedAnyOfTool struct{}
+
+func (ultravoxRealtimeRawMalformedAnyOfTool) ID() string          { return "raw_bad_anyof" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Name() string        { return "raw_bad_anyof" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawMalformedAnyOfTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawMalformedAnyOfTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_bad_anyof",
+		"description": "raw malformed anyOf schema",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"anyOf": []interface{}{
+						map[string]interface{}{"type": []interface{}{"string", "null"}},
+					},
+				},
+			},
 		},
 	}, nil
 }
