@@ -135,9 +135,7 @@ func WithRealtimeSystemPrompt(prompt string) RealtimeOption {
 
 func WithRealtimeOutputMedium(outputMedium string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if outputMedium != "" {
-			m.outputMedium = outputMedium
-		}
+		m.outputMedium = outputMedium
 	}
 }
 

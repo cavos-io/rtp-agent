@@ -150,6 +150,19 @@ func TestUltravoxRealtimeOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeOptionsPreserveReferenceEmptyOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeOutputMedium(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	if got := model.OutputMedium(); got != "" {
+		t.Fatalf("output medium = %q, want explicit empty reference output_medium", got)
+	}
+	if model.Capabilities().AudioOutput {
+		t.Fatal("audio output = true, want false for empty output_medium")
+	}
+}
+
 func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
