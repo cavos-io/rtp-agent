@@ -976,7 +976,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
-		for _, event := range speechmaticsFlushPendingRawFinals(s.state) {
+		for _, event := range s.flushPendingRawFinalEvents() {
 			if !s.enqueueEvent(event) {
 				return false
 			}
@@ -1015,7 +1015,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return true
 	}
 	if s.forcedEOUActive() && speechmaticsPartialMessage(resp.Message) {
-		for _, event := range speechmaticsForcedEOUPartialEvents(resp, s.state) {
+		for _, event := range s.forcedEOUPartialEvents(resp) {
 			if !s.enqueueEvent(event) {
 				return false
 			}
@@ -1031,7 +1031,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 		s.clearForcedEOU()
 	}
-	for _, event := range speechmaticsEvents(resp, s.state) {
+	for _, event := range s.responseEvents(resp) {
 		if !s.enqueueEvent(event) {
 			return false
 		}
@@ -1050,10 +1050,30 @@ func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStre
 	return nil
 }
 
+func (s *speechmaticsSTTStream) flushPendingRawFinalEvents() []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsFlushPendingRawFinals(s.state)
+}
+
+func (s *speechmaticsSTTStream) forcedEOUPartialEvents(resp smResponse) []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsForcedEOUPartialEvents(resp, s.state)
+}
+
+func (s *speechmaticsSTTStream) responseEvents(resp smResponse) []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsEvents(resp, s.state)
+}
+
 func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
 	if s == nil || resp.LanguagePackInfo.WordDelimiter == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
@@ -1838,19 +1858,19 @@ func (s *speechmaticsSTTStream) forcedEOUActive() bool {
 
 func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed {
 		s.forcedEOUCompleted = true
 	}
-	s.mu.Unlock()
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed {
 		s.fixedEOUCompleted = true
 	}
-	s.mu.Unlock()
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 

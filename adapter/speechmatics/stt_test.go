@@ -3683,6 +3683,54 @@ func TestSpeechmaticsSTTUpdateSpeakersFiltersFutureSegmentsLocally(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTConcurrentSpeakerUpdateAndTranscript(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		events:    make(chan *stt.SpeechEvent, 512),
+		errCh:     make(chan error, 1),
+		done:      make(chan struct{}),
+		closeConn: func() error { return nil },
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	resp := smResponse{Message: "AddSegment"}
+	resp.Segments = append(resp.Segments, struct {
+		Text       string   `json:"text"`
+		Language   string   `json:"language"`
+		SpeakerID  string   `json:"speaker_id"`
+		IsActive   *bool    `json:"is_active"`
+		Annotation []string `json:"annotation"`
+		Metadata   struct {
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		} `json:"metadata"`
+	}{Text: "hello", Language: "en", SpeakerID: "agent"})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = provider.UpdateSpeakers([]string{"agent"}, []string{fmt.Sprintf("noise-%d", i)}, "ignore")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			if !stream.handleResponse(resp) {
+				t.Errorf("handleResponse returned false")
+				return
+			}
+			select {
+			case <-stream.events:
+			default:
+			}
+		}
+	}()
+	wg.Wait()
+}
+
 func TestSpeechmaticsSTTUpdateSpeakersRequiresDiarization(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTEnableDiarization(false))
 	stream := &speechmaticsSTTStream{
