@@ -2545,11 +2545,7 @@ func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStr
 	if sampleRate == 0 {
 		sampleRate = 16000
 	}
-	numChannels := frame.NumChannels
-	if numChannels == 0 {
-		numChannels = 1
-	}
-	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
+	return audio.NewAudioByteStream(sampleRate, 1, 0)
 }
 
 type speechmaticsSTTInputAudioNormalizer struct {

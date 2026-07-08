@@ -2782,6 +2782,47 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsPushFrameUsesReferenceMonoProviderChunks(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 8000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after stereo PushFrame = %d, want two reference mono 100ms chunks", len(writes))
+	}
+	if got := len(writes[0]); got != 3200 {
+		t.Fatalf("first chunk length = %d, want 3200 reference mono bytes", got)
+	}
+	if got := len(writes[1]); got != 3200 {
+		t.Fatalf("second chunk length = %d, want 3200 reference mono bytes", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("binary writes after Flush = %d, want stereo remainder chunk", len(writes))
+	}
+	if got := len(writes[2]); got != 1600 {
+		t.Fatalf("flush chunk length = %d, want remaining reference mono bytes", got)
+	}
+}
+
 func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
