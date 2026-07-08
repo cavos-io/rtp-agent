@@ -835,9 +835,6 @@ func speechmaticsKnownSpeakerConfig(speakers []SpeechmaticsSpeakerIdentifier) []
 	config := make([]map[string]interface{}, 0, len(speakers))
 	for _, speaker := range speakers {
 		identifiers := cloneSpeechmaticsStringSlice(speaker.SpeakerIdentifiers)
-		if len(identifiers) == 0 && speaker.SpeakerID != "" {
-			identifiers = []string{speaker.SpeakerID}
-		}
 		entry := map[string]interface{}{
 			"label":               speaker.Label,
 			"speaker_identifiers": identifiers,

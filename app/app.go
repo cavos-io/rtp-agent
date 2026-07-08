@@ -8480,7 +8480,10 @@ func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIde
 		label = strings.TrimSpace(label)
 		speakerID = strings.TrimSpace(speakerID)
 		if label != "" && speakerID != "" {
-			speakers = append(speakers, speechmatics.SpeechmaticsSpeakerIdentifier{Label: label, SpeakerID: speakerID})
+			speakers = append(speakers, speechmatics.SpeechmaticsSpeakerIdentifier{
+				Label:              label,
+				SpeakerIdentifiers: []string{speakerID},
+			})
 		}
 	}
 	return speakers

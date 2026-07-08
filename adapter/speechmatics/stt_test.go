@@ -4752,7 +4752,7 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 		}),
 		WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, []string{"customer"}, "ignore"),
 		WithSpeechmaticsSTTKnownSpeakers([]SpeechmaticsSpeakerIdentifier{
-			{Label: "agent", SpeakerID: "spk-1"},
+			{Label: "agent", SpeakerIdentifiers: []string{"spk-1", "spk-2"}},
 		}),
 	)
 
@@ -4782,7 +4782,7 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 		t.Fatalf("speaker_diarization_config.speakers = %#v, want agent speaker", knownSpeakers)
 	}
 	identifiers, _ := knownSpeakers[0]["speaker_identifiers"].([]interface{})
-	if len(identifiers) != 1 || identifiers[0] != "spk-1" {
+	if len(identifiers) != 2 || identifiers[0] != "spk-1" || identifiers[1] != "spk-2" {
 		t.Fatalf("speaker_identifiers = %#v, want spk-1", knownSpeakers[0]["speaker_identifiers"])
 	}
 	if _, ok := knownSpeakers[0]["speaker_id"]; ok {
@@ -4790,6 +4790,28 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	}
 	if _, ok := config["known_speakers"]; ok {
 		t.Fatalf("known_speakers sent at top level in %#v", config)
+	}
+}
+
+func TestSpeechmaticsSTTKnownSpeakerConfigIgnoresReferenceResultSpeakerID(t *testing.T) {
+	config := speechmaticsKnownSpeakerConfig([]SpeechmaticsSpeakerIdentifier{
+		{Label: "agent", SpeakerID: "result-speaker-id"},
+	})
+	if len(config) != 1 {
+		t.Fatalf("known speaker config = %#v, want one reference speaker entry", config)
+	}
+	if got := config[0]["label"]; got != "agent" {
+		t.Fatalf("label = %#v, want agent", got)
+	}
+	identifiers, ok := config[0]["speaker_identifiers"].([]string)
+	if !ok {
+		t.Fatalf("speaker_identifiers = %#v, want string slice", config[0]["speaker_identifiers"])
+	}
+	if len(identifiers) != 0 {
+		t.Fatalf("speaker_identifiers = %#v, want empty when only result speaker_id is set", identifiers)
+	}
+	if _, ok := config[0]["speaker_id"]; ok {
+		t.Fatalf("speaker_id = %#v, want omitted from reference known-speaker config", config[0]["speaker_id"])
 	}
 }
 
