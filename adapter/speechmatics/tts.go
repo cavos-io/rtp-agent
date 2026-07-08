@@ -512,6 +512,9 @@ func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error 
 	case <-timer.C:
 		return nil
 	case <-s.ctx.Done():
+		if s.isClosedOrFinal() {
+			return io.EOF
+		}
 		return context.Canceled
 	}
 }

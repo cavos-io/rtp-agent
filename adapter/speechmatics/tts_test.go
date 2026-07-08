@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -660,6 +661,67 @@ func TestSpeechmaticsTTSSynthesizeRetriesReferenceReadErrorBeforeAudio(t *testin
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want one retry after pre-audio read error", requests)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCloseDuringReferenceRetryWaitReturnsEOF(t *testing.T) {
+	previousRetryInterval := speechmaticsTTSRetryInterval
+	retryStarted := make(chan struct{})
+	var retryOnce sync.Once
+	speechmaticsTTSRetryInterval = func(int) time.Duration {
+		retryOnce.Do(func() { close(retryStarted) })
+		return time.Hour
+	}
+	t.Cleanup(func() { speechmaticsTTSRetryInterval = previousRetryInterval })
+
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       speechmaticsReadErrorBody{},
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			result <- fmt.Errorf("Next audio = %+v, want nil after close during retry", audio)
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case <-retryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not enter retry wait")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if err != io.EOF {
+			t.Fatalf("Next error = %v, want EOF after close during retry wait", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after Close during retry wait")
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want no retry request after Close", requests)
 	}
 }
 
