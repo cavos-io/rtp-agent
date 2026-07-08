@@ -3645,6 +3645,30 @@ func TestSpeechmaticsSTTStreamRetryAccumulatesReferenceStartTimeOffset(t *testin
 	}
 }
 
+func TestSpeechmaticsSTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"))
+
+	stream, err := provider.Stream(ctx, "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after caller cancellation", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func withSpeechmaticsSTTRetryInterval(t *testing.T, interval time.Duration) {
 	t.Helper()
 	previous := speechmaticsSTTRetryInterval
