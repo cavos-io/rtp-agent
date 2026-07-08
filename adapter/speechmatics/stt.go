@@ -146,7 +146,7 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 }
 
 func speechmaticsRoundEndOfTurnDelay(seconds float64) float64 {
-	return math.Round(seconds*1000) / 1000
+	return math.Round(seconds*1000+1e-9) / 1000
 }
 
 func speechmaticsClampLocalEndpointingDelay(seconds float64) time.Duration {
@@ -1009,8 +1009,27 @@ type speechmaticsStreamState struct {
 	wordDelimiterSet           bool
 	bufferRawFinals            bool
 	pendingRawFinals           []*stt.SpeechEvent
+	rawTrimBeforeTimeSet       bool
+	rawTrimBeforeTime          float64
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
+}
+
+type smAlternative struct {
+	Content    string   `json:"content"`
+	Confidence *float64 `json:"confidence"`
+	SpeakerID  string   `json:"speaker"`
+	Language   string   `json:"language"`
+	Tags       []string `json:"tags,omitempty"`
+}
+
+type smResult struct {
+	Alternatives []smAlternative `json:"alternatives"`
+	Type         string          `json:"type"`
+	Attaches     string          `json:"attaches_to"`
+	IsEOS        bool            `json:"is_eos"`
+	StartTime    float64         `json:"start_time"`
+	EndTime      float64         `json:"end_time"`
 }
 
 type smResponse struct {
@@ -1020,19 +1039,7 @@ type smResponse struct {
 		StartTime  float64 `json:"start_time"`
 		EndTime    float64 `json:"end_time"`
 	} `json:"metadata"`
-	Results []struct {
-		Alternatives []struct {
-			Content    string   `json:"content"`
-			Confidence *float64 `json:"confidence"`
-			SpeakerID  string   `json:"speaker"`
-			Language   string   `json:"language"`
-		} `json:"alternatives"`
-		Type      string  `json:"type"`
-		Attaches  string  `json:"attaches_to"`
-		IsEOS     bool    `json:"is_eos"`
-		StartTime float64 `json:"start_time"`
-		EndTime   float64 `json:"end_time"`
-	} `json:"results"`
+	Results  []smResult `json:"results"`
 	Segments []struct {
 		Text       string   `json:"text"`
 		Language   string   `json:"language"`
@@ -1259,6 +1266,7 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 	}
 	events := state.pendingRawFinals
 	state.pendingRawFinals = nil
+	speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	return events
 }
 
@@ -1272,6 +1280,7 @@ type speechmaticsRawTranscriptFragment struct {
 	startTime  float64
 	endTime    float64
 	confidence float64
+	disfluency bool
 }
 
 func speechmaticsTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1299,6 +1308,9 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 		state.pendingRawFinals = append(state.pendingRawFinals, events...)
 		return nil
 	}
+	if resp.Message == "AddTranscript" {
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
 	return events
 }
 
@@ -1307,6 +1319,7 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	if state != nil && len(state.pendingRawFinals) > 0 {
 		events = append(events, state.pendingRawFinals...)
 		state.pendingRawFinals = nil
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	}
 	if state != nil && !state.includePartials {
 		return events
@@ -1334,6 +1347,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		language := speechmaticsSegmentLanguage(alt.Language, state)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
+		if speechmaticsRawFragmentTrimmed(state, startTime) {
+			continue
+		}
 		kind := result.Type
 		if kind == "" {
 			kind = "word"
@@ -1348,6 +1364,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			startTime:  startTime,
 			endTime:    endTime,
 			confidence: speechmaticsAlternativeConfidence(alt.Confidence),
+			disfluency: speechmaticsStringInSlice("disfluency", alt.Tags),
 		})
 	}
 
@@ -1356,6 +1373,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
 	}
 	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
+		return nil
+	}
+	if speechmaticsRawFragmentTrimmed(state, resp.Metadata.StartTime+startTimeOffset) {
 		return nil
 	}
 	return []*stt.SpeechEvent{
@@ -1374,6 +1394,25 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 	}
 }
 
+func speechmaticsRawFragmentTrimmed(state *speechmaticsStreamState, startTime float64) bool {
+	return state != nil && state.rawTrimBeforeTimeSet && startTime < state.rawTrimBeforeTime
+}
+
+func speechmaticsRecordRawFinalTrimBeforeTime(state *speechmaticsStreamState, events []*stt.SpeechEvent) {
+	if state == nil || len(events) == 0 {
+		return
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) == 0 {
+			continue
+		}
+		state.rawTrimBeforeTimeSet = true
+		state.rawTrimBeforeTime = event.Alternatives[len(event.Alternatives)-1].EndTime
+		return
+	}
+}
+
 func speechmaticsAlternativeConfidence(confidence *float64) float64 {
 	if confidence == nil {
 		return 1.0
@@ -1382,16 +1421,40 @@ func speechmaticsAlternativeConfidence(confidence *float64) float64 {
 }
 
 func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamState, eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment) {
-	if state == nil || eventType != stt.SpeechEventFinalTranscript || len(fragments) == 0 {
+	if state == nil || len(fragments) == 0 {
 		return
 	}
-	annotations := []string{speechmaticsAnnotationEndsWithFinal}
+	var annotations []string
+	if eventType == stt.SpeechEventFinalTranscript {
+		annotations = append(annotations, speechmaticsAnnotationEndsWithFinal)
+	}
 	if fragments[len(fragments)-1].isEOS {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithEOS)
 	}
+	annotations = speechmaticsAppendRawDisfluencyAnnotation(annotations, fragments)
 	annotations = speechmaticsAppendRawSpeechRateAnnotation(annotations, fragments)
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
+}
+
+func speechmaticsAppendRawDisfluencyAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
+	if len(fragments) == 0 {
+		return annotations
+	}
+	for _, fragment := range fragments {
+		if fragment.disfluency {
+			annotations = append(annotations, speechmaticsAnnotationHasDisfluency)
+			break
+		}
+	}
+	if fragments[0].disfluency {
+		annotations = append(annotations, "starts_with_disfluency")
+	}
+	last := fragments[len(fragments)-1]
+	if last.disfluency || (len(fragments) > 1 && (last.isEOS || last.kind == "punctuation") && fragments[len(fragments)-2].disfluency) {
+		annotations = append(annotations, speechmaticsAnnotationEndsWithDisfluency)
+	}
+	return annotations
 }
 
 func speechmaticsAppendRawSpeechRateAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
@@ -1526,14 +1589,14 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
-		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
-			continue
-		}
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
+		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
+			continue
+		}
 		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -1582,18 +1645,13 @@ func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamStat
 }
 
 func speechmaticsSystemSpeakerID(speakerID string) bool {
-	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
+	if len(speakerID) <= 5 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
 		return false
 	}
-	inner := speakerID[2 : len(speakerID)-2]
-	if len(inner) < 2 {
-		return false
-	}
-	for _, r := range inner {
-		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
+	for _, ch := range speakerID[2 : len(speakerID)-2] {
+		if ch != '_' && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') {
+			return false
 		}
-		return false
 	}
 	return true
 }
@@ -2270,7 +2328,16 @@ func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	}
 	s.mu.Lock()
 	s.localEndpointingTurnClosed = false
+	speechmaticsClearLatestEndpointingAnnotation(s.state)
 	s.mu.Unlock()
+}
+
+func speechmaticsClearLatestEndpointingAnnotation(state *speechmaticsStreamState) {
+	if state == nil {
+		return
+	}
+	state.latestSegmentAnnotationSet = false
+	state.latestSegmentAnnotation = nil
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
