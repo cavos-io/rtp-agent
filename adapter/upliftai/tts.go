@@ -41,6 +41,7 @@ const (
 var (
 	upliftAISocketIOAudioWait      = 30 * time.Second
 	upliftAISocketIOReconnectDelay = time.Second
+	upliftAITTSRequestSeq          atomic.Uint64
 )
 
 type UpliftAITTS struct {
@@ -211,10 +212,11 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	ctx, cancel := context.WithCancel(ctx)
 
 	stream := &upliftAITTSChunkedStream{
-		owner:  t,
-		ctx:    ctx,
-		cancel: cancel,
-		text:   text,
+		owner:     t,
+		ctx:       ctx,
+		cancel:    cancel,
+		text:      text,
+		requestID: nextUpliftAITTSID("upliftai-tts"),
 	}
 	if !t.registerStream(stream) {
 		_ = stream.Close()
@@ -349,6 +351,7 @@ type upliftAITTSSynthesizeStream struct {
 	eventCh   chan upliftAITTSStreamResult
 	doneCh    chan struct{}
 	active    tts.ChunkedStream
+	requestID string
 	closed    bool
 	inputDone bool
 	segments  int
@@ -366,12 +369,13 @@ func newUpliftAITTSSynthesizeStream(owner *UpliftAITTS, ctx context.Context) *up
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &upliftAITTSSynthesizeStream{
-		owner:   owner,
-		ctx:     ctx,
-		cancel:  cancel,
-		inputCh: make(chan string, 100),
-		eventCh: make(chan upliftAITTSStreamResult, 100),
-		doneCh:  make(chan struct{}),
+		owner:     owner,
+		ctx:       ctx,
+		cancel:    cancel,
+		inputCh:   make(chan string, 100),
+		eventCh:   make(chan upliftAITTSStreamResult, 100),
+		doneCh:    make(chan struct{}),
+		requestID: nextUpliftAITTSID("upliftai-stream"),
 	}
 	go stream.run()
 	return stream
@@ -540,6 +544,7 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 	if err != nil {
 		return err
 	}
+	segmentID := nextUpliftAITTSID("upliftai-segment")
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -572,6 +577,8 @@ func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
 		if audio == nil {
 			continue
 		}
+		audio.RequestID = s.requestID
+		audio.SegmentID = segmentID
 		if audio.Frame != nil {
 			hasAudio = true
 		}
@@ -630,6 +637,8 @@ type upliftAITTSChunkedStream struct {
 	pcmFrames      []*model.AudioFrame
 	pendingReadErr error
 	outputFormat   string
+	requestID      string
+	segmentID      string
 	started        bool
 	hasAudio       bool
 	pendingFinal   bool
@@ -650,19 +659,40 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
-	if strings.HasPrefix(s.currentOutputFormat(), "MP3") {
-		return s.nextDecodedMP3()
+	var (
+		audio *tts.SynthesizedAudio
+		err   error
+	)
+	switch {
+	case strings.HasPrefix(s.currentOutputFormat(), "MP3"):
+		audio, err = s.nextDecodedMP3()
+	case strings.HasPrefix(s.currentOutputFormat(), "WAV"):
+		audio, err = s.nextDecodedWAV()
+	case strings.HasPrefix(s.currentOutputFormat(), "OGG"):
+		audio, err = s.nextDecodedOGG()
+	case s.currentOutputFormat() == "ULAW_8000_8":
+		audio, err = s.nextBufferedULaw()
+	default:
+		audio, err = s.nextRawPCM()
 	}
-	if strings.HasPrefix(s.currentOutputFormat(), "WAV") {
-		return s.nextDecodedWAV()
+	s.applyMetadata(audio)
+	return audio, err
+}
+
+func nextUpliftAITTSID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, upliftAITTSRequestSeq.Add(1))
+}
+
+func (s *upliftAITTSChunkedStream) applyMetadata(audio *tts.SynthesizedAudio) {
+	if audio == nil {
+		return
 	}
-	if strings.HasPrefix(s.currentOutputFormat(), "OGG") {
-		return s.nextDecodedOGG()
+	if audio.RequestID == "" {
+		audio.RequestID = s.requestID
 	}
-	if s.currentOutputFormat() == "ULAW_8000_8" {
-		return s.nextBufferedULaw()
+	if audio.SegmentID == "" {
+		audio.SegmentID = s.segmentID
 	}
-	return s.nextRawPCM()
 }
 
 func (s *upliftAITTSChunkedStream) ensureResponse() error {

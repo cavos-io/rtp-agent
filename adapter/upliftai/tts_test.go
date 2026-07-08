@@ -1054,6 +1054,57 @@ func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamEmitsReferenceRequestAndSegmentIDs(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02\x03\x04")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello metadata"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final frame", audio)
+	}
+	if audio.RequestID == "" {
+		t.Fatal("first audio RequestID is empty, want reference stream request id")
+	}
+	if audio.SegmentID == "" {
+		t.Fatal("first audio SegmentID is empty, want reference segment id")
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want stable stream request id %q", final.RequestID, audio.RequestID)
+	}
+	if final.SegmentID != audio.SegmentID {
+		t.Fatalf("final SegmentID = %q, want stable segment id %q", final.SegmentID, audio.SegmentID)
+	}
+}
+
 func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	var requestBody map[string]string
 	oldClient := http.DefaultClient
