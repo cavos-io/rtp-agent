@@ -648,6 +648,24 @@ func TestUltravoxRealtimeToolPayloadsKeepReferenceRawNullableRequired(t *testing
 	}
 }
 
+func TestUltravoxRealtimeToolPayloadsUseReferenceRawRequiredMapping(t *testing.T) {
+	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawRequiredMapTool{}})
+	tool, ok := payloads[0]["temporaryTool"].(map[string]any)
+	if !ok {
+		t.Fatalf("temporaryTool = %#v, want map", payloads[0]["temporaryTool"])
+	}
+	params, ok := tool["dynamicParameters"].([]map[string]any)
+	if !ok || len(params) != 1 {
+		t.Fatalf("dynamicParameters = %#v, want one raw parameter", tool["dynamicParameters"])
+	}
+	if params[0]["name"] != "query" {
+		t.Fatalf("raw required-map parameter name = %#v, want query", params[0]["name"])
+	}
+	if params[0]["required"] != true {
+		t.Fatalf("raw required-map parameter required = %#v, want reference membership true", params[0]["required"])
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -5704,6 +5722,31 @@ func (ultravoxRealtimeRawNullableRequiredTool) ParseFunctionTools(string) (map[s
 				},
 			},
 			"required": []string{"query"},
+		},
+	}, nil
+}
+
+type ultravoxRealtimeRawRequiredMapTool struct{}
+
+func (ultravoxRealtimeRawRequiredMapTool) ID() string          { return "raw_required_map" }
+func (ultravoxRealtimeRawRequiredMapTool) Name() string        { return "raw_required_map" }
+func (ultravoxRealtimeRawRequiredMapTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawRequiredMapTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawRequiredMapTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawRequiredMapTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_required_map",
+		"description": "raw required map schema",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string"},
+			},
+			"required": map[string]interface{}{"query": true},
 		},
 	}, nil
 }

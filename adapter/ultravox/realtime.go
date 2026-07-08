@@ -1828,6 +1828,8 @@ func ultravoxRealtimeToolParameterNames(parameters map[string]any, properties ma
 func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
 	set := make(map[string]struct{})
 	switch values := required.(type) {
+	case string:
+		set[values] = struct{}{}
 	case []string:
 		for _, value := range values {
 			set[value] = struct{}{}
@@ -1837,6 +1839,10 @@ func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
 			if name, ok := value.(string); ok {
 				set[name] = struct{}{}
 			}
+		}
+	case map[string]any:
+		for name := range values {
+			set[name] = struct{}{}
 		}
 	}
 	return set
