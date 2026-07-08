@@ -244,6 +244,7 @@ func (s *BasetenSTT) UpdateOptions(opts ...BasetenSTTOption) {
 		return
 	}
 	s.mu.Lock()
+	beforeLanguage := s.language
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -251,18 +252,16 @@ func (s *BasetenSTT) UpdateOptions(opts ...BasetenSTTOption) {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	languageChanged := s.language != beforeLanguage
+	config := basetenSTTMetadataConfigFromProvider(s)
 	endpoint := s.modelEndpoint
 	headers := buildBasetenSTTHeaders(s)
-	metadata, err := json.Marshal(buildBasetenSTTMetadata(s))
 	dialer := s.dialWebsocket
 	language := s.language
 	s.mu.Unlock()
-	if err != nil {
-		return
-	}
 
 	for _, stream := range streams {
-		stream.updateOptions(endpoint, headers, metadata, dialer, language)
+		stream.updateOptions(endpoint, headers, config, dialer, language, languageChanged)
 	}
 }
 
@@ -369,6 +368,53 @@ func buildBasetenSTTMetadataForLanguage(s *BasetenSTT, language string) map[stri
 	}
 }
 
+type basetenSTTMetadataConfig struct {
+	encoding                   string
+	sampleRate                 int
+	enablePartialTranscripts   bool
+	partialTranscriptInterval  float64
+	finalTranscriptMaxDuration int
+	showWordTimestamps         bool
+	vadThreshold               float64
+	vadMinSilenceDurationMS    int
+	vadSpeechPadMS             int
+}
+
+func basetenSTTMetadataConfigFromProvider(s *BasetenSTT) basetenSTTMetadataConfig {
+	return basetenSTTMetadataConfig{
+		encoding:                   s.encoding,
+		sampleRate:                 s.sampleRate,
+		enablePartialTranscripts:   s.enablePartialTranscripts,
+		partialTranscriptInterval:  s.partialTranscriptInterval,
+		finalTranscriptMaxDuration: s.finalTranscriptMaxDuration,
+		showWordTimestamps:         s.showWordTimestamps,
+		vadThreshold:               s.vadThreshold,
+		vadMinSilenceDurationMS:    s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:             s.vadSpeechPadMS,
+	}
+}
+
+func buildBasetenSTTMetadataFromConfig(config basetenSTTMetadataConfig, language string) map[string]interface{} {
+	return map[string]interface{}{
+		"whisper_params": map[string]interface{}{
+			"audio_language":       language,
+			"show_word_timestamps": config.showWordTimestamps,
+		},
+		"streaming_params": map[string]interface{}{
+			"encoding":                        config.encoding,
+			"sample_rate":                     config.sampleRate,
+			"enable_partial_transcripts":      config.enablePartialTranscripts,
+			"partial_transcript_interval_s":   config.partialTranscriptInterval,
+			"final_transcript_max_duration_s": config.finalTranscriptMaxDuration,
+		},
+		"streaming_vad_config": map[string]interface{}{
+			"threshold":               config.vadThreshold,
+			"min_silence_duration_ms": config.vadMinSilenceDurationMS,
+			"speech_pad_ms":           config.vadSpeechPadMS,
+		},
+	}
+}
+
 type basetenSTTStream struct {
 	conn         *websocket.Conn
 	events       chan *stt.SpeechEvent
@@ -465,7 +511,7 @@ func (s *basetenSTTStream) closeLocked() error {
 	return err
 }
 
-func (s *basetenSTTStream) updateOptions(endpoint string, headers http.Header, metadata []byte, dialer basetenSTTWebsocketDialer, language string) {
+func (s *basetenSTTStream) updateOptions(endpoint string, headers http.Header, config basetenSTTMetadataConfig, dialer basetenSTTWebsocketDialer, language string, languageChanged bool) {
 	if dialer == nil {
 		return
 	}
@@ -475,8 +521,16 @@ func (s *basetenSTTStream) updateOptions(endpoint string, headers http.Header, m
 		return
 	}
 	oldConn := s.conn
+	if !languageChanged && s.state != nil && s.state.language != "" {
+		language = s.state.language
+	}
 	s.reconnecting = true
 	s.mu.Unlock()
+
+	metadata, err := json.Marshal(buildBasetenSTTMetadataFromConfig(config, language))
+	if err != nil {
+		return
+	}
 
 	if oldConn != nil {
 		_ = oldConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
