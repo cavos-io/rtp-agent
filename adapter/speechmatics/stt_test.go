@@ -726,6 +726,39 @@ func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceStartOfTurn(t *testing.T) {
+	state := &speechmaticsStreamState{language: "en", includePartials: true, bufferRawFinals: true}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.2,
+			"alternatives":[{"content":"done","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before next turn = %#v, want buffered final", events)
+	}
+	events := speechmaticsEvents(smResponse{Message: "StartOfTurn"}, state)
+	if len(events) != 2 {
+		t.Fatalf("start events = %#v, want buffered final then start_of_speech", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
+		t.Fatalf("first event = %#v, want buffered final transcript before start boundary", events[0])
+	}
+	if events[1].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("second event = %s, want start_of_speech", events[1].Type)
+	}
+	if len(state.pendingRawFinals) != 0 {
+		t.Fatalf("pending finals = %#v, want flushed at next turn start", state.pendingRawFinals)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -1165,6 +1198,68 @@ func TestSpeechmaticsSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T)
 	}
 	if err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want reference provider close error", err)
+	}
+}
+
+func TestSpeechmaticsSTTUnexpectedCloseDrainsPendingRawFinalBeforeError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"results": []map[string]interface{}{{
+				"type":       "word",
+				"start_time": 0.1,
+				"end_time":   0.3,
+				"alternatives": []map[string]interface{}{{
+					"content":    "closing",
+					"confidence": 0.9,
+					"speaker":    "S1",
+					"language":   "en",
+				}},
+			}},
+		}); err != nil {
+			t.Errorf("write raw final: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want pending raw final before provider close error", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first Next event = %#v, want pending raw final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "closing" {
+		t.Fatalf("transcript = %q, want closing", got)
+	}
+	event, err = stream.Next()
+	if event != nil {
+		t.Fatalf("second Next event = %#v, want nil before provider close error", event)
+	}
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want reference provider close error", err)
 	}
 }
 
@@ -2687,6 +2782,47 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsPushFrameUsesReferenceMonoProviderChunks(t *testing.T) {
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+	audioData := make([]byte, 8000)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("binary writes after stereo PushFrame = %d, want two reference mono 100ms chunks", len(writes))
+	}
+	if got := len(writes[0]); got != 3200 {
+		t.Fatalf("first chunk length = %d, want 3200 reference mono bytes", got)
+	}
+	if got := len(writes[1]); got != 3200 {
+		t.Fatalf("second chunk length = %d, want 3200 reference mono bytes", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("binary writes after Flush = %d, want stereo remainder chunk", len(writes))
+	}
+	if got := len(writes[2]); got != 1600 {
+		t.Fatalf("flush chunk length = %d, want remaining reference mono bytes", got)
+	}
+}
+
 func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
@@ -3500,6 +3636,77 @@ func TestSpeechmaticsSTTStreamRetriesReferenceTransientDialFailure(t *testing.T)
 	defer stream.Close()
 	if attempts != 2 {
 		t.Fatalf("dial attempts = %d, want one reference retry after transient failure", attempts)
+	}
+}
+
+func TestSpeechmaticsSTTStreamRetryAccumulatesReferenceStartTimeOffset(t *testing.T) {
+	const retryDelay = 25 * time.Millisecond
+	withSpeechmaticsSTTRetryInterval(t, retryDelay)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	var attempts int
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("transient dial failed")
+			}
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, network, addr)
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("Speechmatics stream does not expose reference timing anchors")
+	}
+	if got := timing.StartTimeOffset(); got < retryDelay.Seconds() {
+		t.Fatalf("StartTimeOffset = %.6f, want at least retry delay %.6f after startup retry", got, retryDelay.Seconds())
+	}
+}
+
+func TestSpeechmaticsSTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"))
+
+	stream, err := provider.Stream(ctx, "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after caller cancellation", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %T %v, want context.Canceled", err, err)
 	}
 }
 

@@ -269,7 +269,8 @@ type speechmaticsTTSChunkedStream struct {
 	requested     bool
 	retryAttempt  int
 	pcm           *audio.AudioByteStream
-	pendingFrames []*model.AudioFrame
+	pendingAudio  []*tts.SynthesizedAudio
+	pendingTail   *model.AudioFrame
 	pendingErr    error
 	emittedAudio  bool
 	finalReady    bool
@@ -281,16 +282,17 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
-	if len(s.pendingFrames) > 0 {
-		return s.emitFrame(s.popPendingFrame()), nil
+	if len(s.pendingAudio) > 0 {
+		return s.emitAudio(s.popPendingAudio())
 	}
 	if s.pendingErr != nil {
 		err := s.pendingErr
 		s.pendingErr = nil
-		s.finish()
 		if errors.Is(err, context.Canceled) {
+			s.finishCanceled()
 			return nil, context.Canceled
 		}
+		s.finish()
 		if speechmaticsTTSTimeoutError(err) {
 			return nil, speechmaticsTTSTimeoutAPIError()
 		}
@@ -303,6 +305,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.ensureStream(); err != nil {
 		if s.isClosedOrFinal() {
 			return nil, io.EOF
+		}
+		if errors.Is(err, context.Canceled) {
+			s.finishCanceled()
+			return nil, context.Canceled
 		}
 		s.finish()
 		return nil, err
@@ -319,22 +325,33 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if s.isClosedOrFinal() {
 			return nil, io.EOF
 		}
+		if errors.Is(err, context.Canceled) {
+			s.finishCanceled()
+			return nil, context.Canceled
+		}
 		if n > 0 {
 			frames := s.pcmStream().Push(buf[:n])
 			if err == io.EOF {
 				frames = append(frames, s.pcmStream().Flush()...)
+				s.queuePCMFrames(frames)
+				s.queueHeldTailAudio()
 				s.finalReady = true
 			} else if err != nil {
-				frames = append(frames, s.pcmStream().Flush()...)
+				s.queuePCMFrames(append(frames, s.pcmStream().Flush()...))
 				s.pendingErr = err
+			} else {
+				s.queuePCMFrames(frames)
 			}
-			if len(frames) == 0 {
+			if err != nil && err != io.EOF && len(s.pendingAudio) == 0 && s.pendingTail != nil {
+				s.queueHeldTailAudio()
+			}
+			if len(s.pendingAudio) == 0 {
 				if err != nil {
 					if err == io.EOF {
 						return s.emitFinal()
 					}
 					if errors.Is(err, context.Canceled) {
-						s.finish()
+						s.finishCanceled()
 						return nil, context.Canceled
 					}
 					apiErr := speechmaticsTTSReadAPIError(err)
@@ -356,21 +373,26 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err != nil {
 				s.closeTerminalResponse()
 			}
-			s.pendingFrames = append(s.pendingFrames, frames[1:]...)
-			return s.emitFrame(frames[0]), nil
+			return s.emitAudio(s.popPendingAudio())
 		}
 		if err != nil {
 			if err == io.EOF {
 				frames := s.pcmStream().Flush()
 				if len(frames) > 0 {
+					s.queuePCMFrames(frames)
+					s.queueHeldTailAudio()
 					s.finalReady = true
-					s.pendingFrames = append(s.pendingFrames, frames[1:]...)
-					return s.emitFrame(frames[0]), nil
+					return s.emitAudio(s.popPendingAudio())
+				}
+				if s.pendingTail != nil {
+					s.queueHeldTailAudio()
+					s.finalReady = true
+					return s.emitAudio(s.popPendingAudio())
 				}
 				return s.emitFinal()
 			}
 			if errors.Is(err, context.Canceled) {
-				s.finish()
+				s.finishCanceled()
 				return nil, context.Canceled
 			}
 			apiErr := speechmaticsTTSReadAPIError(err)
@@ -415,18 +437,109 @@ func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {
 	return s.pcm
 }
 
-func (s *speechmaticsTTSChunkedStream) popPendingFrame() *model.AudioFrame {
-	frame := s.pendingFrames[0]
-	s.pendingFrames = s.pendingFrames[1:]
-	return frame
+func (s *speechmaticsTTSChunkedStream) queuePCMFrames(frames []*model.AudioFrame) {
+	for _, frame := range frames {
+		s.queueNonFinalFrame(frame)
+	}
 }
 
-func (s *speechmaticsTTSChunkedStream) emitFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
-	s.emittedAudio = true
-	return &tts.SynthesizedAudio{
-		RequestID: s.requestID,
-		Frame:     frame,
+func (s *speechmaticsTTSChunkedStream) queueNonFinalFrame(frame *model.AudioFrame) {
+	if frame == nil {
+		return
 	}
+	combined := speechmaticsCombineTTSFrames(s.pendingTail, frame)
+	s.pendingTail = nil
+	head, tail, ok := speechmaticsSplitTTSFrameTail(combined)
+	if !ok {
+		s.pendingTail = tail
+		return
+	}
+	s.pendingAudio = append(s.pendingAudio, &tts.SynthesizedAudio{RequestID: s.requestID, Frame: head})
+	s.pendingTail = tail
+}
+
+func (s *speechmaticsTTSChunkedStream) queueHeldTailAudio() {
+	if s.pendingTail == nil {
+		return
+	}
+	s.pendingAudio = append(s.pendingAudio, &tts.SynthesizedAudio{
+		RequestID: s.requestID,
+		Frame:     s.pendingTail,
+	})
+	s.pendingTail = nil
+}
+
+func (s *speechmaticsTTSChunkedStream) popPendingAudio() *tts.SynthesizedAudio {
+	audio := s.pendingAudio[0]
+	s.pendingAudio = s.pendingAudio[1:]
+	return audio
+}
+
+func speechmaticsSplitTTSFrameTail(frame *model.AudioFrame) (*model.AudioFrame, *model.AudioFrame, bool) {
+	if frame == nil || frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return nil, speechmaticsCloneTTSFrame(frame), false
+	}
+	tailSamples := frame.SampleRate * 10 / 1000
+	if tailSamples == 0 || frame.SamplesPerChannel <= tailSamples {
+		return nil, speechmaticsCloneTTSFrame(frame), false
+	}
+	frameBytes := frame.SamplesPerChannel * frame.NumChannels * 2
+	if uint32(len(frame.Data)) < frameBytes {
+		return nil, speechmaticsCloneTTSFrame(frame), false
+	}
+	headSamples := frame.SamplesPerChannel - tailSamples
+	headBytes := headSamples * frame.NumChannels * 2
+	tailBytes := tailSamples * frame.NumChannels * 2
+
+	head := speechmaticsCloneTTSFrame(frame)
+	head.SamplesPerChannel = headSamples
+	head.Data = append([]byte(nil), frame.Data[:headBytes]...)
+
+	tail := speechmaticsCloneTTSFrame(frame)
+	tail.SamplesPerChannel = tailSamples
+	tail.Data = append([]byte(nil), frame.Data[headBytes:headBytes+tailBytes]...)
+	return head, tail, true
+}
+
+func speechmaticsCombineTTSFrames(first, second *model.AudioFrame) *model.AudioFrame {
+	if first == nil {
+		return speechmaticsCloneTTSFrame(second)
+	}
+	if second == nil {
+		return speechmaticsCloneTTSFrame(first)
+	}
+	if first.SampleRate != second.SampleRate || first.NumChannels != second.NumChannels {
+		return speechmaticsCloneTTSFrame(second)
+	}
+	combined := speechmaticsCloneTTSFrame(first)
+	combined.SamplesPerChannel = first.SamplesPerChannel + second.SamplesPerChannel
+	combined.Data = append(append([]byte(nil), first.Data...), second.Data...)
+	return combined
+}
+
+func speechmaticsCloneTTSFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	clone := *frame
+	clone.Data = append([]byte(nil), frame.Data...)
+	return &clone
+}
+
+func (s *speechmaticsTTSChunkedStream) emitAudio(audio *tts.SynthesizedAudio) (*tts.SynthesizedAudio, error) {
+	if audio == nil {
+		return nil, nil
+	}
+	if audio.Frame != nil {
+		s.emittedAudio = true
+	}
+	if audio.IsFinal {
+		if !s.markFinalSent() {
+			return nil, io.EOF
+		}
+		s.finish()
+	}
+	return audio, nil
 }
 
 func (s *speechmaticsTTSChunkedStream) ensureStream() error {
@@ -536,6 +649,9 @@ func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error 
 	if interval <= 0 {
 		return nil
 	}
+	if s.ctx == nil {
+		return err
+	}
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	select {
@@ -556,7 +672,8 @@ func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
 	s.stream = nil
 	s.requested = false
 	s.pcm = nil
-	s.pendingFrames = nil
+	s.pendingAudio = nil
+	s.pendingTail = nil
 	s.pendingErr = nil
 	s.finalReady = false
 	s.requestID = ""
@@ -606,11 +723,28 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		s.finish()
 		return nil, err
 	}
+	if !s.emittedAudio {
+		s.finish()
+		return nil, io.EOF
+	}
 	if !s.markFinalSent() {
 		return nil, io.EOF
 	}
 	s.finish()
-	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, Frame: speechmaticsTTSFinalMarkerFrame(s.sampleRate), IsFinal: true}, nil
+}
+
+func speechmaticsTTSFinalMarkerFrame(sampleRate int) *model.AudioFrame {
+	if sampleRate <= 0 {
+		return nil
+	}
+	samples := uint32(sampleRate / 100)
+	return &model.AudioFrame{
+		Data:              make([]byte, int(samples)*2),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: samples,
+	}
 }
 
 func (s *speechmaticsTTSChunkedStream) markFinalSent() bool {
@@ -666,6 +800,11 @@ func (s *speechmaticsTTSChunkedStream) cancelRequest() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func (s *speechmaticsTTSChunkedStream) finishCanceled() {
+	s.markFinalSent()
+	s.finish()
 }
 
 func (s *speechmaticsTTSChunkedStream) finish() {

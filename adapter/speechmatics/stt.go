@@ -434,6 +434,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
 	startupAttempt := 0
+	startupStarted := time.Now()
 
 	for {
 		conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header, &startupAttempt)
@@ -446,6 +447,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		}
 
 		streamStartTime := time.Now()
+		startTimeOffset := streamStartTime.Sub(startupStarted).Seconds()
+		if startTimeOffset < 0 {
+			startTimeOffset = 0
+		}
 		stream := &speechmaticsSTTStream{
 			conn:   conn,
 			events: make(chan *stt.SpeechEvent, 10),
@@ -460,6 +465,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 				focusMode:            s.focusMode,
 				includePartials:      speechmaticsIncludePartials(s),
 				bufferRawFinals:      true,
+				startTimeOffset:      startTimeOffset,
 				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
 			},
 			owner:                     s,
@@ -1070,9 +1076,15 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
+					if !s.enqueuePendingRawFinalEvents() {
+						return
+					}
 					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
 				}
 			} else {
+				if !s.enqueuePendingRawFinalEvents() {
+					return
+				}
 				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
 			}
 			return
@@ -1177,6 +1189,15 @@ func (s *speechmaticsSTTStream) flushPendingRawFinalEvents() []*stt.SpeechEvent 
 	return speechmaticsFlushPendingRawFinals(s.state)
 }
 
+func (s *speechmaticsSTTStream) enqueuePendingRawFinalEvents() bool {
+	for _, event := range s.flushPendingRawFinalEvents() {
+		if !s.enqueueEvent(event) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *speechmaticsSTTStream) forcedEOUPartialEvents(resp smResponse) []*stt.SpeechEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1244,7 +1265,9 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+		events := speechmaticsFlushPendingRawFinals(state)
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		return events
 	case "EndOfTurn":
 		return speechmaticsEndOfTurnEvents(state)
 	}
@@ -2522,11 +2545,7 @@ func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStr
 	if sampleRate == 0 {
 		sampleRate = 16000
 	}
-	numChannels := frame.NumChannels
-	if numChannels == 0 {
-		numChannels = 1
-	}
-	return audio.NewAudioByteStream(sampleRate, numChannels, 0)
+	return audio.NewAudioByteStream(sampleRate, 1, 0)
 }
 
 type speechmaticsSTTInputAudioNormalizer struct {
