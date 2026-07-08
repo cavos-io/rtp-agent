@@ -820,7 +820,10 @@ type ultravoxRealtimeConnectionError string
 
 func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
 
-const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+const (
+	ultravoxRealtimeMissingJoinURLError      ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
+)
 
 func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
 	createCallURL, headers, payload := s.createCallRequest()
@@ -899,6 +902,10 @@ func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocket
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				return ultravoxRealtimeUnexpectedWebsocketClose
 			}
 			return err
 		}

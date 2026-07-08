@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 )
 
 func TestUltravoxRealtimeConstructorMatchesReference(t *testing.T) {
@@ -2672,6 +2673,27 @@ func TestUltravoxRealtimeSessionReceiveTaskDispatchesReferenceFrames(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for websocket binary audio frame")
+	}
+}
+
+func TestUltravoxRealtimeSessionReceiveTaskUnexpectedCloseReturnsReferenceError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	conn := &ultravoxRealtimeTestWebsocketConn{
+		readErr: &websocket.CloseError{Code: websocket.CloseNormalClosure, Text: "provider closed"},
+	}
+	err = session.receiveRealtimeMessages(conn)
+	if err == nil || err.Error() != "Ultravox S2S connection closed unexpectedly" {
+		t.Fatalf("receive close error = %v, want reference unexpected close error", err)
 	}
 }
 
