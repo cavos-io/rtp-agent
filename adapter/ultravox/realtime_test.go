@@ -540,6 +540,36 @@ func TestUltravoxRealtimeToolDynamicParametersTreatOmitEmptyAsReferenceOptional(
 	}
 }
 
+func TestUltravoxRealtimeToolPayloadsUseRawFunctionSchemaLikeReference(t *testing.T) {
+	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawSchemaTool{}})
+	if len(payloads) != 1 {
+		t.Fatalf("tool payloads len = %d, want one raw schema tool", len(payloads))
+	}
+	tool, ok := payloads[0]["temporaryTool"].(map[string]any)
+	if !ok {
+		t.Fatalf("temporaryTool = %#v, want map", payloads[0]["temporaryTool"])
+	}
+	if tool["modelToolName"] != "raw_lookup" {
+		t.Fatalf("modelToolName = %#v, want raw schema name", tool["modelToolName"])
+	}
+	if tool["description"] != "raw schema description" {
+		t.Fatalf("description = %#v, want raw schema description", tool["description"])
+	}
+	params, ok := tool["dynamicParameters"].([]map[string]any)
+	if !ok || len(params) != 1 {
+		t.Fatalf("dynamicParameters = %#v, want one raw parameter", tool["dynamicParameters"])
+	}
+	if params[0]["name"] != "query" {
+		t.Fatalf("raw parameter name = %#v, want query", params[0]["name"])
+	}
+	if params[0]["required"] != true {
+		t.Fatalf("raw parameter required = %#v, want true", params[0]["required"])
+	}
+	if schema, ok := params[0]["schema"].(map[string]any); !ok || schema["type"] != "string" {
+		t.Fatalf("raw parameter schema = %#v, want string schema", params[0]["schema"])
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -5075,4 +5105,34 @@ func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
 }
 func (t ultravoxRealtimeTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
+}
+
+type ultravoxRealtimeRawSchemaTool struct{}
+
+func (ultravoxRealtimeRawSchemaTool) ID() string          { return "raw_lookup" }
+func (ultravoxRealtimeRawSchemaTool) Name() string        { return "raw_lookup" }
+func (ultravoxRealtimeRawSchemaTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+}
+func (ultravoxRealtimeRawSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawSchemaTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_lookup",
+		"description": "raw schema description",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string"},
+			},
+			"required": []string{"query"},
+		},
+	}, nil
 }
