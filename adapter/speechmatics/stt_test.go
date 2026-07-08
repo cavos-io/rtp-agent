@@ -1239,12 +1239,24 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
-			_ = tcpConn.SetLinger(0)
-		}
-		_ = conn.UnderlyingConn().Close()
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
 	}))
 	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &speechmaticsFailAfterHandshakeWriteConn{Conn: conn}, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
@@ -2558,8 +2570,10 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *testing.T) {
 	withSpeechmaticsSTTRetryInterval(t, 0)
 	oldDialer := websocket.DefaultDialer
+	attempts := 0
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			attempts++
 			return nil, errors.New("dial failed")
 		},
 		Proxy: nil,
@@ -2574,6 +2588,12 @@ func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *test
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to recognize speech after 3 attempts" {
+		t.Fatalf("APIConnectionError message = %q, want reference exhausted-retry summary", connectionErr.Message)
+	}
+	if attempts != 4 {
+		t.Fatalf("dial attempts = %d, want initial attempt plus 3 reference retries", attempts)
 	}
 }
 
@@ -4455,6 +4475,19 @@ func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
 		data = append(data, sample[:]...)
 	}
 	return data
+}
+
+type speechmaticsFailAfterHandshakeWriteConn struct {
+	net.Conn
+	writes int
+}
+
+func (c *speechmaticsFailAfterHandshakeWriteConn) Write(p []byte) (int, error) {
+	c.writes++
+	if c.writes > 1 {
+		return 0, errors.New("startup write failed")
+	}
+	return c.Conn.Write(p)
 }
 
 type fakeSpeechmaticsVAD struct {

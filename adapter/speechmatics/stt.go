@@ -410,7 +410,7 @@ func (s *SpeechmaticsSTT) waitBeforeStartupRetry(ctx context.Context, err error,
 	}
 	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
 	if *startupAttempt >= maxRetry {
-		return connectionErr
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", *startupAttempt))
 	}
 	interval := speechmaticsSTTRetryInterval(*startupAttempt)
 	*startupAttempt = *startupAttempt + 1
