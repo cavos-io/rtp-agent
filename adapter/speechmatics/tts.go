@@ -318,17 +318,23 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 					if err == io.EOF {
 						return s.emitFinal()
 					}
-					s.cancelRequest()
 					if errors.Is(err, context.Canceled) {
 						s.finish()
 						return nil, context.Canceled
 					}
-					if speechmaticsTTSTimeoutError(err) {
+					apiErr := speechmaticsTTSReadAPIError(err)
+					if retryErr := s.prepareRetryBeforeAudio(apiErr); retryErr == nil {
+						if openErr := s.ensureStream(); openErr != nil {
+							s.finish()
+							return nil, openErr
+						}
+						continue
+					} else if retryErr != apiErr {
 						s.finish()
-						return nil, speechmaticsTTSTimeoutAPIError()
+						return nil, retryErr
 					}
 					s.finish()
-					return nil, speechmaticsTTSConnectionAPIError()
+					return nil, apiErr
 				}
 				continue
 			}
@@ -345,17 +351,23 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return s.emitFinal()
 			}
-			s.cancelRequest()
 			if errors.Is(err, context.Canceled) {
 				s.finish()
 				return nil, context.Canceled
 			}
-			if speechmaticsTTSTimeoutError(err) {
+			apiErr := speechmaticsTTSReadAPIError(err)
+			if retryErr := s.prepareRetryBeforeAudio(apiErr); retryErr == nil {
+				if openErr := s.ensureStream(); openErr != nil {
+					s.finish()
+					return nil, openErr
+				}
+				continue
+			} else if retryErr != apiErr {
 				s.finish()
-				return nil, speechmaticsTTSTimeoutAPIError()
+				return nil, retryErr
 			}
 			s.finish()
-			return nil, speechmaticsTTSConnectionAPIError()
+			return nil, apiErr
 		}
 	}
 }
@@ -471,6 +483,13 @@ func speechmaticsTTSTimeoutAPIError() error {
 
 func speechmaticsTTSConnectionAPIError() error {
 	return llm.NewAPIConnectionError("")
+}
+
+func speechmaticsTTSReadAPIError(err error) error {
+	if speechmaticsTTSTimeoutError(err) {
+		return speechmaticsTTSTimeoutAPIError()
+	}
+	return speechmaticsTTSConnectionAPIError()
 }
 
 func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
