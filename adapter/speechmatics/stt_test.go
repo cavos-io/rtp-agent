@@ -1923,6 +1923,33 @@ func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamRejectsReferenceEmptyFrameSampleRateChange(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(16000)),
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              speechmaticsTestInt16PCM(160),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("empty-frame PushFrame() error = %v, want reference sample-rate consistency error", err)
+	}
+}
+
 func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{

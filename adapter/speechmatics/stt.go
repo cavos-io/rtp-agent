@@ -1479,13 +1479,18 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	if frame == nil || len(frame.Data) == 0 {
+	if frame == nil {
 		s.mu.Unlock()
 		return nil
 	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		s.mu.Unlock()
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	s.pushedSampleRate = frame.SampleRate
+	if len(frame.Data) == 0 {
+		s.mu.Unlock()
+		return nil
 	}
 	vadStream := s.vadStream
 	bufferVAD := vadStream != nil && s.startupGateActiveLocked()
@@ -1511,7 +1516,6 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
-	s.pushedSampleRate = frame.SampleRate
 	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
 	if err != nil {
 		return err
