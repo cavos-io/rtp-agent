@@ -3123,6 +3123,63 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeIncludesReferenceCumulativeAudioTimestamp(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	var writes []map[string]interface{}
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error { return nil },
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              speechmaticsTestInt16PCM(1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	for _, event := range speechmaticsEndOfTurnEvents(stream.state) {
+		if event.Type == stt.SpeechEventRecognitionUsage && event.RecognitionUsage.AudioDuration != 0.1 {
+			t.Fatalf("first turn usage = %#v, want 0.1s", event.RecognitionUsage)
+		}
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              speechmaticsTestInt16PCM(3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 3200,
+	}); err != nil {
+		t.Fatalf("second PushFrame error = %v", err)
+	}
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("finalize writes = %d, want one", len(writes))
+	}
+	timestamp, ok := writes[0]["timestamp"].(float64)
+	if !ok {
+		t.Fatalf("timestamp = %#v, want reference audio_seconds_sent", writes[0]["timestamp"])
+	}
+	if timestamp < 0.299 || timestamp > 0.301 {
+		t.Fatalf("timestamp = %v, want cumulative reference audio_seconds_sent 0.3", timestamp)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeFailureSurfacesToNext(t *testing.T) {
 	finalizeErr := errors.New("manual finalize failed")
 	transportClosed := make(chan struct{})

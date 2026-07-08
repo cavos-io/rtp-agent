@@ -891,6 +891,7 @@ type speechmaticsSTTStream struct {
 type speechmaticsStreamState struct {
 	language             string
 	speechDuration       float64
+	audioSecondsSent     float64
 	startTimeOffset      float64
 	startTime            float64
 	speakerActiveFormat  string
@@ -1572,7 +1573,7 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 			_ = s.closeLocked()
 			return err
 		}
-		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		s.recordSentAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
@@ -1605,7 +1606,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 				s.mu.Unlock()
 				return err
 			}
-			s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+			s.recordSentAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
 	}
 	vadStream := s.vadStream
@@ -1788,11 +1789,14 @@ func (s *speechmaticsSTTStream) Finalize() error {
 }
 
 func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
-	seq, ok := s.beginForcedEOU()
+	seq, timestamp, ok := s.beginForcedEOU()
 	if !ok {
 		return nil
 	}
-	if err := s.writeJSONData(map[string]interface{}{"message": "ForceEndOfUtterance"}); err != nil {
+	if err := s.writeJSONData(map[string]interface{}{
+		"message":   "ForceEndOfUtterance",
+		"timestamp": timestamp,
+	}); err != nil {
 		s.clearForcedEOU()
 		return err
 	}
@@ -1800,18 +1804,22 @@ func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
 	return nil
 }
 
-func (s *speechmaticsSTTStream) beginForcedEOU() (uint64, bool) {
+func (s *speechmaticsSTTStream) beginForcedEOU() (uint64, float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.providerManagedEndpointing {
-		return 0, false
+		return 0, 0, false
 	}
 	if s.forcedEOUPending {
-		return 0, false
+		return 0, 0, false
 	}
 	s.forcedEOUPending = true
 	s.forcedEOUSeq++
-	return s.forcedEOUSeq, true
+	timestamp := 0.0
+	if s.state != nil {
+		timestamp = s.state.audioSecondsSent
+	}
+	return s.forcedEOUSeq, timestamp, true
 }
 
 func (s *speechmaticsSTTStream) scheduleForcedEOUTimeout(seq uint64) {
@@ -2087,9 +2095,17 @@ func (s *speechmaticsSTTStream) Flush() error {
 			_ = s.closeLocked()
 			return err
 		}
-		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
+		s.recordSentAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
+}
+
+func (s *speechmaticsSTTStream) recordSentAudioDurationLocked(duration float64) {
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.speechDuration += duration
+	s.state.audioSecondsSent += duration
 }
 
 func (s *speechmaticsSTTStream) targetSampleRate() uint32 {
