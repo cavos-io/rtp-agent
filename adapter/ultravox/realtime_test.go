@@ -376,6 +376,24 @@ func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptySystemPrompt(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	if got := payload["systemPrompt"]; got != "" {
+		t.Fatalf("systemPrompt = %#v, want explicit empty reference system_prompt", got)
+	}
+}
+
 func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
 	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
 	if err != nil {

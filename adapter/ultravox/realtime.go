@@ -133,9 +133,7 @@ func WithRealtimeBaseURL(baseURL string) RealtimeOption {
 
 func WithRealtimeSystemPrompt(prompt string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if prompt != "" {
-			m.systemPrompt = prompt
-		}
+		m.systemPrompt = prompt
 	}
 }
 
