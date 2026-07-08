@@ -2572,6 +2572,97 @@ func TestUltravoxRealtimeSessionAgentTranscriptBuffersBeyondOldDropLimit(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionAgentTranscriptBuffersFullReferenceTextQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	fullCap := cap(generationState.textCh)
+	if fullCap == 0 {
+		t.Fatal("agent text queue cap = 0, want buffered reference text stream")
+	}
+	for i := 0; i < fullCap; i++ {
+		generationState.textCh <- "queued"
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Delta: "new delta", Final: false, Ordinal: 2})
+
+	for i := 0; i < fullCap; i++ {
+		<-message.TextCh
+	}
+	select {
+	case got := <-message.TextCh:
+		if got != "new delta" {
+			t.Fatalf("agent text delta = %q, want reference-preserved delta", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for agent text delta after full queue")
+	}
+}
+
+func TestUltravoxRealtimeSessionAgentTranscriptDrainsFullReferenceTextQueueBeforeFinalClose(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	fullCap := cap(generationState.textCh)
+	for i := 0; i < fullCap; i++ {
+		generationState.textCh <- "queued"
+	}
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Delta: "tail", Final: false, Ordinal: 2})
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 2})
+
+	for i := 0; i < fullCap; i++ {
+		<-message.TextCh
+	}
+	select {
+	case got, ok := <-message.TextCh:
+		if !ok {
+			t.Fatal("text stream closed before queued agent delta drained")
+		}
+		if got != "tail" {
+			t.Fatalf("agent text delta = %q, want tail", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued agent delta before close")
+	}
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+}
+
 func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -354,6 +354,7 @@ type ultravoxRealtimeGeneration struct {
 	messageCh   chan llm.MessageGeneration
 	functionCh  chan *llm.FunctionCall
 	textCh      chan string
+	textStream  *ultravoxRealtimeTextStream
 	audioCh     chan *model.AudioFrame
 	audioStream *ultravoxRealtimeAudioFrameStream
 	outputText  strings.Builder
@@ -361,6 +362,98 @@ type ultravoxRealtimeGeneration struct {
 	createdAt   time.Time
 	firstToken  time.Time
 	done        bool
+}
+
+type ultravoxRealtimeTextStream struct {
+	out     chan string
+	wake    chan struct{}
+	closeCh chan struct{}
+	mu      sync.Mutex
+	queue   []string
+	closed  bool
+}
+
+func newUltravoxRealtimeTextStream(size int) *ultravoxRealtimeTextStream {
+	stream := &ultravoxRealtimeTextStream{
+		out:     make(chan string, size),
+		wake:    make(chan struct{}, 1),
+		closeCh: make(chan struct{}),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *ultravoxRealtimeTextStream) Chan() chan string {
+	if s == nil {
+		return nil
+	}
+	return s.out
+}
+
+func (s *ultravoxRealtimeTextStream) Send(text string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	select {
+	case s.out <- text:
+		return true
+	default:
+	}
+	s.queue = append(s.queue, text)
+	s.notifyLocked()
+	return true
+}
+
+func (s *ultravoxRealtimeTextStream) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.closeCh)
+	s.notifyLocked()
+	s.mu.Unlock()
+}
+
+func (s *ultravoxRealtimeTextStream) notifyLocked() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *ultravoxRealtimeTextStream) run() {
+	defer close(s.out)
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.mu.Unlock()
+			select {
+			case <-s.wake:
+			case <-s.closeCh:
+			}
+			s.mu.Lock()
+		}
+		if s.closed && len(s.queue) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		text := s.queue[0]
+		s.queue[0] = ""
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+
+		s.out <- text
+	}
 }
 
 type ultravoxRealtimeAudioFrameStream struct {
@@ -1733,11 +1826,13 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	if s.generation != nil && !s.generation.done {
 		return s.generation
 	}
+	textStream := newUltravoxRealtimeTextStream(ultravoxTextDeltaQueueSize)
 	audioStream := newUltravoxRealtimeAudioFrameStream(ultravoxOutputAudioQueueSize)
 	generation := &ultravoxRealtimeGeneration{
 		messageCh:   make(chan llm.MessageGeneration, 1),
 		functionCh:  make(chan *llm.FunctionCall, ultravoxFunctionCallQueueSize),
-		textCh:      make(chan string, ultravoxTextDeltaQueueSize),
+		textCh:      textStream.Chan(),
+		textStream:  textStream,
 		audioCh:     audioStream.Chan(),
 		audioStream: audioStream,
 		createdAt:   s.pickGenerationCreatedAtLocked(),
@@ -1872,10 +1967,7 @@ func (s *realtimeSession) handleAgentTranscriptEvent(event ultravoxRealtimeTrans
 	s.mu.Unlock()
 
 	if incrementalText != "" {
-		select {
-		case generation.textCh <- incrementalText:
-		default:
-		}
+		generation.textStream.Send(incrementalText)
 	}
 	if final {
 		s.finishGeneration(generation, false)
@@ -1890,7 +1982,7 @@ func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneratio
 		return
 	}
 	generation.done = true
-	close(generation.textCh)
+	generation.textStream.Close()
 	generation.audioStream.Close()
 	close(generation.functionCh)
 	close(generation.messageCh)
