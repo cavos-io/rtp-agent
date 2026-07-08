@@ -869,6 +869,33 @@ func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRe
 	return s.runRealtimeConnection(conn)
 }
 
+func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil
+		}
+		restartCount := s.restartCount
+		s.mu.Unlock()
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.runRealtimeOnce(ctx, client); err != nil {
+			return err
+		}
+
+		s.mu.Lock()
+		closed := s.closed
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if closed || !restarted {
+			return nil
+		}
+	}
+}
+
 func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
 	return m.dialWebsocket(ctx, joinURL, http.Header{})
 }

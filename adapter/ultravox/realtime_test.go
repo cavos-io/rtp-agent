@@ -2852,6 +2852,85 @@ func TestUltravoxRealtimeSessionRunOnceConnectsAndRunsReferenceConnection(t *tes
 	}
 }
 
+func TestUltravoxRealtimeSessionRestartLoopReconnectsAfterReferenceRestartSignal(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	firstReadBlock := make(chan struct{})
+	firstConn := &ultravoxRealtimeTestWebsocketConn{
+		readBlock: firstReadBlock,
+		readErr:   io.EOF,
+	}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	dialCh := make(chan int, 2)
+	var conns = []*ultravoxRealtimeTestWebsocketConn{firstConn, secondConn}
+	var dialCount int
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		if endpoint != "wss://ultravox.example/join" {
+			t.Fatalf("websocket endpoint = %q, want provider joinUrl", endpoint)
+		}
+		if dialCount >= len(conns) {
+			t.Fatalf("unexpected extra websocket dial %d", dialCount+1)
+		}
+		conn := conns[dialCount]
+		dialCount++
+		dialCh <- dialCount
+		return conn, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeRestartLoop(context.Background(), doer)
+	}()
+
+	select {
+	case got := <-dialCh:
+		if got != 1 {
+			t.Fatalf("first dial marker = %d, want 1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not create initial reference websocket")
+	}
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	close(firstReadBlock)
+	select {
+	case got := <-dialCh:
+		if got != 2 {
+			t.Fatalf("second dial marker = %d, want 2 after restart signal", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not reconnect after reference restart signal")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeRestartLoop error = %v, want nil after restart reconnect drains", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not exit after second connection completed")
+	}
+	if doer.requestCount != 2 {
+		t.Fatalf("create-call count = %d, want one per reference websocket session", doer.requestCount)
+	}
+	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
+		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -3204,12 +3283,14 @@ func (c *ultravoxRealtimeTestWebsocketConn) Close() error {
 type ultravoxRealtimeTestHTTPDoer struct {
 	request        *http.Request
 	requestBody    []byte
+	requestCount   int
 	responseStatus int
 	responseBody   string
 	err            error
 }
 
 func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	d.requestCount++
 	d.request = req
 	if req.Body != nil {
 		body, err := io.ReadAll(req.Body)
