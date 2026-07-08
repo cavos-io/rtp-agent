@@ -3373,6 +3373,7 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *tes
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","parameters":{}}`),
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-missing-params"}`),
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-bad-params","parameters":[1,2]}`),
+		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-null-params","parameters":null}`),
 		[]byte(`{"type":"pong"}`),
 		[]byte(`{"type":"pong","timestamp":"bad"}`),
 		[]byte(`{not-json`),
