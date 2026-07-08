@@ -1543,6 +1543,27 @@ func TestUltravoxRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionSayReportsReferenceUnsupported(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.Say("hello")
+	if err == nil {
+		t.Fatal("Say error = nil, want reference unsupported direct-speech error")
+	}
+	want := "*ultravox.realtimeSession does not implement say(). use a TTS model instead"
+	if err.Error() != want {
+		t.Fatalf("Say error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestUltravoxRealtimeSessionInterruptSendsReferenceBargeIn(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

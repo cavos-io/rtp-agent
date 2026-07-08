@@ -657,7 +657,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	return nil
 }
 func (s *realtimeSession) Say(string) error {
-	return ultravoxRealtimeSessionUnsupported("say")
+	return errors.New("*ultravox.realtimeSession does not implement say(). use a TTS model instead")
 }
 func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *realtimeSession) Interrupt() error {
@@ -1209,10 +1209,6 @@ func ultravoxRealtimeVariantType(value any) string {
 		}
 	}
 	return ""
-}
-
-func ultravoxRealtimeSessionUnsupported(operation string) error {
-	return errors.New(operation + " is not implemented by the Ultravox realtime session")
 }
 
 func (s *realtimeSession) sendClientEvent(event map[string]any) error {
