@@ -1280,7 +1280,45 @@ func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &number); err == nil {
 		return number.String(), nil
 	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
 	return "", fmt.Errorf("unsupported segment text")
+}
+
+func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		text, err := speechmaticsReferenceTextValue(item)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, text)
+	}
+	return "[" + strings.Join(parts, ", ") + "]", nil
+}
+
+func speechmaticsReferenceTextValue(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "None", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return "'" + text + "'", nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	return "", fmt.Errorf("unsupported list text value")
 }
 
 func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
