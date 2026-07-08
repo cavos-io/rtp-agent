@@ -3058,6 +3058,58 @@ func TestUltravoxRealtimeSessionToolInvocationBuffersBeyondOldDropLimit(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationBuffersFullReferenceFunctionQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	fullCap := cap(generationState.functionCh)
+	if fullCap == 0 {
+		t.Fatal("function queue cap = 0, want buffered reference function stream")
+	}
+	for i := 0; i < fullCap; i++ {
+		generationState.functionCh <- &llm.FunctionCall{CallID: "queued", Name: "queued", Arguments: "{}"}
+	}
+
+	session.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
+		ToolName:     "lookup",
+		InvocationID: "call-full",
+		Parameters:   map[string]any{"city": "Paris"},
+	})
+
+	for i := 0; i < fullCap; i++ {
+		<-generation.FunctionCh
+	}
+	select {
+	case call, ok := <-generation.FunctionCh:
+		if !ok {
+			t.Fatal("function stream closed before queued tool call drained")
+		}
+		if call == nil || call.CallID != "call-full" || call.Name != "lookup" || call.Arguments != `{"city": "Paris"}` {
+			t.Fatalf("function call = %+v, want buffered full-queue lookup call", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for full-queue function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationPreservesReferenceArgumentOrder(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
