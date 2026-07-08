@@ -1081,13 +1081,18 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var raw struct {
-		Results []struct {
+		Message  string          `json:"message"`
+		Metadata json.RawMessage `json:"metadata"`
+		Results  []struct {
 			Alternatives []map[string]json.RawMessage `json:"alternatives"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Metadata) == "null" {
+		return fmt.Errorf("metadata must be an object")
 	}
 	if len(raw.Results) > 0 {
 		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
