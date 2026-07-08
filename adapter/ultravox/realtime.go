@@ -1309,10 +1309,6 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
-	if len(audioData) == 0 {
-		return
-	}
-
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

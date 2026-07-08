@@ -1722,7 +1722,7 @@ func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.
 	}
 }
 
-func TestUltravoxRealtimeSessionForwardsReferenceOddSizedOutputAudio(t *testing.T) {
+func TestUltravoxRealtimeSessionForwardsReferenceOddAndEmptyOutputAudio(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -1756,8 +1756,11 @@ func TestUltravoxRealtimeSessionForwardsReferenceOddSizedOutputAudio(t *testing.
 	session.handleOutputAudio(nil)
 	select {
 	case got := <-message.AudioCh:
-		t.Fatalf("nil output audio queued = %#v, want reference wrapper to ignore empty data", got)
-	default:
+		if got.SampleRate != 24000 || got.NumChannels != 1 || got.SamplesPerChannel != 0 || len(got.Data) != 0 {
+			t.Fatalf("empty audio frame = rate %d channels %d samples %d len %d, want reference 24000/1/0/0", got.SampleRate, got.NumChannels, got.SamplesPerChannel, len(got.Data))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference empty output audio")
 	}
 }
 
