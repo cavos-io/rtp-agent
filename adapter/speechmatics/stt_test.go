@@ -1761,6 +1761,58 @@ func TestSpeechmaticsSTTExplicitNilVADOptsOutOfReferenceAutoVAD(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTProviderManagedModesLoadReferenceLocalVAD(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  SpeechmaticsSTTOption
+	}{
+		{name: "adaptive", opt: WithSpeechmaticsSTTAdaptiveTurnDetection()},
+		{name: "smart_turn", opt: WithSpeechmaticsSTTSmartTurnDetection()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewSpeechmaticsSTT("test-key", tt.opt)
+			if provider.turnDetectionMode != tt.name {
+				t.Fatalf("turn detection mode = %q, want %s", provider.turnDetectionMode, tt.name)
+			}
+			if provider.vad == nil {
+				t.Fatal("vad = nil, want reference local Silero VAD for provider-managed endpointing")
+			}
+			if label := provider.vad.Label(); label != "silero.VAD" {
+				t.Fatalf("vad label = %q, want silero.VAD", label)
+			}
+		})
+	}
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADEndOfSpeechForcesReferenceEOU(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	provider.vad = &fakeSpeechmaticsVAD{stream: vadStream}
+
+	controlMessages := make(chan map[string]interface{}, 4)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		providerManagedEndpointing: true,
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	if err := stream.startVAD(context.Background()); err != nil {
+		t.Fatalf("startVAD() error = %v", err)
+	}
+	defer stream.Close()
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	waitForSpeechmaticsControlMessage(t, controlMessages, "ForceEndOfUtterance")
+}
+
 func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	provider := NewSpeechmaticsSTT("test-key",

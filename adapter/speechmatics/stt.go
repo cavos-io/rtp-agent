@@ -259,13 +259,25 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	for _, opt := range opts {
 		opt(provider)
 	}
-	if provider.turnDetectionMode == "external" && !provider.vadSet {
-		provider.vad = silero.NewSileroVAD()
-	}
 	if provider.vad != nil {
 		provider.turnDetectionMode = "external"
 	}
+	switch provider.turnDetectionMode {
+	case "external":
+		if !provider.vadSet {
+			provider.vad = silero.NewSileroVAD()
+		}
+	case "adaptive", "smart_turn":
+		provider.vad = speechmaticsLocalEndpointingVAD()
+	}
 	return provider
+}
+
+func speechmaticsLocalEndpointingVAD() corevad.VAD {
+	return silero.NewSileroVAD(
+		silero.WithMinSilenceDuration(0.18),
+		silero.WithActivationThreshold(0.35),
+	)
 }
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
@@ -1789,7 +1801,15 @@ func (s *speechmaticsSTTStream) Finalize() error {
 }
 
 func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
-	seq, timestamp, ok := s.beginForcedEOU()
+	return s.sendForceEndOfUtteranceWithProviderManaged(false)
+}
+
+func (s *speechmaticsSTTStream) sendLocalEndpointingForceEndOfUtterance() error {
+	return s.sendForceEndOfUtteranceWithProviderManaged(true)
+}
+
+func (s *speechmaticsSTTStream) sendForceEndOfUtteranceWithProviderManaged(allowProviderManaged bool) error {
+	seq, timestamp, ok := s.beginForcedEOU(allowProviderManaged)
 	if !ok {
 		return nil
 	}
@@ -1804,10 +1824,10 @@ func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
 	return nil
 }
 
-func (s *speechmaticsSTTStream) beginForcedEOU() (uint64, float64, bool) {
+func (s *speechmaticsSTTStream) beginForcedEOU(allowProviderManaged bool) (uint64, float64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.providerManagedEndpointing {
+	if s.closed || (s.providerManagedEndpointing && !allowProviderManaged) {
 		return 0, 0, false
 	}
 	if s.forcedEOUPending {
@@ -1971,7 +1991,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 			return
 		}
 		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
-			if err := s.Finalize(); err != nil {
+			if err := s.sendLocalEndpointingForceEndOfUtterance(); err != nil {
 				s.enqueueError(err)
 				_ = s.Close()
 				return
