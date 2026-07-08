@@ -2024,6 +2024,29 @@ func TestSpeechmaticsRawTranscriptRecordsReferenceSlowSpeakerAnnotationForLocalV
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADStartClearsReferenceEndpointAnnotations(t *testing.T) {
+	state := &speechmaticsStreamState{
+		latestSegmentAnnotationSet: true,
+		latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+	}
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 70*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay before start = %s, want previous final EOS delay %s", got, want)
+	}
+
+	stream.reopenLocalEndpointingTurn()
+
+	if state.latestSegmentAnnotationSet {
+		t.Fatalf("latest segment annotation still set after speech start: %#v", state.latestSegmentAnnotation)
+	}
+	if got, want := stream.localEndpointingDelay(), 140*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay after speech start = %s, want reference fresh-turn delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMinimumDelay(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdaptiveTurnDetection(),

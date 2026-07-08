@@ -2270,7 +2270,16 @@ func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	}
 	s.mu.Lock()
 	s.localEndpointingTurnClosed = false
+	speechmaticsClearLatestEndpointingAnnotation(s.state)
 	s.mu.Unlock()
+}
+
+func speechmaticsClearLatestEndpointingAnnotation(state *speechmaticsStreamState) {
+	if state == nil {
+		return
+	}
+	state.latestSegmentAnnotationSet = false
+	state.latestSegmentAnnotation = nil
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
