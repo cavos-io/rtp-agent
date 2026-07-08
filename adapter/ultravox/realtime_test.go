@@ -749,6 +749,33 @@ func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *test
 	})
 }
 
+func TestUltravoxRealtimeSessionRestartKeepsReferenceEmptyOutputMediumUnset(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "",
+	})
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("restart output-medium event = %#v, want no text fallback for empty reference output_medium", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateInstructionsMarksReferenceRestart(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {

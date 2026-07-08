@@ -270,6 +270,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		model:                 m,
 		inputSampleRate:       uint32(m.inputSampleRate),
 		outputSampleRate:      uint32(m.outputSampleRate),
+		outputMedium:          m.outputMedium,
 		audioOutput:           m.outputMedium == "voice",
 		systemPrompt:          m.systemPrompt,
 		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
@@ -389,6 +390,7 @@ type realtimeSession struct {
 	model                 *RealtimeModel
 	inputSampleRate       uint32
 	outputSampleRate      uint32
+	outputMedium          string
 	audioOutput           bool
 	systemPrompt          string
 	audioStream           *coreaudio.AudioByteStream
@@ -612,11 +614,8 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 		return nil
 	}
 	s.mu.Lock()
-	if options.OutputMedium == "voice" {
-		s.audioOutput = true
-	} else {
-		s.audioOutput = false
-	}
+	s.outputMedium = options.OutputMedium
+	s.audioOutput = options.OutputMedium == "voice"
 	s.mu.Unlock()
 	return nil
 }
@@ -1244,7 +1243,7 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	close(s.outboundCh)
 	s.outboundCh = make(chan ultravoxRealtimeOutboundMessage, cap(s.outboundCh))
-	if !s.audioOutput {
+	if s.outputMedium == "text" {
 		_ = s.enqueueClientEventLocked(map[string]any{
 			"type":   "set_output_medium",
 			"medium": "text",
