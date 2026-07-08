@@ -2865,6 +2865,47 @@ func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachPr
 	}
 }
 
+func TestSpeechmaticsSTTStreamSeedsReferenceStartTime(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		var message map[string]interface{}
+		_ = conn.ReadJSON(&message)
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	before := float64(time.Now().UnixNano()) / 1e9
+	stream, err := provider.Stream(context.Background(), "")
+	after := float64(time.Now().UnixNano()) / 1e9
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(interface{ StartTime() float64 })
+	if !ok {
+		t.Fatalf("stream %T does not expose start time", stream)
+	}
+	if got := timing.StartTime(); got < before || got > after {
+		t.Fatalf("StartTime() = %v, want between %v and %v", got, before, after)
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	closed := false

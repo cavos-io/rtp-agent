@@ -340,6 +340,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			return nil, io.ErrClosedPipe
 		}
 
+		streamStartTime := time.Now()
 		stream := &speechmaticsSTTStream{
 			conn:   conn,
 			events: make(chan *stt.SpeechEvent, 10),
@@ -354,6 +355,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 				focusMode:            s.focusMode,
 				includePartials:      speechmaticsIncludePartials(s),
 				bufferRawFinals:      true,
+				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
 			},
 			owner:                     s,
 			waitForRecognitionStarted: true,
