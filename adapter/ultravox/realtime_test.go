@@ -2060,6 +2060,38 @@ func TestUltravoxRealtimeSessionUserTranscriptEmitsReferenceFinality(t *testing.
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
 }
 
+func TestUltravoxRealtimeSessionFinalUserTranscriptMarksReferenceChatContext(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleUserTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "hello world",
+		Final:   true,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "msg_user_7", Role: llm.ChatRoleUser, Text: "hello world"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want reference duplicate transcript no-op", err)
+	}
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("duplicate transcript context event = %#v, want no user_text_message", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionUserTranscriptBuffersBeyondOldDropLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

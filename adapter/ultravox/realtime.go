@@ -1528,6 +1528,9 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 	}
 	if event.Final {
 		s.lastUserFinalAt = time.Now()
+		if strings.TrimSpace(event.Text) != "" {
+			s.contextItems[fmt.Sprintf("msg_user_%d", event.Ordinal)] = struct{}{}
+		}
 	}
 	realtimeEvent := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
