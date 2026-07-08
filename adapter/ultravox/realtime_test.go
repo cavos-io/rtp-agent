@@ -448,6 +448,24 @@ func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptyMaxDuration(t *
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptyTimeExceededMessage(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeTimeExceededMessage(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	if got, ok := payload["timeExceededMessage"]; !ok || got != "" {
+		t.Fatalf("timeExceededMessage = %#v/%v, want explicit empty reference time_exceeded_message", got, ok)
+	}
+}
+
 func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
 	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
 	if err != nil {

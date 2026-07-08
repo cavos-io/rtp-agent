@@ -184,10 +184,8 @@ func WithRealtimeMaxDuration(maxDuration string) RealtimeOption {
 
 func WithRealtimeTimeExceededMessage(message string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if message != "" {
-			m.timeExceededMessage = message
-			m.timeExceededSet = true
-		}
+		m.timeExceededMessage = message
+		m.timeExceededSet = true
 	}
 }
 
