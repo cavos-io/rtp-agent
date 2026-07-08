@@ -991,6 +991,7 @@ type speechmaticsSTTStream struct {
 	providerManagedEndpointing bool
 	drainEventsAfterClose      bool
 	drainEvents                []*stt.SpeechEvent
+	overflowEvents             []*stt.SpeechEvent
 	forcedEOUPending           bool
 	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
@@ -1217,16 +1218,53 @@ func (s *speechmaticsSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
 	if event == nil {
 		return true
 	}
-	if s.done == nil {
-		s.events <- event
+	if s.done != nil {
+		select {
+		case <-s.done:
+			return false
+		default:
+		}
+	}
+	if s.hasOverflowEvents() {
+		s.queueOverflowEvent(event)
 		return true
+	}
+	if s.done == nil {
+		select {
+		case s.events <- event:
+			return true
+		default:
+			s.queueOverflowEvent(event)
+			return true
+		}
 	}
 	select {
 	case s.events <- event:
 		return true
 	case <-s.done:
 		return false
+	default:
+		s.queueOverflowEvent(event)
+		return true
 	}
+}
+
+func (s *speechmaticsSTTStream) hasOverflowEvents() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.overflowEvents) > 0
+}
+
+func (s *speechmaticsSTTStream) queueOverflowEvent(event *stt.SpeechEvent) {
+	if s == nil || event == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.overflowEvents = append(s.overflowEvents, event)
 }
 
 func (s *speechmaticsSTTStream) isClosed() bool {
@@ -2720,6 +2758,9 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
+		if event, ok := s.nextOverflowEvent(); ok {
+			return event, nil
+		}
 		if event, ok := s.nextDrainedEvent(); ok {
 			return event, nil
 		}
@@ -2727,6 +2768,24 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		s.pendingErr = nil
 		s.markClosed()
 		return nil, err
+	}
+	select {
+	case event, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				s.markClosed()
+				return nil, err
+			default:
+				s.markClosed()
+				return nil, io.EOF
+			}
+		}
+		return event, nil
+	default:
+	}
+	if event, ok := s.nextOverflowEvent(); ok {
+		return event, nil
 	}
 	select {
 	case event, ok := <-s.events:
@@ -2749,6 +2808,9 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 				return event, nil
 			}
 		default:
+		}
+		if event, ok := s.nextOverflowEvent(); ok {
+			return event, nil
 		}
 		if event, ok := s.nextDrainedEvent(); ok {
 			return event, nil
@@ -2775,6 +2837,9 @@ func (s *speechmaticsSTTStream) nextDrainedEvent() (*stt.SpeechEvent, bool) {
 		}
 	default:
 	}
+	if event, ok := s.nextOverflowEvent(); ok {
+		return event, true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.drainEvents) == 0 {
@@ -2783,6 +2848,21 @@ func (s *speechmaticsSTTStream) nextDrainedEvent() (*stt.SpeechEvent, bool) {
 	event := s.drainEvents[0]
 	copy(s.drainEvents, s.drainEvents[1:])
 	s.drainEvents = s.drainEvents[:len(s.drainEvents)-1]
+	return event, true
+}
+
+func (s *speechmaticsSTTStream) nextOverflowEvent() (*stt.SpeechEvent, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.overflowEvents) == 0 {
+		return nil, false
+	}
+	event := s.overflowEvents[0]
+	copy(s.overflowEvents, s.overflowEvents[1:])
+	s.overflowEvents = s.overflowEvents[:len(s.overflowEvents)-1]
 	return event, true
 }
 

@@ -2176,6 +2176,57 @@ func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTEnqueueEventPreservesReferenceOrderWhenEventsFull(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+	}
+	first := &stt.SpeechEvent{
+		Type: stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "first"},
+		},
+	}
+	second := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "second"},
+		},
+	}
+
+	if !stream.enqueueEvent(first) {
+		t.Fatal("enqueue first = false, want queued event")
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- stream.enqueueEvent(second)
+	}()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("enqueue second = false, want overflow queue")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("enqueue second blocked on full events channel, want reference nonblocking event queue")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want first queued event", err)
+	}
+	if got := event.Alternatives[0].Text; got != "first" {
+		t.Fatalf("first transcript = %q, want first", got)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want overflow event", err)
+	}
+	if got := event.Alternatives[0].Text; got != "second" {
+		t.Fatalf("second transcript = %q, want overflow event", got)
+	}
+}
+
 func TestSpeechmaticsSTTNextSurfacesErrorAfterQueuedTranscriptLikeReference(t *testing.T) {
 	for range 64 {
 		stream := &speechmaticsSTTStream{
