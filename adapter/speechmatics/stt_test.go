@@ -1846,6 +1846,9 @@ func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("VAD error did not close Speechmatics stream transport")
 	}
+	if _, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "vad failed") {
+		t.Fatalf("Next after VAD error = %v, want reference VAD failure", err)
+	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01}}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
 		t.Fatalf("PushFrame after VAD error = %v, want reference input-ended error", err)
 	}

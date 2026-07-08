@@ -1909,6 +1909,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 			if errors.Is(err, io.EOF) {
 				return
 			}
+			s.enqueueError(err)
 			_ = s.Close()
 			return
 		}
