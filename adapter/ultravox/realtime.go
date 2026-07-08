@@ -771,7 +771,7 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 
 	m := s.model
 	createCallURL := strings.TrimRight(m.baseURL, "/") + "/calls"
-	if enableGreeting, ok := m.EnableGreetingPrompt(); ok && !enableGreeting {
+	if enableGreeting, ok := m.EnableGreetingPrompt(); !ok || !enableGreeting {
 		createCallURL += "?enableGreetingPrompt=false"
 	}
 	headers := map[string]string{

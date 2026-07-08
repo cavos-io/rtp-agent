@@ -358,6 +358,24 @@ func TestUltravoxRealtimeSessionCreateCallRequestMatchesReference(t *testing.T) 
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	gotURL, _, _ := session.createCallRequest()
+	if gotURL != "https://ultravox.example/api/calls?enableGreetingPrompt=false" {
+		t.Fatalf("create-call URL = %q, want reference default greeting prompt disabled query", gotURL)
+	}
+}
+
 func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
 	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
 	if err != nil {
