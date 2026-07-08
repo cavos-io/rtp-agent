@@ -478,7 +478,6 @@ func (p *BackgroundAudioPlayer) Close() error {
 	p.mu.Lock()
 	if p.mixerTaskCancel != nil {
 		p.mixerTaskCancel()
-		p.mixerTaskCancel = nil
 	}
 	if p.publication != nil && p.room != nil {
 		_ = p.room.LocalParticipant.UnpublishTrack(p.publication.SID())
@@ -486,6 +485,10 @@ func (p *BackgroundAudioPlayer) Close() error {
 	p.mu.Unlock()
 
 	p.playTasks.Wait()
+
+	p.mu.Lock()
+	p.mixerTaskCancel = nil
+	p.mu.Unlock()
 	return nil
 }
 

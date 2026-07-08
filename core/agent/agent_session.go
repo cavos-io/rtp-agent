@@ -253,6 +253,8 @@ type realtimeOptionsUpdatingAssistant interface {
 type AgentSession struct {
 	Options AgentSessionOptions
 
+	Timeline *EventTimeline
+
 	ChatCtx       *llm.ChatContext
 	Agent         AgentInterface
 	STT           stt.STT
@@ -735,25 +737,112 @@ func (s *AgentSession) recordEvent(ev Event) {
 	s.mu.Lock()
 	s.recordedEvents = append(s.recordedEvents, ev)
 	eventType := ev.GetType()
-	registered := s.eventListeners[eventType]
-	listeners := make([]func(Event), 0, len(registered))
-	if len(registered) > 0 {
-		remaining := registered[:0]
-		for _, listener := range registered {
-			listeners = append(listeners, listener.callback)
-			if !listener.once {
-				remaining = append(remaining, listener)
-			}
-		}
-		if len(remaining) == 0 {
-			delete(s.eventListeners, eventType)
-		} else {
-			s.eventListeners[eventType] = remaining
-		}
-	}
+	listeners := s.collectEventListenersLocked(eventType)
+	listeners = append(listeners, s.collectEventListenersLocked(allAgentEventsType)...)
 	s.mu.Unlock()
 	for _, listener := range listeners {
 		callAgentSessionListener(eventType, listener, ev)
+	}
+}
+
+func (s *AgentSession) collectEventListenersLocked(eventType string) []func(Event) {
+	registered := s.eventListeners[eventType]
+	listeners := make([]func(Event), 0, len(registered))
+	if len(registered) == 0 {
+		return listeners
+	}
+	remaining := registered[:0]
+	for _, listener := range registered {
+		listeners = append(listeners, listener.callback)
+		if !listener.once {
+			remaining = append(remaining, listener)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(s.eventListeners, eventType)
+	} else {
+		s.eventListeners[eventType] = remaining
+	}
+	return listeners
+}
+
+func (s *AgentSession) EmitEvent(ev Event) {
+	if s == nil || ev == nil {
+		return
+	}
+	switch event := ev.(type) {
+	case *AgentStateChangedEvent:
+		s.emitAgentStateChangedEvent(event)
+	case *UserStateChangedEvent:
+		s.emitUserStateChangedEvent(event)
+	case *UserInputTranscribedEvent:
+		s.EmitUserInputTranscribed(*event)
+	case *AgentOutputTranscribedEvent:
+		s.EmitAgentOutputTranscribed(*event)
+	case *AgentReasoningTranscribedEvent:
+		s.EmitAgentReasoningTranscribed(*event)
+	case *SpeechCreatedEvent:
+		s.EmitSpeechCreated(*event)
+	case *AgentFalseInterruptionEvent:
+		s.EmitAgentFalseInterruption(*event)
+	case *UserTurnExceededEvent:
+		s.EmitUserTurnExceeded(*event)
+	case *OverlappingSpeechEvent:
+		s.EmitOverlappingSpeech(*event)
+	case *ConversationItemAddedEvent:
+		s.emitConversationItemAddedEvent(event)
+	case *FunctionToolsExecutedEvent:
+		s.emitFunctionToolsExecutedEvent(event)
+	case *MetricsCollectedEvent:
+		s.emitMetricsCollectedEvent(event)
+	case *SessionUsageUpdatedEvent:
+		s.EmitSessionUsageUpdated(*event)
+	case *ErrorEvent:
+		s.EmitError(*event)
+	case *CloseEvent:
+		s.emitCloseEvent(event)
+	default:
+		s.recordEvent(ev)
+	}
+}
+
+func (s *AgentSession) emitAgentStateChangedEvent(ev *AgentStateChangedEvent) {
+	if ev == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(ev)
+	primary, subscribers := s.agentStateChangedSubscribers()
+	if primary != nil {
+		select {
+		case primary <- *ev:
+		default:
+		}
+	}
+	for _, ch := range subscribers {
+		ch <- *ev
+	}
+}
+
+func (s *AgentSession) emitUserStateChangedEvent(ev *UserStateChangedEvent) {
+	if ev == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(ev)
+	primary, subscribers := s.userStateChangedSubscribers()
+	if primary != nil {
+		select {
+		case primary <- *ev:
+		default:
+		}
+	}
+	for _, ch := range subscribers {
+		ch <- *ev
 	}
 }
 
@@ -981,6 +1070,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+	session.Timeline = NewEventTimeline(session)
 	if opts.VideoSampler != nil {
 		session.videoSampler = opts.VideoSampler
 	} else {
@@ -1489,20 +1579,29 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 	if item == nil {
 		return
 	}
-	s.insertChatItem(item)
-	ev := ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}
-	s.recordEvent(&ev)
+	s.emitConversationItemAddedEvent(&ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()})
+}
+
+func (s *AgentSession) emitConversationItemAddedEvent(ev *ConversationItemAddedEvent) {
+	if ev == nil || ev.Item == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.insertChatItem(ev.Item)
+	s.recordEvent(ev)
 	primary, primarySubscribed, subscribers := s.conversationItemAddedSubscribers()
 	if primarySubscribed {
-		primary <- ev
+		primary <- *ev
 	} else if primary != nil {
 		select {
-		case primary <- ev:
+		case primary <- *ev:
 		default:
 		}
 	}
 	for _, ch := range subscribers {
-		ch <- ev
+		ch <- *ev
 	}
 }
 
@@ -1558,6 +1657,17 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.emitFunctionToolsExecutedEvent(&ev)
+	return ev
+}
+
+func (s *AgentSession) emitFunctionToolsExecutedEvent(ev *FunctionToolsExecutedEvent) {
+	if ev == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
 	s.mu.Lock()
 	runState := s.runState
 	s.mu.Unlock()
@@ -1578,20 +1688,19 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 			}
 		}
 	}
-	s.recordEvent(&ev)
+	s.recordEvent(ev)
 	primary, primarySubscribed, subscribers := s.functionToolsExecutedSubscribers()
 	if primarySubscribed {
-		primary <- ev
+		primary <- *ev
 	} else if primary != nil {
 		select {
-		case primary <- ev:
+		case primary <- *ev:
 		default:
 		}
 	}
 	for _, ch := range subscribers {
-		ch <- ev
+		ch <- *ev
 	}
-	return ev
 }
 
 func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedEvent {
@@ -1655,6 +1764,28 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	}
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
+	}
+}
+
+func (s *AgentSession) emitMetricsCollectedEvent(ev *MetricsCollectedEvent) {
+	if ev == nil || ev.Metrics == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(ev)
+	primary, primarySubscribed, subscribers := s.metricsCollectedSubscribers()
+	if primarySubscribed {
+		primary <- *ev
+	} else if primary != nil {
+		select {
+		case primary <- *ev:
+		default:
+		}
+	}
+	for _, ch := range subscribers {
+		ch <- *ev
 	}
 }
 
@@ -2027,6 +2158,34 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 	return ch
 }
 
+func (s *AgentSession) emitCloseEvent(ev *CloseEvent) {
+	if ev == nil {
+		return
+	}
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(ev)
+	primary, primarySubscribed, subscribers := s.closeSubscribers()
+	if primarySubscribed {
+		primary <- *ev
+	} else if primary != nil {
+		select {
+		case primary <- *ev:
+		default:
+		}
+	}
+	for _, ch := range subscribers {
+		ch <- *ev
+	}
+}
+
+func (s *AgentSession) closeSubscribers() (chan CloseEvent, bool, []chan CloseEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeSubscribersLocked()
+}
+
 func (s *AgentSession) closeSubscribersLocked() (chan CloseEvent, bool, []chan CloseEvent) {
 	if s.closeCh == nil {
 		s.closeCh = make(chan CloseEvent, 10)
@@ -2035,11 +2194,8 @@ func (s *AgentSession) closeSubscribersLocked() (chan CloseEvent, bool, []chan C
 }
 
 func (s *AgentSession) closeEventListenersLocked() []func(Event) {
-	registered := s.eventListeners["close"]
-	listeners := make([]func(Event), 0, len(registered))
-	for _, listener := range registered {
-		listeners = append(listeners, listener.callback)
-	}
+	listeners := s.collectEventListenersLocked("close")
+	listeners = append(listeners, s.collectEventListenersLocked(allAgentEventsType)...)
 	return listeners
 }
 
