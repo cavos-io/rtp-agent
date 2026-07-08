@@ -1776,6 +1776,42 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
 }
 
+func TestSpeechmaticsSTTVADFinalizeFailureSurfacesToNext(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	finalizeErr := errors.New("finalize failed")
+	transportClosed := make(chan struct{})
+	var closeOnce sync.Once
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		writeJSON: func(interface{}) error {
+			return finalizeErr
+		},
+		closeConn: func() error {
+			closeOnce.Do(func() { close(transportClosed) })
+			return nil
+		},
+	}
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: vadStream}),
+	)
+	provider.registerStream(stream)
+	if err := stream.startVAD(context.Background()); err != nil {
+		t.Fatalf("startVAD error = %v", err)
+	}
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	select {
+	case <-transportClosed:
+	case <-time.After(time.Second):
+		t.Fatal("VAD finalize failure did not close Speechmatics stream transport")
+	}
+	if _, err := stream.Next(); !errors.Is(err, finalizeErr) {
+		t.Fatalf("Next after VAD finalize failure = %v, want %v", err, finalizeErr)
+	}
+}
+
 func TestSpeechmaticsSTTExplicitVADForcesReferenceExternalTurnDetectionAfterLaterModeOptions(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: newFakeSpeechmaticsVADStream()}),

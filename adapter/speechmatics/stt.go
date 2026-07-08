@@ -1915,6 +1915,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		}
 		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
 			if err := s.Finalize(); err != nil {
+				s.enqueueError(err)
 				_ = s.Close()
 				return
 			}
