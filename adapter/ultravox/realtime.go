@@ -1114,11 +1114,7 @@ func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
 	properties, _ := parameters["properties"].(map[string]any)
 	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
 
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := ultravoxRealtimeToolParameterNames(parameters, properties)
 
 	dynamicParameters := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -1142,6 +1138,47 @@ func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
 		})
 	}
 	return dynamicParameters
+}
+
+func ultravoxRealtimeToolParameterNames(parameters map[string]any, properties map[string]any) []string {
+	if len(properties) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(properties))
+	names := make([]string, 0, len(properties))
+	add := func(name string) {
+		if _, ok := properties[name]; !ok {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	switch required := parameters["required"].(type) {
+	case []string:
+		for _, name := range required {
+			add(name)
+		}
+	case []any:
+		for _, value := range required {
+			if name, ok := value.(string); ok {
+				add(name)
+			}
+		}
+	}
+	remaining := make([]string, 0, len(properties)-len(names))
+	for name := range properties {
+		if _, ok := seen[name]; !ok {
+			remaining = append(remaining, name)
+		}
+	}
+	sort.Strings(remaining)
+	for _, name := range remaining {
+		add(name)
+	}
+	return names
 }
 
 func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {

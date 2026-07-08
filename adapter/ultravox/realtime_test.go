@@ -434,6 +434,34 @@ func TestUltravoxRealtimeSessionCreateCallRequestMatchesReference(t *testing.T) 
 	}
 }
 
+func TestUltravoxRealtimeToolDynamicParametersUseReferenceRequiredOrder(t *testing.T) {
+	params := ultravoxRealtimeToolDynamicParameters(ultravoxRealtimeTestTool{
+		name:        "lookup_order",
+		description: "Lookup order",
+		parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"zip": map[string]any{"type": "string"},
+				"account": map[string]any{
+					"type": "string",
+				},
+				"mode": map[string]any{"type": "string"},
+			},
+			"required": []string{"zip", "account", "mode"},
+		},
+	})
+
+	got := make([]string, 0, len(params))
+	for _, param := range params {
+		name, _ := param["name"].(string)
+		got = append(got, name)
+	}
+	want := []string{"zip", "account", "mode"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dynamic parameter order = %#v, want reference schema order %#v", got, want)
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
