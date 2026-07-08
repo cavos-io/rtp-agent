@@ -2,6 +2,7 @@ package nvidia
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -144,6 +145,22 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	}
 	if _, err := provider.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
 		t.Fatalf("Stream() error = %v, want explicit unsupported stream error", err)
+	}
+}
+
+func TestNvidiaTTSReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := provider.Synthesize(ctx, "hello"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Synthesize() error = %v, want context.Canceled", err)
+	}
+	if _, err := provider.Stream(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream() error = %v, want context.Canceled", err)
 	}
 }
 

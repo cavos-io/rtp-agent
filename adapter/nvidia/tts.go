@@ -95,9 +95,15 @@ func (t *NvidiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *NvidiaTTS) NumChannels() int { return 1 }
 
 func (t *NvidiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("nvidia riva tts synthesis is not implemented")
 }
 
 func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("nvidia riva tts streaming is not implemented")
 }
