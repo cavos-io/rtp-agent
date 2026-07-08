@@ -182,7 +182,7 @@ func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, err
 	if closed {
 		return nil, io.ErrClosedPipe
 	}
-	return nil, fmt.Errorf("speechmatics streaming tts is unsupported")
+	return nil, fmt.Errorf("streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter")
 }
 
 func (t *SpeechmaticsTTS) Close() error {

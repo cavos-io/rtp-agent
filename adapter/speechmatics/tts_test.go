@@ -138,6 +138,21 @@ func TestSpeechmaticsTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSStreamReportsReferenceUnsupported(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+
+	stream, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want unsupported streaming error")
+	}
+	if got, want := err.Error(), "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"; got != want {
+		t.Fatalf("Stream error = %q, want %q", got, want)
+	}
+	if stream != nil {
+		t.Fatalf("Stream stream = %#v, want nil", stream)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),
