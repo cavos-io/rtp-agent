@@ -419,6 +419,24 @@ func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptySystemPrompt(t 
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptyModel(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeModel(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	if got := payload["model"]; got != "" {
+		t.Fatalf("model = %#v, want explicit empty reference model", got)
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptyVoice(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeVoice(""))
 	if err != nil {

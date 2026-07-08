@@ -109,9 +109,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 
 func WithRealtimeModel(model string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if model != "" {
-			m.model = model
-		}
+		m.model = model
 	}
 }
 
