@@ -1612,6 +1612,9 @@ func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
 			schema = schemaMap
 		}
 		_, isRequired := required[name]
+		if isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
+			isRequired = false
+		}
 		dynamicParameters = append(dynamicParameters, map[string]any{
 			"name":     name,
 			"location": "PARAMETER_LOCATION_BODY",
@@ -1678,6 +1681,26 @@ func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
 		}
 	}
 	return set
+}
+
+func ultravoxRealtimeSchemaAllowsNull(prop map[string]any) bool {
+	switch typ := prop["type"].(type) {
+	case string:
+		return typ == "null"
+	case []string:
+		for _, value := range typ {
+			if value == "null" {
+				return true
+			}
+		}
+	case []any:
+		for _, value := range typ {
+			if value == "null" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ultravoxRealtimeParameterType(prop map[string]any) string {

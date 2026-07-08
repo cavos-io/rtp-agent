@@ -514,6 +514,32 @@ func TestUltravoxRealtimeToolDynamicParametersUseReferenceRequiredOrder(t *testi
 	}
 }
 
+func TestUltravoxRealtimeToolDynamicParametersTreatOmitEmptyAsReferenceOptional(t *testing.T) {
+	type request struct {
+		Query string `json:"query" jsonschema:"search query"`
+		Limit int    `json:"limit,omitempty" jsonschema:"maximum results"`
+	}
+
+	params := ultravoxRealtimeToolDynamicParameters(ultravoxRealtimeTestTool{
+		name:        "search",
+		description: "Search",
+		parameters:  llm.GenerateStrictJSONSchema(reflect.TypeOf(request{})),
+	})
+
+	requiredByName := make(map[string]bool, len(params))
+	for _, param := range params {
+		name, _ := param["name"].(string)
+		required, _ := param["required"].(bool)
+		requiredByName[name] = required
+	}
+	if !requiredByName["query"] {
+		t.Fatalf("query required = false, want reference required argument")
+	}
+	if requiredByName["limit"] {
+		t.Fatalf("limit required = true, want reference optional argument for omitempty field")
+	}
+}
+
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
