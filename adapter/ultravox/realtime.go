@@ -922,7 +922,20 @@ func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocket
 
 func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
 	defer conn.Close()
-	return s.receiveRealtimeMessages(conn)
+	sendErrCh := make(chan error, 1)
+	receiveErrCh := make(chan error, 1)
+	go func() {
+		sendErrCh <- s.sendOutboundMessages(conn)
+	}()
+	go func() {
+		receiveErrCh <- s.receiveRealtimeMessages(conn)
+	}()
+	select {
+	case err := <-sendErrCh:
+		return err
+	case err := <-receiveErrCh:
+		return err
+	}
 }
 
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {

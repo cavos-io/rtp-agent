@@ -2718,6 +2718,62 @@ func TestUltravoxRealtimeSessionRunConnectionClosesReferenceWebsocket(t *testing
 	}
 }
 
+func TestUltravoxRealtimeSessionRunConnectionStartsReferenceSendTask(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	readBlock := make(chan struct{})
+	writeCh := make(chan struct{}, 1)
+	conn := &ultravoxRealtimeTestWebsocketConn{
+		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeCh: writeCh},
+		readBlock:                           readBlock,
+		readErr:                             io.EOF,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeConnection(conn)
+	}()
+
+	select {
+	case <-writeCh:
+	case <-time.After(time.Second):
+		t.Fatal("connection runner did not start reference send task")
+	}
+	close(readBlock)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeConnection error = %v, want nil after receive loop exits", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection runner did not exit after receive loop completed")
+	}
+	if len(conn.frames) != 1 || conn.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(conn.frames[0].data, pcm) {
+		t.Fatalf("websocket frames = %#v, want queued audio sent as binary frame", conn.frames)
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -3021,7 +3077,8 @@ type ultravoxRealtimeTestWebsocketFrame struct {
 }
 
 type ultravoxRealtimeTestWebsocketWriter struct {
-	frames []ultravoxRealtimeTestWebsocketFrame
+	frames  []ultravoxRealtimeTestWebsocketFrame
+	writeCh chan struct{}
 }
 
 func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte) error {
@@ -3029,18 +3086,28 @@ func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte)
 		typ:  typ,
 		data: append([]byte(nil), data...),
 	})
+	if w.writeCh != nil {
+		select {
+		case w.writeCh <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
 type ultravoxRealtimeTestWebsocketConn struct {
 	ultravoxRealtimeTestWebsocketWriter
 	readMessages []ultravoxRealtimeTestWebsocketFrame
+	readBlock    <-chan struct{}
 	readErr      error
 	closeCount   int
 }
 
 func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
 	if len(c.readMessages) == 0 {
+		if c.readBlock != nil {
+			<-c.readBlock
+		}
 		if c.readErr != nil {
 			return 0, nil, c.readErr
 		}
