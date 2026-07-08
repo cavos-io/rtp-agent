@@ -4724,6 +4724,58 @@ func TestUltravoxRealtimeSessionRetriesReferenceRecoverableConnectionError(t *te
 	}
 }
 
+func TestUltravoxRealtimeSessionRecoverableRetryClearsReferencePendingRestart(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+	session.recoverableErrorDelay = 0
+
+	if err := session.UpdateInstructions("retry prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if !session.restartPending {
+		t.Fatal("restartPending = false before retry, want pending reference restart signal")
+	}
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		errs:           []error{ultravoxRealtimeTestTimeoutError("temporary timeout"), nil},
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return conn, nil
+	}
+
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want nil after recoverable retry", err)
+	}
+	session.mu.Lock()
+	pending := session.restartPending
+	restartCount := session.restartCount
+	session.mu.Unlock()
+	if pending {
+		t.Fatal("restartPending = true after recoverable retry, want reference restart signal cleared for next session")
+	}
+	if restartCount != 1 {
+		t.Fatalf("restartCount after retry = %d, want original restart signal retained", restartCount)
+	}
+
+	if err := session.UpdateInstructions("later prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions error = %v", err)
+	}
+	if session.restartCount != 2 {
+		t.Fatalf("restartCount after later restart = %d, want new restart accepted", session.restartCount)
+	}
+}
+
 func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {

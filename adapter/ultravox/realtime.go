@@ -1343,6 +1343,7 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return nil
 		}
 		restartCount := s.restartCount
+		s.restartPending = false
 		s.mu.Unlock()
 
 		if err := ctx.Err(); err != nil {
