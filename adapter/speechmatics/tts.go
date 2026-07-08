@@ -266,19 +266,6 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
-	if err := s.ensureStream(); err != nil {
-		if s.isClosedOrFinal() {
-			return nil, io.EOF
-		}
-		s.finish()
-		return nil, err
-	}
-	if s.isClosedOrFinal() {
-		return nil, io.EOF
-	}
-	if s.stream == nil {
-		return nil, io.EOF
-	}
 	if len(s.pendingFrames) > 0 {
 		return s.emitFrame(s.popPendingFrame()), nil
 	}
@@ -297,6 +284,19 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.finalReady {
 		s.finalReady = false
 		return s.emitFinal()
+	}
+	if err := s.ensureStream(); err != nil {
+		if s.isClosedOrFinal() {
+			return nil, io.EOF
+		}
+		s.finish()
+		return nil, err
+	}
+	if s.isClosedOrFinal() {
+		return nil, io.EOF
+	}
+	if s.stream == nil {
+		return nil, io.EOF
 	}
 	for {
 		buf := make([]byte, 4096)
@@ -338,6 +338,9 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				continue
 			}
+			if err != nil {
+				s.closeTerminalResponse()
+			}
 			s.pendingFrames = append(s.pendingFrames, frames[1:]...)
 			return s.emitFrame(frames[0]), nil
 		}
@@ -369,6 +372,20 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.finish()
 			return nil, apiErr
 		}
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) closeTerminalResponse() {
+	s.cancelRequest()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
 	}
 }
 

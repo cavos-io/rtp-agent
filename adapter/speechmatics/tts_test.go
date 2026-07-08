@@ -1018,8 +1018,9 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing
 }
 
 func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
+	body := &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}}
 	stream := &speechmaticsTTSChunkedStream{
-		stream:     &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}},
+		stream:     body,
 		sampleRate: 24000,
 	}
 
@@ -1029,6 +1030,9 @@ func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
 	}
 	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
 		t.Fatalf("first Next = %+v, want provider audio bytes", audio)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("response body close count after terminal read = %d, want %d", got, want)
 	}
 
 	_, err = stream.Next()
@@ -1425,8 +1429,9 @@ func (b speechmaticsCloseErrorBody) Close() error {
 }
 
 type speechmaticsDataThenErrorBody struct {
-	data []byte
-	done bool
+	data       []byte
+	done       bool
+	closeCount int
 }
 
 func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
@@ -1439,6 +1444,7 @@ func (b *speechmaticsDataThenErrorBody) Read(p []byte) (int, error) {
 }
 
 func (b *speechmaticsDataThenErrorBody) Close() error {
+	b.closeCount++
 	return nil
 }
 
