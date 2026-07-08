@@ -79,11 +79,12 @@ func WithDeepgramSTTModel(model string) DeepgramSTTOption {
 }
 
 const deepgramSTTKeepAliveInterval = 5 * time.Second
-const deepgramSTTUsageInterval = 5 * time.Second
 const deepgramSTTRequestTimeout = 30 * time.Second
 const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
 const deepgramSTTFinalizeMessage = `{"type": "Finalize"}`
 const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
+
+var deepgramSTTUsageInterval = 5 * time.Second
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
@@ -782,6 +783,7 @@ type deepgramStream struct {
 	reportedAudio  float64
 	usageTotal     float64
 	usageLastFlush time.Time
+	usageTimer     *time.Timer
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1186,6 +1188,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 		}
 		closeEvents := !stale && !s.closeDraining
 		if closeEvents {
+			s.stopUsageTimerLocked()
 			s.eventsClosed = true
 		}
 		s.mu.Unlock()
@@ -1331,11 +1334,15 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 	s.usageTotal += duration
 	if s.usageLastFlush.IsZero() {
 		s.usageLastFlush = time.Now()
+		s.scheduleUsageTimerLocked(deepgramSTTUsageInterval)
 		return
 	}
-	if time.Since(s.usageLastFlush) >= deepgramSTTUsageInterval {
+	elapsed := time.Since(s.usageLastFlush)
+	if elapsed >= deepgramSTTUsageInterval {
 		s.flushRecognitionUsageLocked()
+		return
 	}
+	s.scheduleUsageTimerLocked(deepgramSTTUsageInterval - elapsed)
 }
 
 func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
@@ -1353,6 +1360,7 @@ func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
 }
 
 func (s *deepgramStream) flushRecognitionUsageLocked() {
+	s.stopUsageTimerLocked()
 	if s.usageTotal <= 0 {
 		return
 	}
@@ -1360,6 +1368,31 @@ func (s *deepgramStream) flushRecognitionUsageLocked() {
 	s.usageTotal = 0
 	s.usageLastFlush = time.Now()
 	s.sendRecognitionUsageDuration(duration)
+}
+
+func (s *deepgramStream) scheduleUsageTimerLocked(delay time.Duration) {
+	if s.usageTimer != nil || s.usageTotal <= 0 || s.events == nil || s.eventsClosed || deepgramSTTUsageInterval <= 0 {
+		return
+	}
+	if delay <= 0 {
+		delay = deepgramSTTUsageInterval
+	}
+	s.usageTimer = time.AfterFunc(delay, s.emitRecognitionUsageFromTimer)
+}
+
+func (s *deepgramStream) emitRecognitionUsageFromTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageTimer = nil
+	s.flushRecognitionUsageLocked()
+}
+
+func (s *deepgramStream) stopUsageTimerLocked() {
+	if s.usageTimer == nil {
+		return
+	}
+	s.usageTimer.Stop()
+	s.usageTimer = nil
 }
 
 func (s *deepgramStream) sendError(err error) {
@@ -1681,6 +1714,7 @@ func (s *deepgramStream) Close() error {
 	s.closed = true
 	s.inputEnded = true
 	s.closeDraining = true
+	s.stopUsageTimerLocked()
 	if shouldSendClose {
 		_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	}
@@ -1869,6 +1903,7 @@ func (s *deepgramStream) writeTextData(payload string, fallback any) error {
 
 func (s *deepgramStream) closeAfterWriteFailureLocked() {
 	s.closed = true
+	s.stopUsageTimerLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}

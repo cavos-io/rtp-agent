@@ -3133,6 +3133,40 @@ func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0625)
 }
 
+func TestDeepgramSTTStreamEmitsReferencePeriodicRecognitionUsage(t *testing.T) {
+	oldInterval := deepgramSTTUsageInterval
+	deepgramSTTUsageInterval = 20 * time.Millisecond
+	t.Cleanup(func() {
+		deepgramSTTUsageInterval = oldInterval
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream := &deepgramStream{
+		ctx:         ctx,
+		events:      make(chan *stt.SpeechEvent, 1),
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.05)
+}
+
 func TestDeepgramSTTStreamFlushWithoutBufferedFrameIsReferenceNoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
