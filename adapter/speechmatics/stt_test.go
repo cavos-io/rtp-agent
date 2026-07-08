@@ -1241,7 +1241,7 @@ func TestSpeechmaticsSegmentEventsFilterReferenceSpeakers(t *testing.T) {
 	}
 }
 
-func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testing.T) {
+func TestSpeechmaticsSegmentEventsEmitReferencePartialsWhenDelivered(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: false}
 	var partial smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -1255,8 +1255,12 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}`), &partial); err != nil {
 		t.Fatalf("unmarshal partial response: %v", err)
 	}
-	if events := speechmaticsEvents(partial, state); len(events) != 0 {
-		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("partial events = %#v, want delivered reference interim transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "partial words" {
+		t.Fatalf("partial text = %q, want partial words", got)
 	}
 
 	var stablePartial smResponse
@@ -1272,7 +1276,7 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}`), &stablePartial); err != nil {
 		t.Fatalf("unmarshal stable partial response: %v", err)
 	}
-	events := speechmaticsEvents(stablePartial, state)
+	events = speechmaticsEvents(stablePartial, state)
 	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
 		t.Fatalf("stable partial events = %#v, want reference interim transcript with has_final", events)
 	}
@@ -1298,6 +1302,30 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}
 }
 
+func TestSpeechmaticsSegmentEventsEmitDeliveredReferencePartialsWhenDisabled(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: false}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"provider partial",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial response: %v", err)
+	}
+
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("partial events = %#v, want delivered reference interim segment", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "provider partial" {
+		t.Fatalf("partial text = %q, want provider partial", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsRecordReferencePartialAnnotationsWhenOutputDisabled(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: false}
 	var partial smResponse
@@ -1314,8 +1342,8 @@ func TestSpeechmaticsSegmentEventsRecordReferencePartialAnnotationsWhenOutputDis
 		t.Fatalf("unmarshal partial response: %v", err)
 	}
 
-	if events := speechmaticsEvents(partial, state); len(events) != 0 {
-		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	if events := speechmaticsEvents(partial, state); len(events) != 1 {
+		t.Fatalf("partial events = %#v, want delivered partial transcript even when include_partials is false", events)
 	}
 	if !state.latestSegmentAnnotationSet {
 		t.Fatal("latest annotation set = false, want reference partial annotation retained for endpointing")

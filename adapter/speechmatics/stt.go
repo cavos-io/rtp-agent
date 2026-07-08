@@ -1707,9 +1707,6 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
-		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
-			continue
-		}
 		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -1818,15 +1815,6 @@ func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, a
 	}
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
-}
-
-func speechmaticsSegmentHasFinal(annotation []string) bool {
-	for _, value := range annotation {
-		if value == "has_final" {
-			return true
-		}
-	}
-	return false
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
