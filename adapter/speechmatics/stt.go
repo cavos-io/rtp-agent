@@ -65,6 +65,27 @@ const (
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
+var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
+	if s == nil {
+		return 0
+	}
+	switch s.turnDetectionMode {
+	case "adaptive":
+		delay := 0.7
+		if s.eouSilenceTrigger != nil {
+			delay = *s.eouSilenceTrigger
+		}
+		return time.Duration(delay * float64(time.Second))
+	case "smart_turn":
+		delay := 0.8
+		if s.eouSilenceTrigger != nil {
+			delay = *s.eouSilenceTrigger
+		}
+		return time.Duration(delay * float64(time.Second))
+	default:
+		return 0
+	}
+}
 var speechmaticsSTTRetryInterval = func(retryAttempt int) time.Duration {
 	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
 }
@@ -895,6 +916,7 @@ type speechmaticsSTTStream struct {
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
 	fixedEOUCompleted          bool
+	localEndpointingEOUSeq     uint64
 }
 
 type speechmaticsStreamState struct {
@@ -1987,14 +2009,80 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 			_ = s.Close()
 			return
 		}
-		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
-			if err := s.sendLocalEndpointingForceEndOfUtterance(); err != nil {
-				s.enqueueError(err)
-				_ = s.Close()
-				return
-			}
+		if event == nil {
+			continue
+		}
+		switch event.Type {
+		case corevad.VADEventStartOfSpeech:
+			s.cancelLocalEndpointingForceEndOfUtterance()
+		case corevad.VADEventEndOfSpeech:
+			s.scheduleLocalEndpointingForceEndOfUtterance()
 		}
 	}
+}
+
+func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
+	if s == nil {
+		return
+	}
+	delay := time.Duration(0)
+	if s.providerManagedEndpointing {
+		delay = speechmaticsLocalEndpointingDelay(s.owner)
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.localEndpointingEOUSeq++
+	seq := s.localEndpointingEOUSeq
+	s.mu.Unlock()
+	if delay <= 0 {
+		s.sendScheduledLocalEndpointingForceEndOfUtterance(seq)
+		return
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.done:
+			return
+		}
+		s.sendScheduledLocalEndpointingForceEndOfUtterance(seq)
+	}()
+}
+
+func (s *speechmaticsSTTStream) sendScheduledLocalEndpointingForceEndOfUtterance(seq uint64) {
+	if !s.consumeLocalEndpointingForceEndOfUtterance(seq) {
+		return
+	}
+	if err := s.sendLocalEndpointingForceEndOfUtterance(); err != nil {
+		s.enqueueError(err)
+		_ = s.Close()
+	}
+}
+
+func (s *speechmaticsSTTStream) consumeLocalEndpointingForceEndOfUtterance(seq uint64) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.localEndpointingEOUSeq != seq {
+		return false
+	}
+	s.localEndpointingEOUSeq++
+	return true
+}
+
+func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localEndpointingEOUSeq++
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
@@ -2308,6 +2396,7 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	s.pendingVADFrames = nil
 	s.pendingVADEndInput = false
 	s.drainingStartup = false
+	s.localEndpointingEOUSeq++
 	vadStream := s.vadStream
 	s.vadStream = nil
 	s.closeDone()

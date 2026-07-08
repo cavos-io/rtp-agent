@@ -1785,7 +1785,11 @@ func TestSpeechmaticsSTTProviderManagedModesLoadReferenceLocalVAD(t *testing.T) 
 	}
 }
 
-func TestSpeechmaticsSTTAdaptiveLocalVADEndOfSpeechForcesReferenceEOU(t *testing.T) {
+func TestSpeechmaticsSTTAdaptiveLocalVADEndOfSpeechDelaysReferenceEOU(t *testing.T) {
+	originalDelay := speechmaticsLocalEndpointingDelay
+	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
+	t.Cleanup(func() { speechmaticsLocalEndpointingDelay = originalDelay })
+
 	vadStream := newFakeSpeechmaticsVADStream()
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
 	provider.vad = &fakeSpeechmaticsVAD{stream: vadStream}
@@ -1810,7 +1814,49 @@ func TestSpeechmaticsSTTAdaptiveLocalVADEndOfSpeechForcesReferenceEOU(t *testing
 	defer stream.Close()
 
 	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	select {
+	case message := <-controlMessages:
+		t.Fatalf("immediate control message = %#v, want delayed ForceEndOfUtterance after reference turn timer", message)
+	case <-time.After(5 * time.Millisecond):
+	}
 	waitForSpeechmaticsControlMessage(t, controlMessages, "ForceEndOfUtterance")
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsReferenceDelayedEOU(t *testing.T) {
+	originalDelay := speechmaticsLocalEndpointingDelay
+	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
+	t.Cleanup(func() { speechmaticsLocalEndpointingDelay = originalDelay })
+
+	vadStream := newFakeSpeechmaticsVADStream()
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	provider.vad = &fakeSpeechmaticsVAD{stream: vadStream}
+
+	controlMessages := make(chan map[string]interface{}, 4)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		providerManagedEndpointing: true,
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	if err := stream.startVAD(context.Background()); err != nil {
+		t.Fatalf("startVAD() error = %v", err)
+	}
+	defer stream.Close()
+
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	vadStream.events <- &vad.VADEvent{Type: vad.VADEventStartOfSpeech}
+	select {
+	case message := <-controlMessages:
+		t.Fatalf("control message after restarted speech = %#v, want canceled delayed ForceEndOfUtterance", message)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
