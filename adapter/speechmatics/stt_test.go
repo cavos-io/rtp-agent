@@ -4863,6 +4863,42 @@ func TestSpeechmaticsSTTFinalizeSuppressesDuplicateReferenceForcedEOU(t *testing
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeAfterForcedEOUTimeoutSuppressesDuplicateReferenceForceEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	writes := 0
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("second Finalize error = %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("ForceEndOfUtterance writes = %d, want no duplicate after forced EOU timeout", writes)
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("second Finalize events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTForcedEOUEndsOnReferenceEndOfUtteranceAck(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = time.Second

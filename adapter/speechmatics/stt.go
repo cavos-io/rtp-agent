@@ -2160,7 +2160,7 @@ func (s *speechmaticsSTTStream) beginForcedEOU(allowProviderManaged bool) (uint6
 	if s.closed || (s.providerManagedEndpointing && !allowProviderManaged) {
 		return 0, 0, false
 	}
-	if s.forcedEOUPending {
+	if s.forcedEOUPending || s.forcedEOUCompleted {
 		return 0, 0, false
 	}
 	s.forcedEOUPending = true
