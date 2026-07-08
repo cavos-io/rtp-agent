@@ -2261,6 +2261,11 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 			default:
 			}
 		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 	if s.pendingErr != nil {

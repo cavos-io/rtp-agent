@@ -1983,6 +1983,34 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTStartupDrainWriteFailureSurfacesToNext(t *testing.T) {
+	writeErr := errors.New("startup write failed")
+	stream := &speechmaticsSTTStream{
+		events:                    make(chan *stt.SpeechEvent, 1),
+		errCh:                     make(chan error, 1),
+		done:                      make(chan struct{}),
+		waitForRecognitionStarted: true,
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); keepReading {
+		t.Fatal("RecognitionStarted kept read loop after startup drain write failure")
+	}
+	if _, err := stream.Next(); !errors.Is(err, writeErr) {
+		t.Fatalf("Next() error after startup drain write failure = %v, want %v", err, writeErr)
+	}
+}
+
 func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	frame := &model.AudioFrame{
