@@ -12,20 +12,22 @@ import (
 
 const (
 	defaultNvidiaSTTServer     = "grpc.nvcf.nvidia.com:443"
-	defaultNvidiaSTTModel      = "parakeet-1.1b-ctc-en-us"
+	defaultNvidiaSTTModel      = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
 	defaultNvidiaSTTFunctionID = "1598d209-5e27-4d3c-8079-4751568b1081"
 	defaultNvidiaSTTLanguage   = "en-US"
 	defaultNvidiaSTTSampleRate = 16000
 )
 
 type NvidiaSTT struct {
-	apiKey     string
-	model      string
-	functionID string
-	server     string
-	language   string
-	sampleRate int
-	useSSL     bool
+	apiKey          string
+	model           string
+	functionID      string
+	server          string
+	language        string
+	sampleRate      int
+	useSSL          bool
+	diarization     bool
+	maxSpeakerCount int
 }
 
 type NvidiaSTTOption func(*NvidiaSTT)
@@ -68,6 +70,20 @@ func WithNvidiaSTTUseSSL(useSSL bool) NvidiaSTTOption {
 	}
 }
 
+func WithNvidiaSTTDiarization(enabled bool) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.diarization = enabled
+	}
+}
+
+func WithNvidiaSTTMaxSpeakerCount(count int) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		if count >= 0 {
+			s.maxSpeakerCount = count
+		}
+	}
+}
+
 func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*NvidiaSTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(nvidiaAPIKeyEnv)
@@ -77,13 +93,15 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 	}
 
 	provider := &NvidiaSTT{
-		apiKey:     apiKey,
-		model:      model,
-		functionID: defaultNvidiaSTTFunctionID,
-		server:     defaultNvidiaSTTServer,
-		language:   defaultNvidiaSTTLanguage,
-		sampleRate: defaultNvidiaSTTSampleRate,
-		useSSL:     true,
+		apiKey:          apiKey,
+		model:           model,
+		functionID:      defaultNvidiaSTTFunctionID,
+		server:          defaultNvidiaSTTServer,
+		language:        defaultNvidiaSTTLanguage,
+		sampleRate:      defaultNvidiaSTTSampleRate,
+		useSSL:          true,
+		diarization:     false,
+		maxSpeakerCount: 0,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -109,8 +127,8 @@ func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
-		Diarization:       false,
-		AlignedTranscript: "",
+		Diarization:       s.diarization,
+		AlignedTranscript: "word",
 		OfflineRecognize:  false,
 	}
 }

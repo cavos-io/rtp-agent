@@ -155,7 +155,7 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if provider.apiKey != "secret" {
 		t.Fatalf("apiKey = %q, want secret", provider.apiKey)
 	}
-	if got, want := provider.model, "parakeet-1.1b-ctc-en-us"; got != want {
+	if got, want := provider.model, "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"; got != want {
 		t.Fatalf("model = %q, want reference default model %q", got, want)
 	}
 	if got, want := provider.server, "grpc.nvcf.nvidia.com:443"; got != want {
@@ -173,7 +173,7 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := provider.Label(), "nvidia.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
 	}
-	if got, want := stt.Model(provider), "parakeet-1.1b-ctc-en-us"; got != want {
+	if got, want := stt.Model(provider), "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"; got != want {
 		t.Fatalf("stt.Model() = %q, want %q", got, want)
 	}
 	if got, want := stt.Provider(provider), "nvidia"; got != want {
@@ -182,8 +182,8 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := provider.InputSampleRate(), uint32(16000); got != want {
 		t.Fatalf("InputSampleRate() = %d, want reference sample rate %d", got, want)
 	}
-	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.Diarization || caps.AlignedTranscript != "" {
-		t.Fatalf("Capabilities() = %+v, want reference streaming interim STT without offline recognition", caps)
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.Diarization || caps.AlignedTranscript != "word" {
+		t.Fatalf("Capabilities() = %+v, want reference streaming interim STT with word alignment and without offline recognition", caps)
 	}
 }
 
@@ -233,6 +233,8 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 		WithNvidiaSTTLanguage("id-ID"),
 		WithNvidiaSTTSampleRate(24000),
 		WithNvidiaSTTUseSSL(false),
+		WithNvidiaSTTDiarization(true),
+		WithNvidiaSTTMaxSpeakerCount(4),
 	)
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
@@ -252,6 +254,15 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 	if got, want := provider.InputSampleRate(), uint32(24000); got != want {
 		t.Fatalf("InputSampleRate() = %d, want %d", got, want)
+	}
+	if !provider.diarization {
+		t.Fatal("diarization = false, want true")
+	}
+	if got, want := provider.maxSpeakerCount, 4; got != want {
+		t.Fatalf("maxSpeakerCount = %d, want %d", got, want)
+	}
+	if caps := provider.Capabilities(); !caps.Diarization || caps.AlignedTranscript != "word" {
+		t.Fatalf("Capabilities() = %+v, want reference diarization and word alignment", caps)
 	}
 	if provider.useSSL {
 		t.Fatal("useSSL = true, want false")
