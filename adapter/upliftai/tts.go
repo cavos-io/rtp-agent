@@ -826,8 +826,7 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 	}
 	conn := c.conn
 	c.requests[requestID] = &upliftAISocketIORequest{
-		pw:    pw,
-		timer: time.AfterFunc(upliftAISocketIOAudioWait, func() { c.finishRequest(requestID, nil) }),
+		pw: pw,
 	}
 	c.mu.Unlock()
 
@@ -850,6 +849,7 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 		_ = pr.Close()
 		return nil, err
 	}
+	c.startRequestTimer(requestID)
 	return &upliftAISocketIOBody{PipeReader: pr, client: c, requestID: requestID}, nil
 }
 
@@ -1037,6 +1037,15 @@ func (c *upliftAISocketIOClient) resetRequestTimer(requestID string) {
 	if req != nil && req.timer != nil {
 		req.timer.Reset(upliftAISocketIOAudioWait)
 	}
+}
+
+func (c *upliftAISocketIOClient) startRequestTimer(requestID string) {
+	c.mu.Lock()
+	req := c.requests[requestID]
+	if req != nil && req.timer == nil {
+		req.timer = time.AfterFunc(upliftAISocketIOAudioWait, func() { c.finishRequest(requestID, nil) })
+	}
+	c.mu.Unlock()
 }
 
 func (c *upliftAISocketIOClient) finishRequest(requestID string, err error) {
