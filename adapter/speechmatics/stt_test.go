@@ -2522,6 +2522,9 @@ func TestSpeechmaticsSTTRejectsSampleRateChangeBeforeVADLikeReference(t *testing
 func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
 		writeBinary: func([]byte) error {
 			return writeErr
 		},
@@ -2540,6 +2543,9 @@ func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 	if !stream.isClosed() {
 		t.Fatal("stream remains open after audio write failure")
+	}
+	if _, err := stream.Next(); !errors.Is(err, writeErr) {
+		t.Fatalf("Next after write failure error = %v, want %v", err, writeErr)
 	}
 	if err := stream.PushFrame(frame); err == nil || !strings.Contains(err.Error(), "stream input ended") {
 		t.Fatalf("PushFrame after write failure error = %v, want reference input-ended error", err)

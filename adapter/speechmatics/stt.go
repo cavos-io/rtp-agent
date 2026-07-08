@@ -1537,6 +1537,7 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
 		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+			s.enqueueError(err)
 			_ = s.closeLocked()
 			return err
 		}
@@ -1568,6 +1569,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		}
 		for _, chunk := range s.audioBuf.Flush() {
 			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+				s.enqueueError(err)
 				_ = s.closeLocked()
 				s.mu.Unlock()
 				return err
@@ -1603,6 +1605,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		return nil
 	}
 	if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+		s.enqueueError(err)
 		_ = s.closeLocked()
 		return err
 	}
@@ -2034,6 +2037,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 	}
 	for _, chunk := range s.audioBuf.Flush() {
 		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+			s.enqueueError(err)
 			_ = s.closeLocked()
 			return err
 		}
