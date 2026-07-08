@@ -990,6 +990,7 @@ type speechmaticsSTTStream struct {
 	pushedSampleRate           uint32
 	providerManagedEndpointing bool
 	drainEventsAfterClose      bool
+	drainEvents                []*stt.SpeechEvent
 	forcedEOUPending           bool
 	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
@@ -2653,6 +2654,7 @@ func (n *speechmaticsSTTInputAudioNormalizer) reset() {
 func (s *speechmaticsSTTStream) Close() error {
 	s.closeDone()
 	_ = s.closeTransportOnce()
+	s.prepareDrainPendingRawFinals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closeLocked()
@@ -2686,6 +2688,20 @@ func (s *speechmaticsSTTStream) closeLocked() error {
 	return nil
 }
 
+func (s *speechmaticsSTTStream) prepareDrainPendingRawFinals() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events := speechmaticsFlushPendingRawFinals(s.state)
+	if len(events) == 0 {
+		return
+	}
+	s.drainEvents = append(s.drainEvents, events...)
+	s.drainEventsAfterClose = true
+}
+
 func (s *speechmaticsSTTStream) closeTransportOnce() error {
 	var closeErr error
 	s.transportOnce.Do(func() {
@@ -2702,14 +2718,8 @@ func (s *speechmaticsSTTStream) closeTransportOnce() error {
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		if s.shouldDrainEventsAfterClose() {
-			select {
-			case event, ok := <-s.events:
-				if ok {
-					return event, nil
-				}
-			default:
-			}
+		if event, ok := s.nextDrainedEvent(); ok {
+			return event, nil
 		}
 		select {
 		case err := <-s.errCh:
@@ -2757,17 +2767,33 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		s.markClosed()
 		return nil, err
 	case <-s.done:
-		if s.shouldDrainEventsAfterClose() {
-			select {
-			case event, ok := <-s.events:
-				if ok {
-					return event, nil
-				}
-			default:
-			}
+		if event, ok := s.nextDrainedEvent(); ok {
+			return event, nil
 		}
 		return nil, io.EOF
 	}
+}
+
+func (s *speechmaticsSTTStream) nextDrainedEvent() (*stt.SpeechEvent, bool) {
+	if s == nil || !s.shouldDrainEventsAfterClose() {
+		return nil, false
+	}
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.drainEvents) == 0 {
+		return nil, false
+	}
+	event := s.drainEvents[0]
+	copy(s.drainEvents, s.drainEvents[1:])
+	s.drainEvents = s.drainEvents[:len(s.drainEvents)-1]
+	return event, true
 }
 
 func (s *speechmaticsSTTStream) markClosed() {
