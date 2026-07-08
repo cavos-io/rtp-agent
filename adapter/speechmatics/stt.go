@@ -1159,6 +1159,17 @@ func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
 	if err := json.Unmarshal(data, &value); err == nil {
 		return value, nil
 	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		switch number {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("invalid bool number %v", number)
+		}
+	}
 	var text string
 	if err := json.Unmarshal(data, &text); err != nil {
 		return false, err
