@@ -1037,16 +1037,27 @@ type smAlternative struct {
 }
 
 func (a *smAlternative) UnmarshalJSON(data []byte) error {
-	type alternative smAlternative
 	var raw struct {
-		alternative
+		Content    json.RawMessage `json:"content"`
 		Confidence json.RawMessage `json:"confidence"`
+		SpeakerID  string          `json:"speaker"`
+		Language   string          `json:"language"`
 		Tags       json.RawMessage `json:"tags"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	*a = smAlternative(raw.alternative)
+	*a = smAlternative{
+		SpeakerID: raw.SpeakerID,
+		Language:  raw.Language,
+	}
+	if len(raw.Content) > 0 {
+		content, err := speechmaticsUnmarshalReferenceContent(raw.Content)
+		if err != nil {
+			return fmt.Errorf("content: %w", err)
+		}
+		a.Content = content
+	}
 	if len(raw.Confidence) > 0 {
 		confidence, err := speechmaticsUnmarshalReferenceFloat(raw.Confidence)
 		if err != nil {
@@ -1086,6 +1097,31 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 		a.Tags = append(a.Tags, "disfluency")
 	}
 	return nil
+}
+
+func speechmaticsUnmarshalReferenceContent(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var boolValue bool
+	if err := json.Unmarshal(data, &boolValue); err == nil {
+		if !boolValue {
+			return "", nil
+		}
+		return "", fmt.Errorf("true is not reference-falsey")
+	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		if number == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("number %v is not reference-falsey", number)
+	}
+	return "", fmt.Errorf("must be string or reference-falsey")
 }
 
 type smResult struct {
