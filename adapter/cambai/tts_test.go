@@ -162,6 +162,7 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 		WithCambaiTTSVoiceID(42),
 		WithCambaiTTSLanguage("fr-fr"),
 		WithCambaiTTSModel("mars-pro"),
+		WithCambaiTTSSampleRate(44100),
 		WithCambaiTTSOutputFormat("wav"),
 		WithCambaiTTSUserInstructions("warm and concise"),
 		WithCambaiTTSEnhanceNamedEntities(true),
@@ -177,8 +178,8 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 	if req.URL.String() != "https://cambai.example/apis/tts-stream" {
 		t.Fatalf("url = %q, want custom tts-stream endpoint", req.URL.String())
 	}
-	if provider.SampleRate() != 48000 {
-		t.Fatalf("sample rate = %d, want mars-pro sample rate", provider.SampleRate())
+	if provider.SampleRate() != 44100 {
+		t.Fatalf("sample rate = %d, want explicit constructor sample rate", provider.SampleRate())
 	}
 
 	var payload map[string]any
@@ -196,6 +197,32 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 	}
 	outputConfig := payload["output_configuration"].(map[string]any)
 	assertCambaiPayload(t, outputConfig, "format", "wav")
+}
+
+func TestCambaiTTSExplicitSampleRateOverridesReferenceModelRate(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "",
+		WithCambaiTTSSampleRate(44100),
+		WithCambaiTTSModel("mars-pro"),
+	)
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+	if got, want := provider.SampleRate(), 44100; got != want {
+		t.Fatalf("SampleRate() = %d, want explicit reference sample rate %d", got, want)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	chunked, ok := stream.(*cambaiTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *cambaiTTSChunkedStream", stream)
+	}
+	defer chunked.Close()
+	if got, want := chunked.sampleRate, 44100; got != want {
+		t.Fatalf("chunked sample rate = %d, want explicit reference sample rate %d", got, want)
+	}
 }
 
 func TestCambaiTTSUpdateOptionsAffectsFutureRequestsLikeReference(t *testing.T) {

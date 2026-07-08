@@ -42,6 +42,7 @@ type CambaiTTS struct {
 	userInstructions     string
 	enhanceNamedEntities bool
 	sampleRate           int
+	explicitSampleRate   bool
 	httpClient           *http.Client
 }
 
@@ -77,7 +78,18 @@ func WithCambaiTTSModel(model string) CambaiTTSOption {
 	return func(t *CambaiTTS) {
 		if model != "" {
 			t.model = model
-			t.sampleRate = cambaiSampleRateForModel(model)
+			if !t.explicitSampleRate {
+				t.sampleRate = cambaiSampleRateForModel(model)
+			}
+		}
+	}
+}
+
+func WithCambaiTTSSampleRate(sampleRate int) CambaiTTSOption {
+	return func(t *CambaiTTS) {
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+			t.explicitSampleRate = true
 		}
 	}
 }
