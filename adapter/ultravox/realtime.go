@@ -29,6 +29,7 @@ const (
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
 	ultravoxRealtimeEventQueueSize  = 2048
+	ultravoxFunctionCallQueueSize   = 2048
 	ultravoxTextDeltaQueueSize      = 2048
 	ultravoxOutputAudioQueueSize    = 2048
 )
@@ -884,7 +885,7 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	}
 	generation := &ultravoxRealtimeGeneration{
 		messageCh:  make(chan llm.MessageGeneration, 1),
-		functionCh: make(chan *llm.FunctionCall, 1),
+		functionCh: make(chan *llm.FunctionCall, ultravoxFunctionCallQueueSize),
 		textCh:     make(chan string, ultravoxTextDeltaQueueSize),
 		audioCh:    make(chan *model.AudioFrame, ultravoxOutputAudioQueueSize),
 		createdAt:  s.pickGenerationCreatedAtLocked(),
