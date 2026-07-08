@@ -2063,6 +2063,116 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTInvalidJSONClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{`)); err != nil {
+			t.Errorf("write invalid JSON: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after invalid provider JSON", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid JSON received") {
+		t.Fatalf("APIConnectionError message = %q, want invalid JSON reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTValidNonObjectJSONDoesNotAbortReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`[1]`)); err != nil {
+			t.Errorf("write valid non-object JSON: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "hello",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("write transcript: %v", err)
+			return
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after valid non-object JSON", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "hello" {
+		t.Fatalf("transcript = %q, want hello", got)
+	}
+}
+
 func TestSpeechmaticsSTTEndOfTranscriptRemovesActiveStream(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	clientClosed := make(chan error, 1)

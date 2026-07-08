@@ -1140,7 +1140,14 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
-			continue
+			if json.Valid(message) {
+				continue
+			}
+			_ = s.closeTransportOnce()
+			s.prepareDrainPendingRawFinals()
+			s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid JSON received: %v", err)))
+			s.markClosedDrainingEvents()
+			return
 		}
 
 		if !s.handleResponse(resp) {
