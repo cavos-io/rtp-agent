@@ -2297,7 +2297,7 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 	case "thinking":
 		s.mu.Lock()
 		if !s.closed && (s.generation == nil || s.generation.done) {
-			s.ensureGenerationLocked()
+			s.ensureGenerationLockedWithPending(false)
 		}
 		s.mu.Unlock()
 	case "speaking":
