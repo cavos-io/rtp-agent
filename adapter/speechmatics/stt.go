@@ -1185,17 +1185,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var raw struct {
-		Message  string          `json:"message"`
-		Metadata json.RawMessage `json:"metadata"`
-		Results  []struct {
-			Alternatives json.RawMessage `json:"alternatives"`
-			IsEOS        json.RawMessage `json:"is_eos"`
-			Attaches     json.RawMessage `json:"attaches_to"`
-			Type         json.RawMessage `json:"type"`
-			StartTime    json.RawMessage `json:"start_time"`
-			EndTime      json.RawMessage `json:"end_time"`
-			Volume       json.RawMessage `json:"volume"`
-		} `json:"results"`
+		Message  string                       `json:"message"`
+		Metadata json.RawMessage              `json:"metadata"`
+		Results  json.RawMessage              `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -1204,10 +1196,27 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 	if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Metadata) == "null" {
 		return fmt.Errorf("metadata must be an object")
 	}
+	var rawResults []struct {
+		Alternatives json.RawMessage `json:"alternatives"`
+		IsEOS        json.RawMessage `json:"is_eos"`
+		Attaches     json.RawMessage `json:"attaches_to"`
+		Type         json.RawMessage `json:"type"`
+		StartTime    json.RawMessage `json:"start_time"`
+		EndTime      json.RawMessage `json:"end_time"`
+		Volume       json.RawMessage `json:"volume"`
+	}
 	if len(raw.Results) > 0 {
-		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
-		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
-		for i, result := range raw.Results {
+		if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Results) == "null" {
+			return fmt.Errorf("results must be an array")
+		}
+		if err := json.Unmarshal(raw.Results, &rawResults); err != nil {
+			return fmt.Errorf("results must be an array: %w", err)
+		}
+	}
+	if len(rawResults) > 0 {
+		decoded.rawLanguagePresent = make([]bool, len(rawResults))
+		decoded.rawSpeakerPresent = make([]bool, len(rawResults))
+		for i, result := range rawResults {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.IsEOS) == "null" {
 				return fmt.Errorf("results[%d].is_eos must be a bool", i)
