@@ -2419,6 +2419,34 @@ func TestUltravoxRealtimeSessionToolInvocationEscapesReferenceUnicodeArguments(t
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedUnicodeArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-escaped-unicode","parameters":{"word":"caf\u00E9","emoji":"\uD83D\uDE00"}}`)); err != nil {
+		t.Fatalf("handle escaped unicode tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"word": "caf\u00e9", "emoji": "\ud83d\ude00"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps normalized unicode escaping %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for escaped unicode function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

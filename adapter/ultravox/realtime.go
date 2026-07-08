@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf16"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
@@ -1744,7 +1745,13 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 	out.Grow(len(value) + 8)
 	inString := false
 	escaped := false
+	unicodeEscapeRemaining := 0
 	for _, r := range value {
+		if unicodeEscapeRemaining > 0 {
+			out.WriteRune(unicode.ToLower(r))
+			unicodeEscapeRemaining--
+			continue
+		}
 		if !inString && (r == ' ' || r == '\n' || r == '\r' || r == '\t') {
 			continue
 		}
@@ -1754,6 +1761,9 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 		}
 		out.WriteRune(r)
 		if escaped {
+			if r == 'u' {
+				unicodeEscapeRemaining = 4
+			}
 			escaped = false
 			continue
 		}
