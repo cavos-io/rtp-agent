@@ -1660,21 +1660,23 @@ func ultravoxRealtimeToolSchemaE(tool llm.Tool) (string, any, map[string]any, bo
 	parameters := llm.ToolParameters(tool)
 	rawSchema := false
 	if rawTool, ok := tool.(ultravoxRealtimeRawToolSchemaParser); ok {
-		if schema, err := rawTool.ParseFunctionTools("ultravox"); err == nil {
-			rawSchema = true
-			if rawName, ok := schema["name"].(string); ok {
-				name = rawName
+		schema, err := rawTool.ParseFunctionTools("ultravox")
+		if err != nil {
+			return name, description, nil, true, err
+		}
+		rawSchema = true
+		if rawName, ok := schema["name"].(string); ok {
+			name = rawName
+		}
+		description = schema["description"]
+		if rawParameters, ok := schema["parameters"]; ok {
+			parameterMap, ok := rawParameters.(map[string]any)
+			if !ok {
+				return name, description, nil, rawSchema, errors.New("'properties'")
 			}
-			description = schema["description"]
-			if rawParameters, ok := schema["parameters"]; ok {
-				parameterMap, ok := rawParameters.(map[string]any)
-				if !ok {
-					return name, description, nil, rawSchema, errors.New("'properties'")
-				}
-				parameters = parameterMap
-			} else {
-				parameters = map[string]any{}
-			}
+			parameters = parameterMap
+		} else {
+			parameters = map[string]any{}
 		}
 	}
 	return name, description, parameters, rawSchema, nil
