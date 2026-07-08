@@ -120,7 +120,6 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		baseURL:    baseURL,
 		voice:      voice,
 		sampleRate: sampleRate,
-		requestID:  lkmath.ShortUUID(""),
 		owner:      t,
 	}
 	if !t.registerStream(stream) {
@@ -497,6 +496,7 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 		resp.Body.Close()
 		return io.EOF
 	}
+	s.requestID = lkmath.ShortUUID("")
 	s.stream = resp.Body
 	s.mu.Unlock()
 	return nil
@@ -559,6 +559,7 @@ func (s *speechmaticsTTSChunkedStream) resetRetryableAttempt() {
 	s.pendingFrames = nil
 	s.pendingErr = nil
 	s.finalReady = false
+	s.requestID = ""
 	s.mu.Unlock()
 	if stream != nil {
 		_ = stream.Close()
