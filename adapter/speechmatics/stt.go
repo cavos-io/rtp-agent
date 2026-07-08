@@ -1244,7 +1244,9 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
-		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
+		events := speechmaticsFlushPendingRawFinals(state)
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		return events
 	case "EndOfTurn":
 		return speechmaticsEndOfTurnEvents(state)
 	}
