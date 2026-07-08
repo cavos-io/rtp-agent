@@ -2244,8 +2244,12 @@ func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fixedEOUCompleted || s.localEndpointingTurnClosed {
+		return nil
+	}
 	if !s.closed {
 		s.fixedEOUCompleted = true
+		s.localEndpointingTurnClosed = true
 	}
 	return speechmaticsEndOfTurnEvents(s.state)
 }

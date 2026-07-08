@@ -5032,6 +5032,38 @@ func TestSpeechmaticsSTTFinalizeFixedModeEmitsReferenceLocalTurnEnd(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeFixedModeSuppressesDuplicateReferenceLocalTurnEnd(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 4),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("finalize write = %#v, want local reference finalization for fixed mode", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("second Finalize error = %v", err)
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("second fixed Finalize events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeFixedModeSuppressesLateReferenceEndOfUtterance(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
 	stream := &speechmaticsSTTStream{
