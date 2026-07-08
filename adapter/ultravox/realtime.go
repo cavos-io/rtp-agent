@@ -170,10 +170,8 @@ func WithRealtimeTemperature(temperature float64) RealtimeOption {
 
 func WithRealtimeLanguageHint(languageHint string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if languageHint != "" {
-			m.languageHint = languageHint
-			m.languageHintSet = true
-		}
+		m.languageHint = languageHint
+		m.languageHintSet = true
 	}
 }
 
