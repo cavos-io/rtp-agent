@@ -1473,7 +1473,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			continue
 		}
 		resultSpeakerID := speechmaticsRawSpeakerID(alt.SpeakerID)
-		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
+		if alt.SpeakerID != "" && speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
 		language := speechmaticsRawFragmentLanguage(alt.Language)

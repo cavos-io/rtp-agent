@@ -338,6 +338,30 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingLanguageToReferenceEnglis
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptKeepsMissingSpeakerDuringReferenceFocusIgnore(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"unlabeled","confidence":0.9,"language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{focusSpeakers: []string{"agent"}, focusMode: "ignore"})
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want missing-speaker raw transcript retained like reference SDK", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "unlabeled" || alt.SpeakerID != "UU" {
+		t.Fatalf("alternative = %+v, want retained default-speaker transcript", alt)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
