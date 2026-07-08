@@ -997,6 +997,7 @@ type speechmaticsSTTStream struct {
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
 	fixedEOUCompleted          bool
+	completedEOUNewTurnStarted bool
 	localEndpointingEOUSeq     uint64
 	localEndpointingTurnClosed bool
 }
@@ -1151,7 +1152,10 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "StartOfTurn" {
 		s.reopenLocalEndpointingTurn()
-		s.resetCompletedEOU()
+		s.markCompletedEOUNewTurnStarted()
+	}
+	if speechmaticsTranscriptMessage(resp.Message) {
+		s.resetCompletedEOUAfterNewTurnContent()
 	}
 	if resp.Message == "EndOfTurn" {
 		s.closeLocalEndpointingTurn()
@@ -1170,6 +1174,10 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 
 func speechmaticsPartialMessage(message string) bool {
 	return message == "AddPartialSegment" || message == "AddPartialTranscript"
+}
+
+func speechmaticsTranscriptMessage(message string) bool {
+	return message == "AddPartialSegment" || message == "AddSegment" || message == "AddPartialTranscript" || message == "AddTranscript"
 }
 
 func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -2252,6 +2260,7 @@ func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
 		return false
 	}
 	s.forcedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	return true
 }
 
@@ -2265,16 +2274,31 @@ func (s *speechmaticsSTTStream) consumeCompletedFixedEOU() bool {
 		return false
 	}
 	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	return true
 }
 
-func (s *speechmaticsSTTStream) resetCompletedEOU() {
+func (s *speechmaticsSTTStream) markCompletedEOUNewTurnStarted() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
+	s.completedEOUNewTurnStarted = s.forcedEOUCompleted || s.fixedEOUCompleted
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsSTTStream) resetCompletedEOUAfterNewTurnContent() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if !s.completedEOUNewTurnStarted {
+		s.mu.Unlock()
+		return
+	}
 	s.forcedEOUCompleted = false
 	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	s.mu.Unlock()
 }
 

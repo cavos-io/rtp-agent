@@ -4664,6 +4664,50 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *te
 	}
 }
 
+func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutAndNewStartDoesNotDuplicate(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit end_of_speech")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit recognition usage")
+	}
+	if ok := stream.handleResponse(smResponse{Message: "StartOfTurn"}); !ok {
+		t.Fatal("StartOfTurn stopped read loop")
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("new turn event = %s, want start_of_speech", got.Type)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("late EndOfTurn stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late EndOfTurn events after new start = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
 func TestSpeechmaticsSTTForcedEOUSuppressesReferencePartialSegments(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = time.Second
