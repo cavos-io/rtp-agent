@@ -67,6 +67,7 @@ var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
 
 const speechmaticsMinEndOfTurnDelay = 10 * time.Millisecond
+const speechmaticsAdaptiveVADStoppedPenalty = 0.2
 
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 	if s == nil {
@@ -78,6 +79,7 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
 		}
+		delay *= speechmaticsAdaptiveVADStoppedPenalty
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
