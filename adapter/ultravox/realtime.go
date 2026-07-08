@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1020,16 +1021,21 @@ func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	nextToolNames := make(map[string]struct{}, len(tools))
+	nextToolByName := make(map[string]llm.Tool, len(tools))
 	nextTools := make([]llm.Tool, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
-		if _, exists := nextToolNames[tool.Name()]; exists {
+		if existing, exists := nextToolByName[tool.Name()]; exists {
+			if ultravoxRealtimeSameToolInstance(existing, tool) {
+				continue
+			}
 			return fmt.Errorf("duplicate function name: %s", tool.Name())
 		}
 		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
+		nextToolByName[tool.Name()] = tool
 	}
 
 	s.mu.Lock()
@@ -2041,6 +2047,26 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 		}
 	}
 	return true
+}
+
+func ultravoxRealtimeSameToolInstance(a, b llm.Tool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() != bv.Type() {
+		return false
+	}
+	switch av.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return av.Pointer() == bv.Pointer()
+	default:
+		if av.Type().Comparable() {
+			return a == b
+		}
+		return false
+	}
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {

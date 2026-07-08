@@ -1161,6 +1161,33 @@ func TestUltravoxRealtimeSessionUpdateToolsRejectsReferenceDuplicateNames(t *tes
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateToolsDedupesReferenceSameInstance(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	lookup := &ultravoxRealtimeTestTool{name: "lookup", description: "same instance"}
+	if err := session.UpdateTools([]llm.Tool{lookup, lookup}); err != nil {
+		t.Fatalf("UpdateTools same instance duplicate error = %v, want reference dedupe", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after same-instance duplicate tools = %d, want one reference restart", got)
+	}
+	if got := len(session.tools); got != 1 {
+		t.Fatalf("stored tools after same-instance duplicate = %d, want one deduped tool", got)
+	}
+	if session.tools[0] != lookup {
+		t.Fatalf("stored tool = %#v, want original same instance", session.tools[0])
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateToolsKeepsReferenceSameNameToolState(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
