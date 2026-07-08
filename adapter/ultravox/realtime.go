@@ -1037,7 +1037,20 @@ func (s *realtimeSession) sendOutboundMessagesFromContext(ctx context.Context, w
 }
 
 func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocketConn) error {
+	s.mu.Lock()
+	restartCount := s.restartCount
+	s.mu.Unlock()
+	return s.receiveRealtimeMessagesFrom(conn, restartCount)
+}
+
+func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebsocketConn, restartCount uint64) error {
 	for {
+		s.mu.Lock()
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
 			if errors.Is(err, io.EOF) {

@@ -2748,6 +2748,41 @@ func TestUltravoxRealtimeSessionReceiveTaskDispatchesReferenceFrames(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionReceiveTaskStopsStaleFramesAfterReferenceRestart(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.mu.Lock()
+	restartCount := session.restartCount
+	session.mu.Unlock()
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	conn := &ultravoxRealtimeTestWebsocketConn{
+		readMessages: []ultravoxRealtimeTestWebsocketFrame{
+			{typ: ultravoxRealtimeWebsocketTextFrame, data: []byte(`{"type":"transcript","role":"user","medium":"voice","text":"stale","final":true,"ordinal":9}`)},
+		},
+		readErr: io.EOF,
+	}
+
+	if err := session.receiveRealtimeMessagesFrom(conn, restartCount); err != nil {
+		t.Fatalf("receive old frames after restart error = %v, want nil", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after restart stale receive = %#v, want old websocket frame ignored", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionReceiveTaskUnexpectedCloseReturnsReferenceError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
