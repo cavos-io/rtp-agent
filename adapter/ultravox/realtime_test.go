@@ -2494,6 +2494,53 @@ func TestUltravoxRealtimeSessionUserTranscriptBuffersFullReferenceEventQueue(t *
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_9", "queued final", true)
 }
 
+func TestUltravoxRealtimeSessionCloseDrainsFullReferenceEventQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+
+	fullCap := cap(session.eventCh)
+	if fullCap == 0 {
+		t.Fatal("event queue cap = 0, want buffered realtime event queue")
+	}
+	for i := 0; i < fullCap; i++ {
+		session.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeText}
+	}
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "close final",
+		Final:   true,
+		Ordinal: 10,
+	})
+	requireUltravoxRealtimeEventStreamBlocked(t, session)
+
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- session.Close()
+	}()
+	for i := 0; i < fullCap; i++ {
+		<-session.eventCh
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_10", "close final", true)
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after draining reference event queue")
+	}
+	if _, ok := <-session.eventCh; ok {
+		t.Fatal("EventCh still open after queued event drained")
+	}
+}
+
 func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -4200,6 +4247,22 @@ func TestUltravoxRealtimeSessionPongQueuesReferencePing(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for reference ping after pong")
 	}
+}
+
+func requireUltravoxRealtimeEventStreamBlocked(t *testing.T, session *realtimeSession) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		session.eventStream.mu.Lock()
+		queueLen := len(session.eventStream.queue)
+		closed := session.eventStream.closed
+		session.eventStream.mu.Unlock()
+		if !closed && queueLen == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for realtime event stream to block on full EventCh")
 }
 
 func requireUltravoxRealtimeGeneration(t *testing.T, session *realtimeSession) *llm.GenerationCreatedEvent {

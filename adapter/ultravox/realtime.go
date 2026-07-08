@@ -778,15 +778,21 @@ func (s *ultravoxRealtimeEventStream) Close() {
 	}
 	s.mu.Lock()
 	if s.closed {
+		wait := len(s.queue) == 0 && len(s.out) == 0
 		s.mu.Unlock()
-		<-s.done
+		if wait {
+			<-s.done
+		}
 		return
 	}
+	wait := len(s.queue) == 0 && len(s.out) == 0
 	s.closed = true
 	close(s.closeCh)
 	s.notifyLocked()
 	s.mu.Unlock()
-	<-s.done
+	if wait {
+		<-s.done
+	}
 }
 
 func (s *ultravoxRealtimeEventStream) notifyLocked() {
@@ -809,7 +815,7 @@ func (s *ultravoxRealtimeEventStream) run() {
 			}
 			s.mu.Lock()
 		}
-		if s.closed {
+		if s.closed && len(s.queue) == 0 {
 			s.mu.Unlock()
 			return
 		}
@@ -819,11 +825,7 @@ func (s *ultravoxRealtimeEventStream) run() {
 		s.queue = s.queue[1:]
 		s.mu.Unlock()
 
-		select {
-		case s.out <- event:
-		case <-s.closeCh:
-			return
-		}
+		s.out <- event
 	}
 }
 
