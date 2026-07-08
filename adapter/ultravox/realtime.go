@@ -1,10 +1,14 @@
 package ultravox
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -368,6 +372,10 @@ const (
 
 type ultravoxRealtimeWebsocketWriter interface {
 	WriteMessage(messageType int, data []byte) error
+}
+
+type ultravoxRealtimeHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
 }
 
 type realtimeSession struct {
@@ -803,6 +811,34 @@ type ultravoxRealtimeConnectionError string
 func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
 
 const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+
+func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
+	createCallURL, headers, payload := s.createCallRequest()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createCallURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("ultravox create call failed: HTTP %d", resp.StatusCode)
+	}
+	return ultravoxRealtimeCreateCallJoinURL(data)
+}
 
 func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter, message ultravoxRealtimeOutboundMessage) error {
 	if len(message.Audio) > 0 {

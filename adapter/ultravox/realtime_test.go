@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -370,6 +372,60 @@ func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T
 		if _, err := ultravoxRealtimeCreateCallJoinURL([]byte(body)); err == nil || err.Error() != "Ultravox call created, but no joinUrl received." {
 			t.Fatalf("joinUrl parse error for %s = %v, want reference missing joinUrl error", body, err)
 		}
+	}
+}
+
+func TestUltravoxRealtimeSessionCreateCallPostsReferenceRequest(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("https://ultravox.example/api/"),
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeEnableGreetingPrompt(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	got, err := session.createCall(context.Background(), doer)
+	if err != nil {
+		t.Fatalf("createCall error = %v, want nil", err)
+	}
+	if got != "wss://ultravox.example/join" {
+		t.Fatalf("joinUrl = %q, want reference joinUrl", got)
+	}
+	if doer.request == nil {
+		t.Fatal("createCall did not issue HTTP request")
+	}
+	if doer.request.Method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", doer.request.Method)
+	}
+	if gotURL := doer.request.URL.String(); gotURL != "https://ultravox.example/api/calls?enableGreetingPrompt=false" {
+		t.Fatalf("URL = %q, want reference create-call URL", gotURL)
+	}
+	if gotHeader := doer.request.Header.Get("User-Agent"); gotHeader != "LiveKit Agents" {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents", gotHeader)
+	}
+	if gotHeader := doer.request.Header.Get("X-API-Key"); gotHeader != "test-key" {
+		t.Fatalf("X-API-Key = %q, want API key", gotHeader)
+	}
+	if gotHeader := doer.request.Header.Get("Content-Type"); gotHeader != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", gotHeader)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(doer.requestBody, &payload); err != nil {
+		t.Fatalf("request JSON = %q failed decode: %v", doer.requestBody, err)
+	}
+	if payload["systemPrompt"] != "stay concise" || payload["model"] != "fixie-ai/ultravox" || payload["voice"] != "Mark" {
+		t.Fatalf("request payload core fields = %#v, want reference model prompt voice", payload)
 	}
 }
 
@@ -2824,6 +2880,37 @@ func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte)
 		data: append([]byte(nil), data...),
 	})
 	return nil
+}
+
+type ultravoxRealtimeTestHTTPDoer struct {
+	request        *http.Request
+	requestBody    []byte
+	responseStatus int
+	responseBody   string
+	err            error
+}
+
+func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	d.request = req
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		d.requestBody = body
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	status := d.responseStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(d.responseBody)),
+		Header:     make(http.Header),
+	}, nil
 }
 
 type ultravoxRealtimeTestTool struct {
