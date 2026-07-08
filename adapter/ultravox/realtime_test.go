@@ -1856,6 +1856,9 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *tes
 
 	for _, payload := range [][]byte{
 		[]byte(`{"type":"transcript","role":"user","medium":"voice","text":"bad","final":true,"ordinal":"bad"}`),
+		[]byte(`{"type":"transcript","role":"user","text":"missing medium","final":true,"ordinal":7}`),
+		[]byte(`{"type":"transcript","role":"user","medium":"voice","text":"missing final","ordinal":8}`),
+		[]byte(`{"type":"transcript","role":"user","medium":"voice","text":"missing ordinal","final":true}`),
 		[]byte(`{not-json`),
 	} {
 		if err := session.handleServerTextMessage(payload); err != nil {

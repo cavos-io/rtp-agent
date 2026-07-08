@@ -761,20 +761,24 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 	case "transcript":
 		var event struct {
 			Role    string `json:"role"`
+			Medium  string `json:"medium"`
 			Text    string `json:"text"`
 			Delta   string `json:"delta"`
-			Final   bool   `json:"final"`
-			Ordinal int    `json:"ordinal"`
+			Final   *bool  `json:"final"`
+			Ordinal *int   `json:"ordinal"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
+			return nil
+		}
+		if !ultravoxRealtimeValidTranscriptEnvelope(event.Role, event.Medium, event.Final, event.Ordinal) {
 			return nil
 		}
 		s.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
 			Role:    event.Role,
 			Text:    event.Text,
 			Delta:   event.Delta,
-			Final:   event.Final,
-			Ordinal: event.Ordinal,
+			Final:   *event.Final,
+			Ordinal: *event.Ordinal,
 		})
 	case "state":
 		var event struct {
@@ -819,6 +823,16 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		return nil
 	}
 	return nil
+}
+
+func ultravoxRealtimeValidTranscriptEnvelope(role string, medium string, final *bool, ordinal *int) bool {
+	if final == nil || ordinal == nil {
+		return false
+	}
+	if role != "user" && role != "agent" {
+		return false
+	}
+	return medium == "text" || medium == "voice"
 }
 
 func (s *realtimeSession) ensureGenerationLocked() *ultravoxRealtimeGeneration {
