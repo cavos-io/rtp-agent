@@ -8,14 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf16"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
@@ -2244,61 +2245,207 @@ func ultravoxRealtimeToolArguments(parameters map[string]any, rawParameters json
 }
 
 func ultravoxRealtimePythonJSONSpacingFromRaw(raw json.RawMessage) (string, error) {
-	var value any
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
+	value, err := ultravoxRealtimeParsePythonJSONValue(decoder)
+	if err != nil {
 		return "", err
 	}
-	return ultravoxRealtimePythonJSONSpacingRaw(string(raw)), nil
+	var out strings.Builder
+	out.Grow(len(raw) + 8)
+	ultravoxRealtimeWritePythonJSONValue(&out, value)
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return "", errors.New("trailing JSON token")
+		}
+		return "", err
+	}
+	return out.String(), nil
 }
 
-func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
-	var out strings.Builder
-	out.Grow(len(value) + 8)
-	inString := false
-	escaped := false
-	unicodeEscapeRemaining := 0
-	for _, r := range value {
-		if unicodeEscapeRemaining > 0 {
-			out.WriteRune(unicode.ToLower(r))
-			unicodeEscapeRemaining--
+type ultravoxRealtimePythonJSONValue struct {
+	kind   string
+	object []ultravoxRealtimePythonJSONPair
+	array  []ultravoxRealtimePythonJSONValue
+	str    string
+	number string
+	bool   bool
+}
+
+type ultravoxRealtimePythonJSONPair struct {
+	key   string
+	value ultravoxRealtimePythonJSONValue
+}
+
+func ultravoxRealtimeParsePythonJSONValue(decoder *json.Decoder) (ultravoxRealtimePythonJSONValue, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return ultravoxRealtimePythonJSONValue{}, err
+	}
+	switch value := token.(type) {
+	case json.Delim:
+		switch value {
+		case '{':
+			return ultravoxRealtimeParsePythonJSONObject(decoder)
+		case '[':
+			return ultravoxRealtimeParsePythonJSONArray(decoder)
+		default:
+			return ultravoxRealtimePythonJSONValue{}, fmt.Errorf("unexpected JSON delimiter %q", value)
+		}
+	case string:
+		return ultravoxRealtimePythonJSONValue{kind: "string", str: value}, nil
+	case json.Number:
+		return ultravoxRealtimePythonJSONValue{kind: "number", number: value.String()}, nil
+	case bool:
+		return ultravoxRealtimePythonJSONValue{kind: "bool", bool: value}, nil
+	case nil:
+		return ultravoxRealtimePythonJSONValue{kind: "null"}, nil
+	default:
+		return ultravoxRealtimePythonJSONValue{}, fmt.Errorf("unexpected JSON token %T", token)
+	}
+}
+
+func ultravoxRealtimeParsePythonJSONObject(decoder *json.Decoder) (ultravoxRealtimePythonJSONValue, error) {
+	object := ultravoxRealtimePythonJSONValue{kind: "object"}
+	indexByKey := map[string]int{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return ultravoxRealtimePythonJSONValue{}, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return ultravoxRealtimePythonJSONValue{}, fmt.Errorf("unexpected JSON object key %T", keyToken)
+		}
+		value, err := ultravoxRealtimeParsePythonJSONValue(decoder)
+		if err != nil {
+			return ultravoxRealtimePythonJSONValue{}, err
+		}
+		if index, ok := indexByKey[key]; ok {
+			object.object[index].value = value
 			continue
 		}
-		if !inString && (r == ' ' || r == '\n' || r == '\r' || r == '\t') {
-			continue
+		indexByKey[key] = len(object.object)
+		object.object = append(object.object, ultravoxRealtimePythonJSONPair{key: key, value: value})
+	}
+	if token, err := decoder.Token(); err != nil {
+		return ultravoxRealtimePythonJSONValue{}, err
+	} else if delimiter, ok := token.(json.Delim); !ok || delimiter != '}' {
+		return ultravoxRealtimePythonJSONValue{}, fmt.Errorf("unexpected JSON object close %v", token)
+	}
+	return object, nil
+}
+
+func ultravoxRealtimeParsePythonJSONArray(decoder *json.Decoder) (ultravoxRealtimePythonJSONValue, error) {
+	array := ultravoxRealtimePythonJSONValue{kind: "array"}
+	for decoder.More() {
+		value, err := ultravoxRealtimeParsePythonJSONValue(decoder)
+		if err != nil {
+			return ultravoxRealtimePythonJSONValue{}, err
 		}
-		if escaped {
-			if r == '/' {
-				out.WriteRune(r)
-			} else {
-				out.WriteByte('\\')
-				out.WriteRune(r)
-				if r == 'u' {
-					unicodeEscapeRemaining = 4
-				}
+		array.array = append(array.array, value)
+	}
+	if token, err := decoder.Token(); err != nil {
+		return ultravoxRealtimePythonJSONValue{}, err
+	} else if delimiter, ok := token.(json.Delim); !ok || delimiter != ']' {
+		return ultravoxRealtimePythonJSONValue{}, fmt.Errorf("unexpected JSON array close %v", token)
+	}
+	return array, nil
+}
+
+func ultravoxRealtimeWritePythonJSONValue(out *strings.Builder, value ultravoxRealtimePythonJSONValue) {
+	switch value.kind {
+	case "object":
+		out.WriteByte('{')
+		for i, pair := range value.object {
+			if i > 0 {
+				out.WriteString(", ")
 			}
-			escaped = false
-			continue
+			ultravoxRealtimeWritePythonJSONString(out, pair.key)
+			out.WriteString(": ")
+			ultravoxRealtimeWritePythonJSONValue(out, pair.value)
 		}
-		if r == '\\' && inString {
-			escaped = true
-			continue
+		out.WriteByte('}')
+	case "array":
+		out.WriteByte('[')
+		for i, item := range value.array {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			ultravoxRealtimeWritePythonJSONValue(out, item)
 		}
-		if inString && !escaped && r > 0x7f {
-			writeUltravoxRealtimePythonJSONUnicodeEscape(&out, r)
-			continue
+		out.WriteByte(']')
+	case "string":
+		ultravoxRealtimeWritePythonJSONString(out, value.str)
+	case "number":
+		out.WriteString(ultravoxRealtimeNormalizePythonJSONNumber(value.number))
+	case "bool":
+		if value.bool {
+			out.WriteString("true")
+		} else {
+			out.WriteString("false")
 		}
-		out.WriteRune(r)
-		if r == '"' {
-			inString = !inString
-			continue
-		}
-		if !inString && (r == ':' || r == ',') {
-			out.WriteByte(' ')
+	case "null":
+		out.WriteString("null")
+	}
+}
+
+func ultravoxRealtimeWritePythonJSONString(out *strings.Builder, value string) {
+	out.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"':
+			out.WriteByte('\\')
+			out.WriteRune(r)
+		case '\b':
+			out.WriteString(`\b`)
+		case '\f':
+			out.WriteString(`\f`)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\r':
+			out.WriteString(`\r`)
+		case '\t':
+			out.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(out, "\\u%04x", r)
+			} else if r > 0x7f {
+				writeUltravoxRealtimePythonJSONUnicodeEscape(out, r)
+			} else {
+				out.WriteRune(r)
+			}
 		}
 	}
-	return out.String()
+	out.WriteByte('"')
+}
+
+func ultravoxRealtimeNormalizePythonJSONNumber(token string) string {
+	if token == "-0" {
+		return "0"
+	}
+	if !strings.ContainsAny(token, ".eE") {
+		return token
+	}
+	value, err := strconv.ParseFloat(token, 64)
+	if err != nil {
+		return token
+	}
+	if value == 0 {
+		if math.Signbit(value) {
+			return "-0.0"
+		}
+		return "0.0"
+	}
+	abs := math.Abs(value)
+	if abs < 1e-4 || abs >= 1e16 {
+		return strconv.FormatFloat(value, 'e', -1, 64)
+	}
+	normalized := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.Contains(normalized, ".") {
+		normalized += ".0"
+	}
+	return normalized
 }
 
 func writeUltravoxRealtimePythonJSONUnicodeEscape(out *strings.Builder, r rune) {

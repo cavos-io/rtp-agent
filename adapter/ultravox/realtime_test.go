@@ -3445,6 +3445,174 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedSlashArg
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedASCIIUnicodeArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-escaped-ascii","parameters":{"tag":"\u003cscript\u003e","amp":"a\u0026b"}}`)); err != nil {
+		t.Fatalf("handle escaped ASCII unicode tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"tag": "<script>", "amp": "a&b"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps ASCII unicode normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for escaped ASCII unicode function call")
+	}
+}
+
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNumberArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-number","parameters":{"count":1000000,"large":1e6,"ratio":1E-3,"whole":1.0,"negativeZero":-0.0}}`)); err != nil {
+		t.Fatalf("handle numeric tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"count": 1000000, "large": 1000000.0, "ratio": 0.001, "whole": 1.0, "negativeZero": -0.0}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps number normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for numeric function call")
+	}
+}
+
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNegativeZeroIntegerArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-negative-zero","parameters":{"offset":-0,"floatOffset":-0.0}}`)); err != nil {
+		t.Fatalf("handle negative-zero tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"offset": 0, "floatOffset": -0.0}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps negative-zero normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for negative-zero function call")
+	}
+}
+
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceControlUnicodeArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-control-unicode","parameters":{"backspace":"\u0008","form":"\u000c","tab":"\u0009","line":"\u000a","return":"\u000d","escape":"\u001b"}}`)); err != nil {
+		t.Fatalf("handle control-unicode tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"backspace": "\b", "form": "\f", "tab": "\t", "line": "\n", "return": "\r", "escape": "\u001b"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps control unicode normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control-unicode function call")
+	}
+}
+
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedQuoteBackslashArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-quote-backslash","parameters":{"quote":"a\u0022b","slash":"c\u005cd"}}`)); err != nil {
+		t.Fatalf("handle quote-backslash tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"quote": "a\"b", "slash": "c\\d"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps quote/backslash normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for quote-backslash function call")
+	}
+}
+
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceDuplicateKeyArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-duplicate-keys","parameters":{"city":"Paris","count":1,"city":"Rome","nested":{"code":"old","code":"new"},"items":[{"id":"first","id":"last"}]}}`)); err != nil {
+		t.Fatalf("handle duplicate-key tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"city": "Rome", "count": 1, "nested": {"code": "new"}, "items": [{"id": "last"}]}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps duplicate-key normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for duplicate-key function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
