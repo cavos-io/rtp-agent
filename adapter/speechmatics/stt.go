@@ -1196,7 +1196,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 	if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Metadata) == "null" {
 		return fmt.Errorf("metadata must be an object")
 	}
-	var rawResults []struct {
+	type rawResult struct {
 		Alternatives json.RawMessage `json:"alternatives"`
 		IsEOS        json.RawMessage `json:"is_eos"`
 		Attaches     json.RawMessage `json:"attaches_to"`
@@ -1205,18 +1205,26 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		EndTime      json.RawMessage `json:"end_time"`
 		Volume       json.RawMessage `json:"volume"`
 	}
+	var rawResultItems []json.RawMessage
 	if len(raw.Results) > 0 {
 		if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Results) == "null" {
 			return fmt.Errorf("results must be an array")
 		}
-		if err := json.Unmarshal(raw.Results, &rawResults); err != nil {
+		if err := json.Unmarshal(raw.Results, &rawResultItems); err != nil {
 			return fmt.Errorf("results must be an array: %w", err)
 		}
 	}
-	if len(rawResults) > 0 {
-		decoded.rawLanguagePresent = make([]bool, len(rawResults))
-		decoded.rawSpeakerPresent = make([]bool, len(rawResults))
-		for i, result := range rawResults {
+	if len(rawResultItems) > 0 {
+		decoded.rawLanguagePresent = make([]bool, len(rawResultItems))
+		decoded.rawSpeakerPresent = make([]bool, len(rawResultItems))
+		for i, resultData := range rawResultItems {
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(resultData) == "null" {
+				return fmt.Errorf("results[%d] must be an object", i)
+			}
+			var result rawResult
+			if err := json.Unmarshal(resultData, &result); err != nil {
+				return fmt.Errorf("results[%d] must be an object: %w", i, err)
+			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.IsEOS) == "null" {
 				return fmt.Errorf("results[%d].is_eos must be a bool", i)
