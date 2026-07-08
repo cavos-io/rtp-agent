@@ -324,12 +324,14 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			frames := s.pcmStream().Push(buf[:n])
 			if err == io.EOF {
 				frames = append(frames, s.pcmStream().Flush()...)
-				s.queuePCMFrames(frames, true)
+				s.queuePCMFrames(frames)
+				s.queueHeldTailAudio()
+				s.finalReady = true
 			} else if err != nil {
-				s.queuePCMFrames(append(frames, s.pcmStream().Flush()...), false)
+				s.queuePCMFrames(append(frames, s.pcmStream().Flush()...))
 				s.pendingErr = err
 			} else {
-				s.queuePCMFrames(frames, false)
+				s.queuePCMFrames(frames)
 			}
 			if err != nil && err != io.EOF && len(s.pendingAudio) == 0 && s.pendingTail != nil {
 				s.queueHeldTailAudio()
@@ -368,11 +370,14 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				frames := s.pcmStream().Flush()
 				if len(frames) > 0 {
-					s.queuePCMFrames(frames, true)
+					s.queuePCMFrames(frames)
+					s.queueHeldTailAudio()
+					s.finalReady = true
 					return s.emitAudio(s.popPendingAudio())
 				}
 				if s.pendingTail != nil {
-					s.queueFinalFrame(nil)
+					s.queueHeldTailAudio()
+					s.finalReady = true
 					return s.emitAudio(s.popPendingAudio())
 				}
 				return s.emitFinal()
@@ -423,12 +428,8 @@ func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {
 	return s.pcm
 }
 
-func (s *speechmaticsTTSChunkedStream) queuePCMFrames(frames []*model.AudioFrame, final bool) {
-	for i, frame := range frames {
-		if final && i == len(frames)-1 {
-			s.queueFinalFrame(frame)
-			continue
-		}
+func (s *speechmaticsTTSChunkedStream) queuePCMFrames(frames []*model.AudioFrame) {
+	for _, frame := range frames {
 		s.queueNonFinalFrame(frame)
 	}
 }
@@ -446,19 +447,6 @@ func (s *speechmaticsTTSChunkedStream) queueNonFinalFrame(frame *model.AudioFram
 	}
 	s.pendingAudio = append(s.pendingAudio, &tts.SynthesizedAudio{RequestID: s.requestID, Frame: head})
 	s.pendingTail = tail
-}
-
-func (s *speechmaticsTTSChunkedStream) queueFinalFrame(frame *model.AudioFrame) {
-	frame = speechmaticsCombineTTSFrames(s.pendingTail, frame)
-	s.pendingTail = nil
-	if frame == nil {
-		return
-	}
-	s.pendingAudio = append(s.pendingAudio, &tts.SynthesizedAudio{
-		RequestID: s.requestID,
-		Frame:     frame,
-		IsFinal:   true,
-	})
 }
 
 func (s *speechmaticsTTSChunkedStream) queueHeldTailAudio() {
