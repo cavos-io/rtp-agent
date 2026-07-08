@@ -1188,13 +1188,13 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		Message  string          `json:"message"`
 		Metadata json.RawMessage `json:"metadata"`
 		Results  []struct {
-			Alternatives []map[string]json.RawMessage `json:"alternatives"`
-			IsEOS        json.RawMessage              `json:"is_eos"`
-			Attaches     json.RawMessage              `json:"attaches_to"`
-			Type         json.RawMessage              `json:"type"`
-			StartTime    json.RawMessage              `json:"start_time"`
-			EndTime      json.RawMessage              `json:"end_time"`
-			Volume       json.RawMessage              `json:"volume"`
+			Alternatives json.RawMessage `json:"alternatives"`
+			IsEOS        json.RawMessage `json:"is_eos"`
+			Attaches     json.RawMessage `json:"attaches_to"`
+			Type         json.RawMessage `json:"type"`
+			StartTime    json.RawMessage `json:"start_time"`
+			EndTime      json.RawMessage `json:"end_time"`
+			Volume       json.RawMessage `json:"volume"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1238,24 +1238,35 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if len(result.Alternatives) == 0 {
 				continue
 			}
+			var alternatives []map[string]json.RawMessage
+			if err := json.Unmarshal(result.Alternatives, &alternatives); err != nil {
+				return fmt.Errorf("results[%d].alternatives must be an array", i)
+			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["tags"]) == "null" {
+				len(alternatives) == 0 {
+				return fmt.Errorf("results[%d].alternatives must contain at least one alternative", i)
+			}
+			if len(alternatives) == 0 {
+				continue
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(alternatives[0]["tags"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].tags must be an array", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["language"]) == "null" {
+				string(alternatives[0]["language"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].language must be a string", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["confidence"]) == "null" {
+				string(alternatives[0]["confidence"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["direction"]) == "null" {
+				string(alternatives[0]["direction"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
 			}
-			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
-			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
+			_, decoded.rawLanguagePresent[i] = alternatives[0]["language"]
+			_, decoded.rawSpeakerPresent[i] = alternatives[0]["speaker"]
 		}
 	}
 	if len(raw.Segments) > 0 {
