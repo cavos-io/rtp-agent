@@ -1396,6 +1396,51 @@ func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestUltravoxRealtimeSessionAgentTranscriptBuffersBeyondOldDropLimit(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	const oldDropLimit = 16
+	if cap(generationState.textCh) <= oldDropLimit {
+		t.Fatalf("agent text queue cap = %d, want above old 16-delta drop limit", cap(generationState.textCh))
+	}
+	for i := 0; i < oldDropLimit; i++ {
+		generationState.textCh <- "queued"
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Delta: "new delta", Final: false, Ordinal: 2})
+
+	for i := 0; i < oldDropLimit; i++ {
+		<-message.TextCh
+	}
+	select {
+	case got := <-message.TextCh:
+		if got != "new delta" {
+			t.Fatalf("agent text delta = %q, want reference-preserved delta", got)
+		}
+	default:
+		t.Fatal("agent text delta missing after old 16-delta queue limit, want reference buffering")
+	}
+}
+
 func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
