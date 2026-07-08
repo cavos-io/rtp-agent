@@ -605,6 +605,50 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	}
 }
 
+func TestSpeechmaticsEventsRawPartialAfterFinalTrimsReferenceDuplicate(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.0,
+			"end_time":0.4,
+			"is_eos":true,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal raw final transcript: %v", err)
+	}
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before following partial = %#v, want buffered final", events)
+	}
+
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.0,
+			"end_time":0.4,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want only buffered final transcript without stale duplicate partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %s, want final transcript", events[0].Type)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("final text = %q, want hello", got)
+	}
+}
+
 func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true, speechDuration: 0.75}
 	var final smResponse

@@ -1009,6 +1009,8 @@ type speechmaticsStreamState struct {
 	wordDelimiterSet           bool
 	bufferRawFinals            bool
 	pendingRawFinals           []*stt.SpeechEvent
+	rawTrimBeforeTimeSet       bool
+	rawTrimBeforeTime          float64
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
 }
@@ -1264,6 +1266,7 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 	}
 	events := state.pendingRawFinals
 	state.pendingRawFinals = nil
+	speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	return events
 }
 
@@ -1305,6 +1308,9 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 		state.pendingRawFinals = append(state.pendingRawFinals, events...)
 		return nil
 	}
+	if resp.Message == "AddTranscript" {
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
 	return events
 }
 
@@ -1313,6 +1319,7 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	if state != nil && len(state.pendingRawFinals) > 0 {
 		events = append(events, state.pendingRawFinals...)
 		state.pendingRawFinals = nil
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	}
 	if state != nil && !state.includePartials {
 		return events
@@ -1340,6 +1347,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		language := speechmaticsSegmentLanguage(alt.Language, state)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
+		if speechmaticsRawFragmentTrimmed(state, startTime) {
+			continue
+		}
 		kind := result.Type
 		if kind == "" {
 			kind = "word"
@@ -1378,6 +1388,25 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 				},
 			},
 		},
+	}
+}
+
+func speechmaticsRawFragmentTrimmed(state *speechmaticsStreamState, startTime float64) bool {
+	return state != nil && state.rawTrimBeforeTimeSet && startTime < state.rawTrimBeforeTime
+}
+
+func speechmaticsRecordRawFinalTrimBeforeTime(state *speechmaticsStreamState, events []*stt.SpeechEvent) {
+	if state == nil || len(events) == 0 {
+		return
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) == 0 {
+			continue
+		}
+		state.rawTrimBeforeTimeSet = true
+		state.rawTrimBeforeTime = event.Alternatives[len(event.Alternatives)-1].EndTime
+		return
 	}
 }
 
