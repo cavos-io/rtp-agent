@@ -2652,9 +2652,9 @@ func (n *speechmaticsSTTInputAudioNormalizer) reset() {
 }
 
 func (s *speechmaticsSTTStream) Close() error {
-	s.closeDone()
 	_ = s.closeTransportOnce()
 	s.prepareDrainPendingRawFinals()
+	s.closeDone()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closeLocked()
