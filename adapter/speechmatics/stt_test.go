@@ -3652,6 +3652,15 @@ func TestSpeechmaticsSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamResamplingIsReferenceChunkInvariant(t *testing.T) {
+	whole := speechmaticsResampledBytes(t, []int{441})
+	split := speechmaticsResampledBytes(t, []int{220, 221})
+
+	if !bytes.Equal(split, whole) {
+		t.Fatalf("split resampled PCM differs from whole frame\nsplit=%#v\nwhole=%#v", split, whole)
+	}
+}
+
 func TestSpeechmaticsSTTStreamRejectsReferenceEmptyFrameSampleRateChange(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(16000)),
@@ -6853,6 +6862,44 @@ func speechmaticsEveryNthInt16PCM(samples int, step int) []byte {
 		var sample [2]byte
 		binary.LittleEndian.PutUint16(sample[:], uint16(int16(i)))
 		data = append(data, sample[:]...)
+	}
+	return data
+}
+
+func speechmaticsResampledBytes(t *testing.T, chunks []int) []byte {
+	t.Helper()
+	var writes [][]byte
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSampleRate(16000)),
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+	}
+
+	nextSample := 0
+	for _, samples := range chunks {
+		data := speechmaticsTestInt16PCMRange(nextSample, samples)
+		nextSample += samples
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              data,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: uint32(samples),
+		}); err != nil {
+			t.Fatalf("PushFrame(%d) error = %v", samples, err)
+		}
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	return bytes.Join(writes, nil)
+}
+
+func speechmaticsTestInt16PCMRange(startSample int, samples int) []byte {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(startSample+i)))
 	}
 	return data
 }

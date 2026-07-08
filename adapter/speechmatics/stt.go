@@ -2827,11 +2827,13 @@ func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStr
 }
 
 type speechmaticsSTTInputAudioNormalizer struct {
-	sampleRate  uint32
-	numChannels uint32
-	targetRate  uint32
-	remainder   uint64
-	lastSample  []byte
+	sampleRate    uint32
+	numChannels   uint32
+	targetRate    uint32
+	inputSamples  uint64
+	outputSamples uint64
+	historyStart  uint64
+	history       []byte
 }
 
 func (n *speechmaticsSTTInputAudioNormalizer) normalize(frame *model.AudioFrame, targetRate uint32) (*model.AudioFrame, error) {
@@ -2860,8 +2862,10 @@ func (n *speechmaticsSTTInputAudioNormalizer) normalize(frame *model.AudioFrame,
 		n.sampleRate = frame.SampleRate
 		n.numChannels = frame.NumChannels
 		n.targetRate = targetRate
-		n.remainder = 0
-		n.lastSample = nil
+		n.inputSamples = 0
+		n.outputSamples = 0
+		n.historyStart = 0
+		n.history = nil
 	}
 	if samplesPerChannel == 0 {
 		return &model.AudioFrame{
@@ -2872,28 +2876,37 @@ func (n *speechmaticsSTTInputAudioNormalizer) normalize(frame *model.AudioFrame,
 		}, nil
 	}
 
-	scaledSamples := uint64(samplesPerChannel)*uint64(targetRate) + n.remainder
-	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
-	n.remainder = scaledSamples % uint64(frame.SampleRate)
-	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	baseInputSamples := n.inputSamples
+	totalInputSamples := baseInputSamples + uint64(samplesPerChannel)
+	if len(n.history) == 0 {
+		n.historyStart = baseInputSamples
+	}
+	n.history = append(n.history, frame.Data[:expectedBytes]...)
+	totalOutputSamples := totalInputSamples * uint64(targetRate) / uint64(frame.SampleRate)
 	channelCount := int(frame.NumChannels)
+	sampleBytes := channelCount * 2
+	historySamples := uint64(len(n.history) / sampleBytes)
+	outSamples := uint32(totalOutputSamples - n.outputSamples)
+	out := make([]byte, int(outSamples)*sampleBytes)
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
-		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(targetRate))
-		if srcIdx >= samplesPerChannel {
-			srcIdx = samplesPerChannel - 1
+		globalOutputIndex := n.outputSamples + uint64(outIdx)
+		globalInputIndex := globalOutputIndex * uint64(frame.SampleRate) / uint64(targetRate)
+		if globalInputIndex < n.historyStart {
+			globalInputIndex = n.historyStart
+		}
+		srcIdx := globalInputIndex - n.historyStart
+		if srcIdx >= historySamples {
+			srcIdx = historySamples - 1
 		}
 		for ch := 0; ch < channelCount; ch++ {
 			inOffset := (int(srcIdx)*channelCount + ch) * 2
 			outOffset := (int(outIdx)*channelCount + ch) * 2
-			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+			copy(out[outOffset:outOffset+2], n.history[inOffset:inOffset+2])
 		}
 	}
-	if n.remainder > 0 {
-		offset := int((samplesPerChannel - 1) * frame.NumChannels * 2)
-		n.lastSample = append(n.lastSample[:0], frame.Data[offset:offset+int(frame.NumChannels*2)]...)
-	} else {
-		n.lastSample = nil
-	}
+	n.inputSamples = totalInputSamples
+	n.outputSamples = totalOutputSamples
+	n.trimHistory()
 
 	return &model.AudioFrame{
 		Data:              out,
@@ -2905,27 +2918,70 @@ func (n *speechmaticsSTTInputAudioNormalizer) normalize(frame *model.AudioFrame,
 }
 
 func (n *speechmaticsSTTInputAudioNormalizer) flush() *model.AudioFrame {
-	if n == nil || n.remainder == 0 || len(n.lastSample) == 0 || n.targetRate == 0 || n.numChannels == 0 {
+	if n == nil || len(n.history) == 0 || n.targetRate == 0 || n.numChannels == 0 {
 		return nil
 	}
-	data := append([]byte(nil), n.lastSample...)
+	if n.outputSamples*uint64(n.sampleRate) >= n.inputSamples*uint64(n.targetRate) {
+		n.inputSamples = 0
+		n.outputSamples = 0
+		n.historyStart = 0
+		n.history = nil
+		return nil
+	}
+	channelCount := int(n.numChannels)
+	sampleBytes := channelCount * 2
+	historySamples := uint64(len(n.history) / sampleBytes)
+	globalInputIndex := n.outputSamples * uint64(n.sampleRate) / uint64(n.targetRate)
+	if globalInputIndex >= n.inputSamples {
+		globalInputIndex = n.inputSamples - 1
+	}
+	if globalInputIndex < n.historyStart {
+		globalInputIndex = n.historyStart
+	}
+	srcIdx := globalInputIndex - n.historyStart
+	if srcIdx >= historySamples {
+		srcIdx = historySamples - 1
+	}
+	offset := int(srcIdx) * sampleBytes
+	data := append([]byte(nil), n.history[offset:offset+sampleBytes]...)
 	frame := &model.AudioFrame{
 		Data:              data,
 		SampleRate:        n.targetRate,
 		NumChannels:       n.numChannels,
 		SamplesPerChannel: 1,
 	}
-	n.remainder = 0
-	n.lastSample = nil
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.historyStart = 0
+	n.history = nil
 	return frame
 }
 
 func (n *speechmaticsSTTInputAudioNormalizer) reset() {
-	n.sampleRate = 0
-	n.numChannels = 0
-	n.targetRate = 0
-	n.remainder = 0
-	n.lastSample = nil
+	*n = speechmaticsSTTInputAudioNormalizer{}
+}
+
+func (n *speechmaticsSTTInputAudioNormalizer) trimHistory() {
+	if n == nil || len(n.history) == 0 || n.sampleRate == 0 || n.targetRate == 0 || n.numChannels == 0 {
+		return
+	}
+	nextInputIndex := n.outputSamples * uint64(n.sampleRate) / uint64(n.targetRate)
+	if nextInputIndex <= n.historyStart {
+		return
+	}
+	channelCount := int(n.numChannels)
+	sampleBytes := channelCount * 2
+	historySamples := uint64(len(n.history) / sampleBytes)
+	dropSamples := nextInputIndex - n.historyStart
+	if dropSamples >= historySamples {
+		n.history = nil
+		n.historyStart = nextInputIndex
+		return
+	}
+	dropBytes := int(dropSamples) * sampleBytes
+	copy(n.history, n.history[dropBytes:])
+	n.history = n.history[:len(n.history)-dropBytes]
+	n.historyStart = nextInputIndex
 }
 
 func (s *speechmaticsSTTStream) Close() error {
