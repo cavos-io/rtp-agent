@@ -109,17 +109,13 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 
 func WithRealtimeModel(model string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if model != "" {
-			m.model = model
-		}
+		m.model = model
 	}
 }
 
 func WithRealtimeVoice(voice string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if voice != "" {
-			m.voice = voice
-		}
+		m.voice = voice
 	}
 }
 
@@ -133,23 +129,19 @@ func WithRealtimeBaseURL(baseURL string) RealtimeOption {
 
 func WithRealtimeSystemPrompt(prompt string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if prompt != "" {
-			m.systemPrompt = prompt
-		}
+		m.systemPrompt = prompt
 	}
 }
 
 func WithRealtimeOutputMedium(outputMedium string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if outputMedium != "" {
-			m.outputMedium = outputMedium
-		}
+		m.outputMedium = outputMedium
 	}
 }
 
 func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			m.inputSampleRate = sampleRate
 		}
 	}
@@ -157,7 +149,7 @@ func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 
 func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			m.outputSampleRate = sampleRate
 		}
 	}
@@ -172,28 +164,22 @@ func WithRealtimeTemperature(temperature float64) RealtimeOption {
 
 func WithRealtimeLanguageHint(languageHint string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if languageHint != "" {
-			m.languageHint = languageHint
-			m.languageHintSet = true
-		}
+		m.languageHint = languageHint
+		m.languageHintSet = true
 	}
 }
 
 func WithRealtimeMaxDuration(maxDuration string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if maxDuration != "" {
-			m.maxDuration = maxDuration
-			m.maxDurationSet = true
-		}
+		m.maxDuration = maxDuration
+		m.maxDurationSet = true
 	}
 }
 
 func WithRealtimeTimeExceededMessage(message string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if message != "" {
-			m.timeExceededMessage = message
-			m.timeExceededSet = true
-		}
+		m.timeExceededMessage = message
+		m.timeExceededSet = true
 	}
 }
 
@@ -206,18 +192,14 @@ func WithRealtimeEnableGreetingPrompt(enable bool) RealtimeOption {
 
 func WithRealtimeFirstSpeaker(firstSpeaker string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if firstSpeaker != "" {
-			m.firstSpeaker = firstSpeaker
-			m.firstSpeakerSet = true
-		}
+		m.firstSpeaker = firstSpeaker
+		m.firstSpeakerSet = true
 	}
 }
 
 func WithRealtimeUpdateOutputMedium(outputMedium string) RealtimeUpdateOption {
 	return func(opts *realtimeUpdateOptions) {
-		if outputMedium != "" {
-			opts.outputMedium = &outputMedium
-		}
+		opts.outputMedium = &outputMedium
 	}
 }
 
@@ -276,6 +258,10 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
+	audioChunkSamples := uint32(m.inputSampleRate) / 10
+	if audioChunkSamples == 0 {
+		audioChunkSamples = 1
+	}
 	session := &realtimeSession{
 		eventCh:               make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
 		audioCh:               make(chan []byte, 256),
@@ -288,7 +274,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		systemPrompt:          m.systemPrompt,
 		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
 		recoverableErrorDelay: time.Second,
-		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, audioChunkSamples),
 		toolNames:             make(map[string]struct{}),
 		toolResults:           make(map[string]struct{}),
 		contextItems:          make(map[string]struct{}),
@@ -524,7 +510,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 }
 
 func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
-	if output == nil || output.CallID == "" {
+	if output == nil {
 		return nil
 	}
 	key := ultravoxRealtimeToolResultKey(output)
@@ -657,7 +643,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	return nil
 }
 func (s *realtimeSession) Say(string) error {
-	return ultravoxRealtimeSessionUnsupported("say")
+	return errors.New("*ultravox.realtimeSession does not implement say(). use a TTS model instead")
 }
 func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *realtimeSession) Interrupt() error {
@@ -771,7 +757,7 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 
 	m := s.model
 	createCallURL := strings.TrimRight(m.baseURL, "/") + "/calls"
-	if enableGreeting, ok := m.EnableGreetingPrompt(); ok && !enableGreeting {
+	if enableGreeting, ok := m.EnableGreetingPrompt(); !ok || !enableGreeting {
 		createCallURL += "?enableGreetingPrompt=false"
 	}
 	headers := map[string]string{
@@ -1061,8 +1047,11 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 		}
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, context.Canceled) {
 				return nil
+			}
+			if errors.Is(err, io.EOF) {
+				return ultravoxRealtimeUnexpectedWebsocketClose
 			}
 			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) {
@@ -1211,10 +1200,6 @@ func ultravoxRealtimeVariantType(value any) string {
 	return ""
 }
 
-func ultravoxRealtimeSessionUnsupported(operation string) error {
-	return errors.New(operation + " is not implemented by the Ultravox realtime session")
-}
-
 func (s *realtimeSession) sendClientEvent(event map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1230,7 +1215,22 @@ func (s *realtimeSession) enqueueClientEventLocked(event map[string]any) error {
 		s.enqueueOutboundEventLocked(event)
 		return nil
 	default:
-		return errors.New("ultravox realtime client event queue is full")
+	}
+	nextCap := cap(s.clientEventCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan map[string]any, nextCap)
+	for {
+		select {
+		case queued := <-s.clientEventCh:
+			next <- queued
+		default:
+			next <- event
+			s.clientEventCh = next
+			s.enqueueOutboundEventLocked(event)
+			return nil
+		}
 	}
 }
 
@@ -1309,10 +1309,6 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
-	if len(audioData) == 0 {
-		return
-	}
-
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -1375,23 +1371,26 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		s.handleStateEvent(ultravoxRealtimeStateEvent{State: event.State})
 	case "client_tool_invocation":
 		var event struct {
-			ToolName      string          `json:"toolName"`
-			InvocationID  string          `json:"invocationId"`
+			ToolName      *string         `json:"toolName"`
+			InvocationID  *string         `json:"invocationId"`
 			RawParameters json.RawMessage `json:"parameters"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil
 		}
-		if event.ToolName == "" || event.InvocationID == "" || len(event.RawParameters) == 0 {
+		if event.ToolName == nil || event.InvocationID == nil || len(event.RawParameters) == 0 {
 			return nil
 		}
 		parameters := map[string]any{}
 		if err := json.Unmarshal(event.RawParameters, &parameters); err != nil {
 			return nil
 		}
+		if parameters == nil {
+			return nil
+		}
 		s.handleToolInvocationEvent(ultravoxRealtimeToolInvocationEvent{
-			ToolName:      event.ToolName,
-			InvocationID:  event.InvocationID,
+			ToolName:      *event.ToolName,
+			InvocationID:  *event.InvocationID,
 			Parameters:    parameters,
 			RawParameters: event.RawParameters,
 		})
@@ -1527,6 +1526,9 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 	}
 	if event.Final {
 		s.lastUserFinalAt = time.Now()
+		if strings.TrimSpace(event.Text) != "" {
+			s.contextItems[fmt.Sprintf("msg_user_%d", event.Ordinal)] = struct{}{}
+		}
 	}
 	realtimeEvent := llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
@@ -1678,6 +1680,11 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 		}
 		if s.generation == nil || s.generation.done {
 			s.ensureGenerationLocked()
+		} else if s.pendingReply {
+			s.pendingReply = false
+			s.pendingReplyAt = time.Time{}
+			s.pendingReplySeq++
+			s.stopGenerateReplyTimerLocked()
 		}
 		event := llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeSpeechStopped,
