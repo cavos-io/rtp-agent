@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +241,116 @@ func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testin
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+}
+
+func TestUltravoxRealtimeSessionCreateCallRequestMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeModel("fixie-ai/ultravox-llama3.3-70b"),
+		WithRealtimeVoice("Jessica"),
+		WithRealtimeBaseURL("https://ultravox.example/api/"),
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeInputSampleRate(8000),
+		WithRealtimeOutputSampleRate(48000),
+		WithRealtimeTemperature(0.2),
+		WithRealtimeLanguageHint("es"),
+		WithRealtimeMaxDuration("30m"),
+		WithRealtimeTimeExceededMessage("done"),
+		WithRealtimeEnableGreetingPrompt(false),
+		WithRealtimeFirstSpeaker("FIRST_SPEAKER_AGENT"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{
+		name:        "lookup_weather",
+		description: "Lookup weather",
+		parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{
+					"type":        "string",
+					"description": "City name",
+				},
+				"unit": map[string]any{
+					"enum":        []any{"c", "f"},
+					"description": "Temperature unit",
+				},
+			},
+			"required": []any{"city"},
+		},
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	gotURL, gotHeaders, gotPayload := session.createCallRequest()
+	if gotURL != "https://ultravox.example/api/calls?enableGreetingPrompt=false" {
+		t.Fatalf("create-call URL = %q, want reference URL with greeting query", gotURL)
+	}
+	wantHeaders := map[string]string{
+		"User-Agent":   "LiveKit Agents",
+		"X-API-Key":    "test-key",
+		"Content-Type": "application/json",
+	}
+	if !reflect.DeepEqual(gotHeaders, wantHeaders) {
+		t.Fatalf("headers = %#v, want %#v", gotHeaders, wantHeaders)
+	}
+
+	wantPayload := map[string]any{
+		"systemPrompt": "stay concise",
+		"model":        "fixie-ai/ultravox-llama3.3-70b",
+		"voice":        "Jessica",
+		"medium": map[string]any{
+			"serverWebSocket": map[string]any{
+				"inputSampleRate":    8000,
+				"outputSampleRate":   48000,
+				"clientBufferSizeMs": 30000,
+			},
+		},
+		"selectedTools": []map[string]any{
+			{
+				"temporaryTool": map[string]any{
+					"modelToolName": "lookup_weather",
+					"description":   "Lookup weather",
+					"dynamicParameters": []map[string]any{
+						{
+							"name":     "city",
+							"location": "PARAMETER_LOCATION_BODY",
+							"schema": map[string]any{
+								"type":        "string",
+								"description": "City name",
+							},
+							"required": true,
+						},
+						{
+							"name":     "unit",
+							"location": "PARAMETER_LOCATION_BODY",
+							"schema": map[string]any{
+								"type":        "string",
+								"description": "Temperature unit",
+							},
+							"required": false,
+						},
+					},
+					"client": map[string]any{},
+				},
+			},
+		},
+		"temperature":         0.2,
+		"languageHint":        "es",
+		"maxDuration":         "30m",
+		"timeExceededMessage": "done",
+		"firstSpeaker":        "FIRST_SPEAKER_AGENT",
+	}
+	if !reflect.DeepEqual(gotPayload, wantPayload) {
+		t.Fatalf("payload = %#v, want %#v", gotPayload, wantPayload)
+	}
 }
 
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
@@ -2512,6 +2623,7 @@ func requireUltravoxRealtimeClientEvent(t *testing.T, session *realtimeSession, 
 type ultravoxRealtimeTestTool struct {
 	name        string
 	description string
+	parameters  map[string]any
 }
 
 func (t ultravoxRealtimeTestTool) ID() string { return t.name }
@@ -2520,7 +2632,7 @@ func (t ultravoxRealtimeTestTool) Name() string {
 }
 func (t ultravoxRealtimeTestTool) Description() string { return t.description }
 func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
-	return nil
+	return t.parameters
 }
 func (t ultravoxRealtimeTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil

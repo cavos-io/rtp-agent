@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ const (
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
+	ultravoxClientBufferSizeMs      = 30000
 	ultravoxClientEventQueueSize    = 2048
 	ultravoxRealtimeEventQueueSize  = 2048
 	ultravoxFunctionCallQueueSize   = 2048
@@ -709,6 +711,163 @@ func (s *realtimeSession) ClearAudio() error {
 }
 
 var _ llm.RealtimeSession = (*realtimeSession)(nil)
+
+func (s *realtimeSession) createCallRequest() (string, map[string]string, map[string]any) {
+	s.mu.Lock()
+	tools := append([]llm.Tool(nil), s.tools...)
+	systemPrompt := s.systemPrompt
+	inputSampleRate := int(s.inputSampleRate)
+	outputSampleRate := int(s.outputSampleRate)
+	s.mu.Unlock()
+
+	m := s.model
+	createCallURL := strings.TrimRight(m.baseURL, "/") + "/calls"
+	if enableGreeting, ok := m.EnableGreetingPrompt(); ok && !enableGreeting {
+		createCallURL += "?enableGreetingPrompt=false"
+	}
+	headers := map[string]string{
+		"User-Agent":   "LiveKit Agents",
+		"X-API-Key":    m.apiKey,
+		"Content-Type": "application/json",
+	}
+	payload := map[string]any{
+		"systemPrompt": systemPrompt,
+		"model":        m.model,
+		"voice":        m.voice,
+		"medium": map[string]any{
+			"serverWebSocket": map[string]any{
+				"inputSampleRate":    inputSampleRate,
+				"outputSampleRate":   outputSampleRate,
+				"clientBufferSizeMs": ultravoxClientBufferSizeMs,
+			},
+		},
+		"selectedTools": ultravoxRealtimeToolPayloads(tools),
+	}
+	if temperature, ok := m.Temperature(); ok {
+		payload["temperature"] = temperature
+	}
+	if languageHint, ok := m.LanguageHint(); ok {
+		payload["languageHint"] = languageHint
+	}
+	if maxDuration, ok := m.MaxDuration(); ok {
+		payload["maxDuration"] = maxDuration
+	}
+	if timeExceededMessage, ok := m.TimeExceededMessage(); ok {
+		payload["timeExceededMessage"] = timeExceededMessage
+	}
+	if firstSpeaker, ok := m.FirstSpeaker(); ok {
+		payload["firstSpeaker"] = firstSpeaker
+	}
+	return createCallURL, headers, payload
+}
+
+func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
+	payloads := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		payloads = append(payloads, map[string]any{
+			"temporaryTool": map[string]any{
+				"modelToolName":     tool.Name(),
+				"description":       tool.Description(),
+				"dynamicParameters": ultravoxRealtimeToolDynamicParameters(tool),
+				"client":            map[string]any{},
+			},
+		})
+	}
+	return payloads
+}
+
+func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
+	parameters := llm.ToolParameters(tool)
+	properties, _ := parameters["properties"].(map[string]any)
+	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
+
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	dynamicParameters := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		prop, _ := properties[name].(map[string]any)
+		schema := any(prop)
+		if _, ok := prop["type"]; !ok {
+			schemaMap := map[string]any{
+				"type": ultravoxRealtimeParameterType(prop),
+			}
+			if description, ok := prop["description"]; ok && description != "" {
+				schemaMap["description"] = description
+			}
+			schema = schemaMap
+		}
+		_, isRequired := required[name]
+		dynamicParameters = append(dynamicParameters, map[string]any{
+			"name":     name,
+			"location": "PARAMETER_LOCATION_BODY",
+			"schema":   schema,
+			"required": isRequired,
+		})
+	}
+	return dynamicParameters
+}
+
+func ultravoxRealtimeRequiredParameterSet(required any) map[string]struct{} {
+	set := make(map[string]struct{})
+	switch values := required.(type) {
+	case []string:
+		for _, value := range values {
+			set[value] = struct{}{}
+		}
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok {
+				set[name] = struct{}{}
+			}
+		}
+	}
+	return set
+}
+
+func ultravoxRealtimeParameterType(prop map[string]any) string {
+	if typ, ok := prop["type"].(string); ok {
+		return typ
+	}
+	if _, ok := prop["enum"]; ok {
+		return "string"
+	}
+	if _, ok := prop["items"]; ok {
+		return "array"
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		if typ := ultravoxRealtimeVariantType(prop[key]); typ != "" {
+			return typ
+		}
+	}
+	return "string"
+}
+
+func ultravoxRealtimeVariantType(value any) string {
+	switch variants := value.(type) {
+	case []any:
+		for _, variant := range variants {
+			if schema, ok := variant.(map[string]any); ok {
+				if typ, ok := schema["type"].(string); ok {
+					return typ
+				}
+			}
+		}
+	case []map[string]any:
+		for _, schema := range variants {
+			if typ, ok := schema["type"].(string); ok {
+				return typ
+			}
+		}
+	}
+	return ""
+}
 
 func ultravoxRealtimeSessionUnsupported(operation string) error {
 	return errors.New(operation + " is not implemented by the Ultravox realtime session")
