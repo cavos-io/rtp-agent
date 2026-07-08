@@ -1136,6 +1136,13 @@ func speechmaticsUnmarshalReferenceFloat(data []byte) (float64, error) {
 	if err := json.Unmarshal(data, &value); err == nil {
 		return value, nil
 	}
+	var boolValue bool
+	if err := json.Unmarshal(data, &boolValue); err == nil {
+		if boolValue {
+			return 1, nil
+		}
+		return 0, nil
+	}
 	var text string
 	if err := json.Unmarshal(data, &text); err != nil {
 		return 0, err

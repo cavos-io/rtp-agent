@@ -158,6 +158,33 @@ func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceStringTiming(t *testing.
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceBoolTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":false,
+			"end_time":true,
+			"alternatives":[{"content":"timed","confidence":0.91,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	event := speechmaticsTranscriptEvent(resp, &speechmaticsStreamState{language: "en"})
+	if event == nil {
+		t.Fatal("speechmaticsTranscriptEvent returned nil")
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 0 || alt.EndTime != 1 {
+		t.Fatalf("timing = %v-%v, want reference bool timing coerced to floats", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 0 || alt.Words[0].EndTime != 1 {
+		t.Fatalf("words = %#v, want reference bool word timing", alt.Words)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceStringConfidence(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
