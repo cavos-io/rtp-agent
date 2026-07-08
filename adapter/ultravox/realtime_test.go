@@ -861,6 +861,37 @@ func TestUltravoxRealtimeSessionGenerateReplyExpiresReferencePendingOwner(t *tes
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyTimerClearsReferencePendingOwner(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	session.generateReplyTimeout = 10 * time.Millisecond
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	requireUltravoxRealtimePendingReplyCleared(t, session)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	if generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true after reference GenerateReply timer, want provider-started generation")
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartClearsReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
@@ -2232,6 +2263,27 @@ func assertNoUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) {
 		}
 		t.Fatalf("unexpected realtime event = %#v", event)
 	default:
+	}
+}
+
+func requireUltravoxRealtimePendingReplyCleared(t *testing.T, session *realtimeSession) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		session.mu.Lock()
+		pending := session.pendingReply
+		pendingAt := session.pendingReplyAt
+		session.mu.Unlock()
+		if !pending && pendingAt.IsZero() {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline:
+			t.Fatal("timed out waiting for reference GenerateReply pending owner cleanup")
+		}
 	}
 }
 

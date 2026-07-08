@@ -257,18 +257,19 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &realtimeSession{
-		eventCh:          make(chan llm.RealtimeEvent, 16),
-		audioCh:          make(chan []byte, 256),
-		clientEventCh:    make(chan map[string]any, 256),
-		model:            m,
-		inputSampleRate:  uint32(m.inputSampleRate),
-		outputSampleRate: uint32(m.outputSampleRate),
-		audioOutput:      m.outputMedium == "voice",
-		systemPrompt:     m.systemPrompt,
-		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
-		toolNames:        make(map[string]struct{}),
-		toolResults:      make(map[string]struct{}),
-		contextItems:     make(map[string]struct{}),
+		eventCh:              make(chan llm.RealtimeEvent, 16),
+		audioCh:              make(chan []byte, 256),
+		clientEventCh:        make(chan map[string]any, 256),
+		model:                m,
+		inputSampleRate:      uint32(m.inputSampleRate),
+		outputSampleRate:     uint32(m.outputSampleRate),
+		audioOutput:          m.outputMedium == "voice",
+		systemPrompt:         m.systemPrompt,
+		generateReplyTimeout: ultravoxGenerateReplyTimeout,
+		audioStream:          coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:            make(map[string]struct{}),
+		toolResults:          make(map[string]struct{}),
+		contextItems:         make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
 		session.clientEventCh <- map[string]any{
@@ -343,29 +344,32 @@ type ultravoxRealtimeServerEventEnvelope struct {
 }
 
 type realtimeSession struct {
-	mu               sync.Mutex
-	eventCh          chan llm.RealtimeEvent
-	audioCh          chan []byte
-	clientEventCh    chan map[string]any
-	model            *RealtimeModel
-	inputSampleRate  uint32
-	outputSampleRate uint32
-	audioOutput      bool
-	systemPrompt     string
-	audioStream      *coreaudio.AudioByteStream
-	inputNormalizer  ultravoxRealtimeInputNormalizer
-	generation       *ultravoxRealtimeGeneration
-	generationSeq    uint64
-	tools            []llm.Tool
-	toolNames        map[string]struct{}
-	toolResults      map[string]struct{}
-	contextItems     map[string]struct{}
-	pendingReply     bool
-	pendingReplyAt   time.Time
-	restartCount     uint64
-	lastUserFinalAt  time.Time
-	closed           bool
-	closeOnce        sync.Once
+	mu                   sync.Mutex
+	eventCh              chan llm.RealtimeEvent
+	audioCh              chan []byte
+	clientEventCh        chan map[string]any
+	model                *RealtimeModel
+	inputSampleRate      uint32
+	outputSampleRate     uint32
+	audioOutput          bool
+	systemPrompt         string
+	audioStream          *coreaudio.AudioByteStream
+	inputNormalizer      ultravoxRealtimeInputNormalizer
+	generation           *ultravoxRealtimeGeneration
+	generationSeq        uint64
+	tools                []llm.Tool
+	toolNames            map[string]struct{}
+	toolResults          map[string]struct{}
+	contextItems         map[string]struct{}
+	pendingReply         bool
+	pendingReplyAt       time.Time
+	pendingReplySeq      uint64
+	pendingReplyTimer    *time.Timer
+	generateReplyTimeout time.Duration
+	restartCount         uint64
+	lastUserFinalAt      time.Time
+	closed               bool
+	closeOnce            sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -593,6 +597,8 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	if !s.closed {
 		s.pendingReply = true
 		s.pendingReplyAt = time.Now()
+		s.pendingReplySeq++
+		s.startGenerateReplyTimerLocked(s.pendingReplySeq)
 	}
 	s.mu.Unlock()
 	return nil
@@ -626,6 +632,7 @@ func (s *realtimeSession) Close() error {
 		generation = s.generation
 		s.closed = true
 		s.generation = nil
+		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)
 		s.mu.Unlock()
@@ -720,6 +727,8 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.restartCount++
 	s.pendingReply = false
 	s.pendingReplyAt = time.Time{}
+	s.pendingReplySeq++
+	s.stopGenerateReplyTimerLocked()
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	if !s.audioOutput {
@@ -892,6 +901,8 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 		userInitiated = s.pendingReply && !s.pendingReplyAt.IsZero() && time.Since(s.pendingReplyAt) <= ultravoxGenerateReplyTimeout
 		s.pendingReply = false
 		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
+		s.stopGenerateReplyTimerLocked()
 	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
@@ -914,6 +925,31 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	default:
 	}
 	return generation
+}
+
+func (s *realtimeSession) startGenerateReplyTimerLocked(seq uint64) {
+	s.stopGenerateReplyTimerLocked()
+	timeout := s.generateReplyTimeout
+	if timeout <= 0 {
+		timeout = ultravoxGenerateReplyTimeout
+	}
+	s.pendingReplyTimer = time.AfterFunc(timeout, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed || s.pendingReplySeq != seq {
+			return
+		}
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+	})
+}
+
+func (s *realtimeSession) stopGenerateReplyTimerLocked() {
+	if s.pendingReplyTimer == nil {
+		return
+	}
+	s.pendingReplyTimer.Stop()
+	s.pendingReplyTimer = nil
 }
 
 func (s *realtimeSession) handleTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
