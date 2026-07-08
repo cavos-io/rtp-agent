@@ -510,7 +510,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 }
 
 func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
-	if output == nil || output.CallID == "" {
+	if output == nil {
 		return nil
 	}
 	key := ultravoxRealtimeToolResultKey(output)

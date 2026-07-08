@@ -2849,6 +2849,37 @@ func TestUltravoxRealtimeSessionToolResultQueuesReferenceClientEvent(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionToolResultAcceptsReferenceEmptyInvocationID(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		ID:     "result-empty",
+		CallID: "",
+		Name:   "lookup",
+		Output: "ok",
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want reference empty invocationId result event", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "client_tool_result",
+		"invocationId":  "",
+		"result":        "ok",
+		"agentReaction": "speaks",
+		"responseType":  "tool-response",
+	})
+}
+
 func TestUltravoxRealtimeSessionToolErrorResultQueuesReferenceClientEvent(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
