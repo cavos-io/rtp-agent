@@ -443,6 +443,47 @@ func TestSpeechmaticsTTSSynthesizePostsAndStreamsPCM(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeUsesReferenceShortRequestID(t *testing.T) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = originalClient
+	}()
+
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("https://tts.example.com"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if len(audio.RequestID) != 12 {
+		t.Fatalf("RequestID = %q length %d, want reference shortuuid length 12", audio.RequestID, len(audio.RequestID))
+	}
+	for _, r := range audio.RequestID {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			continue
+		}
+		t.Fatalf("RequestID = %q, want lowercase hex reference shortuuid", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final returned error: %v", err)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want stable request id %q", final.RequestID, audio.RequestID)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	originalClient := http.DefaultClient
 	requests := 0

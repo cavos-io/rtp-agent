@@ -19,7 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/google/uuid"
+	lkmath "github.com/cavos-io/rtp-agent/library/math"
 )
 
 const (
@@ -120,7 +120,7 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		baseURL:    baseURL,
 		voice:      voice,
 		sampleRate: sampleRate,
-		requestID:  uuid.NewString(),
+		requestID:  lkmath.ShortUUID(""),
 		owner:      t,
 	}
 	if !t.registerStream(stream) {
