@@ -3085,6 +3085,39 @@ func TestSpeechmaticsSTTFinalizeSendsReferenceForceEndOfUtterance(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeFailureSurfacesToNext(t *testing.T) {
+	finalizeErr := errors.New("manual finalize failed")
+	transportClosed := make(chan struct{})
+	var closeOnce sync.Once
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		writeJSON: func(interface{}) error {
+			return finalizeErr
+		},
+		closeConn: func() error {
+			closeOnce.Do(func() { close(transportClosed) })
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	err := provider.Finalize()
+	if !errors.Is(err, finalizeErr) {
+		t.Fatalf("Finalize failure error = %v, want %v", err, finalizeErr)
+	}
+	select {
+	case <-transportClosed:
+	case <-time.After(time.Second):
+		t.Fatal("Finalize failure did not close Speechmatics stream transport")
+	}
+	if _, err := stream.Next(); !errors.Is(err, finalizeErr) {
+		t.Fatalf("Next after Finalize failure = %v, want %v", err, finalizeErr)
+	}
+}
+
 func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 10 * time.Millisecond

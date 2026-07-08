@@ -1741,7 +1741,12 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return nil
 	}
 	s.mu.Unlock()
-	return s.sendForceEndOfUtterance()
+	if err := s.sendForceEndOfUtterance(); err != nil {
+		s.enqueueError(err)
+		_ = s.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
