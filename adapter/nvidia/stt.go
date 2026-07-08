@@ -168,6 +168,11 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
