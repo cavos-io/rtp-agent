@@ -2153,9 +2153,7 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 			if s.chatCtx == nil {
 				s.chatCtx = llm.NewChatContext()
 			}
-			if s.chatCtx.GetByID(itemID) == nil {
-				s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: itemID, Role: llm.ChatRoleUser, Text: event.Text})
-			}
+			s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: itemID, Role: llm.ChatRoleUser, Text: event.Text})
 		}
 	}
 	realtimeEvent := llm.RealtimeEvent{

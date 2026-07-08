@@ -2753,6 +2753,25 @@ func TestUltravoxRealtimeSessionFinalUserTranscriptMarksReferenceChatContext(t *
 		Ordinal: 7,
 	})
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "hello world", true)
+	session.handleUserTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "corrected world",
+		Final:   true,
+		Ordinal: 7,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_7", "corrected world", true)
+
+	var transcriptTexts []string
+	for _, item := range session.chatCtx.Items {
+		message, ok := item.(*llm.ChatMessage)
+		if !ok || message.ID != "msg_user_7" {
+			continue
+		}
+		transcriptTexts = append(transcriptTexts, message.TextContent())
+	}
+	if got, want := strings.Join(transcriptTexts, "|"), "hello world|corrected world"; got != want {
+		t.Fatalf("duplicate transcript chat context = %q, want reference append-only %q", got, want)
+	}
 
 	ctx := llm.NewChatContext()
 	ctx.AddMessage(llm.ChatMessageArgs{ID: "msg_user_7", Role: llm.ChatRoleUser, Text: "hello world"})
