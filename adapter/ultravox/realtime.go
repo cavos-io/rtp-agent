@@ -205,9 +205,7 @@ func WithRealtimeFirstSpeaker(firstSpeaker string) RealtimeOption {
 
 func WithRealtimeUpdateOutputMedium(outputMedium string) RealtimeUpdateOption {
 	return func(opts *realtimeUpdateOptions) {
-		if outputMedium != "" {
-			opts.outputMedium = &outputMedium
-		}
+		opts.outputMedium = &outputMedium
 	}
 }
 

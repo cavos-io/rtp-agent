@@ -197,6 +197,31 @@ func TestUltravoxRealtimeModelUpdateOptionsPropagatesReferenceSessions(t *testin
 	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
 }
 
+func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
+	if got := model.OutputMedium(); got != "" {
+		t.Fatalf("output medium = %q, want explicit empty reference output_medium", got)
+	}
+	if model.Capabilities().AudioOutput {
+		t.Fatal("audio output = true, want false after empty output_medium")
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "",
+	})
+}
+
 func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
