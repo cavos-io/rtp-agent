@@ -572,6 +572,37 @@ func TestSpeechmaticsEventsRawTranscriptPreservesReferenceEmptySpeaker(t *testin
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptFormatsReferenceNullSpeaker(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"unknown","confidence":0.9,"speaker":null}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{
+		focusSpeakers:        []string{"agent"},
+		focusMode:            "retain",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	})
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want null-speaker raw transcript retained like reference SDK", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "" {
+		t.Fatalf("speaker id = %q, want target empty id for reference null speaker", alt.SpeakerID)
+	}
+	if alt.Text != "@None [background]: unknown" {
+		t.Fatalf("text = %q, want null speaker formatted as None like reference SDK", alt.Text)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{

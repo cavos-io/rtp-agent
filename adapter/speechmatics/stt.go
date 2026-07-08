@@ -1262,6 +1262,7 @@ type smResponse struct {
 	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 	rawLanguagePresent      []bool
 	rawSpeakerPresent       []bool
+	rawSpeakerNull          []bool
 	segmentLanguagePresent  []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
@@ -1307,6 +1308,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 	if len(rawResultItems) > 0 {
 		decoded.rawLanguagePresent = make([]bool, len(rawResultItems))
 		decoded.rawSpeakerPresent = make([]bool, len(rawResultItems))
+		decoded.rawSpeakerNull = make([]bool, len(rawResultItems))
 		for i, resultData := range rawResultItems {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(resultData) == "null" {
 				return fmt.Errorf("results[%d] must be an object", i)
@@ -1380,7 +1382,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
 			}
 			_, decoded.rawLanguagePresent[i] = alternative["language"]
-			_, decoded.rawSpeakerPresent[i] = alternative["speaker"]
+			speaker, speakerPresent := alternative["speaker"]
+			decoded.rawSpeakerPresent[i] = speakerPresent
+			decoded.rawSpeakerNull[i] = speakerPresent && string(speaker) == "null"
 		}
 	}
 	if len(raw.Segments) > 0 {
@@ -1712,16 +1716,17 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 }
 
 type speechmaticsRawTranscriptFragment struct {
-	text       string
-	kind       string
-	speakerID  string
-	language   string
-	attaches   string
-	isEOS      bool
-	startTime  float64
-	endTime    float64
-	confidence float64
-	disfluency bool
+	text            string
+	kind            string
+	speakerID       string
+	formatSpeakerID string
+	language        string
+	attaches        string
+	isEOS           bool
+	startTime       float64
+	endTime         float64
+	confidence      float64
+	disfluency      bool
 }
 
 func speechmaticsTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1824,6 +1829,10 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if alt.SpeakerID != "" && speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
+		formatSpeakerID := resultSpeakerID
+		if speechmaticsRawSpeakerNull(resp, i) {
+			formatSpeakerID = "None"
+		}
 		language := speechmaticsRawFragmentLanguage(alt.Language, speechmaticsRawLanguagePresent(resp, i))
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
@@ -1835,16 +1844,17 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			kind = "word"
 		}
 		fragments = append(fragments, speechmaticsRawTranscriptFragment{
-			text:       alt.Content,
-			kind:       kind,
-			speakerID:  resultSpeakerID,
-			language:   language,
-			attaches:   result.Attaches,
-			isEOS:      result.IsEOS,
-			startTime:  startTime,
-			endTime:    endTime,
-			confidence: speechmaticsAlternativeConfidence(alt.Confidence),
-			disfluency: speechmaticsStringInSlice("disfluency", alt.Tags),
+			text:            alt.Content,
+			kind:            kind,
+			speakerID:       resultSpeakerID,
+			formatSpeakerID: formatSpeakerID,
+			language:        language,
+			attaches:        result.Attaches,
+			isEOS:           result.IsEOS,
+			startTime:       startTime,
+			endTime:         endTime,
+			confidence:      speechmaticsAlternativeConfidence(alt.Confidence),
+			disfluency:      speechmaticsStringInSlice("disfluency", alt.Tags),
 		})
 	}
 
@@ -2026,7 +2036,11 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	if rawActive := speechmaticsRawTranscriptSpeakerActive(speakerID, state); rawActive != nil {
 		active = *rawActive
 	}
-	text = speechmaticsFormattedSegmentText(text, speakerID, active, state)
+	formatSpeakerID := speakerID
+	if fragments[0].formatSpeakerID != "" || speakerID == "" {
+		formatSpeakerID = fragments[0].formatSpeakerID
+	}
+	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -2258,6 +2272,10 @@ func speechmaticsRawFragmentLanguage(language string, present bool) string {
 
 func speechmaticsRawSpeakerPresent(resp smResponse, index int) bool {
 	return index >= 0 && index < len(resp.rawSpeakerPresent) && resp.rawSpeakerPresent[index]
+}
+
+func speechmaticsRawSpeakerNull(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.rawSpeakerNull) && resp.rawSpeakerNull[index]
 }
 
 func speechmaticsRawSpeakerID(speakerID string, present bool) string {
