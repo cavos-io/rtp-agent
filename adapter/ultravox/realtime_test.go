@@ -3013,6 +3013,91 @@ func TestUltravoxRealtimeSessionRestartLoopEmitsReferenceConnectionError(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	firstReadBlock := make(chan struct{})
+	firstConn := &ultravoxRealtimeTestWebsocketConn{
+		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeErr: errors.New("socket write failed")},
+		readBlock:                           firstReadBlock,
+		readErr:                             io.EOF,
+	}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	conns := []*ultravoxRealtimeTestWebsocketConn{firstConn, secondConn}
+	dialCh := make(chan int, 2)
+	var dialCount int
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		if dialCount >= len(conns) {
+			t.Fatalf("unexpected extra websocket dial %d", dialCount+1)
+		}
+		conn := conns[dialCount]
+		dialCount++
+		dialCh <- dialCount
+		return conn, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeRestartLoop(context.Background(), doer)
+	}()
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-dialCh:
+			if got != want {
+				t.Fatalf("dial marker = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for websocket dial %d", want)
+		}
+	}
+	close(firstReadBlock)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeRestartLoop error = %v, want nil after reference send-error reconnect", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not exit after reconnect drained")
+	}
+	if doer.requestCount != 2 {
+		t.Fatalf("create-call count = %d, want reconnect create-call after send error", doer.requestCount)
+	}
+	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
+		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after send-error reconnect = %#v, want no fatal error event", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -3316,11 +3401,15 @@ type ultravoxRealtimeTestWebsocketFrame struct {
 }
 
 type ultravoxRealtimeTestWebsocketWriter struct {
-	frames  []ultravoxRealtimeTestWebsocketFrame
-	writeCh chan struct{}
+	frames   []ultravoxRealtimeTestWebsocketFrame
+	writeCh  chan struct{}
+	writeErr error
 }
 
 func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte) error {
+	if w.writeErr != nil {
+		return w.writeErr
+	}
 	w.frames = append(w.frames, ultravoxRealtimeTestWebsocketFrame{
 		typ:  typ,
 		data: append([]byte(nil), data...),

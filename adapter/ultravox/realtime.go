@@ -825,6 +825,8 @@ const (
 	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
 )
 
+var errUltravoxRealtimeReconnectAfterSend = errors.New("ultravox realtime reconnect after send error")
+
 func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
 	createCallURL, headers, payload := s.createCallRequest()
 	body, err := json.Marshal(payload)
@@ -883,6 +885,9 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return err
 		}
 		if err := s.runRealtimeOnce(ctx, client); err != nil {
+			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
+				continue
+			}
 			s.emitRealtimeModelError(err, false)
 			return nil
 		}
@@ -970,7 +975,7 @@ func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsoc
 			return nil
 		}
 		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
-			return err
+			return errUltravoxRealtimeReconnectAfterSend
 		}
 	}
 	return nil
