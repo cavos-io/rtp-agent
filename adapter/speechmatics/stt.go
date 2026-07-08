@@ -1421,10 +1421,13 @@ func speechmaticsAlternativeConfidence(confidence *float64) float64 {
 }
 
 func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamState, eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment) {
-	if state == nil || eventType != stt.SpeechEventFinalTranscript || len(fragments) == 0 {
+	if state == nil || len(fragments) == 0 {
 		return
 	}
-	annotations := []string{speechmaticsAnnotationEndsWithFinal}
+	var annotations []string
+	if eventType == stt.SpeechEventFinalTranscript {
+		annotations = append(annotations, speechmaticsAnnotationEndsWithFinal)
+	}
 	if fragments[len(fragments)-1].isEOS {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithEOS)
 	}

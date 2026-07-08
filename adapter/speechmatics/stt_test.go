@@ -2059,6 +2059,38 @@ func TestSpeechmaticsRawTranscriptRecordsReferenceFinalEOSAnnotationForLocalVAD(
 	}
 }
 
+func TestSpeechmaticsRawPartialRecordsReferenceDisfluencyAnnotationForLocalVAD(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true}
+	resp := smResponse{Message: "AddPartialTranscript"}
+	resp.Results = append(resp.Results, smResult{
+		Alternatives: []smAlternative{{Content: "um", Tags: []string{"disfluency"}}},
+		Type:         "word",
+		StartTime:    0,
+		EndTime:      0.2,
+	})
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw partial transcript", len(events))
+	}
+	for _, want := range []string{"has_disfluency", "ends_with_disfluency"} {
+		if !speechmaticsStringInSlice(want, state.latestSegmentAnnotation) {
+			t.Fatalf("latest raw partial annotation = %#v, want reference %s", state.latestSegmentAnnotation, want)
+		}
+	}
+	if speechmaticsStringInSlice("ends_with_final", state.latestSegmentAnnotation) {
+		t.Fatalf("latest raw partial annotation = %#v, want no final marker", state.latestSegmentAnnotation)
+	}
+
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 770*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want partial disfluency reference delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsRawTranscriptRecordsReferenceSlowSpeakerAnnotationForLocalVAD(t *testing.T) {
 	state := &speechmaticsStreamState{}
 	resp := smResponse{Message: "AddTranscript"}
