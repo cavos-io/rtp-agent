@@ -1188,6 +1188,43 @@ func TestUltravoxRealtimeSessionUpdateToolsDedupesReferenceSameInstance(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateToolsSkipsReferenceProviderTools(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	providerTool := ultravoxRealtimeProviderOnlyTool{name: "web_search"}
+	if err := session.UpdateTools([]llm.Tool{providerTool}); err != nil {
+		t.Fatalf("UpdateTools provider tool error = %v, want reference provider tool ignored by function tool set", err)
+	}
+	if got := session.restartCount; got != 0 {
+		t.Fatalf("restart count after provider-only tool = %d, want no function-tool restart", got)
+	}
+	if got := len(session.tools); got != 0 {
+		t.Fatalf("stored function tools after provider-only tool = %d, want none", got)
+	}
+	if payloads := ultravoxRealtimeToolPayloads([]llm.Tool{providerTool}); len(payloads) != 0 {
+		t.Fatalf("provider tool payloads = %#v, want no selectedTools entry", payloads)
+	}
+
+	if err := session.UpdateTools([]llm.Tool{providerTool, ultravoxRealtimeTestTool{name: "lookup"}}); err != nil {
+		t.Fatalf("UpdateTools provider plus function tool error = %v", err)
+	}
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after function tool with provider tool = %d, want one function-tool restart", got)
+	}
+	if got := len(session.tools); got != 1 {
+		t.Fatalf("stored function tools after provider plus function = %d, want one", got)
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateToolsKeepsReferenceSameNameToolState(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -5697,6 +5734,21 @@ func (t ultravoxRealtimeTestTool) Parameters() map[string]any {
 func (t ultravoxRealtimeTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
+
+type ultravoxRealtimeProviderOnlyTool struct {
+	name string
+}
+
+func (t ultravoxRealtimeProviderOnlyTool) ID() string          { return t.name }
+func (t ultravoxRealtimeProviderOnlyTool) Name() string        { return t.name }
+func (t ultravoxRealtimeProviderOnlyTool) Description() string { return "provider tool" }
+func (t ultravoxRealtimeProviderOnlyTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (t ultravoxRealtimeProviderOnlyTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (t ultravoxRealtimeProviderOnlyTool) IsProviderTool() bool { return true }
 
 type ultravoxRealtimeRawSchemaTool struct{}
 

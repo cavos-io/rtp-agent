@@ -1027,6 +1027,9 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
+		if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+			continue
+		}
 		if existing, exists := nextToolByName[tool.Name()]; exists {
 			if ultravoxRealtimeSameToolInstance(existing, tool) {
 				continue
@@ -1636,6 +1639,9 @@ func ultravoxRealtimeToolPayloadsE(tools []llm.Tool) ([]map[string]any, error) {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
+			continue
+		}
+		if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
 			continue
 		}
 		name, description, parameters, rawSchema, err := ultravoxRealtimeToolSchemaE(tool)
