@@ -1121,6 +1121,20 @@ func speechmaticsUnmarshalReferenceContent(data []byte) (string, error) {
 		}
 		return "", fmt.Errorf("number %v is not reference-falsey", number)
 	}
+	var array []json.RawMessage
+	if err := json.Unmarshal(data, &array); err == nil {
+		if len(array) == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("array is not reference-falsey")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		if len(object) == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("object is not reference-falsey")
+	}
 	return "", fmt.Errorf("must be string or reference-falsey")
 }
 

@@ -826,6 +826,51 @@ func TestSpeechmaticsEventsRawTranscriptSkipsReferenceZeroContent(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContainerContent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "array", content: "[]"},
+		{name: "object", content: "{}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp smResponse
+			if err := json.Unmarshal([]byte(fmt.Sprintf(`{
+				"message":"AddTranscript",
+				"results":[{
+					"type":"word",
+					"start_time":0.1,
+					"end_time":0.3,
+					"alternatives":[{"content":%s,"confidence":0.9,"speaker":"agent","language":"en"}]
+				},{
+					"type":"word",
+					"start_time":0.4,
+					"end_time":0.6,
+					"alternatives":[{"content":"kept","confidence":0.8,"speaker":"agent","language":"en"}]
+				}]
+			}`, tc.content)), &resp); err != nil {
+				t.Fatalf("unmarshal raw transcript: %v", err)
+			}
+
+			events := speechmaticsEvents(resp, nil)
+			if len(events) != 1 {
+				t.Fatalf("events = %#v, want one raw transcript event after empty container content skip", events)
+			}
+			alt := events[0].Alternatives[0]
+			if alt.Text != "kept" {
+				t.Fatalf("text = %q, want empty container raw content skipped", alt.Text)
+			}
+			if len(alt.Words) != 1 || alt.Words[0].Text != "kept" {
+				t.Fatalf("words = %#v, want only non-empty-container content word", alt.Words)
+			}
+			if alt.StartTime != 0.4 || alt.EndTime != 0.6 {
+				t.Fatalf("timing = %v-%v, want non-empty-container fragment timing", alt.StartTime, alt.EndTime)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing.T) {
 	var partial smResponse
 	if err := json.Unmarshal([]byte(`{
