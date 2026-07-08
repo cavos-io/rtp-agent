@@ -1393,6 +1393,14 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &number); err == nil {
 		return number.String(), nil
 	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return speechmaticsReferenceObjectText(object)
+	}
 	return "", fmt.Errorf("unsupported list text value")
 }
 
