@@ -1341,6 +1341,9 @@ func TestUltravoxRealtimeOutboundMessageSerializesReferenceFrames(t *testing.T) 
 	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Audio: audio}); err != nil {
 		t.Fatalf("write audio outbound error = %v", err)
 	}
+	if err := writeUltravoxRealtimeOutboundMessage(writer, ultravoxRealtimeOutboundMessage{Audio: []byte{}}); err != nil {
+		t.Fatalf("write empty audio outbound error = %v", err)
+	}
 	event := map[string]any{
 		"type":          "user_text_message",
 		"text":          "<instruction>respond now</instruction>",
@@ -1350,22 +1353,25 @@ func TestUltravoxRealtimeOutboundMessageSerializesReferenceFrames(t *testing.T) 
 		t.Fatalf("write event outbound error = %v", err)
 	}
 
-	if len(writer.frames) != 2 {
-		t.Fatalf("websocket frame count = %d, want audio then text", len(writer.frames))
+	if len(writer.frames) != 3 {
+		t.Fatalf("websocket frame count = %d, want audio, empty audio, then text", len(writer.frames))
 	}
 	if writer.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(writer.frames[0].data, audio) {
 		t.Fatalf("first websocket frame = %#v, want binary audio", writer.frames[0])
 	}
-	if writer.frames[1].typ != ultravoxRealtimeWebsocketTextFrame {
-		t.Fatalf("second websocket frame type = %d, want text", writer.frames[1].typ)
+	if writer.frames[1].typ != ultravoxRealtimeWebsocketBinaryFrame || len(writer.frames[1].data) != 0 {
+		t.Fatalf("second websocket frame = %#v, want empty binary audio", writer.frames[1])
+	}
+	if writer.frames[2].typ != ultravoxRealtimeWebsocketTextFrame {
+		t.Fatalf("third websocket frame type = %d, want text", writer.frames[2].typ)
 	}
 	var got map[string]any
-	if err := json.Unmarshal(writer.frames[1].data, &got); err != nil {
-		t.Fatalf("event websocket JSON = %q failed decode: %v", writer.frames[1].data, err)
+	if err := json.Unmarshal(writer.frames[2].data, &got); err != nil {
+		t.Fatalf("event websocket JSON = %q failed decode: %v", writer.frames[2].data, err)
 	}
 	for key, want := range event {
 		if got[key] != want {
-			t.Fatalf("event JSON %s = %#v, want %#v in %s", key, got[key], want, writer.frames[1].data)
+			t.Fatalf("event JSON %s = %#v, want %#v in %s", key, got[key], want, writer.frames[2].data)
 		}
 	}
 }

@@ -1442,7 +1442,7 @@ func defaultUltravoxRealtimeWebsocketDialer(ctx context.Context, endpoint string
 }
 
 func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter, message ultravoxRealtimeOutboundMessage) error {
-	if len(message.Audio) > 0 {
+	if message.Audio != nil {
 		return writer.WriteMessage(ultravoxRealtimeWebsocketBinaryFrame, message.Audio)
 	}
 	if message.Event == nil {
