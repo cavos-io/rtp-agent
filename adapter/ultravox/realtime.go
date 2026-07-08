@@ -614,7 +614,7 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 	s.mu.Lock()
 	if options.OutputMedium == "voice" {
 		s.audioOutput = true
-	} else if options.OutputMedium == "text" {
+	} else {
 		s.audioOutput = false
 	}
 	s.mu.Unlock()

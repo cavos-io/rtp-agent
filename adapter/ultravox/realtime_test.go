@@ -266,6 +266,11 @@ func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t
 		"type":   "set_output_medium",
 		"medium": "",
 	})
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
 }
 
 func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *testing.T) {
