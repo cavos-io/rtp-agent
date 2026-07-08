@@ -1843,7 +1843,7 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPe
 }
 
 func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
-	for _, speakerID := range []string{"__assistant__", "__Assistant__", "__A__"} {
+	for _, speakerID := range []string{"__ASSISTANT__", "__A1__", "__A_B__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -1864,6 +1864,37 @@ func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *t
 
 			if events := speechmaticsEvents(resp, nil); len(events) != 0 {
 				t.Fatalf("events = %#v, want wrapped system speaker %q filtered", events, speakerID)
+			}
+		})
+	}
+}
+
+func TestSpeechmaticsSegmentEventsKeepReferenceNonSystemWrappedSpeakerLabels(t *testing.T) {
+	for _, speakerID := range []string{"__assistant__", "__Assistant__", "__A__"} {
+		t.Run(speakerID, func(t *testing.T) {
+			resp := smResponse{Message: "AddSegment"}
+			resp.Segments = append(resp.Segments, struct {
+				Text       string   `json:"text"`
+				Language   string   `json:"language"`
+				SpeakerID  string   `json:"speaker_id"`
+				IsActive   *bool    `json:"is_active"`
+				Annotation []string `json:"annotation"`
+				Metadata   struct {
+					StartTime float64 `json:"start_time"`
+					EndTime   float64 `json:"end_time"`
+				} `json:"metadata"`
+			}{
+				Text:      "speaker words",
+				Language:  "en",
+				SpeakerID: speakerID,
+			})
+
+			events := speechmaticsEvents(resp, nil)
+			if len(events) != 1 || len(events[0].Alternatives) != 1 {
+				t.Fatalf("events = %#v, want non-system wrapped speaker %q emitted", events, speakerID)
+			}
+			if got := events[0].Alternatives[0].SpeakerID; got != speakerID {
+				t.Fatalf("speaker id = %q, want %q", got, speakerID)
 			}
 		})
 	}
