@@ -1070,9 +1070,15 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
+					if !s.enqueuePendingRawFinalEvents() {
+						return
+					}
 					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
 				}
 			} else {
+				if !s.enqueuePendingRawFinalEvents() {
+					return
+				}
 				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
 			}
 			return
@@ -1175,6 +1181,15 @@ func (s *speechmaticsSTTStream) flushPendingRawFinalEvents() []*stt.SpeechEvent 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return speechmaticsFlushPendingRawFinals(s.state)
+}
+
+func (s *speechmaticsSTTStream) enqueuePendingRawFinalEvents() bool {
+	for _, event := range s.flushPendingRawFinalEvents() {
+		if !s.enqueueEvent(event) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *speechmaticsSTTStream) forcedEOUPartialEvents(resp smResponse) []*stt.SpeechEvent {

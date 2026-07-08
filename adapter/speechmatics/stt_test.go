@@ -1201,6 +1201,68 @@ func TestSpeechmaticsSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTUnexpectedCloseDrainsPendingRawFinalBeforeError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message": "AddTranscript",
+			"results": []map[string]interface{}{{
+				"type":       "word",
+				"start_time": 0.1,
+				"end_time":   0.3,
+				"alternatives": []map[string]interface{}{{
+					"content":    "closing",
+					"confidence": 0.9,
+					"speaker":    "S1",
+					"language":   "en",
+				}},
+			}},
+		}); err != nil {
+			t.Errorf("write raw final: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want pending raw final before provider close error", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first Next event = %#v, want pending raw final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "closing" {
+		t.Fatalf("transcript = %q, want closing", got)
+	}
+	event, err = stream.Next()
+	if event != nil {
+		t.Fatalf("second Next event = %#v, want nil before provider close error", event)
+	}
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want reference provider close error", err)
+	}
+}
+
 func TestSpeechmaticsSTTProviderCloseClosesReferenceVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
