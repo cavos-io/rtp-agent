@@ -2107,6 +2107,102 @@ func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionOutputAudioBuffersFullReferenceAudioQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "speaking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	fullCap := cap(generationState.audioCh)
+	if fullCap == 0 {
+		t.Fatal("output audio queue cap = 0, want buffered reference audio stream")
+	}
+	for i := 0; i < fullCap; i++ {
+		generationState.audioCh <- &audiomodel.AudioFrame{Data: []byte{byte(i)}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	}
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i % 251)
+	}
+	session.handleOutputAudio(audio)
+
+	for i := 0; i < fullCap; i++ {
+		<-message.AudioCh
+	}
+	select {
+	case got := <-message.AudioCh:
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("queued output audio = %v, want reference-preserved provider bytes", got.Data[:min(len(got.Data), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for output audio after full queue")
+	}
+}
+
+func TestUltravoxRealtimeSessionOutputAudioDrainsFullReferenceQueueBeforeFinalClose(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "speaking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	fullCap := cap(generationState.audioCh)
+	for i := 0; i < fullCap; i++ {
+		generationState.audioCh <- &audiomodel.AudioFrame{Data: []byte{byte(i)}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	}
+	audio := []byte{1, 2, 3, 4}
+	session.handleOutputAudio(audio)
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+
+	for i := 0; i < fullCap; i++ {
+		<-message.AudioCh
+	}
+	select {
+	case got, ok := <-message.AudioCh:
+		if !ok {
+			t.Fatal("audio stream closed before queued provider audio drained")
+		}
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("queued output audio = %v, want %v", got.Data, audio)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued provider audio before close")
+	}
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+}
+
 func TestUltravoxRealtimeSessionForwardsReferenceOddAndEmptyOutputAudio(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

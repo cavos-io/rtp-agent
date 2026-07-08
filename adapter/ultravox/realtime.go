@@ -351,15 +351,108 @@ func (m *RealtimeModel) realtimeSessions() []*realtimeSession {
 }
 
 type ultravoxRealtimeGeneration struct {
-	messageCh  chan llm.MessageGeneration
-	functionCh chan *llm.FunctionCall
-	textCh     chan string
-	audioCh    chan *model.AudioFrame
-	outputText strings.Builder
-	responseID string
-	createdAt  time.Time
-	firstToken time.Time
-	done       bool
+	messageCh   chan llm.MessageGeneration
+	functionCh  chan *llm.FunctionCall
+	textCh      chan string
+	audioCh     chan *model.AudioFrame
+	audioStream *ultravoxRealtimeAudioFrameStream
+	outputText  strings.Builder
+	responseID  string
+	createdAt   time.Time
+	firstToken  time.Time
+	done        bool
+}
+
+type ultravoxRealtimeAudioFrameStream struct {
+	out     chan *model.AudioFrame
+	wake    chan struct{}
+	closeCh chan struct{}
+	mu      sync.Mutex
+	queue   []*model.AudioFrame
+	closed  bool
+}
+
+func newUltravoxRealtimeAudioFrameStream(size int) *ultravoxRealtimeAudioFrameStream {
+	stream := &ultravoxRealtimeAudioFrameStream{
+		out:     make(chan *model.AudioFrame, size),
+		wake:    make(chan struct{}, 1),
+		closeCh: make(chan struct{}),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *ultravoxRealtimeAudioFrameStream) Chan() chan *model.AudioFrame {
+	if s == nil {
+		return nil
+	}
+	return s.out
+}
+
+func (s *ultravoxRealtimeAudioFrameStream) Send(frame *model.AudioFrame) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	select {
+	case s.out <- frame:
+		return true
+	default:
+	}
+	s.queue = append(s.queue, frame)
+	s.notifyLocked()
+	return true
+}
+
+func (s *ultravoxRealtimeAudioFrameStream) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.closeCh)
+	s.notifyLocked()
+	s.mu.Unlock()
+}
+
+func (s *ultravoxRealtimeAudioFrameStream) notifyLocked() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *ultravoxRealtimeAudioFrameStream) run() {
+	defer close(s.out)
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.mu.Unlock()
+			select {
+			case <-s.wake:
+			case <-s.closeCh:
+			}
+			s.mu.Lock()
+		}
+		if s.closed && len(s.queue) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		frame := s.queue[0]
+		s.queue[0] = nil
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+
+		s.out <- frame
+	}
 }
 
 type ultravoxRealtimeTranscriptEvent struct {
@@ -1536,10 +1629,7 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 	}
 	s.mu.Unlock()
 
-	select {
-	case generation.audioCh <- frame:
-	default:
-	}
+	generation.audioStream.Send(frame)
 }
 
 func (s *realtimeSession) handleServerTextMessage(data []byte) error {
@@ -1643,12 +1733,14 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	if s.generation != nil && !s.generation.done {
 		return s.generation
 	}
+	audioStream := newUltravoxRealtimeAudioFrameStream(ultravoxOutputAudioQueueSize)
 	generation := &ultravoxRealtimeGeneration{
-		messageCh:  make(chan llm.MessageGeneration, 1),
-		functionCh: make(chan *llm.FunctionCall, ultravoxFunctionCallQueueSize),
-		textCh:     make(chan string, ultravoxTextDeltaQueueSize),
-		audioCh:    make(chan *model.AudioFrame, ultravoxOutputAudioQueueSize),
-		createdAt:  s.pickGenerationCreatedAtLocked(),
+		messageCh:   make(chan llm.MessageGeneration, 1),
+		functionCh:  make(chan *llm.FunctionCall, ultravoxFunctionCallQueueSize),
+		textCh:      make(chan string, ultravoxTextDeltaQueueSize),
+		audioCh:     audioStream.Chan(),
+		audioStream: audioStream,
+		createdAt:   s.pickGenerationCreatedAtLocked(),
 	}
 	modalitiesCh := make(chan []string, 1)
 	if s.audioOutput {
@@ -1799,7 +1891,7 @@ func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneratio
 	}
 	generation.done = true
 	close(generation.textCh)
-	close(generation.audioCh)
+	generation.audioStream.Close()
 	close(generation.functionCh)
 	close(generation.messageCh)
 	if s.generation == generation {
