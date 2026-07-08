@@ -10,7 +10,7 @@ import (
 
 const (
 	PluginTitle   = "rtp-agent.plugins.silero"
-	PluginVersion = "v0.1.5"
+	PluginVersion = "v0.1.6"
 	PluginPackage = "rtp-agent.plugins.silero"
 
 	sileroModelFileName = "silero_vad.onnx"
