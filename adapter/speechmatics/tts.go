@@ -293,6 +293,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
+	if s.contextCanceled(s.contextDone()) {
+		s.finishCanceled()
+		return nil, context.Canceled
+	}
 	if len(s.pendingAudio) > 0 {
 		return s.emitAudio(s.popPendingAudio())
 	}
@@ -445,14 +449,17 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 		}()
 	}
 	ch := s.readResultCh
-	var done <-chan struct{}
-	if s.ctx != nil {
-		done = s.ctx.Done()
+	done := s.contextDone()
+	if s.contextCanceled(done) {
+		return nil, context.Canceled, false
 	}
 	var timer *time.Timer
 	if s.pendingTail != nil && !s.tailFlushAt.IsZero() {
 		delay := time.Until(s.tailFlushAt)
 		if delay <= 0 {
+			if result, ok := s.tryReadResult(ch); ok {
+				return result.data, result.err, false
+			}
 			return nil, nil, true
 		}
 		timer = time.NewTimer(delay)
@@ -466,6 +473,9 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 			}
 			return result.data, result.err, false
 		case <-done:
+			if !s.isClosedOrFinal() {
+				return nil, context.Canceled, false
+			}
 			return nil, io.EOF, false
 		}
 	}
@@ -476,9 +486,49 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 		}
 		return result.data, result.err, false
 	case <-timer.C:
+		if s.contextCanceled(done) {
+			return nil, context.Canceled, false
+		}
+		if result, ok := s.tryReadResult(ch); ok {
+			return result.data, result.err, false
+		}
 		return nil, nil, true
 	case <-done:
+		if !s.isClosedOrFinal() {
+			return nil, context.Canceled, false
+		}
 		return nil, io.EOF, false
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) contextDone() <-chan struct{} {
+	if s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Done()
+}
+
+func (s *speechmaticsTTSChunkedStream) contextCanceled(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return !s.isClosedOrFinal()
+	default:
+		return false
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) tryReadResult(ch chan speechmaticsTTSReadResult) (speechmaticsTTSReadResult, bool) {
+	select {
+	case result := <-ch:
+		if s.readResultCh == ch {
+			s.readResultCh = nil
+		}
+		return result, true
+	default:
+		return speechmaticsTTSReadResult{}, false
 	}
 }
 

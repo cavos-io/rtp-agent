@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -32,6 +33,15 @@ func assertSpeechmaticsTTSReferenceFinalMarker(t *testing.T, audio *tts.Synthesi
 	}
 	if !bytes.Equal(audio.Frame.Data, make([]byte, int(wantSamples)*2)) {
 		t.Fatalf("final marker data = %v, want 10ms zero silence", audio.Frame.Data)
+	}
+}
+
+func speechmaticsTTSFrame(sampleRate int, samples uint32) *model.AudioFrame {
+	return &model.AudioFrame{
+		Data:              make([]byte, samples*2),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: samples,
 	}
 }
 
@@ -1237,6 +1247,94 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamActiveReadContextCancelReturnsContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	body := newSpeechmaticsBlockingReadBody()
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     body,
+		ctx:        ctx,
+		cancel:     cancel,
+		sampleRate: 24000,
+	}
+	t.Cleanup(func() {
+		_ = stream.Close()
+		body.release()
+	})
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	<-body.started
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		if result.audio != nil {
+			t.Fatalf("Next audio = %+v, want nil on active read cancellation", result.audio)
+		}
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("Next error = %T(%v), want context.Canceled for active read cancellation", result.err, result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next blocked after active read context cancellation")
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCanceledContextDropsReadyAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &speechmaticsTTSChunkedStream{
+		stream:       io.NopCloser(bytes.NewReader(nil)),
+		ctx:          ctx,
+		sampleRate:   6000,
+		pendingTail:  speechmaticsTTSFrame(6000, 60),
+		tailFlushAt:  time.Now().Add(-time.Millisecond),
+		readResultCh: make(chan speechmaticsTTSReadResult, 1),
+	}
+	stream.readResultCh <- speechmaticsTTSReadResult{data: make([]byte, 240), err: nil}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil when caller cancellation beats ready provider audio", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCanceledContextDropsBufferedAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &speechmaticsTTSChunkedStream{
+		ctx:        ctx,
+		sampleRate: 24000,
+		pendingAudio: []*tts.SynthesizedAudio{{
+			RequestID: "buffered",
+			Frame:     speechmaticsTTSFrame(24000, 240),
+		}},
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil when caller cancellation beats buffered provider audio", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after cancellation = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadCancelDropsReturnedAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     &speechmaticsDataThenCancelBody{data: []byte{0x01, 0x02}},
@@ -1394,6 +1492,32 @@ func TestSpeechmaticsTTSChunkedStreamFlushesReferenceSlowTailBeforeEOF(t *testin
 		}
 	case <-time.After(350 * time.Millisecond):
 		t.Fatal("slow Speechmatics TTS tail was not flushed before EOF like reference AudioEmitter")
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamReadyChunkCancelsReferenceSlowTailFlush(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:       io.NopCloser(bytes.NewReader(nil)),
+		sampleRate:   6000,
+		requestID:    "ready-chunk",
+		pendingTail:  speechmaticsTTSFrame(6000, 60),
+		tailFlushAt:  time.Now().Add(-time.Millisecond),
+		readResultCh: make(chan speechmaticsTTSReadResult, 1),
+	}
+	stream.readResultCh <- speechmaticsTTSReadResult{data: make([]byte, 240), err: nil}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next = %+v, want non-final merged frame", audio)
+	}
+	if audio.Frame.SamplesPerChannel != 120 {
+		t.Fatalf("samples = %d, want ready provider chunk to merge with held tail before delayed flush", audio.Frame.SamplesPerChannel)
+	}
+	if stream.pendingTail == nil {
+		t.Fatal("pendingTail = nil, want new 10ms tail held after ready chunk")
 	}
 }
 
@@ -1888,6 +2012,35 @@ func (speechmaticsReadCancelBody) Read([]byte) (int, error) {
 
 func (speechmaticsReadCancelBody) Close() error {
 	return nil
+}
+
+type speechmaticsBlockingReadBody struct {
+	started     chan struct{}
+	releaseDone chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newSpeechmaticsBlockingReadBody() *speechmaticsBlockingReadBody {
+	return &speechmaticsBlockingReadBody{
+		started:     make(chan struct{}),
+		releaseDone: make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsBlockingReadBody) Read([]byte) (int, error) {
+	b.startOnce.Do(func() { close(b.started) })
+	<-b.releaseDone
+	return 0, context.Canceled
+}
+
+func (b *speechmaticsBlockingReadBody) Close() error {
+	b.release()
+	return nil
+}
+
+func (b *speechmaticsBlockingReadBody) release() {
+	b.releaseOnce.Do(func() { close(b.releaseDone) })
 }
 
 type speechmaticsDataThenCancelBody struct {

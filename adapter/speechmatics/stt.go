@@ -997,6 +997,7 @@ type speechmaticsSTTStream struct {
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
 	fixedEOUCompleted          bool
+	completedEOUNewTurnStarted bool
 	localEndpointingEOUSeq     uint64
 	localEndpointingTurnClosed bool
 }
@@ -1151,7 +1152,10 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "StartOfTurn" {
 		s.reopenLocalEndpointingTurn()
-		s.resetCompletedEOU()
+		s.markCompletedEOUNewTurnStarted()
+	}
+	if speechmaticsTranscriptMessage(resp.Message) {
+		s.resetCompletedEOUAfterNewTurnContent()
 	}
 	if resp.Message == "EndOfTurn" {
 		s.closeLocalEndpointingTurn()
@@ -1170,6 +1174,10 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 
 func speechmaticsPartialMessage(message string) bool {
 	return message == "AddPartialSegment" || message == "AddPartialTranscript"
+}
+
+func speechmaticsTranscriptMessage(message string) bool {
+	return message == "AddPartialSegment" || message == "AddSegment" || message == "AddPartialTranscript" || message == "AddTranscript"
 }
 
 func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1357,16 +1365,45 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 
 func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	var events []*stt.SpeechEvent
+	var flushedFinals []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
-		events = append(events, state.pendingRawFinals...)
+		flushedFinals = append(flushedFinals, state.pendingRawFinals...)
+		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	}
 	if state != nil && !state.includePartials {
 		return events
 	}
-	events = append(events, speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)...)
+	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
+	events = append(events, speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)...)
 	return events
+}
+
+func speechmaticsDropDuplicateTranscriptPartials(partials, finals []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(partials) == 0 || len(finals) == 0 {
+		return partials
+	}
+	kept := partials[:0]
+	for _, partial := range partials {
+		if speechmaticsTranscriptDuplicatesAny(partial, finals) {
+			continue
+		}
+		kept = append(kept, partial)
+	}
+	return kept
+}
+
+func speechmaticsTranscriptDuplicatesAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
+	if event == nil {
+		return false
+	}
+	for _, candidate := range candidates {
+		if speechmaticsTranscriptEventsSameTextTimingAndIdentity(event, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamState, eventType stt.SpeechEventType) []*stt.SpeechEvent {
@@ -1652,7 +1689,76 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			},
 		})
 	}
+	if eventType == stt.SpeechEventFinalTranscript {
+		speechmaticsDropOverlappedPendingRawFinals(state, events)
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
 	return events
+}
+
+func speechmaticsDropOverlappedPendingRawFinals(state *speechmaticsStreamState, segmentEvents []*stt.SpeechEvent) {
+	if state == nil || len(state.pendingRawFinals) == 0 || len(segmentEvents) == 0 {
+		return
+	}
+	kept := state.pendingRawFinals[:0]
+	for _, rawEvent := range state.pendingRawFinals {
+		if speechmaticsTranscriptOverlapsAny(rawEvent, segmentEvents) {
+			continue
+		}
+		kept = append(kept, rawEvent)
+	}
+	state.pendingRawFinals = kept
+}
+
+func speechmaticsTranscriptOverlapsAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	for _, candidate := range candidates {
+		if speechmaticsTranscriptEventsOverlap(event, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil || left.Type != stt.SpeechEventFinalTranscript || right.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	for _, leftAlt := range left.Alternatives {
+		for _, rightAlt := range right.Alternatives {
+			if leftAlt.StartTime < rightAlt.EndTime && rightAlt.StartTime < leftAlt.EndTime {
+				return true
+			}
+			if speechmaticsTranscriptAlternativesSameTimingAndIdentity(leftAlt, rightAlt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func speechmaticsTranscriptEventsSameTextTimingAndIdentity(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	for _, leftAlt := range left.Alternatives {
+		for _, rightAlt := range right.Alternatives {
+			if speechmaticsTranscriptAlternativesSameTimingAndIdentity(leftAlt, rightAlt) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.SpeechData) bool {
+	return left.StartTime == right.StartTime &&
+		left.EndTime == right.EndTime &&
+		left.Text == right.Text &&
+		left.SpeakerID == right.SpeakerID &&
+		left.Language == right.Language
 }
 
 func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
@@ -1781,10 +1887,6 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	s.pushedSampleRate = frame.SampleRate
-	if len(frame.Data) == 0 {
-		s.mu.Unlock()
-		return nil
-	}
 	vadStream := s.vadStream
 	bufferVAD := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVAD {
@@ -1809,6 +1911,9 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	if len(frame.Data) == 0 {
+		return nil
 	}
 	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
 	if err != nil {
@@ -2097,7 +2202,7 @@ func (s *speechmaticsSTTStream) beginForcedEOU(allowProviderManaged bool) (uint6
 	if s.closed || (s.providerManagedEndpointing && !allowProviderManaged) {
 		return 0, 0, false
 	}
-	if s.forcedEOUPending {
+	if s.forcedEOUPending || s.forcedEOUCompleted {
 		return 0, 0, false
 	}
 	s.forcedEOUPending = true
@@ -2175,16 +2280,30 @@ func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	if !s.closed {
 		s.forcedEOUCompleted = true
 	}
+	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
+		return nil
+	}
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fixedEOUCompleted || s.localEndpointingTurnClosed {
+		return nil
+	}
 	if !s.closed {
 		s.fixedEOUCompleted = true
+		s.localEndpointingTurnClosed = true
+	}
+	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
+		return nil
 	}
 	return speechmaticsEndOfTurnEvents(s.state)
+}
+
+func speechmaticsHasReferenceTurnEndEvidence(state *speechmaticsStreamState) bool {
+	return state != nil && (state.speechDuration > 0 || len(state.pendingRawFinals) > 0)
 }
 
 func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
@@ -2197,6 +2316,7 @@ func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
 		return false
 	}
 	s.forcedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	return true
 }
 
@@ -2210,16 +2330,31 @@ func (s *speechmaticsSTTStream) consumeCompletedFixedEOU() bool {
 		return false
 	}
 	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	return true
 }
 
-func (s *speechmaticsSTTStream) resetCompletedEOU() {
+func (s *speechmaticsSTTStream) markCompletedEOUNewTurnStarted() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
+	s.completedEOUNewTurnStarted = s.forcedEOUCompleted || s.fixedEOUCompleted
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsSTTStream) resetCompletedEOUAfterNewTurnContent() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if !s.completedEOUNewTurnStarted {
+		s.mu.Unlock()
+		return
+	}
 	s.forcedEOUCompleted = false
 	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
 	s.mu.Unlock()
 }
 
@@ -2262,12 +2397,26 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		}
 		switch event.Type {
 		case corevad.VADEventStartOfSpeech:
-			s.reopenLocalEndpointingTurn()
-			s.cancelLocalEndpointingForceEndOfUtterance()
+			s.handleVADStartOfSpeech()
 		case corevad.VADEventEndOfSpeech:
 			s.scheduleLocalEndpointingForceEndOfUtterance()
 		}
 	}
+}
+
+func (s *speechmaticsSTTStream) handleVADStartOfSpeech() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localEndpointingTurnClosed = false
+	s.forcedEOUCompleted = false
+	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
+	s.pendingLocalEndpointingEOU = false
+	s.localEndpointingEOUSeq++
+	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
@@ -2340,16 +2489,6 @@ func (s *speechmaticsSTTStream) consumeLocalEndpointingForceEndOfUtterance(seq u
 	}
 	s.localEndpointingEOUSeq++
 	return true
-}
-
-func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.pendingLocalEndpointingEOU = false
-	s.localEndpointingEOUSeq++
-	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) closeLocalEndpointingTurn() {

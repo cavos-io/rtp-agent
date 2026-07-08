@@ -690,6 +690,42 @@ func TestSpeechmaticsEventsMetadataPartialAfterFinalTrimsReferenceDuplicate(t *t
 	}
 }
 
+func TestSpeechmaticsEventsZeroTimingMetadataPartialAfterFinalTrimsReferenceDuplicate(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	final := smResponse{
+		Message: "AddTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "hello",
+		},
+	}
+	if events := speechmaticsEvents(final, state); len(events) != 0 {
+		t.Fatalf("final events before following partial = %#v, want buffered final", events)
+	}
+
+	partial := smResponse{
+		Message: "AddPartialTranscript",
+		Metadata: struct {
+			Transcript string  `json:"transcript"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+		}{
+			Transcript: "hello",
+		},
+	}
+
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want only buffered final transcript without stale zero-timing metadata partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want buffered final hello", events[0])
+	}
+}
+
 func TestSpeechmaticsEventsRawFinalFlushesBeforeReferenceEndOfTurn(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true, speechDuration: 0.75}
 	var final smResponse
@@ -877,6 +913,92 @@ func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 		if got.Text != "hello" || got.Language != "en" || got.SpeakerID != "S1" || got.StartTime != 0.1 || got.EndTime != 0.4 {
 			t.Fatalf("%s alternative = %+v, want reference segment text/language/speaker/timing", tt.message, got)
 		}
+	}
+}
+
+func TestSpeechmaticsSegmentFinalDropsOverlappedReferenceRawFinal(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	var rawFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.4,
+			"alternatives":[{"content":"hello","language":"en","speaker":"S1"}]
+		}]
+	}`), &rawFinal); err != nil {
+		t.Fatalf("unmarshal raw final response: %v", err)
+	}
+	if events := speechmaticsEvents(rawFinal, state); len(events) != 0 {
+		t.Fatalf("raw final events = %#v, want buffered behind reference segment final", events)
+	}
+
+	var segmentFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hello",
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &segmentFinal); err != nil {
+		t.Fatalf("unmarshal segment final response: %v", err)
+	}
+	events := speechmaticsEvents(segmentFinal, state)
+	if len(events) != 1 {
+		t.Fatalf("segment events = %#v, want one reference segment final", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("segment final text = %q, want hello", got)
+	}
+
+	endEvents := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(endEvents) != 1 || endEvents[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end events = %#v, want only end_of_speech without duplicate raw final", endEvents)
+	}
+}
+
+func TestSpeechmaticsSegmentFinalDropsSameZeroTimingReferenceRawFinal(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	var rawFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"metadata":{"transcript":"hello"},
+		"results":[{
+			"type":"word",
+			"alternatives":[{"content":"hello","language":"en","speaker":"S1"}]
+		}]
+	}`), &rawFinal); err != nil {
+		t.Fatalf("unmarshal zero-timing raw final response: %v", err)
+	}
+	if events := speechmaticsEvents(rawFinal, state); len(events) != 0 {
+		t.Fatalf("raw final events = %#v, want buffered behind reference segment final", events)
+	}
+
+	var segmentFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hello",
+			"language":"en",
+			"speaker_id":"S1"
+		}]
+	}`), &segmentFinal); err != nil {
+		t.Fatalf("unmarshal zero-timing segment final response: %v", err)
+	}
+	events := speechmaticsEvents(segmentFinal, state)
+	if len(events) != 1 {
+		t.Fatalf("segment events = %#v, want one reference segment final", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("segment final text = %q, want hello", got)
+	}
+
+	endEvents := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(endEvents) != 1 || endEvents[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end events = %#v, want only end_of_speech without duplicate zero-timing raw final", endEvents)
 	}
 }
 
@@ -2916,8 +3038,7 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsPendingStartupFinalize(t *te
 	if err := stream.sendLocalEndpointingForceEndOfUtterance(); err != nil {
 		t.Fatalf("sendLocalEndpointingForceEndOfUtterance before ready error = %v", err)
 	}
-	stream.reopenLocalEndpointingTurn()
-	stream.cancelLocalEndpointingForceEndOfUtterance()
+	stream.handleVADStartOfSpeech()
 	if err := stream.markReadyForAudio(); err != nil {
 		t.Fatalf("markReadyForAudio error = %v", err)
 	}
@@ -3361,6 +3482,33 @@ func TestSpeechmaticsSTTStartupDrainWriteFailureSurfacesToNext(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, writeErr) {
 		t.Fatalf("Next() error after startup drain write failure = %v, want %v", err, writeErr)
+	}
+}
+
+func TestSpeechmaticsPushFrameForwardsReferenceEmptyFrameToVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	stream := &speechmaticsSTTStream{
+		vadStream: vadStream,
+		writeBinary: func(data []byte) error {
+			t.Fatalf("provider audio write = %d bytes, want no provider write for empty frame", len(data))
+			return nil
+		},
+	}
+	frame := &model.AudioFrame{
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 0,
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame empty frame error = %v", err)
+	}
+	pushed := vadStream.pushedFrames()
+	if len(pushed) != 1 {
+		t.Fatalf("VAD pushed frames = %d, want reference empty frame forwarded", len(pushed))
+	}
+	if pushed[0] != frame {
+		t.Fatalf("VAD frame = %#v, want original empty frame", pushed[0])
 	}
 }
 
@@ -4540,6 +4688,41 @@ func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeTimeoutWithoutSpeechSuppressesReferenceEndOfTurn(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{},
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			if got, want := payload["message"], "ForceEndOfUtterance"; got != want {
+				t.Fatalf("finalize message = %#v, want %#v", got, want)
+			}
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	select {
+	case event := <-stream.events:
+		t.Fatalf("forced EOU timeout without speech emitted %#v, want no reference end_of_speech", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
@@ -4575,6 +4758,50 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *te
 	}
 	if len(stream.events) != 0 {
 		t.Fatalf("late EndOfTurn events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutAndNewStartDoesNotDuplicate(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit end_of_speech")
+	}
+	select {
+	case <-stream.events:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("forced EOU timeout did not emit recognition usage")
+	}
+	if ok := stream.handleResponse(smResponse{Message: "StartOfTurn"}); !ok {
+		t.Fatal("StartOfTurn stopped read loop")
+	}
+	if got := <-stream.events; got.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("new turn event = %s, want start_of_speech", got.Type)
+	}
+	if ok := stream.handleResponse(smResponse{Message: "EndOfTurn"}); !ok {
+		t.Fatal("late EndOfTurn stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late EndOfTurn events after new start = %d, want no duplicate end_of_speech", len(stream.events))
 	}
 }
 
@@ -4730,6 +4957,77 @@ func TestSpeechmaticsSTTFinalizeSuppressesDuplicateReferenceForcedEOU(t *testing
 	}
 	if writes != 1 {
 		t.Fatalf("ForceEndOfUtterance writes = %d, want one while reference forced EOU active", writes)
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeAfterForcedEOUTimeoutSuppressesDuplicateReferenceForceEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	writes := 0
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("second Finalize error = %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("ForceEndOfUtterance writes = %d, want no duplicate after forced EOU timeout", writes)
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("second Finalize events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeAfterVADRestartSendsReferenceForceEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	writes := 0
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	stream.handleVADStartOfSpeech()
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("new-turn Finalize error = %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("ForceEndOfUtterance writes = %d, want new write after VAD start", writes)
 	}
 }
 
@@ -4899,6 +5197,38 @@ func TestSpeechmaticsSTTFinalizeFixedModeEmitsReferenceLocalTurnEnd(t *testing.T
 	usage := readSpeechmaticsTestEvent(t, stream.events)
 	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.4 {
 		t.Fatalf("second event = %#v, want fixed-mode recognition usage", usage)
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeFixedModeSuppressesDuplicateReferenceLocalTurnEnd(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 4),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		writeJSON: func(message interface{}) error {
+			t.Fatalf("finalize write = %#v, want local reference finalization for fixed mode", message)
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("second Finalize error = %v", err)
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("second fixed Finalize events = %d, want no duplicate end_of_speech", len(stream.events))
 	}
 }
 
