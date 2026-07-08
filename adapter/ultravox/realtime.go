@@ -883,7 +883,8 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return err
 		}
 		if err := s.runRealtimeOnce(ctx, client); err != nil {
-			return err
+			s.emitRealtimeModelError(err, false)
+			return nil
 		}
 
 		s.mu.Lock()
@@ -894,6 +895,36 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return nil
 		}
 	}
+}
+
+func (s *realtimeSession) emitRealtimeModelError(err error, recoverable bool) {
+	label := ""
+	if s.model != nil {
+		label = s.model.Label()
+	}
+	event := llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewRealtimeModelError(label, ultravoxRealtimeAPIError(err), recoverable),
+	}
+	select {
+	case s.eventCh <- event:
+	default:
+	}
+}
+
+func ultravoxRealtimeAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var apiError *llm.APIError
+	if errors.As(err, &apiError) {
+		return err
+	}
+	var connectionErr ultravoxRealtimeConnectionError
+	if errors.As(err, &connectionErr) {
+		return llm.NewAPIConnectionError(string(connectionErr))
+	}
+	return llm.NewAPIConnectionError("Connection failed: " + err.Error())
 }
 
 func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {

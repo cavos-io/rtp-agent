@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
@@ -2928,6 +2929,45 @@ func TestUltravoxRealtimeSessionRestartLoopReconnectsAfterReferenceRestartSignal
 	}
 	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
 		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
+	}
+}
+
+func TestUltravoxRealtimeSessionRestartLoopEmitsReferenceConnectionError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	err = session.runRealtimeRestartLoop(context.Background(), &ultravoxRealtimeTestHTTPDoer{
+		err: errors.New("provider unavailable"),
+	})
+	if err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference main task to emit error event and stop", err)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) {
+			t.Fatalf("event error = %T, want RealtimeModelError", event.Error)
+		}
+		if modelErr.Label != "ultravox-fixie-ai/ultravox" || modelErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want reference label and non-recoverable", modelErr)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: provider unavailable" {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference APIConnectionError", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference error event")
 	}
 }
 
