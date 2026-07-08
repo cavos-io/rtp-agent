@@ -1652,7 +1652,51 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			},
 		})
 	}
+	if eventType == stt.SpeechEventFinalTranscript {
+		speechmaticsDropOverlappedPendingRawFinals(state, events)
+		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
 	return events
+}
+
+func speechmaticsDropOverlappedPendingRawFinals(state *speechmaticsStreamState, segmentEvents []*stt.SpeechEvent) {
+	if state == nil || len(state.pendingRawFinals) == 0 || len(segmentEvents) == 0 {
+		return
+	}
+	kept := state.pendingRawFinals[:0]
+	for _, rawEvent := range state.pendingRawFinals {
+		if speechmaticsTranscriptOverlapsAny(rawEvent, segmentEvents) {
+			continue
+		}
+		kept = append(kept, rawEvent)
+	}
+	state.pendingRawFinals = kept
+}
+
+func speechmaticsTranscriptOverlapsAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	for _, candidate := range candidates {
+		if speechmaticsTranscriptEventsOverlap(event, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil || left.Type != stt.SpeechEventFinalTranscript || right.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	for _, leftAlt := range left.Alternatives {
+		for _, rightAlt := range right.Alternatives {
+			if leftAlt.StartTime < rightAlt.EndTime && rightAlt.StartTime < leftAlt.EndTime {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
