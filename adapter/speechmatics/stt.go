@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -75,8 +76,12 @@ const (
 	speechmaticsAnnotationEndsWithEOS             = "ends_with_eos"
 	speechmaticsAnnotationEndsWithDisfluency      = "ends_with_disfluency"
 	speechmaticsAnnotationHasDisfluency           = "has_disfluency"
+	speechmaticsAnnotationVerySlowSpeaker         = "very_slow_speaker"
+	speechmaticsAnnotationSlowSpeaker             = "slow_speaker"
 	speechmaticsAdaptiveEndsWithDisfluencyPenalty = 2.5
 	speechmaticsAdaptiveHasDisfluencyPenalty      = 1.1
+	speechmaticsAdaptiveVerySlowSpeakerPenalty    = 3.0
+	speechmaticsAdaptiveSlowSpeakerPenalty        = 2.0
 )
 
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
@@ -118,6 +123,12 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 		return 1.0
 	}
 	penalty := 1.0
+	if speechmaticsStringInSlice(speechmaticsAnnotationVerySlowSpeaker, annotations) {
+		penalty *= speechmaticsAdaptiveVerySlowSpeakerPenalty
+	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationSlowSpeaker, annotations) {
+		penalty *= speechmaticsAdaptiveSlowSpeakerPenalty
+	}
 	if speechmaticsStringInSlice(speechmaticsAnnotationEndsWithDisfluency, annotations) {
 		penalty *= speechmaticsAdaptiveEndsWithDisfluencyPenalty
 	}
@@ -134,7 +145,12 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 	return penalty
 }
 
+func speechmaticsRoundEndOfTurnDelay(seconds float64) float64 {
+	return math.Round(seconds*1000) / 1000
+}
+
 func speechmaticsClampLocalEndpointingDelay(seconds float64) time.Duration {
+	seconds = speechmaticsRoundEndOfTurnDelay(seconds)
 	delay := time.Duration(seconds * float64(time.Second))
 	if delay < speechmaticsMinEndOfTurnDelay {
 		return speechmaticsMinEndOfTurnDelay
@@ -1373,8 +1389,37 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	if fragments[len(fragments)-1].isEOS {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithEOS)
 	}
+	annotations = speechmaticsAppendRawSpeechRateAnnotation(annotations, fragments)
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
+}
+
+func speechmaticsAppendRawSpeechRateAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
+	words := make([]speechmaticsRawTranscriptFragment, 0, len(fragments))
+	for _, fragment := range fragments {
+		if fragment.kind == "word" {
+			words = append(words, fragment)
+		}
+	}
+	if len(words) <= 1 {
+		return annotations
+	}
+	recentWords := words
+	if len(recentWords) > 10 {
+		recentWords = recentWords[len(recentWords)-10:]
+	}
+	span := recentWords[len(recentWords)-1].endTime - recentWords[0].startTime
+	if span <= 0 {
+		return annotations
+	}
+	wpm := (float64(len(recentWords)) / span) * 60
+	if wpm < 80 {
+		return append(annotations, speechmaticsAnnotationVerySlowSpeaker)
+	}
+	if wpm < 110 {
+		return append(annotations, speechmaticsAnnotationSlowSpeaker)
+	}
+	return annotations
 }
 
 func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) []*stt.SpeechEvent {

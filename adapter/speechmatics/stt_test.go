@@ -1977,6 +1977,53 @@ func TestSpeechmaticsRawTranscriptRecordsReferenceFinalEOSAnnotationForLocalVAD(
 	}
 }
 
+func TestSpeechmaticsRawTranscriptRecordsReferenceSlowSpeakerAnnotationForLocalVAD(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	resp := smResponse{Message: "AddTranscript"}
+	for i := 0; i < 10; i++ {
+		resp.Results = append(resp.Results, struct {
+			Alternatives []struct {
+				Content    string   `json:"content"`
+				Confidence *float64 `json:"confidence"`
+				SpeakerID  string   `json:"speaker"`
+				Language   string   `json:"language"`
+			} `json:"alternatives"`
+			Type      string  `json:"type"`
+			Attaches  string  `json:"attaches_to"`
+			IsEOS     bool    `json:"is_eos"`
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		}{
+			Alternatives: []struct {
+				Content    string   `json:"content"`
+				Confidence *float64 `json:"confidence"`
+				SpeakerID  string   `json:"speaker"`
+				Language   string   `json:"language"`
+			}{{Content: fmt.Sprintf("w%d", i)}},
+			Type:      "word",
+			IsEOS:     i == 9,
+			StartTime: float64(i),
+			EndTime:   float64(i + 1),
+		})
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	if !speechmaticsStringInSlice("very_slow_speaker", state.latestSegmentAnnotation) {
+		t.Fatalf("latest raw annotation = %#v, want reference very_slow_speaker", state.latestSegmentAnnotation)
+	}
+
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 210*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want very-slow reference delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMinimumDelay(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdaptiveTurnDetection(),
