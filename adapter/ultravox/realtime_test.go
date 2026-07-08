@@ -3907,6 +3907,63 @@ func TestUltravoxRealtimeSessionUpdateChatContextReplaysReferenceMovedMessage(t 
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateChatContextUsesReferenceInterruptedAssistantContext(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleUserTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "question",
+		Final:   true,
+		Ordinal: 1,
+	})
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_1", "question", true)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Delta: "partial answer", Final: false, Ordinal: 2})
+	select {
+	case <-message.TextCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for interrupted agent delta")
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	})
+
+	reordered := llm.NewChatContext()
+	reordered.AddMessage(llm.ChatMessageArgs{ID: generation.ResponseID, Role: llm.ChatRoleAssistant, Text: "partial answer"})
+	reordered.AddMessage(llm.ChatMessageArgs{ID: "msg_user_1", Role: llm.ChatRoleUser, Text: "question"})
+	if err := session.UpdateChatContext(reordered); err != nil {
+		t.Fatalf("UpdateChatContext reorder with interrupted assistant error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "question",
+		"deferResponse": true,
+	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("extra interrupted-assistant context event = %#v, want only reference moved user replay", got)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateChatContextBuffersFullReferenceClientQueue(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

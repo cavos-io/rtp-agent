@@ -2129,6 +2129,14 @@ func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneratio
 	if s.generation == generation {
 		s.generation = nil
 	}
+	if cancelled && generation.outputText.Len() > 0 {
+		if s.chatCtx == nil {
+			s.chatCtx = llm.NewChatContext()
+		}
+		if s.chatCtx.GetByID(generation.responseID) == nil {
+			s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: generation.responseID, Role: llm.ChatRoleAssistant, Text: generation.outputText.String()})
+		}
+	}
 	metrics = s.generationMetricsLocked(generation, cancelled)
 	s.mu.Unlock()
 	if metrics == nil {
