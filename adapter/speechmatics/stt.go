@@ -1369,7 +1369,7 @@ func speechmaticsReferenceObjectText(object map[string]json.RawMessage) (string,
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, "'"+key+"': "+text)
+		parts = append(parts, speechmaticsReferenceStringText(key)+": "+text)
 	}
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
@@ -1380,7 +1380,7 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
-		return "'" + text + "'", nil
+		return speechmaticsReferenceStringText(text), nil
 	}
 	var value bool
 	if err := json.Unmarshal(data, &value); err == nil {
@@ -1394,6 +1394,20 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 		return number.String(), nil
 	}
 	return "", fmt.Errorf("unsupported list text value")
+}
+
+func speechmaticsReferenceStringText(text string) string {
+	if strings.Contains(text, "'") && !strings.Contains(text, `"`) {
+		return strconv.Quote(text)
+	}
+	replacer := strings.NewReplacer(
+		"\\", `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		"'", `\'`,
+	)
+	return "'" + replacer.Replace(text) + "'"
 }
 
 func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
