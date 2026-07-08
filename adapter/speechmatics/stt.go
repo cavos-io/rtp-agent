@@ -1375,6 +1375,9 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
 		return nil
 	}
+	if speechmaticsRawFragmentTrimmed(state, resp.Metadata.StartTime+startTimeOffset) {
+		return nil
+	}
 	return []*stt.SpeechEvent{
 		{
 			Type: eventType,
