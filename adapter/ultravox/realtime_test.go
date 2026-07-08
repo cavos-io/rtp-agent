@@ -2697,6 +2697,27 @@ func TestUltravoxRealtimeSessionReceiveTaskUnexpectedCloseReturnsReferenceError(
 	}
 }
 
+func TestUltravoxRealtimeSessionRunConnectionClosesReferenceWebsocket(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	if err := session.runRealtimeConnection(conn); err != nil {
+		t.Fatalf("runRealtimeConnection error = %v, want nil after receive loop exits", err)
+	}
+	if conn.closeCount != 1 {
+		t.Fatalf("websocket close count = %d, want reference close in finally", conn.closeCount)
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -3015,6 +3036,7 @@ type ultravoxRealtimeTestWebsocketConn struct {
 	ultravoxRealtimeTestWebsocketWriter
 	readMessages []ultravoxRealtimeTestWebsocketFrame
 	readErr      error
+	closeCount   int
 }
 
 func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
@@ -3030,6 +3052,7 @@ func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
 }
 
 func (c *ultravoxRealtimeTestWebsocketConn) Close() error {
+	c.closeCount++
 	return nil
 }
 

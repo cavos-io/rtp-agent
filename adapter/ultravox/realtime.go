@@ -920,6 +920,11 @@ func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocket
 	}
 }
 
+func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
+	defer conn.Close()
+	return s.receiveRealtimeMessages(conn)
+}
+
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
