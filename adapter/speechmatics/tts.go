@@ -293,6 +293,10 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
+	if s.contextCanceled(s.contextDone()) {
+		s.finishCanceled()
+		return nil, context.Canceled
+	}
 	if len(s.pendingAudio) > 0 {
 		return s.emitAudio(s.popPendingAudio())
 	}
@@ -445,10 +449,7 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 		}()
 	}
 	ch := s.readResultCh
-	var done <-chan struct{}
-	if s.ctx != nil {
-		done = s.ctx.Done()
-	}
+	done := s.contextDone()
 	if s.contextCanceled(done) {
 		return nil, context.Canceled, false
 	}
@@ -498,6 +499,13 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 		}
 		return nil, io.EOF, false
 	}
+}
+
+func (s *speechmaticsTTSChunkedStream) contextDone() <-chan struct{} {
+	if s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Done()
 }
 
 func (s *speechmaticsTTSChunkedStream) contextCanceled(done <-chan struct{}) bool {
