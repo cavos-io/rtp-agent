@@ -1822,6 +1822,17 @@ func TestSpeechmaticsSTTAdaptiveLocalVADEndOfSpeechDelaysReferenceEOU(t *testing
 	waitForSpeechmaticsControlMessage(t, controlMessages, "ForceEndOfUtterance")
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMaxDelay(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTAdaptiveTurnDetection(),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(0.4),
+	)
+
+	if got, want := speechmaticsLocalEndpointingDelay(provider), 400*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference max-delay clamp %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsReferenceDelayedEOU(t *testing.T) {
 	originalDelay := speechmaticsLocalEndpointingDelay
 	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }

@@ -75,11 +75,17 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
 		}
+		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
+			delay = *s.eouMaxDelay
+		}
 		return time.Duration(delay * float64(time.Second))
 	case "smart_turn":
 		delay := 0.8
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
+		}
+		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
+			delay = *s.eouMaxDelay
 		}
 		return time.Duration(delay * float64(time.Second))
 	default:
