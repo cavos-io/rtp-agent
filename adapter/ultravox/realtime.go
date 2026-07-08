@@ -28,6 +28,11 @@ const (
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
+	ultravoxClientEventQueueSize    = 2048
+	ultravoxRealtimeEventQueueSize  = 2048
+	ultravoxFunctionCallQueueSize   = 2048
+	ultravoxTextDeltaQueueSize      = 2048
+	ultravoxOutputAudioQueueSize    = 2048
 )
 
 type RealtimeModel struct {
@@ -257,18 +262,19 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &realtimeSession{
-		eventCh:          make(chan llm.RealtimeEvent, 16),
-		audioCh:          make(chan []byte, 256),
-		clientEventCh:    make(chan map[string]any, 256),
-		model:            m,
-		inputSampleRate:  uint32(m.inputSampleRate),
-		outputSampleRate: uint32(m.outputSampleRate),
-		audioOutput:      m.outputMedium == "voice",
-		systemPrompt:     m.systemPrompt,
-		audioStream:      coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
-		toolNames:        make(map[string]struct{}),
-		toolResults:      make(map[string]struct{}),
-		contextItems:     make(map[string]struct{}),
+		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
+		audioCh:              make(chan []byte, 256),
+		clientEventCh:        make(chan map[string]any, ultravoxClientEventQueueSize),
+		model:                m,
+		inputSampleRate:      uint32(m.inputSampleRate),
+		outputSampleRate:     uint32(m.outputSampleRate),
+		audioOutput:          m.outputMedium == "voice",
+		systemPrompt:         m.systemPrompt,
+		generateReplyTimeout: ultravoxGenerateReplyTimeout,
+		audioStream:          coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:            make(map[string]struct{}),
+		toolResults:          make(map[string]struct{}),
+		contextItems:         make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
 		session.clientEventCh <- map[string]any{
@@ -343,29 +349,32 @@ type ultravoxRealtimeServerEventEnvelope struct {
 }
 
 type realtimeSession struct {
-	mu               sync.Mutex
-	eventCh          chan llm.RealtimeEvent
-	audioCh          chan []byte
-	clientEventCh    chan map[string]any
-	model            *RealtimeModel
-	inputSampleRate  uint32
-	outputSampleRate uint32
-	audioOutput      bool
-	systemPrompt     string
-	audioStream      *coreaudio.AudioByteStream
-	inputNormalizer  ultravoxRealtimeInputNormalizer
-	generation       *ultravoxRealtimeGeneration
-	generationSeq    uint64
-	tools            []llm.Tool
-	toolNames        map[string]struct{}
-	toolResults      map[string]struct{}
-	contextItems     map[string]struct{}
-	pendingReply     bool
-	pendingReplyAt   time.Time
-	restartCount     uint64
-	lastUserFinalAt  time.Time
-	closed           bool
-	closeOnce        sync.Once
+	mu                   sync.Mutex
+	eventCh              chan llm.RealtimeEvent
+	audioCh              chan []byte
+	clientEventCh        chan map[string]any
+	model                *RealtimeModel
+	inputSampleRate      uint32
+	outputSampleRate     uint32
+	audioOutput          bool
+	systemPrompt         string
+	audioStream          *coreaudio.AudioByteStream
+	inputNormalizer      ultravoxRealtimeInputNormalizer
+	generation           *ultravoxRealtimeGeneration
+	generationSeq        uint64
+	tools                []llm.Tool
+	toolNames            map[string]struct{}
+	toolResults          map[string]struct{}
+	contextItems         map[string]struct{}
+	pendingReply         bool
+	pendingReplyAt       time.Time
+	pendingReplySeq      uint64
+	pendingReplyTimer    *time.Timer
+	generateReplyTimeout time.Duration
+	restartCount         uint64
+	lastUserFinalAt      time.Time
+	closed               bool
+	closeOnce            sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -593,6 +602,8 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	if !s.closed {
 		s.pendingReply = true
 		s.pendingReplyAt = time.Now()
+		s.pendingReplySeq++
+		s.startGenerateReplyTimerLocked(s.pendingReplySeq)
 	}
 	s.mu.Unlock()
 	return nil
@@ -626,6 +637,7 @@ func (s *realtimeSession) Close() error {
 		generation = s.generation
 		s.closed = true
 		s.generation = nil
+		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)
 		s.mu.Unlock()
@@ -651,21 +663,41 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 
 	audioFrame, err := s.inputNormalizer.Normalize(frame, s.inputSampleRate)
 	if err != nil {
-		return err
+		return nil
 	}
 	if audioFrame == nil || len(audioFrame.Data) == 0 {
 		return nil
 	}
 	for _, chunk := range s.audioStream.Push(audioFrame.Data) {
 		audioData := append([]byte(nil), chunk.Data...)
-		select {
-		case s.audioCh <- audioData:
-		default:
-			return errors.New("ultravox realtime audio queue is full")
-		}
+		s.enqueueAudioDataLocked(audioData)
 	}
 	return nil
 }
+
+func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
+	select {
+	case s.audioCh <- audioData:
+		return
+	default:
+	}
+	nextCap := cap(s.audioCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan []byte, nextCap)
+	for {
+		select {
+		case queued := <-s.audioCh:
+			next <- queued
+		default:
+			next <- audioData
+			s.audioCh = next
+			return
+		}
+	}
+}
+
 func (s *realtimeSession) PushVideo(*images.VideoFrame) error {
 	return nil
 }
@@ -700,6 +732,8 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.restartCount++
 	s.pendingReply = false
 	s.pendingReplyAt = time.Time{}
+	s.pendingReplySeq++
+	s.stopGenerateReplyTimerLocked()
 	close(s.clientEventCh)
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	if !s.audioOutput {
@@ -725,7 +759,7 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
-	if len(audioData) == 0 {
+	if len(audioData) == 0 || len(audioData)%(2*ultravoxRealtimeInputChannels) != 0 {
 		return
 	}
 
@@ -852,9 +886,9 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	}
 	generation := &ultravoxRealtimeGeneration{
 		messageCh:  make(chan llm.MessageGeneration, 1),
-		functionCh: make(chan *llm.FunctionCall, 1),
-		textCh:     make(chan string, 16),
-		audioCh:    make(chan *model.AudioFrame, 16),
+		functionCh: make(chan *llm.FunctionCall, ultravoxFunctionCallQueueSize),
+		textCh:     make(chan string, ultravoxTextDeltaQueueSize),
+		audioCh:    make(chan *model.AudioFrame, ultravoxOutputAudioQueueSize),
 		createdAt:  s.pickGenerationCreatedAtLocked(),
 	}
 	modalitiesCh := make(chan []string, 1)
@@ -872,6 +906,8 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 		userInitiated = s.pendingReply && !s.pendingReplyAt.IsZero() && time.Since(s.pendingReplyAt) <= ultravoxGenerateReplyTimeout
 		s.pendingReply = false
 		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
+		s.stopGenerateReplyTimerLocked()
 	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
@@ -894,6 +930,31 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	default:
 	}
 	return generation
+}
+
+func (s *realtimeSession) startGenerateReplyTimerLocked(seq uint64) {
+	s.stopGenerateReplyTimerLocked()
+	timeout := s.generateReplyTimeout
+	if timeout <= 0 {
+		timeout = ultravoxGenerateReplyTimeout
+	}
+	s.pendingReplyTimer = time.AfterFunc(timeout, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed || s.pendingReplySeq != seq {
+			return
+		}
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+	})
+}
+
+func (s *realtimeSession) stopGenerateReplyTimerLocked() {
+	if s.pendingReplyTimer == nil {
+		return
+	}
+	s.pendingReplyTimer.Stop()
+	s.pendingReplyTimer = nil
 }
 
 func (s *realtimeSession) handleTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
