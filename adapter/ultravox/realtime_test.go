@@ -1134,6 +1134,55 @@ func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "speaking"})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	session.mu.Lock()
+	generationState := session.generation
+	session.mu.Unlock()
+	if generationState == nil {
+		t.Fatal("session generation = nil")
+	}
+
+	const oldDropLimit = 16
+	if cap(generationState.audioCh) <= oldDropLimit {
+		t.Fatalf("output audio queue cap = %d, want above old 16-frame drop limit", cap(generationState.audioCh))
+	}
+	for i := 0; i < oldDropLimit; i++ {
+		generationState.audioCh <- &audiomodel.AudioFrame{Data: []byte{byte(i)}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	}
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i % 251)
+	}
+	session.handleOutputAudio(audio)
+
+	for i := 0; i < oldDropLimit; i++ {
+		<-message.AudioCh
+	}
+	select {
+	case got := <-message.AudioCh:
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("queued output audio = %v, want reference-preserved provider bytes", got.Data[:min(len(got.Data), 8)])
+		}
+	default:
+		t.Fatal("new output audio missing after old 16-frame queue limit, want reference buffering")
+	}
+}
+
 func TestUltravoxRealtimeSessionDropsMalformedReferenceOutputAudio(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

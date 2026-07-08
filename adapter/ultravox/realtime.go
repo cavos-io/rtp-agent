@@ -28,6 +28,7 @@ const (
 	defaultRealtimeFirstSpeaker     = "FIRST_SPEAKER_USER"
 	ultravoxRealtimeInputChannels   = 1
 	ultravoxGenerateReplyTimeout    = 5 * time.Second
+	ultravoxOutputAudioQueueSize    = 2048
 )
 
 type RealtimeModel struct {
@@ -883,7 +884,7 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 		messageCh:  make(chan llm.MessageGeneration, 1),
 		functionCh: make(chan *llm.FunctionCall, 1),
 		textCh:     make(chan string, 16),
-		audioCh:    make(chan *model.AudioFrame, 16),
+		audioCh:    make(chan *model.AudioFrame, ultravoxOutputAudioQueueSize),
 		createdAt:  s.pickGenerationCreatedAtLocked(),
 	}
 	modalitiesCh := make(chan []string, 1)
