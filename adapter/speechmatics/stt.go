@@ -1104,6 +1104,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
+		_ = s.closeTransportOnce()
 		s.closeLocalEndpointingTurn()
 		for _, event := range s.flushPendingRawFinalEvents() {
 			if !s.enqueueEvent(event) {
@@ -1111,7 +1112,6 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 			}
 		}
 		s.markClosedDrainingEvents()
-		_ = s.closeTransportOnce()
 		return false
 	}
 	if resp.Message == "RecognitionStarted" {

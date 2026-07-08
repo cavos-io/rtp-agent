@@ -1614,6 +1614,64 @@ func TestSpeechmaticsSTTEndOfTranscriptClosesStreamBeforeNext(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTEndOfTranscriptUnblocksInFlightPushFrameLikeReference(t *testing.T) {
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	var releaseOnce sync.Once
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			close(writeStarted)
+			<-releaseWrite
+			return io.ErrClosedPipe
+		},
+		closeConn: func() error {
+			releaseOnce.Do(func() { close(releaseWrite) })
+			return nil
+		},
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- stream.PushFrame(&model.AudioFrame{
+			Data:              make([]byte, 3200),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1600,
+		})
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame did not start provider audio write")
+	}
+
+	endDone := make(chan bool, 1)
+	go func() {
+		endDone <- stream.handleResponse(smResponse{Message: "EndOfTranscript"})
+	}()
+
+	select {
+	case keepReading := <-endDone:
+		if keepReading {
+			t.Fatal("EndOfTranscript handler continued reading, want terminal cleanup")
+		}
+	case <-time.After(100 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseWrite) })
+		t.Fatal("EndOfTranscript did not unblock in-flight PushFrame")
+	}
+
+	select {
+	case err := <-pushDone:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("PushFrame error = %v, want closed-pipe after EndOfTranscript interrupted write", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseWrite) })
+		t.Fatal("PushFrame did not return after EndOfTranscript")
+	}
+}
+
 func TestSpeechmaticsSTTNextDrainsQueuedTranscriptAfterEndOfTranscript(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		events: make(chan *stt.SpeechEvent, 2),
