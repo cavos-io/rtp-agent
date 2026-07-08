@@ -1668,6 +1668,36 @@ func TestSpeechmaticsSegmentEventsPreserveReferenceEmptySpeakerID(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceNumericSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"numeric speaker",
+			"language":"en",
+			"speaker_id":123,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "123" {
+		t.Fatalf("speaker id = %q, want reference formatted numeric speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@123: numeric speaker" {
+		t.Fatalf("text = %q, want reference formatted numeric speaker id", alt.Text)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsKeepReferenceMissingSpeakerDuringFocusIgnore(t *testing.T) {
 	state := &speechmaticsStreamState{
 		focusSpeakers: []string{"agent"},
