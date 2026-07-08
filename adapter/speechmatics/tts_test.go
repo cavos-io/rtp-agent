@@ -1237,6 +1237,24 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamReadCancelDropsReturnedAudio(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     &speechmaticsDataThenCancelBody{data: []byte{0x01, 0x02}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil when caller cancellation wins over returned bytes", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after cancellation = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
 	body := &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}}
 	stream := &speechmaticsTTSChunkedStream{
@@ -1769,6 +1787,24 @@ func (speechmaticsReadCancelBody) Read([]byte) (int, error) {
 }
 
 func (speechmaticsReadCancelBody) Close() error {
+	return nil
+}
+
+type speechmaticsDataThenCancelBody struct {
+	data []byte
+	done bool
+}
+
+func (b *speechmaticsDataThenCancelBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, errors.New("read after cancellation")
+	}
+	b.done = true
+	copy(p, b.data)
+	return len(b.data), context.Canceled
+}
+
+func (b *speechmaticsDataThenCancelBody) Close() error {
 	return nil
 }
 
