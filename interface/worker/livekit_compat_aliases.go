@@ -102,6 +102,8 @@ const (
 
 type ConnectOptions = workerlivekit.ConnectOptions
 
+type RoomOptions = workerlivekit.RoomOptions
+
 type Job = workerlivekit.Job
 
 type SDKRoom = workerlivekit.SDKRoom

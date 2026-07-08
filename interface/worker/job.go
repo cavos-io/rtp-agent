@@ -405,6 +405,27 @@ var jobContextNewRoom = livekitNewJobContextRoom
 
 var jobContextRoomConnector RoomConnector
 
+type StartSessionOptions struct {
+	RoomOptions    RoomOptions
+	ConnectOptions []ConnectOptions
+	RoomCallback   *RoomCallback
+	SessionContext context.Context
+}
+
+type jobSessionRoomIO interface {
+	WithCallback(*RoomCallback) *RoomCallback
+	AttachRoom(*SDKRoom)
+	Start(context.Context) error
+	Close() error
+}
+
+func normalizeStartSessionOptions(options ...StartSessionOptions) StartSessionOptions {
+	if len(options) == 0 {
+		return StartSessionOptions{}
+	}
+	return options[0]
+}
+
 func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
 	opts := livekitJobContextNormalizeConnectOptions(options...)
 	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
@@ -449,6 +470,73 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", livekitJobContextRoomName(c.Job))
 	return nil
+}
+
+func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSession, options ...StartSessionOptions) error {
+	if c == nil {
+		return fmt.Errorf("job context is nil")
+	}
+	if session == nil {
+		return fmt.Errorf("agent session is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts := normalizeStartSessionOptions(options...)
+	sessionCtx := opts.SessionContext
+	if sessionCtx == nil {
+		sessionCtx = ctx
+	}
+
+	c.SetPrimarySession(session)
+	session.SetJobContext(c)
+
+	roomOptions := opts.RoomOptions
+	if roomOptions.DeleteRoom == nil {
+		roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
+			_, err := c.DeleteRoom(deleteCtx, roomName)
+			return err
+		}
+	}
+
+	var roomIO jobSessionRoomIO
+	if c.Room == nil {
+		roomIO = livekitNewRoomIO(nil, session, roomOptions)
+		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
+		roomIO.AttachRoom(room)
+		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
+			_ = roomIO.Close()
+			return err
+		}
+	}
+
+	if c.Room != nil {
+		session.Room = c.Room
+		if roomIO == nil {
+			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+		}
+		if err := c.AddShutdownCallback(func() {
+			_ = session.Stop(context.Background())
+			_ = roomIO.Close()
+		}); err != nil {
+			logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
+		}
+		if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
+			if err := roomIO.Start(ctx); err != nil {
+				return err
+			}
+		}
+	}
+
+	info := c.AvatarStartInfo()
+	if info.LiveKitURL != "" && info.LiveKitToken != "" {
+		sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
+	}
+	if err := session.Start(sessionCtx); err != nil {
+		return err
+	}
+	_, err := c.MakeSessionReport(session)
+	return err
 }
 
 func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {

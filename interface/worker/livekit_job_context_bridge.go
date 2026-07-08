@@ -30,6 +30,8 @@ var livekitJobContextLocalParticipant = workerlivekit.JobContextLocalParticipant
 
 var livekitNewJobContextRoom = workerlivekit.NewJobContextRoom
 
+var livekitJobContextRoomReadyForRoomIOStart = workerlivekit.JobContextRoomReadyForRoomIOStart
+
 var livekitJobContextNormalizeConnectOptions = workerlivekit.JobContextNormalizeConnectOptions
 
 var livekitJobContextJoinPreparedRoom = workerlivekit.JobContextJoinPreparedRoom
@@ -41,6 +43,8 @@ var livekitJobContextRoomName = workerlivekit.JobContextRoomName
 var livekitJobContextApplyAutoSubscribeToRoom = workerlivekit.JobContextApplyAutoSubscribeToRoom
 
 var livekitJobContextRoomCallbackWithHandlers = workerlivekit.JobContextRoomCallbackWithHandlers
+
+var livekitNewRoomIO = workerlivekit.NewRoomIO
 
 var livekitJobContextParticipantInfoFromRemoteParticipant = workerlivekit.JobContextParticipantInfoFromRemoteParticipant
 

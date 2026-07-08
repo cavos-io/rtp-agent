@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func JobContextInferenceHeaders(job *Job) map[string]string {
@@ -84,6 +85,10 @@ func JobContextRoomCallbackWithHandlers(cb *RoomCallback, handlers RoomCallbackH
 
 func NewJobContextRoom(cb *RoomCallback) *SDKRoom {
 	return NewRoom(cb)
+}
+
+func JobContextRoomReadyForRoomIOStart(room *SDKRoom) bool {
+	return room != nil && room.LocalParticipant != nil && room.ConnectionState() == lksdk.ConnectionStateConnected
 }
 
 func JobContextParticipantInfoFromRemoteParticipant(participant RemoteParticipantView) *ParticipantInfo {
