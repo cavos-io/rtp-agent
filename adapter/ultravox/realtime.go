@@ -1691,6 +1691,9 @@ func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters
 		if prop == nil {
 			return nil, errors.New("'properties'")
 		}
+		if err := ultravoxRealtimeReferenceParameterSchemaError(prop); err != nil {
+			return nil, err
+		}
 		schema := ultravoxRealtimeToolParameterSchema(prop, preserveTypeSchema)
 		_, isRequired := required[name]
 		if relaxNullableRequired && isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
@@ -1704,6 +1707,36 @@ func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredModeE(parameters
 		})
 	}
 	return dynamicParameters, nil
+}
+
+func ultravoxRealtimeReferenceParameterSchemaError(prop map[string]any) error {
+	if _, ok := prop["type"]; ok {
+		return nil
+	}
+	if _, ok := prop["enum"]; ok {
+		return nil
+	}
+	if _, ok := prop["items"]; ok {
+		return nil
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		variants, _ := prop[key].([]any)
+		for _, variant := range variants {
+			schema, ok := variant.(map[string]any)
+			if !ok {
+				continue
+			}
+			value, ok := schema["type"]
+			if !ok {
+				continue
+			}
+			if _, ok := value.(string); !ok {
+				return errors.New("")
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func ultravoxRealtimeToolParameterSchema(prop map[string]any, preserveTypeSchema bool) any {

@@ -4762,6 +4762,52 @@ func TestUltravoxRealtimeSessionCreateCallRejectsReferenceMalformedRawToolSchema
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallRejectsReferenceMalformedRawAnyOfType(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeRawMalformedAnyOfTool{}}); err != nil {
+		t.Fatalf("UpdateTools malformed raw anyOf tool error = %v, want stored until create-call like reference", err)
+	}
+	model.dialWebsocket = func(context.Context, string, http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
+	}
+	if doer.request != nil {
+		t.Fatalf("create-call request = %#v, want reference malformed anyOf failure before HTTP request", doer.request)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: " {
+			t.Fatalf("RealtimeModelError unwrap = %v, want reference raw anyOf AssertionError", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reference raw anyOf schema error event")
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartLoopMapsReferenceHTTPStatusError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -5586,5 +5632,33 @@ func (ultravoxRealtimeRawMissingPropertiesTool) ParseFunctionTools(string) (map[
 		"name":        "raw_missing_props",
 		"description": "raw missing properties schema",
 		"parameters":  map[string]interface{}{"type": "object"},
+	}, nil
+}
+
+type ultravoxRealtimeRawMalformedAnyOfTool struct{}
+
+func (ultravoxRealtimeRawMalformedAnyOfTool) ID() string          { return "raw_bad_anyof" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Name() string        { return "raw_bad_anyof" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Description() string { return "fallback description" }
+func (ultravoxRealtimeRawMalformedAnyOfTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (ultravoxRealtimeRawMalformedAnyOfTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (ultravoxRealtimeRawMalformedAnyOfTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_bad_anyof",
+		"description": "raw malformed anyOf schema",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"anyOf": []interface{}{
+						map[string]interface{}{"type": []interface{}{"string", "null"}},
+					},
+				},
+			},
+		},
 	}, nil
 }
