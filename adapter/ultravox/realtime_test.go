@@ -1445,6 +1445,13 @@ func TestUltravoxRealtimeSessionCloseFinishesReferenceActiveGeneration(t *testin
 	}
 	requireUltravoxRealtimeClosedText(t, message.TextCh)
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != generation.ResponseID || !metrics.Cancelled {
+		t.Fatalf("close metrics = request %q cancelled %v, want cancelled metrics for %q", metrics.RequestID, metrics.Cancelled, generation.ResponseID)
+	}
+	if session.chatCtx.GetByID(generation.ResponseID) == nil {
+		t.Fatalf("close chat context missing assistant message %q, want reference interrupted output persisted", generation.ResponseID)
+	}
 }
 
 func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T) {
