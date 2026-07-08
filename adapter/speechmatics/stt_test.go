@@ -1890,6 +1890,45 @@ func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTVADPushFailureSurfacesToNext(t *testing.T) {
+	vadErr := errors.New("vad push failed")
+	vadStream := newFakeSpeechmaticsVADStream()
+	vadStream.pushErr = vadErr
+	transportClosed := make(chan struct{})
+	var closeOnce sync.Once
+	stream := &speechmaticsSTTStream{
+		events:    make(chan *stt.SpeechEvent, 1),
+		errCh:     make(chan error, 1),
+		done:      make(chan struct{}),
+		vadStream: vadStream,
+		closeConn: func() error {
+			closeOnce.Do(func() { close(transportClosed) })
+			return nil
+		},
+		writeBinary: func([]byte) error {
+			return nil
+		},
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	})
+	if !errors.Is(err, vadErr) {
+		t.Fatalf("PushFrame VAD failure error = %v, want %v", err, vadErr)
+	}
+	select {
+	case <-transportClosed:
+	case <-time.After(time.Second):
+		t.Fatal("VAD PushFrame failure did not close Speechmatics stream transport")
+	}
+	if _, err := stream.Next(); !errors.Is(err, vadErr) {
+		t.Fatalf("Next after VAD PushFrame failure = %v, want %v", err, vadErr)
+	}
+}
+
 func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
@@ -4653,6 +4692,7 @@ func (f *fakeSpeechmaticsVAD) Stream(context.Context) (vad.VADStream, error) {
 type fakeSpeechmaticsVADStream struct {
 	events          chan *vad.VADEvent
 	nextErr         error
+	pushErr         error
 	nextStarted     chan struct{}
 	pushStarted     chan struct{}
 	endInputStarted chan struct{}
@@ -4667,6 +4707,9 @@ func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
 }
 
 func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
+	if s.pushErr != nil {
+		return s.pushErr
+	}
 	if s.pushStarted != nil {
 		close(s.pushStarted)
 		s.pushStarted = nil

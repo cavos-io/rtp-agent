@@ -1502,6 +1502,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Unlock()
 	if vadStream != nil && !bufferVAD {
 		if err := vadStream.PushFrame(frame); err != nil {
+			s.enqueueError(err)
 			_ = s.Close()
 			return err
 		}
