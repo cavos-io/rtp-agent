@@ -1587,6 +1587,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 
 	if vadStream != nil && !bufferVADEndInput {
 		if err := vadStream.EndInput(); err != nil {
+			s.enqueueError(err)
 			_ = s.Close()
 			return err
 		}
@@ -1704,6 +1705,7 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		}
 		if vadStream != nil && pendingVADEndInput {
 			if err := vadStream.EndInput(); err != nil {
+				s.enqueueError(err)
 				_ = s.Close()
 				return err
 			}
