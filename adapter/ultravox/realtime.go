@@ -147,17 +147,13 @@ func WithRealtimeOutputMedium(outputMedium string) RealtimeOption {
 
 func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate >= 0 {
-			m.inputSampleRate = sampleRate
-		}
+		m.inputSampleRate = sampleRate
 	}
 }
 
 func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate >= 0 {
-			m.outputSampleRate = sampleRate
-		}
+		m.outputSampleRate = sampleRate
 	}
 }
 
@@ -267,7 +263,8 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	audioChunkSamples := uint32(m.inputSampleRate) / 10
+	runtimeInputSampleRate := ultravoxRealtimeRuntimeSampleRate(m.inputSampleRate)
+	audioChunkSamples := runtimeInputSampleRate / 10
 	if audioChunkSamples == 0 {
 		audioChunkSamples = 1
 	}
@@ -279,14 +276,14 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		clientEventCh:         make(chan map[string]any, ultravoxClientEventQueueSize),
 		outboundCh:            make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
 		model:                 m,
-		inputSampleRate:       uint32(m.inputSampleRate),
-		outputSampleRate:      uint32(m.outputSampleRate),
+		inputSampleRate:       m.inputSampleRate,
+		outputSampleRate:      m.outputSampleRate,
 		outputMedium:          m.outputMedium,
 		audioOutput:           m.outputMedium == "voice",
 		systemPrompt:          m.systemPrompt,
 		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
 		recoverableErrorDelay: time.Second,
-		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, audioChunkSamples),
+		audioStream:           coreaudio.NewAudioByteStream(runtimeInputSampleRate, ultravoxRealtimeInputChannels, audioChunkSamples),
 		toolNames:             make(map[string]struct{}),
 		toolResults:           make(map[string]struct{}),
 		contextItems:          make(map[string]struct{}),
@@ -300,6 +297,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+func ultravoxRealtimeRuntimeSampleRate(sampleRate int) uint32 {
+	if sampleRate <= 0 {
+		return 1
+	}
+	return uint32(sampleRate)
+}
 
 func (s *realtimeSession) startRealtimeMainTask(client ultravoxRealtimeHTTPDoer) {
 	if client == nil {
@@ -696,8 +700,8 @@ type realtimeSession struct {
 	clientEventCh         chan map[string]any
 	outboundCh            chan ultravoxRealtimeOutboundMessage
 	model                 *RealtimeModel
-	inputSampleRate       uint32
-	outputSampleRate      uint32
+	inputSampleRate       int
+	outputSampleRate      int
 	outputMedium          string
 	audioOutput           bool
 	systemPrompt          string
@@ -1185,8 +1189,11 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if s.closed {
 		return nil
 	}
+	if s.inputSampleRate <= 0 {
+		return nil
+	}
 
-	audioFrame, err := s.inputNormalizer.Normalize(frame, s.inputSampleRate)
+	audioFrame, err := s.inputNormalizer.Normalize(frame, uint32(s.inputSampleRate))
 	if err != nil {
 		return nil
 	}
@@ -1246,8 +1253,8 @@ func (s *realtimeSession) createCallRequestE() (string, map[string]string, map[s
 	s.mu.Lock()
 	tools := append([]llm.Tool(nil), s.tools...)
 	systemPrompt := s.systemPrompt
-	inputSampleRate := int(s.inputSampleRate)
-	outputSampleRate := int(s.outputSampleRate)
+	inputSampleRate := s.inputSampleRate
+	outputSampleRate := s.outputSampleRate
 	s.mu.Unlock()
 
 	m := s.model
@@ -2109,13 +2116,20 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 	}
 	frame := &model.AudioFrame{
 		Data:              append([]byte(nil), audioData...),
-		SampleRate:        s.outputSampleRate,
+		SampleRate:        ultravoxRealtimeOutputAudioSampleRate(s.outputSampleRate),
 		NumChannels:       ultravoxRealtimeInputChannels,
 		SamplesPerChannel: uint32(len(audioData)) / (2 * ultravoxRealtimeInputChannels),
 	}
 	s.mu.Unlock()
 
 	generation.audioStream.Send(frame)
+}
+
+func ultravoxRealtimeOutputAudioSampleRate(sampleRate int) uint32 {
+	if sampleRate <= 0 {
+		return 0
+	}
+	return uint32(sampleRate)
 }
 
 func (s *realtimeSession) handleServerTextMessage(data []byte) error {

@@ -202,6 +202,53 @@ func TestUltravoxRealtimeOptionsPreserveReferenceZeroSampleRates(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeOptionsPreserveReferenceNegativeSampleRates(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeInputSampleRate(-8000),
+		WithRealtimeOutputSampleRate(-24000),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	if got := model.InputSampleRate(); got != -8000 {
+		t.Fatalf("input sample rate = %d, want explicit negative reference input_sample_rate", got)
+	}
+	if got := model.OutputSampleRate(); got != -24000 {
+		t.Fatalf("output sample rate = %d, want explicit negative reference output_sample_rate", got)
+	}
+
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	medium := payload["medium"].(map[string]any)
+	serverWebsocket := medium["serverWebSocket"].(map[string]any)
+	if got := serverWebsocket["inputSampleRate"]; got != -8000 {
+		t.Fatalf("inputSampleRate payload = %#v, want explicit negative reference input_sample_rate", got)
+	}
+	if got := serverWebsocket["outputSampleRate"]; got != -24000 {
+		t.Fatalf("outputSampleRate payload = %#v, want explicit negative reference output_sample_rate", got)
+	}
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              []byte{1, 0},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushAudio with negative configured rate error = %v, want safe no-op", err)
+	}
+	select {
+	case got := <-session.audioCh:
+		t.Fatalf("queued audio with negative configured rate = %v, want no runtime uint32 wrap", got)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
