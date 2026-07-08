@@ -1284,6 +1284,10 @@ func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return speechmaticsReferenceObjectText(object)
+	}
 	return "", fmt.Errorf("unsupported segment text")
 }
 
@@ -1297,6 +1301,23 @@ func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
 		parts = append(parts, text)
 	}
 	return "[" + strings.Join(parts, ", ") + "]", nil
+}
+
+func speechmaticsReferenceObjectText(object map[string]json.RawMessage) (string, error) {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		text, err := speechmaticsReferenceTextValue(object[key])
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "'"+key+"': "+text)
+	}
+	return "{" + strings.Join(parts, ", ") + "}", nil
 }
 
 func speechmaticsReferenceTextValue(data []byte) (string, error) {
