@@ -1086,6 +1086,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		Results  []struct {
 			Alternatives []map[string]json.RawMessage `json:"alternatives"`
 			IsEOS        json.RawMessage              `json:"is_eos"`
+			Attaches     json.RawMessage              `json:"attaches_to"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1102,6 +1103,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.IsEOS) == "null" {
 				return fmt.Errorf("results[%d].is_eos must be a bool", i)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Attaches) == "null" {
+				return fmt.Errorf("results[%d].attaches_to must be a string", i)
 			}
 			if len(result.Alternatives) == 0 {
 				continue
