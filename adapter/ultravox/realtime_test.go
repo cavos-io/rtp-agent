@@ -3557,6 +3557,34 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceControlUnicodeA
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedQuoteBackslashArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-quote-backslash","parameters":{"quote":"a\u0022b","slash":"c\u005cd"}}`)); err != nil {
+		t.Fatalf("handle quote-backslash tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"quote": "a\"b", "slash": "c\\d"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps quote/backslash normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for quote-backslash function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
