@@ -1128,6 +1128,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 				string(result.Alternatives[0]["confidence"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
 			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.Alternatives[0]["direction"]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
+			}
 			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
 			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
 		}
