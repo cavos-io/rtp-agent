@@ -1015,6 +1015,48 @@ func TestUltravoxRealtimeSessionSendTaskWritesReferenceOutboundStream(t *testing
 	}
 }
 
+func TestUltravoxRealtimeSessionSendTaskStopsStaleOutboundAfterReferenceRestart(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	session.mu.Lock()
+	oldOutbound := session.outboundCh
+	restartCount := session.restartCount
+	session.mu.Unlock()
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	writer := &ultravoxRealtimeTestWebsocketWriter{}
+	if err := session.sendOutboundMessagesFrom(writer, oldOutbound, restartCount); err != nil {
+		t.Fatalf("send old outbound after restart error = %v, want nil", err)
+	}
+	if len(writer.frames) != 0 {
+		t.Fatalf("websocket frames after restart = %#v, want stale old-session outbound dropped", writer.frames)
+	}
+}
+
 func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

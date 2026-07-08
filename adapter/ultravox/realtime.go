@@ -954,7 +954,21 @@ func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter
 }
 
 func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
-	for message := range s.outboundCh {
+	s.mu.Lock()
+	outboundCh := s.outboundCh
+	restartCount := s.restartCount
+	s.mu.Unlock()
+	return s.sendOutboundMessagesFrom(writer, outboundCh, restartCount)
+}
+
+func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
+	for message := range outboundCh {
+		s.mu.Lock()
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
 			return err
 		}
