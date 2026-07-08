@@ -156,9 +156,12 @@ type nvidiaSTTStream struct {
 	startTime       float64
 }
 
-func (s *nvidiaSTTStream) PushFrame(*model.AudioFrame) error {
+func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
 	}
 	return fmt.Errorf("nvidia riva stt streaming is not implemented")
 }

@@ -294,6 +294,24 @@ func TestNvidiaSTTStreamExposesReferenceTimingOffset(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{}); err != nil {
+		t.Fatalf("PushFrame(empty) error = %v, want nil", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("PushFrame(non-empty) error = %v, want explicit unsupported streaming error", err)
+	}
+}
+
 func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
@@ -314,7 +332,7 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if got, want := concrete.language, "id-ID"; got != want {
 		t.Fatalf("stream language = %q, want %q", got, want)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
 		t.Fatalf("PushFrame() error = %v, want explicit unsupported streaming error", err)
 	}
 	if err := stream.Close(); err != nil {
