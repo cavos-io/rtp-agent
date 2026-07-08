@@ -204,10 +204,8 @@ func WithRealtimeEnableGreetingPrompt(enable bool) RealtimeOption {
 
 func WithRealtimeFirstSpeaker(firstSpeaker string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if firstSpeaker != "" {
-			m.firstSpeaker = firstSpeaker
-			m.firstSpeakerSet = true
-		}
+		m.firstSpeaker = firstSpeaker
+		m.firstSpeakerSet = true
 	}
 }
 

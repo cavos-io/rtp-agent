@@ -394,6 +394,24 @@ func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptySystemPrompt(t 
 	}
 }
 
+func TestUltravoxRealtimeSessionCreateCallPreservesReferenceEmptyFirstSpeaker(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeFirstSpeaker(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	if got := payload["firstSpeaker"]; got != "" {
+		t.Fatalf("firstSpeaker = %#v, want explicit empty reference first_speaker", got)
+	}
+}
+
 func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
 	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
 	if err != nil {
