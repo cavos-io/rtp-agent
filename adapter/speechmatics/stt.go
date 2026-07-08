@@ -1,6 +1,7 @@
 package speechmatics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,10 +81,15 @@ const (
 	speechmaticsAnnotationHasDisfluency           = "has_disfluency"
 	speechmaticsAnnotationVerySlowSpeaker         = "very_slow_speaker"
 	speechmaticsAnnotationSlowSpeaker             = "slow_speaker"
+	speechmaticsAnnotationSmartTurnTrue           = "smart_turn_true"
+	speechmaticsAnnotationSmartTurnFalse          = "smart_turn_false"
+	speechmaticsAnnotationSmartTurnInactive       = "smart_turn_inactive"
+	speechmaticsAnnotationVADStopped              = "vad_stopped"
 	speechmaticsAdaptiveEndsWithDisfluencyPenalty = 2.5
 	speechmaticsAdaptiveHasDisfluencyPenalty      = 1.1
 	speechmaticsAdaptiveVerySlowSpeakerPenalty    = 3.0
 	speechmaticsAdaptiveSlowSpeakerPenalty        = 2.0
+	speechmaticsAdaptiveSmartTurnTruePenalty      = 0.2
 )
 
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
@@ -111,6 +117,7 @@ func speechmaticsLocalEndpointingDelayWithAnnotations(s *SpeechmaticsSTT, annota
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
 		}
+		delay *= speechmaticsAdaptiveAnnotationPenalty(speechmaticsSmartTurnLocalVADAnnotations(annotations))
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
@@ -144,7 +151,24 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 		speechmaticsStringInSlice(speechmaticsAnnotationEndsWithEOS, annotations) {
 		penalty *= speechmaticsAdaptiveFinalEOSPenalty
 	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnTrue, annotations) {
+		penalty *= speechmaticsAdaptiveSmartTurnTruePenalty
+	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationVADStopped, annotations) &&
+		speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnInactive, annotations) {
+		penalty *= speechmaticsAdaptiveVADStoppedPenalty
+	}
 	return penalty
+}
+
+func speechmaticsSmartTurnLocalVADAnnotations(annotations []string) []string {
+	if speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnTrue, annotations) ||
+		speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnFalse, annotations) {
+		return annotations
+	}
+	withVAD := cloneSpeechmaticsStringSlice(annotations)
+	withVAD = append(withVAD, speechmaticsAnnotationVADStopped, speechmaticsAnnotationSmartTurnInactive)
+	return withVAD
 }
 
 func speechmaticsRoundEndOfTurnDelay(seconds float64) float64 {
@@ -1248,6 +1272,9 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
+		if value, ok := speechmaticsParseReferenceBoolString(text); ok {
+			return value, nil
+		}
 		return text != "", nil
 	}
 	var list []json.RawMessage
@@ -1259,6 +1286,35 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 		return len(object) > 0, nil
 	}
 	return false, fmt.Errorf("unsupported truthy bool")
+}
+
+func speechmaticsParseReferenceBoolString(text string) (bool, bool) {
+	switch strings.ToLower(text) {
+	case "yes", "on", "y", "true", "t", "1":
+		return true, true
+	case "no", "off", "n", "false", "f", "0":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func speechmaticsUnmarshalReferenceSegmentTiming(data []byte) (float64, bool) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return 1, true
+		}
+		return 0, true
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		number, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			return number, true
+		}
+	}
+	return 0, false
 }
 
 func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
@@ -1284,9 +1340,8 @@ func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment text")
 }
@@ -1311,9 +1366,8 @@ func speechmaticsUnmarshalReferenceSegmentSpeakerID(data []byte) (string, error)
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment speaker id")
 }
@@ -1338,9 +1392,8 @@ func speechmaticsUnmarshalReferenceSegmentLanguage(data []byte) (string, error) 
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment language")
 }
@@ -1357,19 +1410,43 @@ func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
 	return "[" + strings.Join(parts, ", ") + "]", nil
 }
 
-func speechmaticsReferenceObjectText(object map[string]json.RawMessage) (string, error) {
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
+func speechmaticsReferenceObjectTextRaw(data []byte) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		text, err := speechmaticsReferenceTextValue(object[key])
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return "", fmt.Errorf("not an object")
+	}
+	parts := make([]string, 0)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, "'"+key+"': "+text)
+		key, ok := keyToken.(string)
+		if !ok {
+			return "", fmt.Errorf("object key must be a string")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+		text, err := speechmaticsReferenceTextValue(value)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, speechmaticsReferenceStringText(key)+": "+text)
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return "", err
+	}
+	delim, ok = token.(json.Delim)
+	if !ok || delim != '}' {
+		return "", fmt.Errorf("object is not closed")
 	}
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
@@ -1380,7 +1457,7 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
-		return "'" + text + "'", nil
+		return speechmaticsReferenceStringText(text), nil
 	}
 	var value bool
 	if err := json.Unmarshal(data, &value); err == nil {
@@ -1393,7 +1470,28 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &number); err == nil {
 		return number.String(), nil
 	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
+	}
 	return "", fmt.Errorf("unsupported list text value")
+}
+
+func speechmaticsReferenceStringText(text string) string {
+	if strings.Contains(text, "'") && !strings.Contains(text, `"`) {
+		return strconv.Quote(text)
+	}
+	replacer := strings.NewReplacer(
+		"\\", `\\`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+		"'", `\'`,
+	)
+	return "'" + replacer.Replace(text) + "'"
 }
 
 func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
@@ -1444,6 +1542,43 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 			}
 			segment["language"] = encoded
 			changed = true
+		}
+		if metadataRaw, ok := segment["metadata"]; ok && string(metadataRaw) != "null" {
+			var metadata map[string]json.RawMessage
+			if err := json.Unmarshal(metadataRaw, &metadata); err == nil {
+				metadataChanged := false
+				for _, field := range []string{"start_time", "end_time"} {
+					rawTiming, ok := metadata[field]
+					if !ok || string(rawTiming) == "null" {
+						continue
+					}
+					value, converted := speechmaticsUnmarshalReferenceSegmentTiming(rawTiming)
+					if !converted {
+						continue
+					}
+					encoded, err := json.Marshal(value)
+					if err != nil {
+						return nil, err
+					}
+					metadata[field] = encoded
+					metadataChanged = true
+					changed = true
+				}
+				if metadataChanged {
+					encodedMetadata, err := json.Marshal(metadata)
+					if err != nil {
+						return nil, err
+					}
+					segment["metadata"] = encodedMetadata
+				}
+			}
+		}
+		if annotation, ok := segment["annotation"]; ok && string(annotation) != "null" {
+			var values []string
+			if err := json.Unmarshal(annotation, &values); err != nil {
+				segment["annotation"] = []byte("[]")
+				changed = true
+			}
 		}
 		isActive, ok := segment["is_active"]
 		if !ok || string(isActive) == "null" {
@@ -2345,12 +2480,13 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			(speakerPresent && segment.SpeakerID != "" && speechmaticsConfiguredSpeakerFiltered(speakerID, state)) {
 			continue
 		}
-		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
+		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
+		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active)
 		formatSpeakerID := speakerID
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
-		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -2452,8 +2588,8 @@ func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.Spe
 		left.Language == right.Language
 }
 
-func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
-	if state == nil || (isActive != nil && !*isActive) {
+func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool) {
+	if state == nil || !active {
 		return
 	}
 	state.latestSegmentAnnotationSet = true
@@ -2478,7 +2614,16 @@ func speechmaticsConfiguredSpeakerFiltered(speakerID string, state *speechmatics
 }
 
 func speechmaticsSystemSpeakerID(speakerID string) bool {
-	return len(speakerID) > 4 && strings.HasPrefix(speakerID, "__") && strings.HasSuffix(speakerID, "__")
+	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
+		return false
+	}
+	for _, r := range speakerID[2 : len(speakerID)-2] {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func speechmaticsStringInSlice(value string, values []string) bool {
@@ -3152,7 +3297,7 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 	}
 	delay := time.Duration(0)
 	if s.providerManagedEndpointing {
-		delay = s.localEndpointingDelay()
+		delay = s.localEndpointingForceEOUDelay()
 	}
 	s.mu.Lock()
 	if s.closed || s.localEndpointingTurnClosed {
@@ -3178,12 +3323,26 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 	}()
 }
 
+func (s *speechmaticsSTTStream) localEndpointingForceEOUDelay() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	hasTranscript := s.state != nil && s.state.turnHasTranscript
+	s.mu.Unlock()
+	if !hasTranscript {
+		return speechmaticsMinEndOfTurnDelay
+	}
+	return s.localEndpointingDelay()
+}
+
 func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	if s == nil {
 		return 0
 	}
 	s.mu.Lock()
 	annotationsSet := s.state != nil && s.state.latestSegmentAnnotationSet
+	hasTranscript := s.state != nil && s.state.turnHasTranscript
 	var annotations []string
 	if annotationsSet {
 		annotations = cloneSpeechmaticsStringSlice(s.state.latestSegmentAnnotation)
@@ -3191,6 +3350,9 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	s.mu.Unlock()
 	if annotationsSet {
 		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations)
+	}
+	if hasTranscript {
+		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped})
 	}
 	return speechmaticsLocalEndpointingDelay(s.owner)
 }

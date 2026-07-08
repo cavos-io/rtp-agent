@@ -1598,6 +1598,52 @@ func TestSpeechmaticsSegmentEventsFormatsReferenceListText(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsEscapesReferenceListTextStrings(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":["can't","ok"],
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != `["can't", 'ok']` {
+		t.Fatalf("text = %q, want Python-style escaped list text", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceNestedListText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":[["hi"],{"ok":false}],
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "[['hi'], {'ok': False}]" {
+		t.Fatalf("text = %q, want reference formatted nested list text", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsFormatsReferenceObjectText(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -1618,6 +1664,29 @@ func TestSpeechmaticsSegmentEventsFormatsReferenceObjectText(t *testing.T) {
 	}
 	if got := events[0].Alternatives[0].Text; got != "{'active': False, 'kind': 'noise'}" {
 		t.Fatalf("text = %q, want reference formatted object text", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsPreservesReferenceObjectTextOrder(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":{"kind":"noise","active":false},
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "{'kind': 'noise', 'active': False}" {
+		t.Fatalf("text = %q, want reference insertion-order object text", got)
 	}
 }
 
@@ -2020,6 +2089,32 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNullActiveAsPassive(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSegmentEventsIgnoreReferenceNullActiveAnnotations(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"null active",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":null,
+			"annotation":["ends_with_final","ends_with_eos"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one passive transcript", events)
+	}
+	if state.latestSegmentAnnotationSet {
+		t.Fatalf("latest annotation = %#v, want passive null is_active to leave endpointing annotations unchanged", state.latestSegmentAnnotation)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsTreatReferenceNumericInactiveAsPassive(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",
@@ -2045,6 +2140,82 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNumericInactiveAsPassive(t *test
 	}
 	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: numeric inactive" {
 		t.Fatalf("text = %q, want reference passive format for numeric zero is_active", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsTreatReferenceStringFalseActiveAsPassive(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat:  "@{speaker_id}: {text}",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"string false active",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":"false",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: string false active" {
+		t.Fatalf("text = %q, want reference passive format for string false is_active", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsAcceptReferenceBoolTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"bool timing",
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":true,"end_time":false}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{})
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.StartTime != 1 || alt.EndTime != 0 {
+		t.Fatalf("timing = (%v, %v), want reference bool timing (1, 0)", alt.StartTime, alt.EndTime)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsAcceptReferenceStringTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"string timing",
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":"0.25","end_time":"0.75"}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{})
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.StartTime != 0.25 || alt.EndTime != 0.75 {
+		t.Fatalf("timing = (%v, %v), want reference string timing (0.25, 0.75)", alt.StartTime, alt.EndTime)
 	}
 }
 
@@ -2196,6 +2367,48 @@ func TestSpeechmaticsSegmentEventsEmitDeliveredReferencePartialsWhenDisabled(t *
 	}
 	if got := events[0].Alternatives[0].Text; got != "provider partial" {
 		t.Fatalf("partial text = %q, want provider partial", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsEmitReferenceEmptyText(t *testing.T) {
+	for _, message := range []string{"AddPartialSegment", "AddSegment"} {
+		t.Run(message, func(t *testing.T) {
+			state := &speechmaticsStreamState{}
+			var resp smResponse
+			if err := json.Unmarshal([]byte(fmt.Sprintf(`{
+				"message":%q,
+				"segments":[{
+					"text":"",
+					"language":"en",
+					"speaker_id":"agent",
+					"annotation":["ends_with_final"],
+					"metadata":{"start_time":0.1,"end_time":0.4}
+				}]
+			}`, message)), &resp); err != nil {
+				t.Fatalf("unmarshal empty-text segment: %v", err)
+			}
+
+			events := speechmaticsEvents(resp, state)
+			if len(events) != 1 {
+				t.Fatalf("events = %#v, want reference empty-text segment emitted", events)
+			}
+			wantType := stt.SpeechEventInterimTranscript
+			if message == "AddSegment" {
+				wantType = stt.SpeechEventFinalTranscript
+			}
+			if events[0].Type != wantType || len(events[0].Alternatives) != 1 || events[0].Alternatives[0].Text != "" {
+				t.Fatalf("event = %#v, want reference empty %s transcript", events[0], wantType)
+			}
+			if !state.turnHasTranscript {
+				t.Fatal("turnHasTranscript = false, want reference empty-text segment kept as transcript evidence")
+			}
+			if !state.latestSegmentAnnotationSet {
+				t.Fatal("latest annotation unset, want reference empty-text segment endpointing annotation retained")
+			}
+			if got, want := state.latestSegmentAnnotation, []string{"ends_with_final"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("latest annotation = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 
@@ -4869,6 +5082,18 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceStoppedPenalty(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceMissingEOSWithoutSegmentAnnotation(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{turnHasTranscript: true},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 280*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference transcript missing-EOS delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPenalties(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
 
@@ -4914,12 +5139,64 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPe
 	}
 }
 
-func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
-	if !speechmaticsSystemSpeakerID("__assistant__") {
-		t.Fatal("lowercase wrapped speaker was not classified as reference system speaker")
+func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceSmartTurnPenalty(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation: []string{
+				"smart_turn_true",
+				"ends_with_final",
+				"ends_with_eos",
+			},
+		},
 	}
 
-	for _, speakerID := range []string{"__ASSISTANT__", "__assistant__", "__Assistant__", "__a__", "__A1__", "__A_B__"} {
+	if got, want := stream.localEndpointingDelay(), 80*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference smart-turn true final EOS delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceFallbackVADPenalty(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation: []string{
+				"ends_with_final",
+				"ends_with_eos",
+			},
+		},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 80*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference smart-turn fallback final EOS delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceFallbackMissingEOSPenalty(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{turnHasTranscript: true},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 320*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference smart-turn fallback missing-EOS delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
+	if !speechmaticsSystemSpeakerID("__ASSISTANT__") {
+		t.Fatal("uppercase wrapped speaker was not classified as reference system speaker")
+	}
+	if speechmaticsSystemSpeakerID("__assistant__") {
+		t.Fatal("lowercase wrapped speaker was classified as reference system speaker")
+	}
+
+	for _, speakerID := range []string{"__ASSISTANT__", "__A1__", "__A_B__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -4946,7 +5223,7 @@ func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *t
 }
 
 func TestSpeechmaticsSegmentEventsKeepReferenceNonWrappedSpeakerLabels(t *testing.T) {
-	for _, speakerID := range []string{"__", "__A", "A__", "_assistant_"} {
+	for _, speakerID := range []string{"__", "__A", "A__", "_assistant_", "__assistant__", "__Assistant__", "__a__", "__A-__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -5021,6 +5298,32 @@ func TestSpeechmaticsSegmentEventsRecordReferenceActiveSegmentAnnotations(t *tes
 	}
 	if got, want := state.latestSegmentAnnotation, []string{"ends_with_final", "ends_with_eos"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("latest segment annotation = %#v, want active reference annotation %#v", got, want)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsIgnoreReferenceInvalidAnnotationShape(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"annotation shape",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":true,
+			"annotation":{"slow_speaker":true},
+			"metadata":{"start_time":0.1,"end_time":0.3}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	state := &speechmaticsStreamState{}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript despite invalid annotation shape", events)
+	}
+	if len(state.latestSegmentAnnotation) != 0 {
+		t.Fatalf("latest segment annotation = %#v, want ignored invalid reference annotation", state.latestSegmentAnnotation)
 	}
 }
 
@@ -5426,6 +5729,37 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsReferenceDelayedEOU(t *testi
 	case message := <-controlMessages:
 		t.Fatalf("control message after restarted speech = %#v, want canceled delayed ForceEndOfUtterance", message)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADWithoutTranscriptUsesReferenceMinimumDelay(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	controlMessages := make(chan map[string]interface{}, 1)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		providerManagedEndpointing: true,
+		state:                      &speechmaticsStreamState{},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	defer stream.Close()
+
+	stream.scheduleLocalEndpointingForceEndOfUtterance()
+
+	select {
+	case message := <-controlMessages:
+		if got := message["message"]; got != "ForceEndOfUtterance" {
+			t.Fatalf("control message = %#v, want ForceEndOfUtterance", message)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("ForceEndOfUtterance not sent after reference minimum delay without transcript")
 	}
 }
 
