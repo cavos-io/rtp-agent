@@ -924,6 +924,48 @@ func TestSpeechmaticsSegmentFinalDropsOverlappedReferenceRawFinal(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSegmentFinalDropsSameZeroTimingReferenceRawFinal(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	var rawFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"metadata":{"transcript":"hello"},
+		"results":[{
+			"type":"word",
+			"alternatives":[{"content":"hello","language":"en","speaker":"S1"}]
+		}]
+	}`), &rawFinal); err != nil {
+		t.Fatalf("unmarshal zero-timing raw final response: %v", err)
+	}
+	if events := speechmaticsEvents(rawFinal, state); len(events) != 0 {
+		t.Fatalf("raw final events = %#v, want buffered behind reference segment final", events)
+	}
+
+	var segmentFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hello",
+			"language":"en",
+			"speaker_id":"S1"
+		}]
+	}`), &segmentFinal); err != nil {
+		t.Fatalf("unmarshal zero-timing segment final response: %v", err)
+	}
+	events := speechmaticsEvents(segmentFinal, state)
+	if len(events) != 1 {
+		t.Fatalf("segment events = %#v, want one reference segment final", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("segment final text = %q, want hello", got)
+	}
+
+	endEvents := speechmaticsEvents(smResponse{Message: "EndOfTurn"}, state)
+	if len(endEvents) != 1 || endEvents[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end events = %#v, want only end_of_speech without duplicate zero-timing raw final", endEvents)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsApplyReferenceStartTimeOffset(t *testing.T) {
 	stream := &speechmaticsSTTStream{}
 	timing, ok := interface{}(stream).(stt.StreamTiming)

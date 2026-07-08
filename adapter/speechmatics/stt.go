@@ -1694,9 +1694,20 @@ func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
 			if leftAlt.StartTime < rightAlt.EndTime && rightAlt.StartTime < leftAlt.EndTime {
 				return true
 			}
+			if speechmaticsTranscriptAlternativesSameTimingAndIdentity(leftAlt, rightAlt) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.SpeechData) bool {
+	return left.StartTime == right.StartTime &&
+		left.EndTime == right.EndTime &&
+		left.Text == right.Text &&
+		left.SpeakerID == right.SpeakerID &&
+		left.Language == right.Language
 }
 
 func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
