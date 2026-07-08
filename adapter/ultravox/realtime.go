@@ -292,15 +292,6 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		contextItems:          make(map[string]struct{}),
 		chatCtx:               llm.NewChatContext(),
 	}
-	if m.outputMedium == "text" {
-		event := map[string]any{
-			"type":   "set_output_medium",
-			"medium": "text",
-		}
-		session.mu.Lock()
-		_ = session.enqueueClientEventLocked(event)
-		session.mu.Unlock()
-	}
 	m.registerRealtimeSession(session)
 	if m.autoStart {
 		session.startRealtimeMainTask(http.DefaultClient)
@@ -1376,7 +1367,12 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 }
 
 func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
-	conn, err := s.connectRealtimeWebsocket(ctx, client)
+	joinURL, err := s.createCall(ctx, client)
+	if err != nil {
+		return err
+	}
+	s.queueStartupOutputMedium()
+	conn, err := s.model.dialRealtimeWebsocket(ctx, joinURL)
 	if err != nil {
 		return err
 	}
@@ -1991,14 +1987,20 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	close(s.outboundCh)
 	s.outboundCh = make(chan ultravoxRealtimeOutboundMessage, cap(s.outboundCh))
-	if s.outputMedium == "text" {
-		_ = s.enqueueClientEventLocked(map[string]any{
-			"type":   "set_output_medium",
-			"medium": "text",
-		})
-	}
 	close(s.audioCh)
 	s.audioCh = make(chan []byte, cap(s.audioCh))
+}
+
+func (s *realtimeSession) queueStartupOutputMedium() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.outputMedium != "text" {
+		return
+	}
+	_ = s.enqueueClientEventLocked(map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
 }
 
 func (s *realtimeSession) enqueueOutboundAudioLocked(audioData []byte) {

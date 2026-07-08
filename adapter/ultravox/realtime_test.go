@@ -383,6 +383,12 @@ func TestUltravoxRealtimeSessionQueuesReferenceInitialTextOutputMedium(t *testin
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("client event before provider start = %#v, want reference _main_task startup timing", got)
+	default:
+	}
+	session.queueStartupOutputMedium()
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
 		"type":   "set_output_medium",
 		"medium": "text",
@@ -968,13 +974,49 @@ func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *test
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("restart queued client event before provider start = %#v, want reference _main_task startup timing", got)
+	default:
+	}
+	session.queueStartupOutputMedium()
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
 		"type":   "set_output_medium",
 		"medium": "text",
 	})
+}
+
+func TestUltravoxRealtimeSessionRestartQueuesReferenceReplyBeforeTextOutputMedium(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeSystemPrompt("stay concise"),
+		WithRealtimeOutputMedium("text"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
 		t.Fatalf("UpdateInstructions error = %v", err)
 	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	session.queueStartupOutputMedium()
+
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
 		"type":   "set_output_medium",
 		"medium": "text",
@@ -2789,12 +2831,6 @@ func TestUltravoxRealtimeSessionGenerationMessageExposesReferenceModalities(t *t
 			}
 			session := sessionInterface.(*realtimeSession)
 			defer session.Close()
-			if tc.outputMedium == "text" {
-				requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-					"type":   "set_output_medium",
-					"medium": "text",
-				})
-			}
 
 			session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 			generation := requireUltravoxRealtimeGeneration(t, session)
