@@ -768,11 +768,6 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 	return nil
 }
 
-func speechmaticsTTSRetryableError(err error) bool {
-	var apiErr *llm.APIError
-	return errors.As(err, &apiErr) && apiErr.Retryable
-}
-
 func speechmaticsTTSTimeoutAPIError() error {
 	return llm.NewAPITimeoutError("")
 }
@@ -789,7 +784,8 @@ func speechmaticsTTSReadAPIError(err error) error {
 }
 
 func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
-	if s.emittedAudio || !speechmaticsTTSRetryableError(err) {
+	var apiErr *llm.APIError
+	if s.emittedAudio || !errors.As(err, &apiErr) {
 		return err
 	}
 	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
