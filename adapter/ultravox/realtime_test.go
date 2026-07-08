@@ -2365,6 +2365,39 @@ func TestUltravoxRealtimeSessionUserTranscriptBuffersBeyondOldDropLimit(t *testi
 	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_8", "final words", true)
 }
 
+func TestUltravoxRealtimeSessionUserTranscriptBuffersFullReferenceEventQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	fullCap := cap(session.eventCh)
+	if fullCap == 0 {
+		t.Fatal("event queue cap = 0, want buffered realtime event queue")
+	}
+	for i := 0; i < fullCap; i++ {
+		session.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeText}
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "user",
+		Text:    "queued final",
+		Final:   true,
+		Ordinal: 9,
+	})
+
+	for i := 0; i < fullCap; i++ {
+		<-session.eventCh
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_9", "queued final", true)
+}
+
 func TestUltravoxRealtimeSessionAgentTranscriptStreamsReferenceDeltas(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

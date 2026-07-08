@@ -265,8 +265,10 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if audioChunkSamples == 0 {
 		audioChunkSamples = 1
 	}
+	eventStream := newUltravoxRealtimeEventStream(ultravoxRealtimeEventQueueSize)
 	session := &realtimeSession{
-		eventCh:               make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
+		eventCh:               eventStream.Chan(),
+		eventStream:           eventStream,
 		audioCh:               make(chan []byte, 256),
 		clientEventCh:         make(chan map[string]any, ultravoxClientEventQueueSize),
 		outboundCh:            make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
@@ -412,6 +414,7 @@ type ultravoxRealtimeHTTPDoer interface {
 type realtimeSession struct {
 	mu                    sync.Mutex
 	eventCh               chan llm.RealtimeEvent
+	eventStream           *ultravoxRealtimeEventStream
 	audioCh               chan []byte
 	clientEventCh         chan map[string]any
 	outboundCh            chan ultravoxRealtimeOutboundMessage
@@ -441,6 +444,108 @@ type realtimeSession struct {
 	closeOnce             sync.Once
 	runCancel             context.CancelFunc
 	runDone               chan struct{}
+}
+
+type ultravoxRealtimeEventStream struct {
+	out     chan llm.RealtimeEvent
+	wake    chan struct{}
+	closeCh chan struct{}
+	done    chan struct{}
+	mu      sync.Mutex
+	queue   []llm.RealtimeEvent
+	closed  bool
+}
+
+func newUltravoxRealtimeEventStream(size int) *ultravoxRealtimeEventStream {
+	stream := &ultravoxRealtimeEventStream{
+		out:     make(chan llm.RealtimeEvent, size),
+		wake:    make(chan struct{}, 1),
+		closeCh: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *ultravoxRealtimeEventStream) Chan() chan llm.RealtimeEvent {
+	if s == nil {
+		return nil
+	}
+	return s.out
+}
+
+func (s *ultravoxRealtimeEventStream) Send(event llm.RealtimeEvent) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	select {
+	case s.out <- event:
+		return true
+	default:
+	}
+	s.queue = append(s.queue, event)
+	s.notifyLocked()
+	return true
+}
+
+func (s *ultravoxRealtimeEventStream) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		<-s.done
+		return
+	}
+	s.closed = true
+	close(s.closeCh)
+	s.notifyLocked()
+	s.mu.Unlock()
+	<-s.done
+}
+
+func (s *ultravoxRealtimeEventStream) notifyLocked() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *ultravoxRealtimeEventStream) run() {
+	defer close(s.done)
+	defer close(s.out)
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.mu.Unlock()
+			select {
+			case <-s.wake:
+			case <-s.closeCh:
+			}
+			s.mu.Lock()
+		}
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		event := s.queue[0]
+		var zero llm.RealtimeEvent
+		s.queue[0] = zero
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+
+		select {
+		case s.out <- event:
+		case <-s.closeCh:
+			return
+		}
+	}
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -719,7 +824,7 @@ func (s *realtimeSession) Close() error {
 		close(s.outboundCh)
 		s.mu.Unlock()
 		s.finishGeneration(generation, true)
-		close(s.eventCh)
+		s.eventStream.Close()
 	})
 	if s.model != nil {
 		s.model.unregisterRealtimeSession(s)
@@ -727,6 +832,13 @@ func (s *realtimeSession) Close() error {
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *realtimeSession) emitEvent(event llm.RealtimeEvent) {
+	if s == nil || s.eventStream == nil {
+		return
+	}
+	s.eventStream.Send(event)
+}
 func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -975,10 +1087,7 @@ func (s *realtimeSession) emitRealtimeModelError(err error, recoverable bool) {
 		Type:  llm.RealtimeEventTypeError,
 		Error: llm.NewRealtimeModelError(label, ultravoxRealtimeAPIError(err), recoverable),
 	}
-	select {
-	case s.eventCh <- event:
-	default:
-	}
+	s.emitEvent(event)
 }
 
 func ultravoxRealtimeRecoverableError(err error) bool {
@@ -1575,10 +1684,7 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 			UserInitiated: userInitiated,
 		},
 	}
-	select {
-	case s.eventCh <- event:
-	default:
-	}
+	s.emitEvent(event)
 	return generation
 }
 
@@ -1639,10 +1745,7 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 			IsFinal:    event.Final,
 		},
 	}
-	select {
-	case s.eventCh <- realtimeEvent:
-	default:
-	}
+	s.emitEvent(realtimeEvent)
 }
 
 func (s *realtimeSession) pickGenerationCreatedAtLocked() time.Time {
@@ -1707,10 +1810,7 @@ func (s *realtimeSession) finishGeneration(generation *ultravoxRealtimeGeneratio
 	if metrics == nil {
 		return
 	}
-	select {
-	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics}:
-	default:
-	}
+	s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics})
 }
 
 func (s *realtimeSession) generationMetricsLocked(generation *ultravoxRealtimeGeneration, cancelled bool) *telemetry.RealtimeModelMetrics {
@@ -1794,10 +1894,7 @@ func (s *realtimeSession) handleStateEvent(event ultravoxRealtimeStateEvent) {
 			},
 		}
 		s.mu.Unlock()
-		select {
-		case s.eventCh <- event:
-		default:
-		}
+		s.emitEvent(event)
 	}
 }
 
@@ -1933,10 +2030,7 @@ func (s *realtimeSession) handlePlaybackClearBufferEvent() {
 	if s.closed {
 		return
 	}
-	select {
-	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}:
-	default:
-	}
+	s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 }
 
 func (s *realtimeSession) handlePongEvent(float64) {
