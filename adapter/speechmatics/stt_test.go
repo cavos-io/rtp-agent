@@ -131,6 +131,33 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingConfidenceToReferenceOne(
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceStringTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":"0.15",
+			"end_time":"0.45",
+			"alternatives":[{"content":"timed","confidence":0.91,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	event := speechmaticsTranscriptEvent(resp, &speechmaticsStreamState{language: "en"})
+	if event == nil {
+		t.Fatal("speechmaticsTranscriptEvent returned nil")
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 0.15 || alt.EndTime != 0.45 {
+		t.Fatalf("timing = %v-%v, want reference string timing coerced to floats", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 0.15 || alt.Words[0].EndTime != 0.45 {
+		t.Fatalf("words = %#v, want reference string word timing", alt.Words)
+	}
+}
+
 func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",

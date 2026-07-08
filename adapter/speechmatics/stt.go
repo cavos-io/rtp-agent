@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1067,6 +1068,49 @@ type smResult struct {
 	IsEOS        bool            `json:"is_eos"`
 	StartTime    float64         `json:"start_time"`
 	EndTime      float64         `json:"end_time"`
+}
+
+func (r *smResult) UnmarshalJSON(data []byte) error {
+	type result smResult
+	var raw struct {
+		result
+		StartTime json.RawMessage `json:"start_time"`
+		EndTime   json.RawMessage `json:"end_time"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = smResult(raw.result)
+	var err error
+	if len(raw.StartTime) > 0 {
+		r.StartTime, err = speechmaticsUnmarshalReferenceFloat(raw.StartTime)
+		if err != nil {
+			return fmt.Errorf("start_time: %w", err)
+		}
+	}
+	if len(raw.EndTime) > 0 {
+		r.EndTime, err = speechmaticsUnmarshalReferenceFloat(raw.EndTime)
+		if err != nil {
+			return fmt.Errorf("end_time: %w", err)
+		}
+	}
+	return nil
+}
+
+func speechmaticsUnmarshalReferenceFloat(data []byte) (float64, error) {
+	var value float64
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
 }
 
 type smResponse struct {
