@@ -988,6 +988,33 @@ func TestSpeechmaticsSegmentEventsSuppressReferencePartialsWhenDisabled(t *testi
 	}
 }
 
+func TestSpeechmaticsSegmentEventsRecordReferencePartialAnnotationsWhenOutputDisabled(t *testing.T) {
+	state := &speechmaticsStreamState{includePartials: false}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"partial words",
+			"language":"en",
+			"speaker_id":"agent",
+			"annotation":["slow_speaker"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial response: %v", err)
+	}
+
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("partial events = %#v, want none when include_partials is false", events)
+	}
+	if !state.latestSegmentAnnotationSet {
+		t.Fatal("latest annotation set = false, want reference partial annotation retained for endpointing")
+	}
+	if got, want := state.latestSegmentAnnotation, []string{"slow_speaker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("latest annotation = %#v, want %#v", got, want)
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
