@@ -2133,6 +2133,55 @@ func TestUltravoxRealtimeSessionGenerateReplyIgnoresSilentOutputAudio(t *testing
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyIgnoresBinaryOutputAudio(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	audio := make([]byte, 960)
+	for i := range audio {
+		audio[i] = byte(i%251 + 1)
+	}
+	session.handleOutputAudio(audio)
+	audioGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if audioGeneration.UserInitiated {
+		t.Fatal("binary audio generation UserInitiated = true, want reference pending GenerateReply unresolved until speaking or text")
+	}
+	message := requireUltravoxRealtimeMessage(t, audioGeneration)
+	select {
+	case got := <-message.AudioCh:
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("binary output audio = %v, want provider bytes", got.Data[:min(len(got.Data), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for binary output audio")
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+	requireUltravoxRealtimeMetrics(t, session)
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	replyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !replyGeneration.UserInitiated {
+		t.Fatal("reply generation UserInitiated = false, want pending GenerateReply preserved after binary output audio")
+	}
+}
+
 func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -1825,7 +1825,7 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 		s.mu.Unlock()
 		return
 	}
-	generation := s.ensureGenerationLockedWithPending(hasSignal)
+	generation := s.ensureGenerationLockedWithPending(false)
 	if hasSignal && generation.firstToken.IsZero() {
 		generation.firstToken = time.Now()
 	}
