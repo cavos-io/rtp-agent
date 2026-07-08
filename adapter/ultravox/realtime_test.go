@@ -540,6 +540,32 @@ func TestUltravoxRealtimeToolDynamicParametersTreatOmitEmptyAsReferenceOptional(
 	}
 }
 
+func TestUltravoxRealtimeToolDynamicParametersCollapseNullableGeneratedSchemaLikeReference(t *testing.T) {
+	type request struct {
+		Limit int `json:"limit,omitempty" jsonschema:"maximum results"`
+	}
+
+	params := ultravoxRealtimeToolDynamicParameters(ultravoxRealtimeTestTool{
+		name:        "search",
+		description: "Search",
+		parameters:  llm.GenerateStrictJSONSchema(reflect.TypeOf(request{})),
+	})
+
+	if len(params) != 1 {
+		t.Fatalf("dynamic parameters len = %d, want one", len(params))
+	}
+	schema, ok := params[0]["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema = %#v, want map", params[0]["schema"])
+	}
+	if schema["type"] != "integer" {
+		t.Fatalf("nullable generated schema type = %#v, want reference primitive integer", schema["type"])
+	}
+	if schema["description"] != "maximum results" {
+		t.Fatalf("schema description = %#v, want preserved description", schema["description"])
+	}
+}
+
 func TestUltravoxRealtimeToolPayloadsUseRawFunctionSchemaLikeReference(t *testing.T) {
 	payloads := ultravoxRealtimeToolPayloads([]llm.Tool{ultravoxRealtimeRawSchemaTool{}})
 	if len(payloads) != 1 {

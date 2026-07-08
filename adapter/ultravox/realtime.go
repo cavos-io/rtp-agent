@@ -1630,16 +1630,7 @@ func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) 
 	dynamicParameters := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		prop, _ := properties[name].(map[string]any)
-		schema := any(prop)
-		if _, ok := prop["type"]; !ok {
-			schemaMap := map[string]any{
-				"type": ultravoxRealtimeParameterType(prop),
-			}
-			if description, ok := prop["description"]; ok && description != "" {
-				schemaMap["description"] = description
-			}
-			schema = schemaMap
-		}
+		schema := ultravoxRealtimeToolParameterSchema(prop)
 		_, isRequired := required[name]
 		if isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
 			isRequired = false
@@ -1652,6 +1643,30 @@ func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) 
 		})
 	}
 	return dynamicParameters
+}
+
+func ultravoxRealtimeToolParameterSchema(prop map[string]any) any {
+	if typ := ultravoxRealtimeNonNullType(prop["type"]); typ != "" {
+		if _, nullable := prop["type"].([]string); nullable {
+			return ultravoxRealtimeMinimalParameterSchema(prop, typ)
+		}
+		if _, nullable := prop["type"].([]any); nullable {
+			return ultravoxRealtimeMinimalParameterSchema(prop, typ)
+		}
+		return prop
+	}
+	if _, ok := prop["type"]; ok {
+		return prop
+	}
+	return ultravoxRealtimeMinimalParameterSchema(prop, ultravoxRealtimeParameterType(prop))
+}
+
+func ultravoxRealtimeMinimalParameterSchema(prop map[string]any, typ string) map[string]any {
+	schema := map[string]any{"type": typ}
+	if description, ok := prop["description"]; ok && description != "" {
+		schema["description"] = description
+	}
+	return schema
 }
 
 func ultravoxRealtimeToolParameterNames(parameters map[string]any, properties map[string]any) []string {
@@ -1730,6 +1745,28 @@ func ultravoxRealtimeSchemaAllowsNull(prop map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func ultravoxRealtimeNonNullType(value any) string {
+	switch typ := value.(type) {
+	case string:
+		if typ != "null" {
+			return typ
+		}
+	case []string:
+		for _, value := range typ {
+			if value != "null" {
+				return value
+			}
+		}
+	case []any:
+		for _, value := range typ {
+			if typ, ok := value.(string); ok && typ != "null" {
+				return typ
+			}
+		}
+	}
+	return ""
 }
 
 func ultravoxRealtimeParameterType(prop map[string]any) string {
