@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf16"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -42,6 +45,8 @@ const (
 	ultravoxTextDeltaQueueSize      = 2048
 	ultravoxOutputAudioQueueSize    = 2048
 )
+
+var ultravoxRealtimeMonotonicStart = time.Now()
 
 type RealtimeModel struct {
 	apiKey              string
@@ -272,20 +277,21 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &realtimeSession{
-		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
-		audioCh:              make(chan []byte, 256),
-		clientEventCh:        make(chan map[string]any, ultravoxClientEventQueueSize),
-		outboundCh:           make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
-		model:                m,
-		inputSampleRate:      uint32(m.inputSampleRate),
-		outputSampleRate:     uint32(m.outputSampleRate),
-		audioOutput:          m.outputMedium == "voice",
-		systemPrompt:         m.systemPrompt,
-		generateReplyTimeout: ultravoxGenerateReplyTimeout,
-		audioStream:          coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
-		toolNames:            make(map[string]struct{}),
-		toolResults:          make(map[string]struct{}),
-		contextItems:         make(map[string]struct{}),
+		eventCh:               make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
+		audioCh:               make(chan []byte, 256),
+		clientEventCh:         make(chan map[string]any, ultravoxClientEventQueueSize),
+		outboundCh:            make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
+		model:                 m,
+		inputSampleRate:       uint32(m.inputSampleRate),
+		outputSampleRate:      uint32(m.outputSampleRate),
+		audioOutput:           m.outputMedium == "voice",
+		systemPrompt:          m.systemPrompt,
+		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
+		recoverableErrorDelay: time.Second,
+		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:             make(map[string]struct{}),
+		toolResults:           make(map[string]struct{}),
+		contextItems:          make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
 		event := map[string]any{
@@ -389,33 +395,34 @@ type ultravoxRealtimeHTTPDoer interface {
 }
 
 type realtimeSession struct {
-	mu                   sync.Mutex
-	eventCh              chan llm.RealtimeEvent
-	audioCh              chan []byte
-	clientEventCh        chan map[string]any
-	outboundCh           chan ultravoxRealtimeOutboundMessage
-	model                *RealtimeModel
-	inputSampleRate      uint32
-	outputSampleRate     uint32
-	audioOutput          bool
-	systemPrompt         string
-	audioStream          *coreaudio.AudioByteStream
-	inputNormalizer      ultravoxRealtimeInputNormalizer
-	generation           *ultravoxRealtimeGeneration
-	generationSeq        uint64
-	tools                []llm.Tool
-	toolNames            map[string]struct{}
-	toolResults          map[string]struct{}
-	contextItems         map[string]struct{}
-	pendingReply         bool
-	pendingReplyAt       time.Time
-	pendingReplySeq      uint64
-	pendingReplyTimer    *time.Timer
-	generateReplyTimeout time.Duration
-	restartCount         uint64
-	lastUserFinalAt      time.Time
-	closed               bool
-	closeOnce            sync.Once
+	mu                    sync.Mutex
+	eventCh               chan llm.RealtimeEvent
+	audioCh               chan []byte
+	clientEventCh         chan map[string]any
+	outboundCh            chan ultravoxRealtimeOutboundMessage
+	model                 *RealtimeModel
+	inputSampleRate       uint32
+	outputSampleRate      uint32
+	audioOutput           bool
+	systemPrompt          string
+	audioStream           *coreaudio.AudioByteStream
+	inputNormalizer       ultravoxRealtimeInputNormalizer
+	generation            *ultravoxRealtimeGeneration
+	generationSeq         uint64
+	tools                 []llm.Tool
+	toolNames             map[string]struct{}
+	toolResults           map[string]struct{}
+	contextItems          map[string]struct{}
+	pendingReply          bool
+	pendingReplyAt        time.Time
+	pendingReplySeq       uint64
+	pendingReplyTimer     *time.Timer
+	generateReplyTimeout  time.Duration
+	recoverableErrorDelay time.Duration
+	restartCount          uint64
+	lastUserFinalAt       time.Time
+	closed                bool
+	closeOnce             sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -825,6 +832,8 @@ const (
 	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
 )
 
+var errUltravoxRealtimeReconnectAfterSend = errors.New("ultravox realtime reconnect after send error")
+
 func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtimeHTTPDoer) (string, error) {
 	createCallURL, headers, payload := s.createCallRequest()
 	body, err := json.Marshal(payload)
@@ -848,7 +857,11 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("ultravox create call failed: HTTP %d", resp.StatusCode)
+		reason := http.StatusText(resp.StatusCode)
+		if reason == "" {
+			reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return "", llm.NewAPIError(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, reason), nil, false)
 	}
 	return ultravoxRealtimeCreateCallJoinURL(data)
 }
@@ -883,8 +896,18 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return err
 		}
 		if err := s.runRealtimeOnce(ctx, client); err != nil {
-			s.emitRealtimeModelError(err, false)
-			return nil
+			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
+				continue
+			}
+			recoverable := ultravoxRealtimeRecoverableError(err)
+			s.emitRealtimeModelError(err, recoverable)
+			if !recoverable {
+				return nil
+			}
+			if err := s.waitRecoverableErrorDelay(ctx); err != nil {
+				return err
+			}
+			continue
 		}
 
 		s.mu.Lock()
@@ -894,6 +917,21 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 		if closed || !restarted {
 			return nil
 		}
+	}
+}
+
+func (s *realtimeSession) waitRecoverableErrorDelay(ctx context.Context) error {
+	delay := s.recoverableErrorDelay
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -910,6 +948,18 @@ func (s *realtimeSession) emitRealtimeModelError(err error, recoverable bool) {
 	case s.eventCh <- event:
 	default:
 	}
+}
+
+func ultravoxRealtimeRecoverableError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
 }
 
 func ultravoxRealtimeAPIError(err error) error {
@@ -954,15 +1004,33 @@ func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter
 }
 
 func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
+	return s.sendOutboundMessagesWithContext(context.Background(), writer)
+}
+
+func (s *realtimeSession) sendOutboundMessagesWithContext(ctx context.Context, writer ultravoxRealtimeWebsocketWriter) error {
 	s.mu.Lock()
 	outboundCh := s.outboundCh
 	restartCount := s.restartCount
 	s.mu.Unlock()
-	return s.sendOutboundMessagesFrom(writer, outboundCh, restartCount)
+	return s.sendOutboundMessagesFromContext(ctx, writer, outboundCh, restartCount)
 }
 
 func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
-	for message := range outboundCh {
+	return s.sendOutboundMessagesFromContext(context.Background(), writer, outboundCh, restartCount)
+}
+
+func (s *realtimeSession) sendOutboundMessagesFromContext(ctx context.Context, writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
+	for {
+		var message ultravoxRealtimeOutboundMessage
+		select {
+		case <-ctx.Done():
+			return nil
+		case next, ok := <-outboundCh:
+			if !ok {
+				return nil
+			}
+			message = next
+		}
 		s.mu.Lock()
 		restarted := s.restartCount != restartCount
 		s.mu.Unlock()
@@ -970,14 +1038,27 @@ func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsoc
 			return nil
 		}
 		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
-			return err
+			return errUltravoxRealtimeReconnectAfterSend
 		}
 	}
 	return nil
 }
 
 func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocketConn) error {
+	s.mu.Lock()
+	restartCount := s.restartCount
+	s.mu.Unlock()
+	return s.receiveRealtimeMessagesFrom(conn, restartCount)
+}
+
+func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebsocketConn, restartCount uint64) error {
 	for {
+		s.mu.Lock()
+		restarted := s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -1002,18 +1083,22 @@ func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocket
 
 func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
 	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sendErrCh := make(chan error, 1)
 	receiveErrCh := make(chan error, 1)
 	go func() {
-		sendErrCh <- s.sendOutboundMessages(conn)
+		sendErrCh <- s.sendOutboundMessagesWithContext(ctx, conn)
 	}()
 	go func() {
 		receiveErrCh <- s.receiveRealtimeMessages(conn)
 	}()
 	select {
 	case err := <-sendErrCh:
+		cancel()
 		return err
 	case err := <-receiveErrCh:
+		cancel()
 		return err
 	}
 }
@@ -1224,7 +1309,7 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
-	if len(audioData) == 0 || len(audioData)%(2*ultravoxRealtimeInputChannels) != 0 {
+	if len(audioData) == 0 {
 		return
 	}
 
@@ -1662,12 +1747,25 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 	out.Grow(len(value) + 8)
 	inString := false
 	escaped := false
+	unicodeEscapeRemaining := 0
 	for _, r := range value {
+		if unicodeEscapeRemaining > 0 {
+			out.WriteRune(unicode.ToLower(r))
+			unicodeEscapeRemaining--
+			continue
+		}
 		if !inString && (r == ' ' || r == '\n' || r == '\r' || r == '\t') {
+			continue
+		}
+		if inString && !escaped && r > 0x7f {
+			writeUltravoxRealtimePythonJSONUnicodeEscape(&out, r)
 			continue
 		}
 		out.WriteRune(r)
 		if escaped {
+			if r == 'u' {
+				unicodeEscapeRemaining = 4
+			}
 			escaped = false
 			continue
 		}
@@ -1684,6 +1782,15 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 		}
 	}
 	return out.String()
+}
+
+func writeUltravoxRealtimePythonJSONUnicodeEscape(out *strings.Builder, r rune) {
+	if r <= 0xffff {
+		fmt.Fprintf(out, "\\u%04x", r)
+		return
+	}
+	high, low := utf16.EncodeRune(r)
+	fmt.Fprintf(out, "\\u%04x\\u%04x", high, low)
 }
 
 func ultravoxRealtimePythonJSONSpacing(value string) string {
@@ -1727,7 +1834,7 @@ func (s *realtimeSession) handlePlaybackClearBufferEvent() {
 func (s *realtimeSession) handlePongEvent(float64) {
 	_ = s.sendClientEvent(map[string]any{
 		"type":      "ping",
-		"timestamp": float64(time.Now().UnixNano()) / float64(time.Second),
+		"timestamp": time.Since(ultravoxRealtimeMonotonicStart).Seconds(),
 	})
 }
 
