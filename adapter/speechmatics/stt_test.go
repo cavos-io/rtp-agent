@@ -1804,6 +1804,36 @@ func TestSpeechmaticsSegmentEventsFormatsReferenceListSpeakerID(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceObjectSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"object speaker",
+			"language":"en",
+			"speaker_id":{"active":false,"label":"S1"},
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "{'active': False, 'label': 'S1'}" {
+		t.Fatalf("speaker id = %q, want reference formatted object speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@{'active': False, 'label': 'S1'}: object speaker" {
+		t.Fatalf("text = %q, want reference formatted object speaker id", alt.Text)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsKeepReferenceMissingSpeakerDuringFocusIgnore(t *testing.T) {
 	state := &speechmaticsStreamState{
 		focusSpeakers: []string{"agent"},
