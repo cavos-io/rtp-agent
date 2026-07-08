@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2298,7 +2300,80 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 			out.WriteByte(' ')
 		}
 	}
-	return ultravoxRealtimeDecodePythonJSONASCIIEscapes(out.String())
+	return ultravoxRealtimeDecodePythonJSONASCIIEscapes(ultravoxRealtimeNormalizePythonJSONNumbers(out.String()))
+}
+
+func ultravoxRealtimeNormalizePythonJSONNumbers(value string) string {
+	var out strings.Builder
+	out.Grow(len(value))
+	inString := false
+	escaped := false
+	for i := 0; i < len(value); {
+		c := value[i]
+		if escaped {
+			out.WriteByte(c)
+			escaped = false
+			i++
+			continue
+		}
+		if inString {
+			out.WriteByte(c)
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '-' || (c >= '0' && c <= '9') {
+			end := i + 1
+			for end < len(value) && ultravoxRealtimeJSONNumberByte(value[end]) {
+				end++
+			}
+			out.WriteString(ultravoxRealtimeNormalizePythonJSONNumber(value[i:end]))
+			i = end
+			continue
+		}
+		out.WriteByte(c)
+		i++
+	}
+	return out.String()
+}
+
+func ultravoxRealtimeJSONNumberByte(c byte) bool {
+	return (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E'
+}
+
+func ultravoxRealtimeNormalizePythonJSONNumber(token string) string {
+	if !strings.ContainsAny(token, ".eE") {
+		return token
+	}
+	value, err := strconv.ParseFloat(token, 64)
+	if err != nil {
+		return token
+	}
+	if value == 0 {
+		if math.Signbit(value) {
+			return "-0.0"
+		}
+		return "0.0"
+	}
+	abs := math.Abs(value)
+	if abs < 1e-4 || abs >= 1e16 {
+		return strconv.FormatFloat(value, 'e', -1, 64)
+	}
+	normalized := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.Contains(normalized, ".") {
+		normalized += ".0"
+	}
+	return normalized
 }
 
 func ultravoxRealtimeDecodePythonJSONASCIIEscapes(value string) string {

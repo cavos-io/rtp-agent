@@ -3473,6 +3473,34 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedASCIIUni
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNumberArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-number","parameters":{"count":1000000,"large":1e6,"ratio":1E-3,"whole":1.0,"negativeZero":-0.0}}`)); err != nil {
+		t.Fatalf("handle numeric tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"count": 1000000, "large": 1000000.0, "ratio": 0.001, "whole": 1.0, "negativeZero": -0.0}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps number normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for numeric function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
