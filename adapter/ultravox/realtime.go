@@ -2425,9 +2425,6 @@ func (s *realtimeSession) generationMetricsLocked(generation *ultravoxRealtimeGe
 	ttft := -1.0
 	if !generation.firstToken.IsZero() {
 		ttft = generation.firstToken.Sub(createdAt).Seconds()
-		if ttft < 0 {
-			ttft = 0
-		}
 	}
 	modelName := ""
 	modelProvider := ""

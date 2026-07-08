@@ -3407,6 +3407,33 @@ func TestUltravoxRealtimeSessionMetricsAnchorToRecentReferenceUserFinal(t *testi
 	}
 }
 
+func TestUltravoxRealtimeSessionMetricsPreserveReferenceNegativeTTFT(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	firstToken := time.Now()
+	createdAt := firstToken.Add(50 * time.Millisecond)
+	metrics := session.generationMetricsLocked(&ultravoxRealtimeGeneration{
+		responseID: "ultravox-turn-negative-ttft",
+		createdAt:  createdAt,
+		firstToken: firstToken,
+	}, false)
+	if metrics == nil {
+		t.Fatal("metrics = nil, want reference timing metrics")
+	}
+	if metrics.TTFT >= 0 {
+		t.Fatalf("metrics TTFT = %f, want unclamped reference negative value", metrics.TTFT)
+	}
+}
+
 func TestUltravoxRealtimeSessionInterruptEmitsReferenceCancelledMetrics(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
