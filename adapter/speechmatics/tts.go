@@ -466,6 +466,9 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 			}
 			return result.data, result.err, false
 		case <-done:
+			if !s.isClosedOrFinal() {
+				return nil, context.Canceled, false
+			}
 			return nil, io.EOF, false
 		}
 	}
@@ -478,6 +481,9 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 	case <-timer.C:
 		return nil, nil, true
 	case <-done:
+		if !s.isClosedOrFinal() {
+			return nil, context.Canceled, false
+		}
 		return nil, io.EOF, false
 	}
 }

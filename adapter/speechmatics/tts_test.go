@@ -1237,6 +1237,48 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamActiveReadContextCancelReturnsContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	body := newSpeechmaticsBlockingReadBody()
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     body,
+		ctx:        ctx,
+		cancel:     cancel,
+		sampleRate: 24000,
+	}
+	t.Cleanup(func() {
+		_ = stream.Close()
+		body.release()
+	})
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	<-body.started
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		if result.audio != nil {
+			t.Fatalf("Next audio = %+v, want nil on active read cancellation", result.audio)
+		}
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("Next error = %T(%v), want context.Canceled for active read cancellation", result.err, result.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next blocked after active read context cancellation")
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadCancelDropsReturnedAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     &speechmaticsDataThenCancelBody{data: []byte{0x01, 0x02}},
@@ -1888,6 +1930,35 @@ func (speechmaticsReadCancelBody) Read([]byte) (int, error) {
 
 func (speechmaticsReadCancelBody) Close() error {
 	return nil
+}
+
+type speechmaticsBlockingReadBody struct {
+	started     chan struct{}
+	releaseDone chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newSpeechmaticsBlockingReadBody() *speechmaticsBlockingReadBody {
+	return &speechmaticsBlockingReadBody{
+		started:     make(chan struct{}),
+		releaseDone: make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsBlockingReadBody) Read([]byte) (int, error) {
+	b.startOnce.Do(func() { close(b.started) })
+	<-b.releaseDone
+	return 0, context.Canceled
+}
+
+func (b *speechmaticsBlockingReadBody) Close() error {
+	b.release()
+	return nil
+}
+
+func (b *speechmaticsBlockingReadBody) release() {
+	b.releaseOnce.Do(func() { close(b.releaseDone) })
 }
 
 type speechmaticsDataThenCancelBody struct {
