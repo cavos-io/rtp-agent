@@ -1599,12 +1599,12 @@ func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 		if tool == nil {
 			continue
 		}
-		name, description, parameters := ultravoxRealtimeToolSchema(tool)
+		name, description, parameters, rawSchema := ultravoxRealtimeToolSchema(tool)
 		payloads = append(payloads, map[string]any{
 			"temporaryTool": map[string]any{
 				"modelToolName":     name,
 				"description":       description,
-				"dynamicParameters": ultravoxRealtimeToolDynamicParametersFromSchema(parameters),
+				"dynamicParameters": ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema),
 				"client":            map[string]any{},
 			},
 		})
@@ -1612,12 +1612,14 @@ func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	return payloads
 }
 
-func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any) {
+func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any, bool) {
 	name := tool.Name()
 	var description any = tool.Description()
 	parameters := llm.ToolParameters(tool)
+	rawSchema := false
 	if rawTool, ok := tool.(ultravoxRealtimeRawToolSchemaParser); ok {
 		if schema, err := rawTool.ParseFunctionTools("ultravox"); err == nil {
+			rawSchema = true
 			if rawName, ok := schema["name"].(string); ok {
 				name = rawName
 			}
@@ -1627,15 +1629,15 @@ func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any) {
 			}
 		}
 	}
-	return name, description, parameters
+	return name, description, parameters, rawSchema
 }
 
 func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
-	_, _, parameters := ultravoxRealtimeToolSchema(tool)
-	return ultravoxRealtimeToolDynamicParametersFromSchema(parameters)
+	_, _, parameters, rawSchema := ultravoxRealtimeToolSchema(tool)
+	return ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema)
 }
 
-func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) []map[string]any {
+func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters map[string]any, relaxNullableRequired bool) []map[string]any {
 	properties, _ := parameters["properties"].(map[string]any)
 	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
 
@@ -1646,7 +1648,7 @@ func ultravoxRealtimeToolDynamicParametersFromSchema(parameters map[string]any) 
 		prop, _ := properties[name].(map[string]any)
 		schema := ultravoxRealtimeToolParameterSchema(prop)
 		_, isRequired := required[name]
-		if isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
+		if relaxNullableRequired && isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
 			isRequired = false
 		}
 		dynamicParameters = append(dynamicParameters, map[string]any{
