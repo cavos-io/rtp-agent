@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"io"
 	"math"
 	"math/rand"
@@ -397,12 +398,12 @@ func (p *BackgroundAudioPlayer) Start(room *lksdk.Room, agentSession *AgentSessi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.mixerTaskCancel != nil {
+		return errors.New("background audio already started")
+	}
+
 	p.room = room
 	p.agentSession = agentSession
-
-	ctx, cancel := context.WithCancel(context.Background())
-	p.mixerTaskCtx = ctx
-	p.mixerTaskCancel = cancel
 
 	track, err := lksdk.NewLocalSampleTrack(backgroundAudioOutputCodec())
 	if err != nil {
@@ -424,7 +425,12 @@ func (p *BackgroundAudioPlayer) Start(room *lksdk.Room, agentSession *AgentSessi
 	}
 	p.publication = pub
 
-	go p.runMixerTask(track)
+	ctx, cancel := context.WithCancel(context.Background())
+	p.mixerTaskCtx = ctx
+	p.mixerTaskCancel = cancel
+
+	p.playTasks.Add(1)
+	go p.runMixerTask(ctx, track)
 
 	if p.ambientSound != nil {
 		source, cfg := p.normalizeSoundSource(p.ambientSound)
@@ -483,13 +489,15 @@ func (p *BackgroundAudioPlayer) Close() error {
 	return nil
 }
 
-func (p *BackgroundAudioPlayer) runMixerTask(track *lksdk.LocalSampleTrack) {
+func (p *BackgroundAudioPlayer) runMixerTask(ctx context.Context, track *lksdk.LocalSampleTrack) {
+	defer p.playTasks.Done()
+
 	ticker := time.NewTicker(20 * time.Millisecond) // 20ms block
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.mixerTaskCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			p.mu.Lock()
