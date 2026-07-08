@@ -878,6 +878,42 @@ func TestJobContextStartSessionUsesRoomCallbackForSubscriptions(t *testing.T) {
 	}
 }
 
+func TestJobContextStartSessionLeavesRoomAsPublicSubscriptionSurface(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_room_surface", Room: &livekit.Room{Name: "room-surface"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, room *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			room.LocalParticipant = &lksdk.LocalParticipant{}
+			return nil
+		},
+	}
+	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomOptions: RoomOptions{
+			DisableAudioInput:  true,
+			DisableAudioOutput: true,
+			DisableTextInput:   true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	if ctx.Room == nil {
+		t.Fatal("JobContext.Room is nil after StartSession")
+	}
+	if ctx.Agent() != ctx.Room.LocalParticipant {
+		t.Fatal("JobContext.Agent() is not derived from JobContext.Room")
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
 	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
