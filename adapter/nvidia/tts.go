@@ -3,7 +3,9 @@ package nvidia
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -95,9 +97,126 @@ func (t *NvidiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *NvidiaTTS) NumChannels() int { return 1 }
 
 func (t *NvidiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	return nil, fmt.Errorf("nvidia riva tts synthesis is not implemented")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &nvidiaTTSChunkedStream{ctx: ctx, text: text}, nil
 }
 
 func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("nvidia riva tts streaming is not implemented")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &nvidiaTTSSynthesizeStream{ctx: ctx}, nil
+}
+
+type nvidiaTTSSynthesizeStream struct {
+	ctx       context.Context
+	done      bool
+	closed    bool
+	exception error
+}
+
+type nvidiaTTSChunkedStream struct {
+	ctx       context.Context
+	text      string
+	done      bool
+	exception error
+}
+
+func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.done {
+		return nil, io.EOF
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(s.text) == "" {
+		s.done = true
+		return nil, io.EOF
+	}
+	err := fmt.Errorf("nvidia riva tts synthesis is not implemented")
+	s.done = true
+	s.exception = err
+	return nil, err
+}
+
+func (s *nvidiaTTSChunkedStream) Close() error {
+	s.done = true
+	return nil
+}
+
+func (s *nvidiaTTSChunkedStream) Done() bool {
+	return s.done
+}
+
+func (s *nvidiaTTSChunkedStream) Exception() error {
+	return s.exception
+}
+
+func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return err
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) Flush() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) Close() error {
+	s.closed = true
+	s.done = true
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		s.done = true
+		return nil, io.EOF
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return nil, err
+		}
+	}
+	err := fmt.Errorf("nvidia riva tts streaming is not implemented")
+	s.done = true
+	s.exception = err
+	return nil, err
+}
+
+func (s *nvidiaTTSSynthesizeStream) Done() bool {
+	return s.done
+}
+
+func (s *nvidiaTTSSynthesizeStream) Exception() error {
+	return s.exception
 }

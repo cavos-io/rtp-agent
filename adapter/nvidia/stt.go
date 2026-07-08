@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -12,20 +13,23 @@ import (
 
 const (
 	defaultNvidiaSTTServer     = "grpc.nvcf.nvidia.com:443"
-	defaultNvidiaSTTModel      = "parakeet-1.1b-ctc-en-us"
+	defaultNvidiaSTTModel      = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
 	defaultNvidiaSTTFunctionID = "1598d209-5e27-4d3c-8079-4751568b1081"
 	defaultNvidiaSTTLanguage   = "en-US"
 	defaultNvidiaSTTSampleRate = 16000
 )
 
 type NvidiaSTT struct {
-	apiKey     string
-	model      string
-	functionID string
-	server     string
-	language   string
-	sampleRate int
-	useSSL     bool
+	apiKey          string
+	model           string
+	functionID      string
+	server          string
+	language        string
+	sampleRate      int
+	punctuate       bool
+	useSSL          bool
+	diarization     bool
+	maxSpeakerCount int
 }
 
 type NvidiaSTTOption func(*NvidiaSTT)
@@ -62,9 +66,29 @@ func WithNvidiaSTTSampleRate(sampleRate int) NvidiaSTTOption {
 	}
 }
 
+func WithNvidiaSTTPunctuate(enabled bool) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.punctuate = enabled
+	}
+}
+
 func WithNvidiaSTTUseSSL(useSSL bool) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
 		s.useSSL = useSSL
+	}
+}
+
+func WithNvidiaSTTDiarization(enabled bool) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.diarization = enabled
+	}
+}
+
+func WithNvidiaSTTMaxSpeakerCount(count int) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		if count >= 0 {
+			s.maxSpeakerCount = count
+		}
 	}
 }
 
@@ -77,13 +101,16 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 	}
 
 	provider := &NvidiaSTT{
-		apiKey:     apiKey,
-		model:      model,
-		functionID: defaultNvidiaSTTFunctionID,
-		server:     defaultNvidiaSTTServer,
-		language:   defaultNvidiaSTTLanguage,
-		sampleRate: defaultNvidiaSTTSampleRate,
-		useSSL:     true,
+		apiKey:          apiKey,
+		model:           model,
+		functionID:      defaultNvidiaSTTFunctionID,
+		server:          defaultNvidiaSTTServer,
+		language:        defaultNvidiaSTTLanguage,
+		sampleRate:      defaultNvidiaSTTSampleRate,
+		punctuate:       true,
+		useSSL:          true,
+		diarization:     false,
+		maxSpeakerCount: 0,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -109,13 +136,16 @@ func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
-		Diarization:       false,
-		AlignedTranscript: "",
+		Diarization:       s.diarization,
+		AlignedTranscript: "word",
 		OfflineRecognize:  false,
 	}
 }
 
-func (s *NvidiaSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*stt.SpeechEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("nvidia riva stt recognition is not implemented")
 }
 
@@ -125,22 +155,51 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		streamLanguage = language
 	}
 	return &nvidiaSTTStream{
+		stt:      s,
 		ctx:      ctx,
 		language: streamLanguage,
 	}, nil
 }
 
 type nvidiaSTTStream struct {
+	stt             *NvidiaSTT
 	ctx             context.Context
 	language        string
 	closed          bool
+	speaking        bool
 	startTimeOffset float64
 	startTime       float64
 }
 
-func (s *nvidiaSTTStream) PushFrame(*model.AudioFrame) error {
+type nvidiaSTTWord struct {
+	Word       string
+	StartTime  float64
+	EndTime    float64
+	SpeakerTag int
+}
+
+type nvidiaSTTAlternative struct {
+	Transcript string
+	Confidence float64
+	Words      []nvidiaSTTWord
+}
+
+type nvidiaSTTResult struct {
+	IsFinal     bool
+	Alternative nvidiaSTTAlternative
+}
+
+func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
 	}
 	return fmt.Errorf("nvidia riva stt streaming is not implemented")
 }
@@ -148,6 +207,11 @@ func (s *nvidiaSTTStream) PushFrame(*model.AudioFrame) error {
 func (s *nvidiaSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -169,6 +233,76 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 	}
 	return nil, fmt.Errorf("nvidia riva stt streaming is not implemented")
+}
+
+func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechEvent {
+	transcript := result.Alternative.Transcript
+	if strings.TrimSpace(transcript) == "" {
+		return nil
+	}
+
+	events := make([]stt.SpeechEvent, 0, 3)
+	if !s.speaking {
+		s.speaking = true
+		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+	}
+
+	eventType := stt.SpeechEventInterimTranscript
+	if result.IsFinal {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+	events = append(events, stt.SpeechEvent{
+		Type:         eventType,
+		Alternatives: []stt.SpeechData{s.speechDataFromAlternative(result.Alternative, result.IsFinal)},
+	})
+	if result.IsFinal && s.speaking {
+		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+	}
+	return events
+}
+
+func (s *nvidiaSTTStream) speechDataFromAlternative(alternative nvidiaSTTAlternative, isFinal bool) stt.SpeechData {
+	data := stt.SpeechData{
+		Language:   s.language,
+		Text:       alternative.Transcript,
+		Confidence: alternative.Confidence,
+	}
+	if len(alternative.Words) == 0 {
+		return data
+	}
+
+	first := alternative.Words[0]
+	last := alternative.Words[len(alternative.Words)-1]
+	data.StartTime = first.StartTime/1000.0 + s.startTimeOffset
+	data.EndTime = last.EndTime/1000.0 + s.startTimeOffset
+	data.Words = make([]stt.TimedString, 0, len(alternative.Words))
+	for _, word := range alternative.Words {
+		data.Words = append(data.Words, stt.TimedString{
+			Text:      word.Word,
+			StartTime: word.StartTime + s.startTimeOffset,
+			EndTime:   word.EndTime + s.startTimeOffset,
+		})
+	}
+	if s.stt != nil && s.stt.diarization && isFinal {
+		if speakerTag, ok := majoritySpeakerTag(alternative.Words); ok {
+			data.SpeakerID = fmt.Sprintf("S%d", speakerTag)
+		}
+	}
+	return data
+}
+
+func majoritySpeakerTag(words []nvidiaSTTWord) (int, bool) {
+	counts := make(map[int]int)
+	bestTag := 0
+	bestCount := 0
+	for _, word := range words {
+		counts[word.SpeakerTag]++
+		if counts[word.SpeakerTag] > bestCount {
+			bestTag = word.SpeakerTag
+			bestCount = counts[word.SpeakerTag]
+		}
+	}
+	return bestTag, bestCount > 0
 }
 
 func (s *nvidiaSTTStream) StartTimeOffset() float64 {

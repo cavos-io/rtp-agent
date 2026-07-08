@@ -1395,6 +1395,7 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 	if err != nil {
 		return nil, err
 	}
+	s.queueStartupOutputMedium()
 	start := time.Now()
 	conn, err := s.model.dialRealtimeWebsocket(ctx, joinURL)
 	if err != nil {
@@ -1409,7 +1410,6 @@ func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRe
 	if err != nil {
 		return err
 	}
-	s.queueStartupOutputMedium()
 	return s.runRealtimeConnectionWithContext(ctx, conn)
 }
 

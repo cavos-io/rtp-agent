@@ -2,11 +2,13 @@ package nvidia
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -20,6 +22,81 @@ func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	}
 	if PluginPackage != "rtp-agent.plugins.nvidia" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.nvidia", PluginPackage)
+	}
+}
+
+func TestNvidiaRealtimeDefaultsMatchReference(t *testing.T) {
+	t.Setenv("PERSONAPLEX_URL", "")
+
+	model := NewNvidiaRealtimeModel()
+
+	if got, want := model.Model(), "personaplex-7b"; got != want {
+		t.Fatalf("Model() = %q, want %q", got, want)
+	}
+	if got, want := model.Provider(), "nvidia"; got != want {
+		t.Fatalf("Provider() = %q, want %q", got, want)
+	}
+	if got, want := model.Label(), "personaplex-NATF2"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := model.baseURL, "localhost:8998"; got != want {
+		t.Fatalf("baseURL = %q, want %q", got, want)
+	}
+	if got, want := model.voice, "NATF2"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := model.textPrompt, "You are a helpful assistant."; got != want {
+		t.Fatalf("textPrompt = %q, want %q", got, want)
+	}
+	if model.seed != nil {
+		t.Fatalf("seed = %v, want nil", *model.seed)
+	}
+	if got, want := model.silenceThresholdMS, 500; got != want {
+		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
+	}
+	if model.useSSL {
+		t.Fatal("useSSL = true, want false for reference localhost default")
+	}
+	caps := model.Capabilities()
+	if caps.MessageTruncation || caps.TurnDetection || caps.UserTranscription || caps.AutoToolReplyGeneration || !caps.AudioOutput || caps.ManualFunctionCalls || caps.PerResponseToolChoice {
+		t.Fatalf("Capabilities() = %+v, want PersonaPlex reference audio-output-only realtime flags", caps)
+	}
+	var realtime llm.RealtimeModel = model
+	if err := realtime.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestNvidiaRealtimeOptionsMatchReference(t *testing.T) {
+	seed := 42
+	model := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("wss://personaplex.example:9443"),
+		WithNvidiaRealtimeVoice("VARF1"),
+		WithNvidiaRealtimeTextPrompt("Speak tersely."),
+		WithNvidiaRealtimeSeed(seed),
+		WithNvidiaRealtimeSilenceThresholdMS(750),
+	)
+
+	if got, want := model.baseURL, "personaplex.example:9443"; got != want {
+		t.Fatalf("baseURL = %q, want stripped host %q", got, want)
+	}
+	if !model.useSSL {
+		t.Fatal("useSSL = false, want true for wss URL")
+	}
+	if got, want := model.voice, "VARF1"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := model.textPrompt, "Speak tersely."; got != want {
+		t.Fatalf("textPrompt = %q, want %q", got, want)
+	}
+	if model.seed == nil || *model.seed != seed {
+		t.Fatalf("seed = %v, want %d", model.seed, seed)
+	}
+	if got, want := model.silenceThresholdMS, 750; got != want {
+		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
+	}
+	if _, err := model.Session(); err == nil || !strings.Contains(err.Error(), "personaplex realtime session is not implemented") {
+		t.Fatalf("Session() error = %v, want explicit unsupported realtime session error", err)
 	}
 }
 
@@ -139,11 +216,136 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
 	}
 
-	if _, err := provider.Synthesize(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
-		t.Fatalf("Synthesize() error = %v, want explicit unsupported synthesis error", err)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v, want chunked stream before native transport", err)
 	}
-	if _, err := provider.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-		t.Fatalf("Stream() error = %v, want explicit unsupported stream error", err)
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before synthesis output")
+	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported synthesis error", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after synthesis error")
+	}
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
+		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
+	}
+}
+
+func TestNvidiaTTSSynthesizeEmptyTextEndsWithoutTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before empty input EOF")
+	}
+	if audio, err := stream.Next(); err != io.EOF || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil EOF for empty input", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after empty input EOF")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after empty input EOF = %v, want nil", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want stream construction before native transport", err)
+	}
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText(empty) error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v, want nil", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText(non-empty) error = %v, want nil before native transport", err)
+	}
+	if err := stream.PushText(" again"); err != nil {
+		t.Fatalf("PushText(second) error = %v, want nil before native transport", err)
+	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before stream output")
+	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported stream error", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after stream output error")
+	}
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("Exception() after stream output error = %v, want unsupported stream error", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != io.ErrClosedPipe {
+		t.Fatalf("PushText() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); err != io.ErrClosedPipe {
+		t.Fatalf("Flush() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if audio, err := stream.Next(); err != io.EOF || audio != nil {
+		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestNvidiaTTSReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := provider.Synthesize(ctx, "hello"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Synthesize() error = %v, want context.Canceled", err)
+	}
+	if _, err := provider.Stream(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream() error = %v, want context.Canceled", err)
 	}
 }
 
@@ -155,7 +357,7 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if provider.apiKey != "secret" {
 		t.Fatalf("apiKey = %q, want secret", provider.apiKey)
 	}
-	if got, want := provider.model, "parakeet-1.1b-ctc-en-us"; got != want {
+	if got, want := provider.model, "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"; got != want {
 		t.Fatalf("model = %q, want reference default model %q", got, want)
 	}
 	if got, want := provider.server, "grpc.nvcf.nvidia.com:443"; got != want {
@@ -167,13 +369,16 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := provider.language, "en-US"; got != want {
 		t.Fatalf("language = %q, want %q", got, want)
 	}
+	if !provider.punctuate {
+		t.Fatal("punctuate = false, want reference default true")
+	}
 	if !provider.useSSL {
 		t.Fatal("useSSL = false, want reference default true")
 	}
 	if got, want := provider.Label(), "nvidia.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
 	}
-	if got, want := stt.Model(provider), "parakeet-1.1b-ctc-en-us"; got != want {
+	if got, want := stt.Model(provider), "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"; got != want {
 		t.Fatalf("stt.Model() = %q, want %q", got, want)
 	}
 	if got, want := stt.Provider(provider), "nvidia"; got != want {
@@ -182,8 +387,8 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := provider.InputSampleRate(), uint32(16000); got != want {
 		t.Fatalf("InputSampleRate() = %d, want reference sample rate %d", got, want)
 	}
-	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.Diarization || caps.AlignedTranscript != "" {
-		t.Fatalf("Capabilities() = %+v, want reference streaming interim STT without offline recognition", caps)
+	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.Diarization || caps.AlignedTranscript != "word" {
+		t.Fatalf("Capabilities() = %+v, want reference streaming interim STT with word alignment and without offline recognition", caps)
 	}
 }
 
@@ -233,6 +438,9 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 		WithNvidiaSTTLanguage("id-ID"),
 		WithNvidiaSTTSampleRate(24000),
 		WithNvidiaSTTUseSSL(false),
+		WithNvidiaSTTDiarization(true),
+		WithNvidiaSTTMaxSpeakerCount(4),
+		WithNvidiaSTTPunctuate(false),
 	)
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
@@ -253,8 +461,93 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	if got, want := provider.InputSampleRate(), uint32(24000); got != want {
 		t.Fatalf("InputSampleRate() = %d, want %d", got, want)
 	}
+	if !provider.diarization {
+		t.Fatal("diarization = false, want true")
+	}
+	if got, want := provider.maxSpeakerCount, 4; got != want {
+		t.Fatalf("maxSpeakerCount = %d, want %d", got, want)
+	}
+	if provider.punctuate {
+		t.Fatal("punctuate = true, want false")
+	}
+	if caps := provider.Capabilities(); !caps.Diarization || caps.AlignedTranscript != "word" {
+		t.Fatalf("Capabilities() = %+v, want reference diarization and word alignment", caps)
+	}
 	if provider.useSSL {
 		t.Fatal("useSSL = true, want false")
+	}
+}
+
+func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
+	stream := &nvidiaSTTStream{
+		language:        "en-US",
+		startTimeOffset: 1.25,
+		stt:             &NvidiaSTT{diarization: true},
+	}
+
+	events := stream.eventsFromResult(nvidiaSTTResult{
+		IsFinal: false,
+		Alternative: nvidiaSTTAlternative{
+			Transcript: "hello",
+			Confidence: 0.7,
+			Words: []nvidiaSTTWord{{
+				Word:       "hello",
+				StartTime:  100,
+				EndTime:    340,
+				SpeakerTag: 2,
+			}},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("interim event count = %d, want start_of_speech + interim_transcript", len(events))
+	}
+	if events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event[0].Type = %q, want start_of_speech", events[0].Type)
+	}
+	if events[1].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event[1].Type = %q, want interim_transcript", events[1].Type)
+	}
+	interim := events[1].Alternatives[0]
+	if interim.Text != "hello" || interim.Language != "en-US" || interim.Confidence != 0.7 {
+		t.Fatalf("interim speech data = %+v, want transcript/language/confidence from Riva alternative", interim)
+	}
+	if interim.SpeakerID != "" {
+		t.Fatalf("interim SpeakerID = %q, want empty until final diarization", interim.SpeakerID)
+	}
+	if interim.StartTime != 1.35 || interim.EndTime != 1.59 {
+		t.Fatalf("interim timing = (%v, %v), want seconds plus offset", interim.StartTime, interim.EndTime)
+	}
+	if len(interim.Words) != 1 || interim.Words[0].Text != "hello" || interim.Words[0].StartTime != 101.25 || interim.Words[0].EndTime != 341.25 {
+		t.Fatalf("interim words = %+v, want reference millisecond word timings plus offset", interim.Words)
+	}
+
+	events = stream.eventsFromResult(nvidiaSTTResult{
+		IsFinal: true,
+		Alternative: nvidiaSTTAlternative{
+			Transcript: "hello there",
+			Confidence: 0.9,
+			Words: []nvidiaSTTWord{
+				{Word: "hello", StartTime: 100, EndTime: 340, SpeakerTag: 2},
+				{Word: "there", StartTime: 350, EndTime: 700, SpeakerTag: 2},
+				{Word: "aside", StartTime: 710, EndTime: 900, SpeakerTag: 1},
+			},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("final event count = %d, want final_transcript + end_of_speech", len(events))
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event[0].Type = %q, want final_transcript", events[0].Type)
+	}
+	if events[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event[1].Type = %q, want end_of_speech", events[1].Type)
+	}
+	final := events[0].Alternatives[0]
+	if final.SpeakerID != "S2" {
+		t.Fatalf("final SpeakerID = %q, want majority speaker S2", final.SpeakerID)
+	}
+	if final.StartTime != 1.35 || final.EndTime != 2.15 {
+		t.Fatalf("final timing = (%v, %v), want first/last word seconds plus offset", final.StartTime, final.EndTime)
 	}
 }
 
@@ -283,6 +576,62 @@ func TestNvidiaSTTStreamExposesReferenceTimingOffset(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{}); err != nil {
+		t.Fatalf("PushFrame(empty) error = %v, want nil", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("PushFrame(non-empty) error = %v, want explicit unsupported streaming error", err)
+	}
+}
+
+func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	cancel()
+
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PushFrame() error = %v, want context.Canceled", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Flush() error = %v, want context.Canceled", err)
+	}
+	if event, err := stream.Next(); !errors.Is(err, context.Canceled) || event != nil {
+		t.Fatalf("Next() = (%v, %v), want nil context.Canceled", event, err)
+	}
+}
+
+func TestNvidiaSTTReturnsCallerCancellationBeforeUnsupportedRecognize(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	event, err := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}}, "")
+	if !errors.Is(err, context.Canceled) || event != nil {
+		t.Fatalf("Recognize() = (%v, %v), want nil context.Canceled", event, err)
+	}
+}
+
 func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
@@ -303,7 +652,7 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if got, want := concrete.language, "id-ID"; got != want {
 		t.Fatalf("stream language = %q, want %q", got, want)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
 		t.Fatalf("PushFrame() error = %v, want explicit unsupported streaming error", err)
 	}
 	if err := stream.Close(); err != nil {
