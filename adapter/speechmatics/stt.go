@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1036,16 +1037,27 @@ type smAlternative struct {
 }
 
 func (a *smAlternative) UnmarshalJSON(data []byte) error {
-	type alternative smAlternative
 	var raw struct {
-		alternative
+		Content    json.RawMessage `json:"content"`
 		Confidence json.RawMessage `json:"confidence"`
+		SpeakerID  string          `json:"speaker"`
+		Language   string          `json:"language"`
 		Tags       json.RawMessage `json:"tags"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	*a = smAlternative(raw.alternative)
+	*a = smAlternative{
+		SpeakerID: raw.SpeakerID,
+		Language:  raw.Language,
+	}
+	if len(raw.Content) > 0 {
+		content, err := speechmaticsUnmarshalReferenceContent(raw.Content)
+		if err != nil {
+			return fmt.Errorf("content: %w", err)
+		}
+		a.Content = content
+	}
 	if len(raw.Confidence) > 0 {
 		confidence, err := speechmaticsUnmarshalReferenceFloat(raw.Confidence)
 		if err != nil {
@@ -1056,20 +1068,74 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 	if len(raw.Tags) == 0 {
 		return nil
 	}
-	var tags []string
-	if err := json.Unmarshal(raw.Tags, &tags); err == nil {
-		a.Tags = tags
+	var tagItems []json.RawMessage
+	if err := json.Unmarshal(raw.Tags, &tagItems); err == nil {
+		a.Tags = make([]string, 0, len(tagItems))
+		for _, item := range tagItems {
+			var tag string
+			if err := json.Unmarshal(item, &tag); err == nil {
+				a.Tags = append(a.Tags, tag)
+			}
+		}
 		return nil
 	}
 	var tag string
 	if err := json.Unmarshal(raw.Tags, &tag); err != nil {
-		return err
+		var tagMap map[string]json.RawMessage
+		if mapErr := json.Unmarshal(raw.Tags, &tagMap); mapErr != nil {
+			return err
+		}
+		a.Tags = make([]string, 0, len(tagMap))
+		for key := range tagMap {
+			a.Tags = append(a.Tags, key)
+		}
+		sort.Strings(a.Tags)
+		return nil
 	}
 	a.Tags = []string{tag}
 	if strings.Contains(tag, "disfluency") && tag != "disfluency" {
 		a.Tags = append(a.Tags, "disfluency")
 	}
 	return nil
+}
+
+func speechmaticsUnmarshalReferenceContent(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var boolValue bool
+	if err := json.Unmarshal(data, &boolValue); err == nil {
+		if !boolValue {
+			return "", nil
+		}
+		return "", fmt.Errorf("true is not reference-falsey")
+	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		if number == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("number %v is not reference-falsey", number)
+	}
+	var array []json.RawMessage
+	if err := json.Unmarshal(data, &array); err == nil {
+		if len(array) == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("array is not reference-falsey")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		if len(object) == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("object is not reference-falsey")
+	}
+	return "", fmt.Errorf("must be string or reference-falsey")
 }
 
 type smResult struct {
@@ -1120,6 +1186,13 @@ func speechmaticsUnmarshalReferenceFloat(data []byte) (float64, error) {
 	if err := json.Unmarshal(data, &value); err == nil {
 		return value, nil
 	}
+	var boolValue bool
+	if err := json.Unmarshal(data, &boolValue); err == nil {
+		if boolValue {
+			return 1, nil
+		}
+		return 0, nil
+	}
 	var text string
 	if err := json.Unmarshal(data, &text); err != nil {
 		return 0, err
@@ -1136,9 +1209,26 @@ func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
 	if err := json.Unmarshal(data, &value); err == nil {
 		return value, nil
 	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		switch number {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf("invalid bool number %v", number)
+		}
+	}
 	var text string
 	if err := json.Unmarshal(data, &text); err != nil {
 		return false, err
+	}
+	switch strings.ToLower(text) {
+	case "yes", "on", "y":
+		return true, nil
+	case "no", "off", "n":
+		return false, nil
 	}
 	value, err := strconv.ParseBool(text)
 	if err != nil {
@@ -1172,6 +1262,7 @@ type smResponse struct {
 	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 	rawLanguagePresent      []bool
 	rawSpeakerPresent       []bool
+	rawSpeakerNull          []bool
 	segmentLanguagePresent  []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
@@ -1185,17 +1276,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var raw struct {
-		Message  string          `json:"message"`
-		Metadata json.RawMessage `json:"metadata"`
-		Results  []struct {
-			Alternatives []map[string]json.RawMessage `json:"alternatives"`
-			IsEOS        json.RawMessage              `json:"is_eos"`
-			Attaches     json.RawMessage              `json:"attaches_to"`
-			Type         json.RawMessage              `json:"type"`
-			StartTime    json.RawMessage              `json:"start_time"`
-			EndTime      json.RawMessage              `json:"end_time"`
-			Volume       json.RawMessage              `json:"volume"`
-		} `json:"results"`
+		Message  string                       `json:"message"`
+		Metadata json.RawMessage              `json:"metadata"`
+		Results  json.RawMessage              `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -1204,10 +1287,36 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 	if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Metadata) == "null" {
 		return fmt.Errorf("metadata must be an object")
 	}
+	type rawResult struct {
+		Alternatives json.RawMessage `json:"alternatives"`
+		IsEOS        json.RawMessage `json:"is_eos"`
+		Attaches     json.RawMessage `json:"attaches_to"`
+		Type         json.RawMessage `json:"type"`
+		StartTime    json.RawMessage `json:"start_time"`
+		EndTime      json.RawMessage `json:"end_time"`
+		Volume       json.RawMessage `json:"volume"`
+	}
+	var rawResultItems []json.RawMessage
 	if len(raw.Results) > 0 {
-		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
-		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
-		for i, result := range raw.Results {
+		if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(raw.Results) == "null" {
+			return fmt.Errorf("results must be an array")
+		}
+		if err := json.Unmarshal(raw.Results, &rawResultItems); err != nil {
+			return fmt.Errorf("results must be an array: %w", err)
+		}
+	}
+	if len(rawResultItems) > 0 {
+		decoded.rawLanguagePresent = make([]bool, len(rawResultItems))
+		decoded.rawSpeakerPresent = make([]bool, len(rawResultItems))
+		decoded.rawSpeakerNull = make([]bool, len(rawResultItems))
+		for i, resultData := range rawResultItems {
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(resultData) == "null" {
+				return fmt.Errorf("results[%d] must be an object", i)
+			}
+			var result rawResult
+			if err := json.Unmarshal(resultData, &result); err != nil {
+				return fmt.Errorf("results[%d] must be an object: %w", i, err)
+			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
 				string(result.IsEOS) == "null" {
 				return fmt.Errorf("results[%d].is_eos must be a bool", i)
@@ -1238,24 +1347,44 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			if len(result.Alternatives) == 0 {
 				continue
 			}
+			var alternativeItems []json.RawMessage
+			if err := json.Unmarshal(result.Alternatives, &alternativeItems); err != nil {
+				return fmt.Errorf("results[%d].alternatives must be an array", i)
+			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["tags"]) == "null" {
+				len(alternativeItems) == 0 {
+				return fmt.Errorf("results[%d].alternatives must contain at least one alternative", i)
+			}
+			if len(alternativeItems) == 0 {
+				continue
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") && string(alternativeItems[0]) == "null" {
+				return fmt.Errorf("results[%d].alternatives[0] must be an object", i)
+			}
+			var alternative map[string]json.RawMessage
+			if err := json.Unmarshal(alternativeItems[0], &alternative); err != nil {
+				return fmt.Errorf("results[%d].alternatives[0] must be an object: %w", i, err)
+			}
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(alternative["tags"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].tags must be an array", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["language"]) == "null" {
+				string(alternative["language"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].language must be a string", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["confidence"]) == "null" {
+				string(alternative["confidence"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].confidence must be a number", i)
 			}
 			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
-				string(result.Alternatives[0]["direction"]) == "null" {
+				string(alternative["direction"]) == "null" {
 				return fmt.Errorf("results[%d].alternatives[0].direction must be a string", i)
 			}
-			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
-			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
+			_, decoded.rawLanguagePresent[i] = alternative["language"]
+			speaker, speakerPresent := alternative["speaker"]
+			decoded.rawSpeakerPresent[i] = speakerPresent
+			decoded.rawSpeakerNull[i] = speakerPresent && string(speaker) == "null"
 		}
 	}
 	if len(raw.Segments) > 0 {
@@ -1587,16 +1716,18 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 }
 
 type speechmaticsRawTranscriptFragment struct {
-	text       string
-	kind       string
-	speakerID  string
-	language   string
-	attaches   string
-	isEOS      bool
-	startTime  float64
-	endTime    float64
-	confidence float64
-	disfluency bool
+	text            string
+	kind            string
+	speakerID       string
+	speakerGroupID  string
+	formatSpeakerID string
+	language        string
+	attaches        string
+	isEOS           bool
+	startTime       float64
+	endTime         float64
+	confidence      float64
+	disfluency      bool
 }
 
 func speechmaticsTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1699,6 +1830,14 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if alt.SpeakerID != "" && speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
+		formatSpeakerID := resultSpeakerID
+		if speechmaticsRawSpeakerNull(resp, i) {
+			formatSpeakerID = "None"
+		}
+		speakerGroupID := resultSpeakerID
+		if speechmaticsRawSpeakerNull(resp, i) {
+			speakerGroupID = "\x00null"
+		}
 		language := speechmaticsRawFragmentLanguage(alt.Language, speechmaticsRawLanguagePresent(resp, i))
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
@@ -1710,16 +1849,18 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			kind = "word"
 		}
 		fragments = append(fragments, speechmaticsRawTranscriptFragment{
-			text:       alt.Content,
-			kind:       kind,
-			speakerID:  resultSpeakerID,
-			language:   language,
-			attaches:   result.Attaches,
-			isEOS:      result.IsEOS,
-			startTime:  startTime,
-			endTime:    endTime,
-			confidence: speechmaticsAlternativeConfidence(alt.Confidence),
-			disfluency: speechmaticsStringInSlice("disfluency", alt.Tags),
+			text:            alt.Content,
+			kind:            kind,
+			speakerID:       resultSpeakerID,
+			speakerGroupID:  speakerGroupID,
+			formatSpeakerID: formatSpeakerID,
+			language:        language,
+			attaches:        result.Attaches,
+			isEOS:           result.IsEOS,
+			startTime:       startTime,
+			endTime:         endTime,
+			confidence:      speechmaticsAlternativeConfidence(alt.Confidence),
+			disfluency:      speechmaticsStringInSlice("disfluency", alt.Tags),
 		})
 	}
 
@@ -1851,7 +1992,7 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	var events []*stt.SpeechEvent
 	groupStart := 0
 	for i := 1; i <= len(fragments); i++ {
-		if i < len(fragments) && fragments[i].speakerID == fragments[groupStart].speakerID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
+		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
 			continue
 		}
 		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {
@@ -1901,7 +2042,11 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	if rawActive := speechmaticsRawTranscriptSpeakerActive(speakerID, state); rawActive != nil {
 		active = *rawActive
 	}
-	text = speechmaticsFormattedSegmentText(text, speakerID, active, state)
+	formatSpeakerID := speakerID
+	if fragments[0].formatSpeakerID != "" || speakerID == "" {
+		formatSpeakerID = fragments[0].formatSpeakerID
+	}
+	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -2133,6 +2278,10 @@ func speechmaticsRawFragmentLanguage(language string, present bool) string {
 
 func speechmaticsRawSpeakerPresent(resp smResponse, index int) bool {
 	return index >= 0 && index < len(resp.rawSpeakerPresent) && resp.rawSpeakerPresent[index]
+}
+
+func speechmaticsRawSpeakerNull(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.rawSpeakerNull) && resp.rawSpeakerNull[index]
 }
 
 func speechmaticsRawSpeakerID(speakerID string, present bool) string {

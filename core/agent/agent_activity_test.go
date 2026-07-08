@@ -6256,6 +6256,39 @@ func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *t
 	}
 }
 
+func TestAgentActivityEOUEmitsFinalTranscriptBeforeReply(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	events := make([]string, 0, 3)
+	session.On("user_input_transcribed", func(Event) { events = append(events, "transcript") })
+	session.On("conversation_item_added", func(Event) { events = append(events, "conversation") })
+	session.On("speech_created", func(Event) { events = append(events, "reply") })
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "order this turn", Confidence: 0.9}},
+	})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+
+	want := []string{"transcript", "conversation", "reply"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events = %#v, want %#v", events, want)
+		}
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationSchedulesMatchingFinalTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -6565,6 +6598,76 @@ func TestAgentActivityMatchingFinalTranscriptKeepsPreflightGeneration(t *testing
 	}
 	if !preemptive.IsScheduled() {
 		t.Fatal("preflight generation was not scheduled after matching final turn")
+	}
+}
+
+func TestAgentActivityChangedFinalTranscriptReplacesPreflightGeneration(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	countingLLM := &preemptiveCountingLLM{
+		calls: make(chan struct{}, 3),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "preflight reply"},
+		}}},
+	}
+	agent.LLM = countingLLM
+	agent.TTS = &fakePipelineTTS{stream: &fakePipelineTTSStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "first guess",
+			Confidence: 0.8,
+		}},
+	})
+
+	var first *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		first = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preflight generation")
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for preflight generation")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "corrected final",
+			Confidence: 0.9,
+		}},
+	})
+
+	if !first.IsInterrupted() {
+		t.Fatal("stale preflight generation was not interrupted after final transcript changed")
+	}
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil {
+			t.Fatal("replacement SpeechCreatedEvent has nil handle")
+		}
+		if ev.SpeechHandle == first {
+			t.Fatal("replacement reused stale preflight handle")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive replacement generation")
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for replacement generation")
 	}
 }
 
