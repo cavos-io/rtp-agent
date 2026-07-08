@@ -1967,10 +1967,7 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	userInitiated := false
 	if consumePendingReply {
 		userInitiated = s.pendingReply && !s.pendingReplyAt.IsZero() && time.Since(s.pendingReplyAt) <= ultravoxGenerateReplyTimeout
-		s.pendingReply = false
-		s.pendingReplyAt = time.Time{}
-		s.pendingReplySeq++
-		s.stopGenerateReplyTimerLocked()
+		s.consumePendingReplyLocked()
 	}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    messageID,
@@ -1990,6 +1987,16 @@ func (s *realtimeSession) ensureGenerationLockedWithPending(consumePendingReply 
 	}
 	s.emitEvent(event)
 	return generation
+}
+
+func (s *realtimeSession) consumePendingReplyLocked() {
+	if !s.pendingReply {
+		return
+	}
+	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
+	s.pendingReplySeq++
+	s.stopGenerateReplyTimerLocked()
 }
 
 func (s *realtimeSession) startGenerateReplyTimerLocked(seq uint64) {
@@ -2079,6 +2086,7 @@ func (s *realtimeSession) handleAgentTranscriptEvent(event ultravoxRealtimeTrans
 		if generation.firstToken.IsZero() {
 			generation.firstToken = time.Now()
 		}
+		s.consumePendingReplyLocked()
 	}
 	final := event.Final
 	s.mu.Unlock()

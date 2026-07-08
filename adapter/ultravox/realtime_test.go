@@ -2182,6 +2182,52 @@ func TestUltravoxRealtimeSessionGenerateReplyIgnoresBinaryOutputAudio(t *testing
 	}
 }
 
+func TestUltravoxRealtimeSessionAgentTextConsumesReferenceActivePendingReply(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleOutputAudio([]byte{1, 2, 3, 4})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	if generation.UserInitiated {
+		t.Fatal("audio generation UserInitiated = true, want reference pending unresolved before text")
+	}
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case <-message.AudioCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio frame")
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Delta: "he", Final: false, Ordinal: 1})
+	requireUltravoxRealtimeText(t, message.TextCh, "he")
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "hello", Final: true, Ordinal: 1})
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeMetrics(t, session)
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	nextGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if nextGeneration.UserInitiated {
+		t.Fatal("next generation UserInitiated = true, want first agent text to consume pending GenerateReply")
+	}
+}
+
 func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
