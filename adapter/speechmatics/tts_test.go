@@ -108,6 +108,23 @@ func TestSpeechmaticsTTSProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeDefersReferenceRequestIDUntilRequestRun(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunked, ok := stream.(*speechmaticsTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want Speechmatics chunked stream", stream)
+	}
+	if chunked.requestID != "" {
+		t.Fatalf("requestID before Next = %q, want empty until reference _run initializes AudioEmitter", chunked.requestID)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsTTS("")
 	if err := tts.Close(provider); err != nil {
