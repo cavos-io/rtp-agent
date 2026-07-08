@@ -47,6 +47,7 @@ const (
 )
 
 var ultravoxRealtimeMonotonicStart = time.Now()
+var ultravoxRealtimeAutoStartDefault = true
 
 type RealtimeModel struct {
 	apiKey              string
@@ -70,6 +71,7 @@ type RealtimeModel struct {
 	firstSpeaker        string
 	firstSpeakerSet     bool
 	dialWebsocket       ultravoxRealtimeWebsocketDialer
+	autoStart           bool
 	sessionsMu          sync.Mutex
 	sessions            map[*realtimeSession]struct{}
 }
@@ -100,6 +102,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		firstSpeaker:     defaultRealtimeFirstSpeaker,
 		firstSpeakerSet:  true,
 		dialWebsocket:    defaultUltravoxRealtimeWebsocketDialer,
+		autoStart:        ultravoxRealtimeAutoStartDefault,
 	}
 	for _, opt := range opts {
 		opt(model)
@@ -290,10 +293,35 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		session.mu.Unlock()
 	}
 	m.registerRealtimeSession(session)
+	if m.autoStart {
+		session.startRealtimeMainTask(http.DefaultClient)
+	}
 	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+func (s *realtimeSession) startRealtimeMainTask(client ultravoxRealtimeHTTPDoer) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		cancel()
+		return
+	}
+	s.runCancel = cancel
+	s.runDone = make(chan struct{})
+	runDone := s.runDone
+	s.mu.Unlock()
+
+	go func() {
+		defer close(runDone)
+		_ = s.runRealtimeRestartLoop(ctx, client)
+	}()
+}
 
 func (m *RealtimeModel) registerRealtimeSession(session *realtimeSession) {
 	m.sessionsMu.Lock()
@@ -411,6 +439,8 @@ type realtimeSession struct {
 	lastUserFinalAt       time.Time
 	closed                bool
 	closeOnce             sync.Once
+	runCancel             context.CancelFunc
+	runDone               chan struct{}
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -667,6 +697,19 @@ func (s *realtimeSession) Close() error {
 	var generation *ultravoxRealtimeGeneration
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
+		runCancel := s.runCancel
+		runDone := s.runDone
+		s.runCancel = nil
+		s.runDone = nil
+		s.mu.Unlock()
+		if runCancel != nil {
+			runCancel()
+		}
+		if runDone != nil {
+			<-runDone
+		}
+
+		s.mu.Lock()
 		generation = s.generation
 		s.closed = true
 		s.generation = nil
@@ -864,7 +907,7 @@ func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRe
 	if err != nil {
 		return err
 	}
-	return s.runRealtimeConnection(conn)
+	return s.runRealtimeConnectionWithContext(ctx, conn)
 }
 
 func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
@@ -881,6 +924,9 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			return err
 		}
 		if err := s.runRealtimeOnce(ctx, client); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
 				continue
 			}
@@ -1070,9 +1116,28 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 }
 
 func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
-	defer conn.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	return s.runRealtimeConnectionWithContext(context.Background(), conn)
+}
+
+func (s *realtimeSession) runRealtimeConnectionWithContext(parent context.Context, conn ultravoxRealtimeWebsocketConn) error {
+	var closeOnce sync.Once
+	closeConn := func() {
+		closeOnce.Do(func() {
+			_ = conn.Close()
+		})
+	}
+	defer closeConn()
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	connCloseDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeConn()
+		case <-connCloseDone:
+		}
+	}()
+	defer close(connCloseDone)
 	sendErrCh := make(chan error, 1)
 	receiveErrCh := make(chan error, 1)
 	go func() {

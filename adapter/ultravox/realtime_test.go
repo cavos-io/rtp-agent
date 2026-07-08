@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,6 +20,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
+
+func init() {
+	ultravoxRealtimeAutoStartDefault = false
+}
 
 func TestUltravoxRealtimeConstructorMatchesReference(t *testing.T) {
 	t.Run("defaults", TestUltravoxRealtimeDefaultsMatchReference)
@@ -303,6 +308,53 @@ func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *test
 	case got := <-session.clientEventCh:
 		t.Fatalf("unexpected client event for empty UpdateOptions = %#v", got)
 	default:
+	}
+}
+
+func TestUltravoxRealtimeSessionStartsMainTaskLikeReference(t *testing.T) {
+	oldAutoStart := ultravoxRealtimeAutoStartDefault
+	ultravoxRealtimeAutoStartDefault = true
+	defer func() { ultravoxRealtimeAutoStartDefault = oldAutoStart }()
+
+	requestCh := make(chan *http.Request, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCh <- r
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
+	}))
+	defer server.Close()
+
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	dialCh := make(chan string, 1)
+	model.dialWebsocket = func(_ context.Context, joinURL string, _ http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		dialCh <- joinURL
+		return &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}, nil
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case req := <-requestCh:
+		if req.Method != http.MethodPost {
+			t.Fatalf("create call method = %s, want POST", req.Method)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Session() did not start reference main task create-call request")
+	}
+	select {
+	case joinURL := <-dialCh:
+		if joinURL != "wss://ultravox.example/join" {
+			t.Fatalf("dial join URL = %q, want reference join URL", joinURL)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Session() did not dial reference realtime websocket")
 	}
 }
 
