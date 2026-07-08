@@ -658,14 +658,34 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	}
 	for _, chunk := range s.audioStream.Push(audioFrame.Data) {
 		audioData := append([]byte(nil), chunk.Data...)
-		select {
-		case s.audioCh <- audioData:
-		default:
-			return errors.New("ultravox realtime audio queue is full")
-		}
+		s.enqueueAudioDataLocked(audioData)
 	}
 	return nil
 }
+
+func (s *realtimeSession) enqueueAudioDataLocked(audioData []byte) {
+	select {
+	case s.audioCh <- audioData:
+		return
+	default:
+	}
+	nextCap := cap(s.audioCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan []byte, nextCap)
+	for {
+		select {
+		case queued := <-s.audioCh:
+			next <- queued
+		default:
+			next <- audioData
+			s.audioCh = next
+			return
+		}
+	}
+}
+
 func (s *realtimeSession) PushVideo(*images.VideoFrame) error {
 	return nil
 }

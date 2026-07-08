@@ -689,6 +689,48 @@ func TestUltravoxRealtimeSessionPushAudioDropsInvalidReferenceFrames(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionPushAudioGrowsReferenceQueue(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for i := 0; i < cap(session.audioCh); i++ {
+		session.audioCh <- []byte{byte(i)}
+	}
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio with full queue error = %v, want reference unbounded queue behavior", err)
+	}
+
+	for i := 0; i < 256; i++ {
+		<-session.audioCh
+	}
+	select {
+	case got := <-session.audioCh:
+		if !bytes.Equal(got, pcm) {
+			t.Fatalf("queued audio after full queue = %v, want new PCM chunk", got[:min(len(got), 8)])
+		}
+	default:
+		t.Fatal("new audio missing after full queue, want reference queue growth")
+	}
+}
+
 func TestUltravoxRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
