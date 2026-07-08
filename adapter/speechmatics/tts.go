@@ -467,13 +467,13 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 		return speechmaticsTTSConnectionAPIError()
 	}
 	if resp.StatusCode == 499 {
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		return io.EOF
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		message := speechmaticsTTSStatusReason(resp)
 		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}

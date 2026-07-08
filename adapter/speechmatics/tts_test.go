@@ -911,6 +911,47 @@ func TestSpeechmaticsTTSSynthesizeStatusErrorUsesReferenceResponseReason(t *test
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeStatusErrorCancelsRequestBeforeBodyClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := newSpeechmaticsContextCloseBody()
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body.ctx = r.Context()
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+		}
+	case <-time.After(100 * time.Millisecond):
+		body.release()
+		t.Fatal("Next blocked closing status response body, want request canceled before body close")
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -1485,6 +1526,38 @@ func (b *speechmaticsBlockingBody) Read([]byte) (int, error) {
 func (b *speechmaticsBlockingBody) Close() error {
 	close(b.closeDone)
 	return nil
+}
+
+type speechmaticsContextCloseBody struct {
+	ctx         context.Context
+	releaseCh   chan struct{}
+	releaseOnce sync.Once
+}
+
+func newSpeechmaticsContextCloseBody() *speechmaticsContextCloseBody {
+	return &speechmaticsContextCloseBody{
+		releaseCh: make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsContextCloseBody) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b *speechmaticsContextCloseBody) Close() error {
+	if b.ctx == nil {
+		return errors.New("response body closed before request context was captured")
+	}
+	select {
+	case <-b.ctx.Done():
+		return nil
+	case <-b.releaseCh:
+		return nil
+	}
+}
+
+func (b *speechmaticsContextCloseBody) release() {
+	b.releaseOnce.Do(func() { close(b.releaseCh) })
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
