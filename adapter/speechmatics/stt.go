@@ -1334,6 +1334,10 @@ func speechmaticsUnmarshalReferenceSegmentLanguage(data []byte) (string, error) 
 		}
 		return "False", nil
 	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
 	return "", fmt.Errorf("unsupported segment language")
 }
 
