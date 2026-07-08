@@ -2298,7 +2298,78 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 			out.WriteByte(' ')
 		}
 	}
+	return ultravoxRealtimeDecodePythonJSONASCIIEscapes(out.String())
+}
+
+func ultravoxRealtimeDecodePythonJSONASCIIEscapes(value string) string {
+	var out strings.Builder
+	out.Grow(len(value))
+	inString := false
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if escaped {
+			if c == 'u' && i+4 < len(value) {
+				if decoded, ok := ultravoxRealtimePrintableASCIIUnicodeEscape(value[i+1 : i+5]); ok {
+					out.WriteByte(decoded)
+					i += 4
+					escaped = false
+					continue
+				}
+			}
+			out.WriteByte('\\')
+			out.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if inString && c == '\\' {
+			escaped = true
+			continue
+		}
+		out.WriteByte(c)
+		if c == '"' {
+			inString = !inString
+		}
+	}
+	if escaped {
+		out.WriteByte('\\')
+	}
 	return out.String()
+}
+
+func ultravoxRealtimePrintableASCIIUnicodeEscape(hex string) (byte, bool) {
+	if len(hex) != 4 {
+		return 0, false
+	}
+	var value byte
+	for i := 0; i < 4; i++ {
+		nibble, ok := ultravoxRealtimeHexNibble(hex[i])
+		if !ok {
+			return 0, false
+		}
+		if i >= 2 {
+			value = value<<4 | nibble
+		} else if nibble != 0 {
+			return 0, false
+		}
+	}
+	if value < 0x20 || value >= 0x7f || value == '"' || value == '\\' {
+		return 0, false
+	}
+	return value, true
+}
+
+func ultravoxRealtimeHexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func writeUltravoxRealtimePythonJSONUnicodeEscape(out *strings.Builder, r rune) {
