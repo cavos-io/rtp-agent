@@ -1243,6 +1243,43 @@ func TestSpeechmaticsTTSChunkedStreamUsesReferenceProgressivePCMFrames(t *testin
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamUsesReferenceFrameSizeForNonKilohertzRate(t *testing.T) {
+	const sampleRate = 44100
+	wantFrames := []uint32{882, 1764, 3528, 7056, 8800}
+	totalSamples := 0
+	for _, samples := range wantFrames {
+		totalSamples += int(samples)
+	}
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     io.NopCloser(bytes.NewReader(make([]byte, totalSamples*2))),
+		sampleRate: sampleRate,
+	}
+
+	for i, wantSamples := range wantFrames {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next frame %d error = %v", i, err)
+		}
+		if audio == nil || audio.Frame == nil || audio.IsFinal {
+			t.Fatalf("Next frame %d = %+v, want audio frame", i, audio)
+		}
+		if audio.Frame.SampleRate != sampleRate {
+			t.Fatalf("frame %d sample rate = %d, want %d", i, audio.Frame.SampleRate, sampleRate)
+		}
+		if audio.Frame.SamplesPerChannel != wantSamples {
+			t.Fatalf("frame %d samples per channel = %d, want reference AudioEmitter progressive frame size %d", i, audio.Frame.SamplesPerChannel, wantSamples)
+		}
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	body := &speechmaticsCloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &speechmaticsTTSChunkedStream{

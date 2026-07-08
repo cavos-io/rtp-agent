@@ -407,7 +407,7 @@ func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {
 			s.pcm = audio.NewAudioByteStream(0, 1, 1)
 			return s.pcm
 		}
-		samplesPerChannel := uint32(s.sampleRate) * 200 / 1000
+		samplesPerChannel := uint32(s.sampleRate/1000) * 200
 		s.pcm = audio.NewAudioByteStreamWithOptions(uint32(s.sampleRate), 1, samplesPerChannel, audio.AudioByteStreamOptions{
 			Progressive: true,
 		})
