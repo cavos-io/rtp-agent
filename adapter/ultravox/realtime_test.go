@@ -1070,8 +1070,8 @@ func TestUltravoxRealtimeSessionUpdateToolsMarksReferenceRestartOnNameSetChange(
 	if err := session.UpdateTools([]llm.Tool{lookup, ultravoxRealtimeTestTool{name: "calendar"}}); err != nil {
 		t.Fatalf("UpdateTools changed name set error = %v, want reference restart", err)
 	}
-	if got := session.restartCount; got != 2 {
-		t.Fatalf("restart count after changed tool-name set = %d, want 2", got)
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after changed tool-name set while restart pending = %d, want 1 reference restart signal", got)
 	}
 }
 
@@ -1973,6 +1973,38 @@ func TestUltravoxRealtimeSessionRestartDropsReferenceQueuedClientEvents(t *testi
 	case event := <-session.clientEventCh:
 		t.Fatalf("queued client event after restart = %#v, want reference old message channel dropped", event)
 	default:
+	}
+}
+
+func TestUltravoxRealtimeSessionPendingRestartKeepsReferenceFreshClientEvents(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("first UpdateInstructions error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply after restart signal error = %v", err)
+	}
+	if err := session.UpdateTools([]llm.Tool{ultravoxRealtimeTestTool{name: "lookup"}}); err != nil {
+		t.Fatalf("second restart while pending error = %v", err)
+	}
+
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+	if got := session.restartCount; got != 1 {
+		t.Fatalf("restart count after duplicate pending restart = %d, want one reference restart signal", got)
 	}
 }
 

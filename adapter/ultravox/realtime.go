@@ -721,6 +721,7 @@ type realtimeSession struct {
 	generateReplyTimeout  time.Duration
 	recoverableErrorDelay time.Duration
 	restartCount          uint64
+	restartPending        bool
 	lastUserFinalAt       time.Time
 	closed                bool
 	closeOnce             sync.Once
@@ -1368,6 +1369,9 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 		s.mu.Lock()
 		closed := s.closed
 		restarted := s.restartCount != restartCount
+		if restarted {
+			s.restartPending = false
+		}
 		s.mu.Unlock()
 		if closed || !restarted {
 			return nil
@@ -1840,6 +1844,10 @@ func (s *realtimeSession) enqueueClientEventLocked(event map[string]any) error {
 }
 
 func (s *realtimeSession) markRestartNeededLocked() {
+	if s.restartPending {
+		return
+	}
+	s.restartPending = true
 	s.restartCount++
 	s.pendingReply = false
 	s.pendingReplyAt = time.Time{}
