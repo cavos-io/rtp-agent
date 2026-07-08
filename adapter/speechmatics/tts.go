@@ -480,8 +480,8 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 	s.mu.Lock()
 	if s.closed || s.finalSent {
 		s.mu.Unlock()
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		return io.EOF
 	}
 	s.stream = resp.Body

@@ -1349,6 +1349,48 @@ func TestSpeechmaticsTTSChunkedStreamCloseCancelsPendingRequest(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamCancelsStaleResponseBeforeClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := newSpeechmaticsContextCloseBody()
+	stream := &speechmaticsTTSChunkedStream{
+		ctx:        context.Background(),
+		cancel:     func() {},
+		text:       "hello",
+		apiKey:     "test-key",
+		baseURL:    "https://tts.example.com",
+		voice:      "sarah",
+		sampleRate: 16000,
+	}
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body.ctx = r.Context()
+		stream.mu.Lock()
+		stream.closed = true
+		stream.mu.Unlock()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != io.EOF {
+			t.Fatalf("Next error = %v, want EOF for stale response after Close", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		body.release()
+		t.Fatal("Next blocked closing stale response body, want request canceled before body close")
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamCloseCancelsActiveResponse(t *testing.T) {
 	body := newSpeechmaticsBlockingBody()
 	stream := &speechmaticsTTSChunkedStream{
