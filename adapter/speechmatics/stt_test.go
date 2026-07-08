@@ -3485,6 +3485,33 @@ func TestSpeechmaticsSTTStartupDrainWriteFailureSurfacesToNext(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsPushFrameForwardsReferenceEmptyFrameToVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	stream := &speechmaticsSTTStream{
+		vadStream: vadStream,
+		writeBinary: func(data []byte) error {
+			t.Fatalf("provider audio write = %d bytes, want no provider write for empty frame", len(data))
+			return nil
+		},
+	}
+	frame := &model.AudioFrame{
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 0,
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame empty frame error = %v", err)
+	}
+	pushed := vadStream.pushedFrames()
+	if len(pushed) != 1 {
+		t.Fatalf("VAD pushed frames = %d, want reference empty frame forwarded", len(pushed))
+	}
+	if pushed[0] != frame {
+		t.Fatalf("VAD frame = %#v, want original empty frame", pushed[0])
+	}
+}
+
 func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	frame := &model.AudioFrame{
