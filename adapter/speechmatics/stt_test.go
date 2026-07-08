@@ -1552,6 +1552,29 @@ func TestSpeechmaticsSegmentEventsFormatsReferenceBoolText(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceNumericText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":1.5,
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "1.5" {
+		t.Fatalf("text = %q, want reference formatted numeric text", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsPreserveReferenceEmptyLanguage(t *testing.T) {
 	state := &speechmaticsStreamState{language: "de"}
 	var resp smResponse

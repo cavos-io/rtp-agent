@@ -1276,6 +1276,10 @@ func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 		}
 		return "False", nil
 	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
 	return "", fmt.Errorf("unsupported segment text")
 }
 
