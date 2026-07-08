@@ -2662,7 +2662,11 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPe
 }
 
 func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
-	for _, speakerID := range []string{"__ASSISTANT__", "__A1__", "__A_B__"} {
+	if !speechmaticsSystemSpeakerID("__assistant__") {
+		t.Fatal("lowercase wrapped speaker was not classified as reference system speaker")
+	}
+
+	for _, speakerID := range []string{"__ASSISTANT__", "__assistant__", "__Assistant__", "__a__", "__A1__", "__A_B__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -2688,8 +2692,8 @@ func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *t
 	}
 }
 
-func TestSpeechmaticsSegmentEventsKeepReferenceNonSystemWrappedSpeakerLabels(t *testing.T) {
-	for _, speakerID := range []string{"__assistant__", "__Assistant__", "__A__"} {
+func TestSpeechmaticsSegmentEventsKeepReferenceNonWrappedSpeakerLabels(t *testing.T) {
+	for _, speakerID := range []string{"__", "__A", "A__", "_assistant_"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -2710,7 +2714,7 @@ func TestSpeechmaticsSegmentEventsKeepReferenceNonSystemWrappedSpeakerLabels(t *
 
 			events := speechmaticsEvents(resp, nil)
 			if len(events) != 1 || len(events[0].Alternatives) != 1 {
-				t.Fatalf("events = %#v, want non-system wrapped speaker %q emitted", events, speakerID)
+				t.Fatalf("events = %#v, want non-wrapped speaker %q emitted", events, speakerID)
 			}
 			if got := events[0].Alternatives[0].SpeakerID; got != speakerID {
 				t.Fatalf("speaker id = %q, want %q", got, speakerID)
