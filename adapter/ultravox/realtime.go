@@ -1292,7 +1292,10 @@ const (
 	ultravoxRealtimeUnexpectedWebsocketClose ultravoxRealtimeConnectionError = "Ultravox S2S connection closed unexpectedly"
 )
 
-var errUltravoxRealtimeReconnectAfterSend = errors.New("ultravox realtime reconnect after send error")
+var (
+	errUltravoxRealtimeReconnectAfterSend    = errors.New("ultravox realtime reconnect after send error")
+	errUltravoxRealtimeReconnectAfterReceive = errors.New("ultravox realtime reconnect after receive error")
+)
 
 type ultravoxRealtimeRawToolSchemaParser interface {
 	ParseFunctionTools(format string) (map[string]interface{}, error)
@@ -1364,7 +1367,7 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
+			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
 				continue
 			}
 			recoverable := ultravoxRealtimeRecoverableError(err)
@@ -1539,7 +1542,7 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 			if errors.As(err, &closeErr) {
 				return ultravoxRealtimeUnexpectedWebsocketClose
 			}
-			return err
+			return errUltravoxRealtimeReconnectAfterReceive
 		}
 		switch messageType {
 		case ultravoxRealtimeWebsocketTextFrame:
