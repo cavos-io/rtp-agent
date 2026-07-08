@@ -1034,6 +1034,32 @@ type smAlternative struct {
 	Tags       []string `json:"tags,omitempty"`
 }
 
+func (a *smAlternative) UnmarshalJSON(data []byte) error {
+	type alternative smAlternative
+	var raw struct {
+		alternative
+		Tags json.RawMessage `json:"tags"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = smAlternative(raw.alternative)
+	if len(raw.Tags) == 0 {
+		return nil
+	}
+	var tags []string
+	if err := json.Unmarshal(raw.Tags, &tags); err == nil {
+		a.Tags = tags
+		return nil
+	}
+	var tag string
+	if err := json.Unmarshal(raw.Tags, &tag); err != nil {
+		return err
+	}
+	a.Tags = []string{tag}
+	return nil
+}
+
 type smResult struct {
 	Alternatives []smAlternative `json:"alternatives"`
 	Type         string          `json:"type"`
