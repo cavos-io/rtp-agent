@@ -1229,7 +1229,22 @@ func (s *realtimeSession) enqueueClientEventLocked(event map[string]any) error {
 		s.enqueueOutboundEventLocked(event)
 		return nil
 	default:
-		return errors.New("ultravox realtime client event queue is full")
+	}
+	nextCap := cap(s.clientEventCh) * 2
+	if nextCap == 0 {
+		nextCap = 1
+	}
+	next := make(chan map[string]any, nextCap)
+	for {
+		select {
+		case queued := <-s.clientEventCh:
+			next <- queued
+		default:
+			next <- event
+			s.clientEventCh = next
+			s.enqueueOutboundEventLocked(event)
+			return nil
+		}
 	}
 }
 

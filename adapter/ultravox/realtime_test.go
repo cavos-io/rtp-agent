@@ -1311,18 +1311,18 @@ func TestUltravoxRealtimeSessionGenerateReplyBuffersBeyondOldClientEventLimit(t 
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
-	const oldDropLimit = 256
-	if cap(session.clientEventCh) <= oldDropLimit {
-		t.Fatalf("client event queue cap = %d, want above old 256-event limit", cap(session.clientEventCh))
+	fullCap := cap(session.clientEventCh)
+	if fullCap == 0 {
+		t.Fatal("client event queue cap = 0, want buffered reference queue")
 	}
-	for i := 0; i < oldDropLimit; i++ {
+	for i := 0; i < fullCap; i++ {
 		session.clientEventCh <- map[string]any{"type": "queued"}
 	}
 
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
-		t.Fatalf("GenerateReply error = %v, want reference unbounded client event queue", err)
+		t.Fatalf("GenerateReply error = %v, want reference unbounded client event queue growth", err)
 	}
-	for i := 0; i < oldDropLimit; i++ {
+	for i := 0; i < fullCap; i++ {
 		<-session.clientEventCh
 	}
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
@@ -1608,7 +1608,7 @@ func TestUltravoxRealtimeSessionInterruptSendsReferenceBargeIn(t *testing.T) {
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
 
-func TestUltravoxRealtimeSessionInterruptBackpressureClosesReferenceGeneration(t *testing.T) {
+func TestUltravoxRealtimeSessionInterruptBuffersFullReferenceClientQueue(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -1634,10 +1634,19 @@ func TestUltravoxRealtimeSessionInterruptBackpressureClosesReferenceGeneration(t
 		session.clientEventCh <- map[string]any{"type": "queued"}
 	}
 
-	err = session.Interrupt()
-	if err == nil || !strings.Contains(err.Error(), "client event queue is full") {
-		t.Fatalf("Interrupt error = %v, want client event queue backpressure", err)
+	oldCap := cap(session.clientEventCh)
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v, want reference unbounded client event queue growth", err)
 	}
+	for i := 0; i < oldCap; i++ {
+		<-session.clientEventCh
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"urgency":       "immediate",
+		"deferResponse": true,
+	})
 	requireUltravoxRealtimeClosedText(t, message.TextCh)
 	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
 }
@@ -1870,7 +1879,7 @@ func TestUltravoxRealtimeSessionOutputMediumUpdateKeepsReferenceModalities(t *te
 	requireUltravoxRealtimeModalities(t, voiceMessage.ModalitiesCh, []string{"audio", "text"})
 }
 
-func TestUltravoxRealtimeSessionOutputMediumBackpressureKeepsReferenceModalities(t *testing.T) {
+func TestUltravoxRealtimeSessionOutputMediumQueueGrowthKeepsReferenceModalities(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -1882,17 +1891,24 @@ func TestUltravoxRealtimeSessionOutputMediumBackpressureKeepsReferenceModalities
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
-	for i := 0; i < cap(session.clientEventCh); i++ {
+	fullCap := cap(session.clientEventCh)
+	for i := 0; i < fullCap; i++ {
 		session.clientEventCh <- map[string]any{"type": "queued"}
 	}
 
-	err = session.UpdateOptions(llm.RealtimeSessionOptions{
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
 		OutputMedium:    "text",
 		OutputMediumSet: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "client event queue is full") {
-		t.Fatalf("UpdateOptions error = %v, want client event queue backpressure", err)
+	}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want reference unbounded client event queue growth", err)
 	}
+	for i := 0; i < fullCap; i++ {
+		<-session.clientEventCh
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
 
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 	generation := requireUltravoxRealtimeGeneration(t, session)
@@ -2702,7 +2718,7 @@ func TestUltravoxRealtimeSessionUpdateChatContextResendsReferenceReaddedItems(t 
 	})
 }
 
-func TestUltravoxRealtimeSessionUpdateChatContextRetriesAfterClientQueueBackpressure(t *testing.T) {
+func TestUltravoxRealtimeSessionUpdateChatContextBuffersFullReferenceClientQueue(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -2714,21 +2730,17 @@ func TestUltravoxRealtimeSessionUpdateChatContextRetriesAfterClientQueueBackpres
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
-	for i := 0; i < cap(session.clientEventCh); i++ {
+	fullCap := cap(session.clientEventCh)
+	for i := 0; i < fullCap; i++ {
 		session.clientEventCh <- map[string]any{"type": "filler"}
 	}
 
 	ctx := llm.NewChatContext()
 	ctx.AddMessage(llm.ChatMessageArgs{ID: "memo", Role: llm.ChatRoleUser, Text: "remember Paris"})
-	if err := session.UpdateChatContext(ctx); err == nil || !strings.Contains(err.Error(), "client event queue is full") {
-		t.Fatalf("UpdateChatContext full queue error = %v, want queue full", err)
-	}
-	<-session.clientEventCh
-
 	if err := session.UpdateChatContext(ctx); err != nil {
-		t.Fatalf("UpdateChatContext retry error = %v, want context event after backpressure clears", err)
+		t.Fatalf("UpdateChatContext error = %v, want reference unbounded client event queue growth", err)
 	}
-	for i := 0; i < cap(session.clientEventCh)-1; i++ {
+	for i := 0; i < fullCap; i++ {
 		<-session.clientEventCh
 	}
 	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
