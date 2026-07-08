@@ -237,6 +237,31 @@ func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceStringEOS(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptAcceptsReferencePydanticStringEOS(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.15,
+			"end_time":0.45,
+			"is_eos":"yes",
+			"alternatives":[{"content":"done","confidence":0.91,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	if !speechmaticsStringInSlice("ends_with_eos", state.latestSegmentAnnotation) {
+		t.Fatalf("latest raw annotation = %#v, want reference pydantic string is_eos treated as true", state.latestSegmentAnnotation)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptAcceptsReferenceNumericEOS(t *testing.T) {
 	state := &speechmaticsStreamState{}
 	var resp smResponse
