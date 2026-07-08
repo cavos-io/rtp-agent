@@ -1071,6 +1071,7 @@ type smResponse struct {
 	segmentLanguagePresent  []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
+	segmentSpeakerIDNull    []bool
 }
 
 func (r *smResponse) UnmarshalJSON(data []byte) error {
@@ -1103,6 +1104,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.segmentLanguagePresent = make([]bool, len(raw.Segments))
 		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
+		decoded.segmentSpeakerIDNull = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
 			if text, ok := segment["text"]; ok && string(text) == "null" {
 				decoded.Segments[i].Text = "None"
@@ -1116,6 +1118,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 			_, decoded.segmentLanguagePresent[i] = segment["language"]
 			_, decoded.segmentIsActivePresent[i] = segment["is_active"]
 			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
+			if speakerID, ok := segment["speaker_id"]; ok && string(speakerID) == "null" {
+				decoded.segmentSpeakerIDNull[i] = true
+			}
 		}
 	}
 	*r = smResponse(decoded)
@@ -1799,7 +1804,11 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
-		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
+		formatSpeakerID := speakerID
+		if speechmaticsSegmentSpeakerIDNull(resp, i) {
+			formatSpeakerID = "None"
+		}
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -1977,6 +1986,10 @@ func speechmaticsRawSpeakerID(speakerID string, present bool) string {
 
 func speechmaticsSegmentSpeakerIDPresent(resp smResponse, index int) bool {
 	return index >= 0 && index < len(resp.segmentSpeakerIDPresent) && resp.segmentSpeakerIDPresent[index]
+}
+
+func speechmaticsSegmentSpeakerIDNull(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentSpeakerIDNull) && resp.segmentSpeakerIDNull[index]
 }
 
 func speechmaticsSegmentIsActivePresent(resp smResponse, index int) bool {

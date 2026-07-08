@@ -1360,6 +1360,32 @@ func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceNullSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"null speaker",
+			"language":"en",
+			"speaker_id":null,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@None: null speaker" {
+		t.Fatalf("text = %q, want reference formatted null speaker id", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsTreatReferenceNullActiveAsPassive(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",
