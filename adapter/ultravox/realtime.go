@@ -2063,16 +2063,16 @@ func (s *realtimeSession) pickGenerationCreatedAtLocked() time.Time {
 }
 
 func (s *realtimeSession) handleAgentTranscriptEvent(event ultravoxRealtimeTranscriptEvent) {
+	incrementalText := event.Delta
+	if incrementalText == "" && !event.Final {
+		incrementalText = event.Text
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return
 	}
-	generation := s.ensureGenerationLocked()
-	incrementalText := event.Delta
-	if incrementalText == "" && !event.Final {
-		incrementalText = event.Text
-	}
+	generation := s.ensureGenerationLockedWithPending(incrementalText != "")
 	if incrementalText != "" {
 		generation.outputText.WriteString(incrementalText)
 		if generation.firstToken.IsZero() {

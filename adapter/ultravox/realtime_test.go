@@ -1677,6 +1677,40 @@ func TestUltravoxRealtimeSessionGenerateReplyMarksReferenceUserInitiatedGenerati
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyIgnoresEmptyFinalAgentTranscript(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Final: true, Ordinal: 1})
+	emptyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if emptyGeneration.UserInitiated {
+		t.Fatal("empty final generation UserInitiated = true, want reference pending reply unresolved until text or speaking")
+	}
+
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	replyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !replyGeneration.UserInitiated {
+		t.Fatal("reply generation UserInitiated = false, want pending GenerateReply preserved after empty final transcript")
+	}
+}
+
 func TestUltravoxRealtimeSessionGenerateReplySpeakingConsumesReferenceActiveGenerationPending(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
