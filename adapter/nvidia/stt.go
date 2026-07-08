@@ -25,6 +25,7 @@ type NvidiaSTT struct {
 	server          string
 	language        string
 	sampleRate      int
+	punctuate       bool
 	useSSL          bool
 	diarization     bool
 	maxSpeakerCount int
@@ -64,6 +65,12 @@ func WithNvidiaSTTSampleRate(sampleRate int) NvidiaSTTOption {
 	}
 }
 
+func WithNvidiaSTTPunctuate(enabled bool) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.punctuate = enabled
+	}
+}
+
 func WithNvidiaSTTUseSSL(useSSL bool) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
 		s.useSSL = useSSL
@@ -99,6 +106,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		server:          defaultNvidiaSTTServer,
 		language:        defaultNvidiaSTTLanguage,
 		sampleRate:      defaultNvidiaSTTSampleRate,
+		punctuate:       true,
 		useSSL:          true,
 		diarization:     false,
 		maxSpeakerCount: 0,

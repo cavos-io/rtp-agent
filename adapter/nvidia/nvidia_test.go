@@ -167,6 +167,9 @@ func TestNvidiaSTTReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := provider.language, "en-US"; got != want {
 		t.Fatalf("language = %q, want %q", got, want)
 	}
+	if !provider.punctuate {
+		t.Fatal("punctuate = false, want reference default true")
+	}
 	if !provider.useSSL {
 		t.Fatal("useSSL = false, want reference default true")
 	}
@@ -235,6 +238,7 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 		WithNvidiaSTTUseSSL(false),
 		WithNvidiaSTTDiarization(true),
 		WithNvidiaSTTMaxSpeakerCount(4),
+		WithNvidiaSTTPunctuate(false),
 	)
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
@@ -260,6 +264,9 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 	if got, want := provider.maxSpeakerCount, 4; got != want {
 		t.Fatalf("maxSpeakerCount = %d, want %d", got, want)
+	}
+	if provider.punctuate {
+		t.Fatal("punctuate = true, want false")
 	}
 	if caps := provider.Capabilities(); !caps.Diarization || caps.AlignedTranscript != "word" {
 		t.Fatalf("Capabilities() = %+v, want reference diarization and word alignment", caps)
