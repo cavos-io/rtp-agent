@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -5299,6 +5300,89 @@ func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) 
 	}
 }
 
+func TestUltravoxRealtimeSessionSendErrorDropsReferenceStaleReceiveFrame(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	firstConn := &ultravoxRealtimeBlockingMessageConn{
+		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeErr: errors.New("socket write failed")},
+		ready:                               make(chan struct{}),
+		release:                             make(chan struct{}),
+		frame: ultravoxRealtimeTestWebsocketFrame{
+			typ:  ultravoxRealtimeWebsocketTextFrame,
+			data: []byte(`{"type":"transcript","role":"user","medium":"voice","text":"stale","final":true,"ordinal":11}`),
+		},
+	}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
+	conns := []ultravoxRealtimeWebsocketConn{firstConn, secondConn}
+	dialCh := make(chan int, 2)
+	var dialCount int
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		if dialCount >= len(conns) {
+			t.Fatalf("unexpected extra websocket dial %d", dialCount+1)
+		}
+		conn := conns[dialCount]
+		dialCount++
+		dialCh <- dialCount
+		return conn, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeRestartLoop(context.Background(), doer)
+	}()
+	select {
+	case <-firstConn.ready:
+	case <-time.After(time.Second):
+		t.Fatal("first receive task did not block on stale provider frame")
+	}
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-dialCh:
+			if got != want {
+				t.Fatalf("dial marker = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for websocket dial %d", want)
+		}
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeRestartLoop error = %v, want nil after stale receive cleanup", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart loop did not exit after stale receive cleanup")
+	}
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event from stale receive frame = %#v, want old websocket frame ignored", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionReconnectsAfterReferenceReceiveError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -5735,6 +5819,43 @@ func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
 
 func (c *ultravoxRealtimeTestWebsocketConn) Close() error {
 	c.closeCount++
+	return nil
+}
+
+type ultravoxRealtimeBlockingMessageConn struct {
+	ultravoxRealtimeTestWebsocketWriter
+	ready      chan struct{}
+	release    chan struct{}
+	frame      ultravoxRealtimeTestWebsocketFrame
+	readyOnce  sync.Once
+	closeOnce  sync.Once
+	closeCount int
+	sent       bool
+}
+
+func (c *ultravoxRealtimeBlockingMessageConn) ReadMessage() (int, []byte, error) {
+	if c.sent {
+		return 0, nil, context.Canceled
+	}
+	c.readyOnce.Do(func() {
+		if c.ready != nil {
+			close(c.ready)
+		}
+	})
+	if c.release != nil {
+		<-c.release
+	}
+	c.sent = true
+	return c.frame.typ, append([]byte(nil), c.frame.data...), nil
+}
+
+func (c *ultravoxRealtimeBlockingMessageConn) Close() error {
+	c.closeCount++
+	c.closeOnce.Do(func() {
+		if c.release != nil {
+			close(c.release)
+		}
+	})
 	return nil
 }
 

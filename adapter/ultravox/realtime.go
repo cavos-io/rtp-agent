@@ -1577,6 +1577,12 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 			}
 			return errUltravoxRealtimeReconnectAfterReceive
 		}
+		s.mu.Lock()
+		restarted = s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		switch messageType {
 		case ultravoxRealtimeWebsocketTextFrame:
 			if err := s.handleServerTextMessage(data); err != nil {
@@ -1621,9 +1627,19 @@ func (s *realtimeSession) runRealtimeConnectionWithContext(parent context.Contex
 	}()
 	select {
 	case err := <-sendErrCh:
+		if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
+			s.mu.Lock()
+			s.restartCount++
+			s.mu.Unlock()
+		}
 		cancel()
 		return err
 	case err := <-receiveErrCh:
+		if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
+			s.mu.Lock()
+			s.restartCount++
+			s.mu.Unlock()
+		}
 		cancel()
 		return err
 	}
