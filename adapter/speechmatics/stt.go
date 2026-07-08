@@ -1085,6 +1085,7 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		Metadata json.RawMessage `json:"metadata"`
 		Results  []struct {
 			Alternatives []map[string]json.RawMessage `json:"alternatives"`
+			IsEOS        json.RawMessage              `json:"is_eos"`
 		} `json:"results"`
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1098,6 +1099,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
 		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
 		for i, result := range raw.Results {
+			if (raw.Message == "AddTranscript" || raw.Message == "AddPartialTranscript") &&
+				string(result.IsEOS) == "null" {
+				return fmt.Errorf("results[%d].is_eos must be a bool", i)
+			}
 			if len(result.Alternatives) == 0 {
 				continue
 			}
