@@ -2,6 +2,8 @@ package fal
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
@@ -85,7 +88,13 @@ func TestFalSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 func TestFalSTTRecognizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewFalSTT("test-key")
 
-	req, err := buildFalSTTRequest(context.Background(), provider, []byte{0x01, 0x02}, "")
+	wav := falSTTWAVBytes([]*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}})
+	req, err := buildFalSTTRequest(context.Background(), provider, wav, "")
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -101,8 +110,22 @@ func TestFalSTTRecognizeRequestUsesReferencePayload(t *testing.T) {
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if payload["audio_url"] != "data:audio/x-wav;base64,AQI=" {
+	audioURL, ok := payload["audio_url"].(string)
+	if !ok || !strings.HasPrefix(audioURL, "data:audio/x-wav;base64,") {
 		t.Fatalf("audio_url = %#v, want wav data URI", payload["audio_url"])
+	}
+	audio, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(audioURL, "data:audio/x-wav;base64,"))
+	if err != nil {
+		t.Fatalf("decode audio data URI: %v", err)
+	}
+	if string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" {
+		t.Fatalf("audio header = %q/%q, want RIFF/WAVE", audio[:4], audio[8:12])
+	}
+	if got := binary.LittleEndian.Uint32(audio[24:28]); got != 8000 {
+		t.Fatalf("wav sample rate = %d, want 8000", got)
+	}
+	if got := audio[len(audio)-4:]; string(got) != string([]byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("wav data tail = %#v, want PCM bytes", got)
 	}
 	assertFalSTTPayload(t, payload, "task", "transcribe")
 	assertFalSTTPayload(t, payload, "language", "en")

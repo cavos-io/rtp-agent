@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,14 +110,8 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		s.language = language
 	}
 
-	// For Fal, we typically need to provide an audio URL or base64 encoded data
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
-
 	resolvedLanguage := s.resolveLanguage("")
-	req, err := buildFalSTTRequest(ctx, s, buf.Bytes(), resolvedLanguage)
+	req, err := buildFalSTTRequest(ctx, s, falSTTWAVBytes(frames), resolvedLanguage)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +167,45 @@ func validateFalSTTAPIKey(apiKey string) error {
 		return fmt.Errorf("fal AI API key is required. It should be set with env FAL_KEY")
 	}
 	return nil
+}
+
+func falSTTWAVBytes(frames []*model.AudioFrame) []byte {
+	sampleRate := uint32(16000)
+	numChannels := uint32(1)
+	var data bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && data.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && data.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		data.Write(frame.Data)
+	}
+	pcm := data.Bytes()
+	dataSize := uint32(len(pcm))
+	blockAlign := numChannels * 2
+	byteRate := sampleRate * blockAlign
+
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(blockAlign))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func buildFalSTTRequest(ctx context.Context, s *FalSTT, audio []byte, language string) (*http.Request, error) {
