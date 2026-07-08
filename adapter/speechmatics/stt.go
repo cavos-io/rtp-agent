@@ -1020,6 +1020,8 @@ type speechmaticsStreamState struct {
 	pendingRawFinals           []*stt.SpeechEvent
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
+	latestRawPartialEvents     []*stt.SpeechEvent
+	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
 }
@@ -1063,7 +1065,52 @@ type smResponse struct {
 	LanguagePackInfo struct {
 		WordDelimiter *string `json:"word_delimiter"`
 	} `json:"language_pack_info"`
-	Speakers []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	rawLanguagePresent      []bool
+	rawSpeakerPresent       []bool
+	segmentLanguagePresent  []bool
+	segmentIsActivePresent  []bool
+	segmentSpeakerIDPresent []bool
+}
+
+func (r *smResponse) UnmarshalJSON(data []byte) error {
+	type response smResponse
+	var decoded response
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw struct {
+		Results []struct {
+			Alternatives []map[string]json.RawMessage `json:"alternatives"`
+		} `json:"results"`
+		Segments []map[string]json.RawMessage `json:"segments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Results) > 0 {
+		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
+		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
+		for i, result := range raw.Results {
+			if len(result.Alternatives) == 0 {
+				continue
+			}
+			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
+			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
+		}
+	}
+	if len(raw.Segments) > 0 {
+		decoded.segmentLanguagePresent = make([]bool, len(raw.Segments))
+		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
+		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
+		for i, segment := range raw.Segments {
+			_, decoded.segmentLanguagePresent[i] = segment["language"]
+			_, decoded.segmentIsActivePresent[i] = segment["is_active"]
+			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
+		}
+	}
+	*r = smResponse(decoded)
+	return nil
 }
 
 func (s *speechmaticsSTTStream) readLoop() {
@@ -1291,13 +1338,29 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	case "AddPartialSegment", "AddSegment":
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
+		speechmaticsClearLatestRawPartialEvents(state)
+		speechmaticsClearTurnTranscriptEvidence(state)
 		events := speechmaticsFlushPendingRawFinals(state)
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		return events
 	case "EndOfTurn":
+		defer speechmaticsClearLatestRawPartialEvents(state)
+		defer speechmaticsClearTurnTranscriptEvidence(state)
 		return speechmaticsEndOfTurnEvents(state)
 	}
 	return nil
+}
+
+func speechmaticsClearLatestRawPartialEvents(state *speechmaticsStreamState) {
+	if state != nil {
+		state.latestRawPartialEvents = nil
+	}
+}
+
+func speechmaticsClearTurnTranscriptEvidence(state *speechmaticsStreamState) {
+	if state != nil {
+		state.turnHasTranscript = false
+	}
 }
 
 func speechmaticsEndOfTurnEvents(state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1354,6 +1417,9 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 	}
 	events := speechmaticsRawTranscriptEvents(resp, state, eventType)
 	if resp.Message == "AddTranscript" && state != nil && state.bufferRawFinals {
+		if len(events) > 0 {
+			state.turnHasTranscript = true
+		}
 		state.pendingRawFinals = append(state.pendingRawFinals, events...)
 		return nil
 	}
@@ -1376,7 +1442,14 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 		return events
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
-	events = append(events, speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)...)
+	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
+	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
+		return events
+	}
+	if state != nil && len(partials) > 0 {
+		state.latestRawPartialEvents = partials
+	}
+	events = append(events, partials...)
 	return events
 }
 
@@ -1410,7 +1483,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 	var fragments []speechmaticsRawTranscriptFragment
 
-	for _, result := range resp.Results {
+	for i, result := range resp.Results {
 		if len(result.Alternatives) == 0 {
 			continue
 		}
@@ -1418,11 +1491,11 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if alt.Content == "" {
 			continue
 		}
-		resultSpeakerID := speechmaticsSegmentSpeakerID(alt.SpeakerID)
-		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
+		resultSpeakerID := speechmaticsRawSpeakerID(alt.SpeakerID, speechmaticsRawSpeakerPresent(resp, i))
+		if alt.SpeakerID != "" && speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
-		language := speechmaticsSegmentLanguage(alt.Language, state)
+		language := speechmaticsRawFragmentLanguage(alt.Language, speechmaticsRawLanguagePresent(resp, i))
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
 		if speechmaticsRawFragmentTrimmed(state, startTime) {
@@ -1448,7 +1521,11 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 
 	if len(fragments) > 0 {
 		speechmaticsRecordLatestRawTranscriptAnnotation(state, eventType, fragments)
-		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
+		events := speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
+		if len(events) > 0 && state != nil {
+			state.turnHasTranscript = true
+		}
+		return events
 	}
 	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
 		return nil
@@ -1456,13 +1533,16 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 	if speechmaticsRawFragmentTrimmed(state, resp.Metadata.StartTime+startTimeOffset) {
 		return nil
 	}
+	if state != nil {
+		state.turnHasTranscript = true
+	}
 	return []*stt.SpeechEvent{
 		{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
 				{
 					Text:       resp.Metadata.Transcript,
-					Language:   speechmaticsSegmentLanguage("", state),
+					Language:   speechmaticsSegmentLanguage("", false, state),
 					Confidence: 1.0,
 					StartTime:  resp.Metadata.StartTime + startTimeOffset,
 					EndTime:    resp.Metadata.EndTime + startTimeOffset,
@@ -1613,7 +1693,11 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 		}
 	}
 	speakerID := fragments[0].speakerID
-	text = speechmaticsFormattedSegmentText(text, speakerID, speechmaticsRawTranscriptSpeakerActive(speakerID, state), state)
+	active := true
+	if rawActive := speechmaticsRawTranscriptSpeakerActive(speakerID, state); rawActive != nil {
+		active = *rawActive
+	}
+	text = speechmaticsFormattedSegmentText(text, speakerID, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -1666,22 +1750,19 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
-	for _, segment := range resp.Segments {
-		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID)
+	for i, segment := range resp.Segments {
+		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID, speechmaticsSegmentSpeakerIDPresent(resp, i))
 		if speechmaticsSpeakerFiltered(speakerID, state) {
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
-		if eventType == stt.SpeechEventInterimTranscript && state != nil && !state.includePartials && !speechmaticsSegmentHasFinal(segment.Annotation) {
-			continue
-		}
-		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, segment.IsActive, state)
+		text := speechmaticsFormattedSegmentText(segment.Text, speakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
 				{
 					Text:      text,
-					Language:  speechmaticsSegmentLanguage(segment.Language, state),
+					Language:  speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state),
 					SpeakerID: speakerID,
 					StartTime: segment.Metadata.StartTime + startTimeOffset,
 					EndTime:   segment.Metadata.EndTime + startTimeOffset,
@@ -1692,6 +1773,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	if eventType == stt.SpeechEventFinalTranscript {
 		speechmaticsDropOverlappedPendingRawFinals(state, events)
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
+	if len(events) > 0 && state != nil {
+		state.turnHasTranscript = true
 	}
 	return events
 }
@@ -1739,6 +1823,19 @@ func speechmaticsTranscriptEventsOverlap(left, right *stt.SpeechEvent) bool {
 	return false
 }
 
+func speechmaticsTranscriptEventSlicesSame(left, right []*stt.SpeechEvent) bool {
+	if len(left) == 0 || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] == nil || right[i] == nil || left[i].Type != right[i].Type ||
+			!speechmaticsTranscriptEventsSameTextTimingAndIdentity(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func speechmaticsTranscriptEventsSameTextTimingAndIdentity(left, right *stt.SpeechEvent) bool {
 	if left == nil || right == nil {
 		return false
@@ -1769,15 +1866,6 @@ func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, a
 	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
 }
 
-func speechmaticsSegmentHasFinal(annotation []string) bool {
-	for _, value := range annotation {
-		if value == "has_final" {
-			return true
-		}
-	}
-	return false
-}
-
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
 	if speechmaticsSystemSpeakerID(speakerID) {
 		return true
@@ -1792,15 +1880,7 @@ func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamStat
 }
 
 func speechmaticsSystemSpeakerID(speakerID string) bool {
-	if len(speakerID) <= 5 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
-		return false
-	}
-	for _, ch := range speakerID[2 : len(speakerID)-2] {
-		if ch != '_' && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') {
-			return false
-		}
-	}
-	return true
+	return len(speakerID) > 4 && strings.HasPrefix(speakerID, "__") && strings.HasSuffix(speakerID, "__")
 }
 
 func speechmaticsStringInSlice(value string, values []string) bool {
@@ -1812,8 +1892,12 @@ func speechmaticsStringInSlice(value string, values []string) bool {
 	return false
 }
 
-func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState) string {
-	if language != "" {
+func speechmaticsSegmentLanguagePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentLanguagePresent) && resp.segmentLanguagePresent[index]
+}
+
+func speechmaticsSegmentLanguage(language string, present bool, state *speechmaticsStreamState) string {
+	if present || language != "" {
 		return language
 	}
 	if state != nil {
@@ -1822,19 +1906,52 @@ func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState
 	return "en"
 }
 
-func speechmaticsSegmentSpeakerID(speakerID string) string {
-	if speakerID != "" {
+func speechmaticsRawLanguagePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.rawLanguagePresent) && resp.rawLanguagePresent[index]
+}
+
+func speechmaticsRawFragmentLanguage(language string, present bool) string {
+	if present || language != "" {
+		return language
+	}
+	return "en"
+}
+
+func speechmaticsRawSpeakerPresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.rawSpeakerPresent) && resp.rawSpeakerPresent[index]
+}
+
+func speechmaticsRawSpeakerID(speakerID string, present bool) string {
+	if present || speakerID != "" {
 		return speakerID
 	}
 	return "UU"
 }
 
-func speechmaticsFormattedSegmentText(text, speakerID string, isActive *bool, state *speechmaticsStreamState) string {
-	format := ""
-	active := true
+func speechmaticsSegmentSpeakerIDPresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentSpeakerIDPresent) && resp.segmentSpeakerIDPresent[index]
+}
+
+func speechmaticsSegmentIsActivePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentIsActivePresent) && resp.segmentIsActivePresent[index]
+}
+
+func speechmaticsSegmentIsActive(isActive *bool, present bool) bool {
 	if isActive != nil {
-		active = *isActive
+		return *isActive
 	}
+	return !present
+}
+
+func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
+	if present || speakerID != "" {
+		return speakerID
+	}
+	return "UU"
+}
+
+func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state *speechmaticsStreamState) string {
+	format := ""
 	if state != nil {
 		if active {
 			format = state.speakerActiveFormat
@@ -2283,7 +2400,9 @@ func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
 		return nil
 	}
-	return speechmaticsEndOfTurnEvents(s.state)
+	events := speechmaticsEndOfTurnEvents(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
+	return events
 }
 
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
@@ -2299,11 +2418,13 @@ func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
 		return nil
 	}
-	return speechmaticsEndOfTurnEvents(s.state)
+	events := speechmaticsEndOfTurnEvents(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
+	return events
 }
 
 func speechmaticsHasReferenceTurnEndEvidence(state *speechmaticsStreamState) bool {
-	return state != nil && (state.speechDuration > 0 || len(state.pendingRawFinals) > 0)
+	return state != nil && (state.turnHasTranscript || len(state.pendingRawFinals) > 0)
 }
 
 func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {
