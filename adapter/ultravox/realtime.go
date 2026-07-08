@@ -1819,13 +1819,14 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 }
 
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
+	hasSignal := ultravoxRealtimeAudioHasSignal(audioData)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return
 	}
-	generation := s.ensureGenerationLocked()
-	if ultravoxRealtimeAudioHasSignal(audioData) && generation.firstToken.IsZero() {
+	generation := s.ensureGenerationLockedWithPending(hasSignal)
+	if hasSignal && generation.firstToken.IsZero() {
 		generation.firstToken = time.Now()
 	}
 	frame := &model.AudioFrame{

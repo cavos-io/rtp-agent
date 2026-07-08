@@ -2092,6 +2092,47 @@ func TestUltravoxRealtimeSessionOutputAudioStartsReferenceGeneration(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionGenerateReplyIgnoresSilentOutputAudio(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+
+	session.handleOutputAudio(make([]byte, 960))
+	silentGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if silentGeneration.UserInitiated {
+		t.Fatal("silent audio generation UserInitiated = true, want pending GenerateReply unresolved until speech or text")
+	}
+	message := requireUltravoxRealtimeMessage(t, silentGeneration)
+	select {
+	case <-message.AudioCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for silent output audio")
+	}
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{Role: "agent", Text: "done", Final: true, Ordinal: 1})
+	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
+	replyGeneration := requireUltravoxRealtimeGeneration(t, session)
+	if !replyGeneration.UserInitiated {
+		t.Fatal("reply generation UserInitiated = false, want pending GenerateReply preserved after silent output audio")
+	}
+}
+
 func TestUltravoxRealtimeSessionOutputAudioBuffersBeyondOldDropLimit(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
