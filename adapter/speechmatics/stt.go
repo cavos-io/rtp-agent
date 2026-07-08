@@ -1310,6 +1310,18 @@ func speechmaticsUnmarshalReferenceSegmentSpeakerID(data []byte) (string, error)
 	return "", fmt.Errorf("unsupported segment speaker id")
 }
 
+func speechmaticsUnmarshalReferenceSegmentLanguage(data []byte) (string, error) {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	return "", fmt.Errorf("unsupported segment language")
+}
+
 func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
@@ -1396,6 +1408,18 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 				return nil, err
 			}
 			segment["speaker_id"] = encoded
+			changed = true
+		}
+		if language, ok := segment["language"]; ok && string(language) != "null" {
+			value, err := speechmaticsUnmarshalReferenceSegmentLanguage(language)
+			if err != nil {
+				return nil, fmt.Errorf("segments[%d].language: %w", i, err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			segment["language"] = encoded
 			changed = true
 		}
 		isActive, ok := segment["is_active"]
