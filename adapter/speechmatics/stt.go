@@ -931,6 +931,7 @@ type speechmaticsSTTStream struct {
 	providerManagedEndpointing bool
 	drainEventsAfterClose      bool
 	forcedEOUPending           bool
+	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
 	fixedEOUCompleted          bool
@@ -1759,14 +1760,16 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		pendingVADEndInput := s.pendingVADEndInput
 		pendingAudio := s.pendingAudioChunks
 		pendingFinalize := s.pendingFinalize
+		pendingLocalEndpointingEOU := s.pendingLocalEndpointingEOU
 		pendingEndInput := s.pendingEndInput
 		vadStream := s.vadStream
 		s.pendingVADFrames = nil
 		s.pendingVADEndInput = false
 		s.pendingAudioChunks = nil
 		s.pendingFinalize = false
+		s.pendingLocalEndpointingEOU = false
 		s.pendingEndInput = false
-		if len(pendingVADFrames) == 0 && !pendingVADEndInput && len(pendingAudio) == 0 && !pendingFinalize && !pendingEndInput {
+		if len(pendingVADFrames) == 0 && !pendingVADEndInput && len(pendingAudio) == 0 && !pendingFinalize && !pendingLocalEndpointingEOU && !pendingEndInput {
 			s.drainingStartup = false
 			s.mu.Unlock()
 			return nil
@@ -1796,6 +1799,12 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		}
 		if pendingFinalize {
 			if err := s.sendForceEndOfUtterance(); err != nil {
+				_ = s.Close()
+				return err
+			}
+		}
+		if pendingLocalEndpointingEOU {
+			if err := s.sendForceEndOfUtteranceWithProviderManaged(true); err != nil {
 				_ = s.Close()
 				return err
 			}
@@ -1846,6 +1855,17 @@ func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
 }
 
 func (s *speechmaticsSTTStream) sendLocalEndpointingForceEndOfUtterance() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.startupGateActiveLocked() {
+		s.pendingLocalEndpointingEOU = true
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
 	return s.sendForceEndOfUtteranceWithProviderManaged(true)
 }
 

@@ -1922,6 +1922,42 @@ func TestSpeechmaticsSTTAdaptiveProviderEndOfTurnCancelsReferenceDelayedEOU(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADFinalizeWaitsForRecognitionStarted(t *testing.T) {
+	var writes []string
+	stream := &speechmaticsSTTStream{
+		waitForRecognitionStarted:  true,
+		providerManagedEndpointing: true,
+		pendingAudioChunks:         [][]byte{speechmaticsTestInt16PCM(1600)},
+		writeBinary: func(data []byte) error {
+			writes = append(writes, fmt.Sprintf("audio:%d", len(data)))
+			return nil
+		},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			writes = append(writes, fmt.Sprintf("control:%s", control["message"]))
+			return nil
+		},
+	}
+
+	if err := stream.sendLocalEndpointingForceEndOfUtterance(); err != nil {
+		t.Fatalf("sendLocalEndpointingForceEndOfUtterance before ready error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before RecognitionStarted = %#v, want pending local endpointing finalize", writes)
+	}
+	if err := stream.markReadyForAudio(); err != nil {
+		t.Fatalf("markReadyForAudio error = %v", err)
+	}
+
+	want := []string{"audio:3200", "control:ForceEndOfUtterance"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after RecognitionStarted = %#v, want %#v", writes, want)
+	}
+}
+
 func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
 	provider := NewSpeechmaticsSTT("test-key",
