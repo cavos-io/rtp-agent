@@ -1863,6 +1863,8 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *tes
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","parameters":{}}`),
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-missing-params"}`),
 		[]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-bad-params","parameters":[1,2]}`),
+		[]byte(`{"type":"pong"}`),
+		[]byte(`{"type":"pong","timestamp":"bad"}`),
 		[]byte(`{not-json`),
 	} {
 		if err := session.handleServerTextMessage(payload); err != nil {
@@ -1872,6 +1874,11 @@ func TestUltravoxRealtimeSessionServerJSONIgnoresMalformedReferenceEvents(t *tes
 	select {
 	case event := <-session.EventCh():
 		t.Fatalf("event after malformed JSON = %#v, want no emitted event", event)
+	default:
+	}
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("client event after malformed JSON = %#v, want none", event)
 	default:
 	}
 

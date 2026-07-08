@@ -814,12 +814,15 @@ func (s *realtimeSession) handleServerTextMessage(data []byte) error {
 		s.handlePlaybackClearBufferEvent()
 	case "pong":
 		var event struct {
-			Timestamp float64 `json:"timestamp"`
+			Timestamp *float64 `json:"timestamp"`
 		}
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil
 		}
-		s.handlePongEvent(event.Timestamp)
+		if event.Timestamp == nil {
+			return nil
+		}
+		s.handlePongEvent(*event.Timestamp)
 	case "call_started", "debug":
 		return nil
 	default:
