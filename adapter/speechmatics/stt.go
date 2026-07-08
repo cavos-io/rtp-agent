@@ -65,6 +65,9 @@ const (
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
+
+const speechmaticsMinEndOfTurnDelay = 10 * time.Millisecond
+
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 	if s == nil {
 		return 0
@@ -78,7 +81,7 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
-		return time.Duration(delay * float64(time.Second))
+		return speechmaticsClampLocalEndpointingDelay(delay)
 	case "smart_turn":
 		delay := 0.8
 		if s.eouSilenceTrigger != nil {
@@ -87,11 +90,20 @@ var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
-		return time.Duration(delay * float64(time.Second))
+		return speechmaticsClampLocalEndpointingDelay(delay)
 	default:
 		return 0
 	}
 }
+
+func speechmaticsClampLocalEndpointingDelay(seconds float64) time.Duration {
+	delay := time.Duration(seconds * float64(time.Second))
+	if delay < speechmaticsMinEndOfTurnDelay {
+		return speechmaticsMinEndOfTurnDelay
+	}
+	return delay
+}
+
 var speechmaticsSTTRetryInterval = func(retryAttempt int) time.Duration {
 	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
 }
