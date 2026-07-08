@@ -1300,6 +1300,13 @@ func speechmaticsUnmarshalReferenceSegmentSpeakerID(data []byte) (string, error)
 	if err := json.Unmarshal(data, &number); err == nil {
 		return number.String(), nil
 	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
 	return "", fmt.Errorf("unsupported segment speaker id")
 }
 
