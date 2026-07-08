@@ -639,6 +639,56 @@ func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t 
 	}
 }
 
+func TestUltravoxRealtimeSessionPushAudioDropsInvalidReferenceFrames(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	invalidFrames := []*audiomodel.AudioFrame{
+		{Data: []byte{1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1},
+		{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 0, SamplesPerChannel: 1},
+		{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2},
+	}
+	for i, frame := range invalidFrames {
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio invalid frame %d error = %v, want reference drop", i, err)
+		}
+	}
+	select {
+	case got := <-session.audioCh:
+		t.Fatalf("queued audio after invalid frames length = %d, want no provider audio", len(got))
+	default:
+	}
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio valid after invalid frames error = %v", err)
+	}
+	select {
+	case got := <-session.audioCh:
+		if !bytes.Equal(got, pcm) {
+			t.Fatalf("queued audio after invalid frames = %v, want later valid PCM", got[:min(len(got), 8)])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid PushAudio after invalid frames did not queue reference 100ms chunk")
+	}
+}
+
 func TestUltravoxRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -651,7 +651,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 
 	audioFrame, err := s.inputNormalizer.Normalize(frame, s.inputSampleRate)
 	if err != nil {
-		return err
+		return nil
 	}
 	if audioFrame == nil || len(audioFrame.Data) == 0 {
 		return nil
