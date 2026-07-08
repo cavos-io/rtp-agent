@@ -1084,6 +1084,7 @@ func (r *smResult) UnmarshalJSON(data []byte) error {
 		result
 		StartTime json.RawMessage `json:"start_time"`
 		EndTime   json.RawMessage `json:"end_time"`
+		IsEOS     json.RawMessage `json:"is_eos"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -1102,6 +1103,12 @@ func (r *smResult) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("end_time: %w", err)
 		}
 	}
+	if len(raw.IsEOS) > 0 {
+		r.IsEOS, err = speechmaticsUnmarshalReferenceBool(raw.IsEOS)
+		if err != nil {
+			return fmt.Errorf("is_eos: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -1117,6 +1124,22 @@ func speechmaticsUnmarshalReferenceFloat(data []byte) (float64, error) {
 	value, err := strconv.ParseFloat(text, 64)
 	if err != nil {
 		return 0, err
+	}
+	return value, nil
+}
+
+func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return false, err
+	}
+	value, err := strconv.ParseBool(text)
+	if err != nil {
+		return false, err
 	}
 	return value, nil
 }
