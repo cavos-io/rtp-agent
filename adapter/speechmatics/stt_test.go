@@ -3598,6 +3598,53 @@ func TestSpeechmaticsSTTStreamRetriesReferenceTransientDialFailure(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTStreamRetryAccumulatesReferenceStartTimeOffset(t *testing.T) {
+	const retryDelay = 25 * time.Millisecond
+	withSpeechmaticsSTTRetryInterval(t, retryDelay)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	var attempts int
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("transient dial failed")
+			}
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, network, addr)
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("Speechmatics stream does not expose reference timing anchors")
+	}
+	if got := timing.StartTimeOffset(); got < retryDelay.Seconds() {
+		t.Fatalf("StartTimeOffset = %.6f, want at least retry delay %.6f after startup retry", got, retryDelay.Seconds())
+	}
+}
+
 func withSpeechmaticsSTTRetryInterval(t *testing.T, interval time.Duration) {
 	t.Helper()
 	previous := speechmaticsSTTRetryInterval

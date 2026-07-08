@@ -434,6 +434,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
 	startupAttempt := 0
+	startupStarted := time.Now()
 
 	for {
 		conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header, &startupAttempt)
@@ -446,6 +447,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		}
 
 		streamStartTime := time.Now()
+		startTimeOffset := streamStartTime.Sub(startupStarted).Seconds()
+		if startTimeOffset < 0 {
+			startTimeOffset = 0
+		}
 		stream := &speechmaticsSTTStream{
 			conn:   conn,
 			events: make(chan *stt.SpeechEvent, 10),
@@ -460,6 +465,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 				focusMode:            s.focusMode,
 				includePartials:      speechmaticsIncludePartials(s),
 				bufferRawFinals:      true,
+				startTimeOffset:      startTimeOffset,
 				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
 			},
 			owner:                     s,
