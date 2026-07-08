@@ -714,11 +714,28 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		s.finish()
 		return nil, err
 	}
+	if !s.emittedAudio {
+		s.finish()
+		return nil, io.EOF
+	}
 	if !s.markFinalSent() {
 		return nil, io.EOF
 	}
 	s.finish()
-	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, Frame: speechmaticsTTSFinalMarkerFrame(s.sampleRate), IsFinal: true}, nil
+}
+
+func speechmaticsTTSFinalMarkerFrame(sampleRate int) *model.AudioFrame {
+	if sampleRate <= 0 {
+		return nil
+	}
+	samples := uint32(sampleRate / 100)
+	return &model.AudioFrame{
+		Data:              make([]byte, int(samples)*2),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: samples,
+	}
 }
 
 func (s *speechmaticsTTSChunkedStream) markFinalSent() bool {
