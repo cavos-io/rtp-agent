@@ -1066,6 +1066,7 @@ type smResponse struct {
 		WordDelimiter *string `json:"word_delimiter"`
 	} `json:"language_pack_info"`
 	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
+	rawLanguagePresent      []bool
 	rawSpeakerPresent       []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
@@ -1087,11 +1088,13 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(raw.Results) > 0 {
+		decoded.rawLanguagePresent = make([]bool, len(raw.Results))
 		decoded.rawSpeakerPresent = make([]bool, len(raw.Results))
 		for i, result := range raw.Results {
 			if len(result.Alternatives) == 0 {
 				continue
 			}
+			_, decoded.rawLanguagePresent[i] = result.Alternatives[0]["language"]
 			_, decoded.rawSpeakerPresent[i] = result.Alternatives[0]["speaker"]
 		}
 	}
@@ -1489,7 +1492,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if alt.SpeakerID != "" && speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
-		language := speechmaticsRawFragmentLanguage(alt.Language)
+		language := speechmaticsRawFragmentLanguage(alt.Language, speechmaticsRawLanguagePresent(resp, i))
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
 		if speechmaticsRawFragmentTrimmed(state, startTime) {
@@ -1896,8 +1899,12 @@ func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState
 	return "en"
 }
 
-func speechmaticsRawFragmentLanguage(language string) string {
-	if language != "" {
+func speechmaticsRawLanguagePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.rawLanguagePresent) && resp.rawLanguagePresent[index]
+}
+
+func speechmaticsRawFragmentLanguage(language string, present bool) string {
+	if present || language != "" {
 		return language
 	}
 	return "en"
