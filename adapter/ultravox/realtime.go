@@ -285,6 +285,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		toolNames:             make(map[string]struct{}),
 		toolResults:           make(map[string]struct{}),
 		contextItems:          make(map[string]struct{}),
+		chatCtx:               llm.NewChatContext(),
 	}
 	if m.outputMedium == "text" {
 		event := map[string]any{
@@ -712,6 +713,7 @@ type realtimeSession struct {
 	toolNames             map[string]struct{}
 	toolResults           map[string]struct{}
 	contextItems          map[string]struct{}
+	chatCtx               *llm.ChatContext
 	pendingReply          bool
 	pendingReplyAt        time.Time
 	pendingReplySeq       uint64
@@ -867,19 +869,32 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		s.mu.Unlock()
 		return nil
 	}
-	hasCreate := ultravoxRealtimeHasNewKey(s.contextItems, nextContextItems) || ultravoxRealtimeHasNewKey(s.toolResults, nextToolResults)
+	oldChatCtx := s.chatCtx
+	if oldChatCtx == nil {
+		oldChatCtx = llm.NewChatContext()
+	}
+	diff := llm.ComputeChatCtxDiff(oldChatCtx, chatCtx)
 	s.mu.Unlock()
-	if !hasCreate {
+	if diff == nil || len(diff.ToCreate) == 0 {
 		return nil
 	}
+	createIDs := make(map[string]struct{}, len(diff.ToCreate))
+	for _, create := range diff.ToCreate {
+		if create[1] != nil {
+			createIDs[*create[1]] = struct{}{}
+		}
+	}
 	for _, item := range chatCtx.Items {
+		if _, ok := createIDs[item.GetID()]; !ok {
+			continue
+		}
 		switch item := item.(type) {
 		case *llm.ChatMessage:
-			if err := s.sendChatContextMessage(item); err != nil {
+			if err := s.sendChatContextMessage(item, true); err != nil {
 				return err
 			}
 		case *llm.FunctionCallOutput:
-			if err := s.sendToolResult(item); err != nil {
+			if err := s.sendToolResult(item, true); err != nil {
 				return err
 			}
 		}
@@ -888,21 +903,13 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if !s.closed {
 		s.contextItems = nextContextItems
 		s.toolResults = nextToolResults
+		s.chatCtx = chatCtx.Copy()
 	}
 	s.mu.Unlock()
 	return nil
 }
 
-func ultravoxRealtimeHasNewKey(current map[string]struct{}, next map[string]struct{}) bool {
-	for key := range next {
-		if _, ok := current[key]; !ok {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error {
+func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage, force bool) error {
 	if message == nil {
 		return nil
 	}
@@ -927,7 +934,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 		s.mu.Unlock()
 		return nil
 	}
-	if _, ok := s.contextItems[key]; ok {
+	if _, ok := s.contextItems[key]; ok && !force {
 		s.mu.Unlock()
 		return nil
 	}
@@ -947,7 +954,7 @@ func (s *realtimeSession) sendChatContextMessage(message *llm.ChatMessage) error
 	return nil
 }
 
-func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
+func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput, force bool) error {
 	if output == nil {
 		return nil
 	}
@@ -957,7 +964,7 @@ func (s *realtimeSession) sendToolResult(output *llm.FunctionCallOutput) error {
 		s.mu.Unlock()
 		return nil
 	}
-	if _, ok := s.toolResults[key]; ok {
+	if _, ok := s.toolResults[key]; ok && !force {
 		s.mu.Unlock()
 		return nil
 	}
@@ -2046,7 +2053,14 @@ func (s *realtimeSession) handleUserTranscriptEvent(event ultravoxRealtimeTransc
 	if event.Final {
 		s.lastUserFinalAt = time.Now()
 		if strings.TrimSpace(event.Text) != "" {
-			s.contextItems[fmt.Sprintf("msg_user_%d", event.Ordinal)] = struct{}{}
+			itemID := fmt.Sprintf("msg_user_%d", event.Ordinal)
+			s.contextItems[itemID] = struct{}{}
+			if s.chatCtx == nil {
+				s.chatCtx = llm.NewChatContext()
+			}
+			if s.chatCtx.GetByID(itemID) == nil {
+				s.chatCtx.AddMessage(llm.ChatMessageArgs{ID: itemID, Role: llm.ChatRoleUser, Text: event.Text})
+			}
 		}
 	}
 	realtimeEvent := llm.RealtimeEvent{

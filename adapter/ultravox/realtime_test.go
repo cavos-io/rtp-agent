@@ -3860,6 +3860,53 @@ func TestUltravoxRealtimeSessionUpdateChatContextKeepsReferenceIgnoredDeletions(
 	}
 }
 
+func TestUltravoxRealtimeSessionUpdateChatContextReplaysReferenceMovedMessage(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	initial := llm.NewChatContext()
+	initial.AddMessage(llm.ChatMessageArgs{ID: "a", Role: llm.ChatRoleUser, Text: "first"})
+	initial.AddMessage(llm.ChatMessageArgs{ID: "b", Role: llm.ChatRoleUser, Text: "second"})
+	if err := session.UpdateChatContext(initial); err != nil {
+		t.Fatalf("UpdateChatContext initial error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "first",
+		"deferResponse": true,
+	})
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "second",
+		"deferResponse": true,
+	})
+
+	reordered := llm.NewChatContext()
+	reordered.AddMessage(llm.ChatMessageArgs{ID: "b", Role: llm.ChatRoleUser, Text: "second"})
+	reordered.AddMessage(llm.ChatMessageArgs{ID: "a", Role: llm.ChatRoleUser, Text: "first"})
+	if err := session.UpdateChatContext(reordered); err != nil {
+		t.Fatalf("UpdateChatContext reorder error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "first",
+		"deferResponse": true,
+	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("extra reordered context event = %#v, want only reference moved item replay", got)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionUpdateChatContextBuffersFullReferenceClientQueue(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
