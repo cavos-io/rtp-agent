@@ -2636,6 +2636,8 @@ func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	}
 	s.mu.Lock()
 	s.localEndpointingTurnClosed = false
+	s.pendingLocalEndpointingEOU = false
+	s.localEndpointingEOUSeq++
 	speechmaticsClearLatestEndpointingAnnotation(s.state)
 	s.mu.Unlock()
 }
