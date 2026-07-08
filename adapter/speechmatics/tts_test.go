@@ -294,6 +294,36 @@ func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceBaseURL(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSConcurrentUpdateAndSynthesizeSnapshot(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			provider.UpdateOptions(WithSpeechmaticsTTSVoice(fmt.Sprintf("voice-%d", i)))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			stream, err := provider.Synthesize(ctx, "hello")
+			if err != nil {
+				t.Errorf("Synthesize error = %v", err)
+				return
+			}
+			if err := stream.Close(); err != nil {
+				t.Errorf("Close error = %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+}
+
 func TestSpeechmaticsTTSRequestPreservesReferenceBaseURLPath(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),

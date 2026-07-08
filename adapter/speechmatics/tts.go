@@ -90,17 +90,25 @@ func (t *SpeechmaticsTTS) Provider() string {
 func (t *SpeechmaticsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
+func (t *SpeechmaticsTTS) SampleRate() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sampleRate
+}
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	t.mu.Lock()
 	closed := t.closed
+	apiKey := t.apiKey
+	baseURL := t.baseURL
+	voice := t.voice
+	sampleRate := t.sampleRate
 	t.mu.Unlock()
 	if closed {
 		return nil, io.ErrClosedPipe
 	}
-	if t.apiKey == "" {
+	if apiKey == "" {
 		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -108,10 +116,10 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		ctx:        streamCtx,
 		cancel:     cancel,
 		text:       text,
-		apiKey:     t.apiKey,
-		baseURL:    t.baseURL,
-		voice:      t.voice,
-		sampleRate: t.sampleRate,
+		apiKey:     apiKey,
+		baseURL:    baseURL,
+		voice:      voice,
+		sampleRate: sampleRate,
 		requestID:  uuid.NewString(),
 		owner:      t,
 	}
@@ -122,12 +130,18 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 }
 
 func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text string) (*http.Request, error) {
+	t.mu.Lock()
+	apiKey := t.apiKey
+	baseURL := t.baseURL
+	voice := t.voice
+	sampleRate := t.sampleRate
+	t.mu.Unlock()
 	return buildSpeechmaticsTTSRequestFromOptions(ctx, speechmaticsTTSRequestOptions{
 		text:       text,
-		apiKey:     t.apiKey,
-		baseURL:    t.baseURL,
-		voice:      t.voice,
-		sampleRate: t.sampleRate,
+		apiKey:     apiKey,
+		baseURL:    baseURL,
+		voice:      voice,
+		sampleRate: sampleRate,
 	})
 }
 
@@ -166,6 +180,8 @@ func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmati
 }
 
 func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	sampleRate := t.sampleRate
 	baseURL := t.baseURL
 	for _, opt := range opts {
