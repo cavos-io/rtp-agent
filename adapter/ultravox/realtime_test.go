@@ -1019,6 +1019,7 @@ func TestUltravoxRealtimeSessionConnectsReferenceCreateCallToWebsocket(t *testin
 	if gotEndpoint != "wss://ultravox.example/join" {
 		t.Fatalf("websocket endpoint = %q, want joinUrl from create-call response", gotEndpoint)
 	}
+	requireUltravoxRealtimeConnectionMetrics(t, session)
 }
 
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
@@ -5411,6 +5412,8 @@ func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) 
 	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
 		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
 	}
+	requireUltravoxRealtimeConnectionMetrics(t, session)
+	requireUltravoxRealtimeConnectionMetrics(t, session)
 	select {
 	case event := <-session.EventCh():
 		t.Fatalf("event after send-error reconnect = %#v, want no fatal error event", event)
@@ -5494,6 +5497,8 @@ func TestUltravoxRealtimeSessionSendErrorDropsReferenceStaleReceiveFrame(t *test
 	case <-time.After(time.Second):
 		t.Fatal("restart loop did not exit after stale receive cleanup")
 	}
+	requireUltravoxRealtimeConnectionMetrics(t, session)
+	requireUltravoxRealtimeConnectionMetrics(t, session)
 	select {
 	case event := <-session.EventCh():
 		t.Fatalf("event from stale receive frame = %#v, want old websocket frame ignored", event)
@@ -5560,6 +5565,8 @@ func TestUltravoxRealtimeSessionReconnectsAfterReferenceReceiveError(t *testing.
 	if firstConn.closeCount != 1 || secondConn.closeCount != 1 {
 		t.Fatalf("websocket close counts = %d, %d, want both closed", firstConn.closeCount, secondConn.closeCount)
 	}
+	requireUltravoxRealtimeConnectionMetrics(t, session)
+	requireUltravoxRealtimeConnectionMetrics(t, session)
 	select {
 	case event := <-session.EventCh():
 		t.Fatalf("event after receive-error reconnect = %#v, want no fatal error event", event)
@@ -5824,6 +5831,21 @@ func requireUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) *tel
 		t.Fatal("timed out waiting for metrics_collected")
 	}
 	return nil
+}
+
+func requireUltravoxRealtimeConnectionMetrics(t *testing.T, session *realtimeSession) *telemetry.RealtimeModelMetrics {
+	t.Helper()
+	metrics := requireUltravoxRealtimeMetrics(t, session)
+	if metrics.RequestID != "" {
+		t.Fatalf("connection metrics request id = %q, want reference empty request id", metrics.RequestID)
+	}
+	if metrics.AcquireTime < 0 || metrics.ConnectionReused {
+		t.Fatalf("connection metrics acquire/reused = %f/%v, want non-negative acquire_time and false reused", metrics.AcquireTime, metrics.ConnectionReused)
+	}
+	if metrics.Metadata == nil || metrics.Metadata.ModelName != "fixie-ai/ultravox" || metrics.Metadata.ModelProvider != "Ultravox" {
+		t.Fatalf("connection metrics metadata = %#v, want Ultravox model metadata", metrics.Metadata)
+	}
+	return metrics
 }
 
 func assertNoUltravoxRealtimeMetrics(t *testing.T, session *realtimeSession) {

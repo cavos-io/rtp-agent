@@ -1395,20 +1395,46 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 	if err != nil {
 		return nil, err
 	}
-	return s.model.dialRealtimeWebsocket(ctx, joinURL)
+	start := time.Now()
+	conn, err := s.model.dialRealtimeWebsocket(ctx, joinURL)
+	if err != nil {
+		return nil, err
+	}
+	s.emitConnectionAcquiredMetrics(time.Since(start))
+	return conn, nil
 }
 
 func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
-	joinURL, err := s.createCall(ctx, client)
+	conn, err := s.connectRealtimeWebsocket(ctx, client)
 	if err != nil {
 		return err
 	}
 	s.queueStartupOutputMedium()
-	conn, err := s.model.dialRealtimeWebsocket(ctx, joinURL)
-	if err != nil {
-		return err
-	}
 	return s.runRealtimeConnectionWithContext(ctx, conn)
+}
+
+func (s *realtimeSession) emitConnectionAcquiredMetrics(acquireTime time.Duration) {
+	if acquireTime < 0 {
+		acquireTime = 0
+	}
+	modelName := ""
+	modelProvider := ""
+	if s.model != nil {
+		modelName = s.model.model
+		modelProvider = s.model.Provider()
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			Timestamp:        time.Now(),
+			AcquireTime:      acquireTime.Seconds(),
+			ConnectionReused: false,
+			Metadata: &telemetry.Metadata{
+				ModelName:     modelName,
+				ModelProvider: modelProvider,
+			},
+		},
+	})
 }
 
 func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
