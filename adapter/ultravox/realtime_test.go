@@ -3425,6 +3425,35 @@ func TestUltravoxRealtimeSessionAgentTranscriptFinalEmitsReferenceMetrics(t *tes
 	}
 }
 
+func TestUltravoxRealtimeSessionFinalOnlyAgentTranscriptSuppressesReferenceMetrics(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	session.handleTranscriptEvent(ultravoxRealtimeTranscriptEvent{
+		Role:    "agent",
+		Text:    "final text",
+		Final:   true,
+		Ordinal: 2,
+	})
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	requireUltravoxRealtimeClosedText(t, message.TextCh)
+	requireUltravoxRealtimeClosedAudio(t, message.AudioCh)
+	select {
+	case event := <-session.EventCh():
+		t.Fatalf("event after final-only agent transcript = %#v, want no reference metrics without output delta", event)
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionMetricsAnchorToRecentReferenceUserFinal(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
