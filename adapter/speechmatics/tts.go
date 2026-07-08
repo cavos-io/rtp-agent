@@ -449,6 +449,9 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 	if s.ctx != nil {
 		done = s.ctx.Done()
 	}
+	if s.contextCanceled(done) {
+		return nil, context.Canceled, false
+	}
 	var timer *time.Timer
 	if s.pendingTail != nil && !s.tailFlushAt.IsZero() {
 		delay := time.Until(s.tailFlushAt)
@@ -482,6 +485,9 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 		}
 		return result.data, result.err, false
 	case <-timer.C:
+		if s.contextCanceled(done) {
+			return nil, context.Canceled, false
+		}
 		if result, ok := s.tryReadResult(ch); ok {
 			return result.data, result.err, false
 		}
@@ -491,6 +497,18 @@ func (s *speechmaticsTTSChunkedStream) readChunkOrFlushTail() ([]byte, error, bo
 			return nil, context.Canceled, false
 		}
 		return nil, io.EOF, false
+	}
+}
+
+func (s *speechmaticsTTSChunkedStream) contextCanceled(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return !s.isClosedOrFinal()
+	default:
+		return false
 	}
 }
 

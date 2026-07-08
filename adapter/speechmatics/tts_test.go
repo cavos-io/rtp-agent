@@ -1289,6 +1289,28 @@ func TestSpeechmaticsTTSChunkedStreamActiveReadContextCancelReturnsContextCancel
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamCanceledContextDropsReadyAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &speechmaticsTTSChunkedStream{
+		stream:       io.NopCloser(bytes.NewReader(nil)),
+		ctx:          ctx,
+		sampleRate:   6000,
+		pendingTail:  speechmaticsTTSFrame(6000, 60),
+		tailFlushAt:  time.Now().Add(-time.Millisecond),
+		readResultCh: make(chan speechmaticsTTSReadResult, 1),
+	}
+	stream.readResultCh <- speechmaticsTTSReadResult{data: make([]byte, 240), err: nil}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil when caller cancellation beats ready provider audio", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T(%v), want context.Canceled for caller cancellation", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadCancelDropsReturnedAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     &speechmaticsDataThenCancelBody{data: []byte{0x01, 0x02}},
