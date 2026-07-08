@@ -861,6 +861,14 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 	return s.model.dialRealtimeWebsocket(ctx, joinURL)
 }
 
+func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
+	conn, err := s.connectRealtimeWebsocket(ctx, client)
+	if err != nil {
+		return err
+	}
+	return s.runRealtimeConnection(conn)
+}
+
 func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
 	return m.dialWebsocket(ctx, joinURL, http.Header{})
 }

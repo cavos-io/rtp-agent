@@ -2774,6 +2774,84 @@ func TestUltravoxRealtimeSessionRunConnectionStartsReferenceSendTask(t *testing.
 	}
 }
 
+func TestUltravoxRealtimeSessionRunOnceConnectsAndRunsReferenceConnection(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	readBlock := make(chan struct{})
+	writeCh := make(chan struct{}, 1)
+	conn := &ultravoxRealtimeTestWebsocketConn{
+		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeCh: writeCh},
+		readBlock:                           readBlock,
+		readErr:                             io.EOF,
+	}
+	var gotEndpoint string
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		gotEndpoint = endpoint
+		if len(headers) != 0 {
+			t.Fatalf("websocket headers = %#v, want none like reference ws_connect(join_url)", headers)
+		}
+		return conn, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.runRealtimeOnce(context.Background(), doer)
+	}()
+
+	select {
+	case <-writeCh:
+	case <-time.After(time.Second):
+		t.Fatal("run once did not start reference send task after websocket connect")
+	}
+	close(readBlock)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runRealtimeOnce error = %v, want nil after receive loop exits", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run once did not exit after reference receive task completed")
+	}
+	if doer.request == nil || doer.request.Method != http.MethodPost {
+		t.Fatalf("create-call request = %#v, want POST before websocket dial", doer.request)
+	}
+	if gotEndpoint != "wss://ultravox.example/join" {
+		t.Fatalf("websocket endpoint = %q, want provider joinUrl", gotEndpoint)
+	}
+	if conn.closeCount != 1 {
+		t.Fatalf("websocket close count = %d, want reference close in finally", conn.closeCount)
+	}
+	if len(conn.frames) != 1 || conn.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(conn.frames[0].data, pcm) {
+		t.Fatalf("websocket frames = %#v, want queued audio sent as binary frame", conn.frames)
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
