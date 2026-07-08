@@ -1151,6 +1151,9 @@ func (s *realtimeSession) Close() error {
 		generation = s.generation
 		s.closed = true
 		s.generation = nil
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
 		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)

@@ -2166,6 +2166,38 @@ func TestUltravoxRealtimeSessionGenerateReplyTimerClearsReferencePendingOwner(t 
 	}
 }
 
+func TestUltravoxRealtimeSessionCloseClearsReferencePendingGenerateReply(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
+		"type":          "user_text_message",
+		"text":          "",
+		"deferResponse": false,
+	})
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	session.mu.Lock()
+	pending := session.pendingReply
+	pendingAt := session.pendingReplyAt
+	session.mu.Unlock()
+	if pending || !pendingAt.IsZero() {
+		t.Fatalf("pending GenerateReply after Close = %v/%v, want reference pending future cleared", pending, pendingAt)
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartClearsReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
