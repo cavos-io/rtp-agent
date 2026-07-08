@@ -2345,12 +2345,26 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		}
 		switch event.Type {
 		case corevad.VADEventStartOfSpeech:
-			s.reopenLocalEndpointingTurn()
-			s.cancelLocalEndpointingForceEndOfUtterance()
+			s.handleVADStartOfSpeech()
 		case corevad.VADEventEndOfSpeech:
 			s.scheduleLocalEndpointingForceEndOfUtterance()
 		}
 	}
+}
+
+func (s *speechmaticsSTTStream) handleVADStartOfSpeech() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.localEndpointingTurnClosed = false
+	s.forcedEOUCompleted = false
+	s.fixedEOUCompleted = false
+	s.completedEOUNewTurnStarted = false
+	s.pendingLocalEndpointingEOU = false
+	s.localEndpointingEOUSeq++
+	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
@@ -2423,16 +2437,6 @@ func (s *speechmaticsSTTStream) consumeLocalEndpointingForceEndOfUtterance(seq u
 	}
 	s.localEndpointingEOUSeq++
 	return true
-}
-
-func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.pendingLocalEndpointingEOU = false
-	s.localEndpointingEOUSeq++
-	s.mu.Unlock()
 }
 
 func (s *speechmaticsSTTStream) closeLocalEndpointingTurn() {

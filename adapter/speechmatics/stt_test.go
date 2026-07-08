@@ -3002,8 +3002,7 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsPendingStartupFinalize(t *te
 	if err := stream.sendLocalEndpointingForceEndOfUtterance(); err != nil {
 		t.Fatalf("sendLocalEndpointingForceEndOfUtterance before ready error = %v", err)
 	}
-	stream.reopenLocalEndpointingTurn()
-	stream.cancelLocalEndpointingForceEndOfUtterance()
+	stream.handleVADStartOfSpeech()
 	if err := stream.markReadyForAudio(); err != nil {
 		t.Fatalf("markReadyForAudio error = %v", err)
 	}
@@ -4896,6 +4895,41 @@ func TestSpeechmaticsSTTFinalizeAfterForcedEOUTimeoutSuppressesDuplicateReferenc
 	}
 	if len(stream.events) != 0 {
 		t.Fatalf("second Finalize events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
+func TestSpeechmaticsSTTFinalizeAfterVADRestartSendsReferenceForceEOU(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	writes := 0
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		writeJSON: func(message interface{}) error {
+			writes++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("first Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	stream.handleVADStartOfSpeech()
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("new-turn Finalize error = %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("ForceEndOfUtterance writes = %d, want new write after VAD start", writes)
 	}
 }
 
