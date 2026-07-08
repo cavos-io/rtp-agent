@@ -761,6 +761,25 @@ func (s *realtimeSession) createCallRequest() (string, map[string]string, map[st
 	return createCallURL, headers, payload
 }
 
+func ultravoxRealtimeCreateCallJoinURL(data []byte) (string, error) {
+	var response struct {
+		JoinURL string `json:"joinUrl"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return "", err
+	}
+	if response.JoinURL == "" {
+		return "", ultravoxRealtimeMissingJoinURLError
+	}
+	return response.JoinURL, nil
+}
+
+type ultravoxRealtimeConnectionError string
+
+func (e ultravoxRealtimeConnectionError) Error() string { return string(e) }
+
+const ultravoxRealtimeMissingJoinURLError ultravoxRealtimeConnectionError = "Ultravox call created, but no joinUrl received."
+
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {

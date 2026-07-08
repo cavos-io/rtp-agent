@@ -353,6 +353,25 @@ func TestUltravoxRealtimeSessionCreateCallRequestMatchesReference(t *testing.T) 
 	}
 }
 
+func TestUltravoxRealtimeCreateCallResponseRequiresReferenceJoinURL(t *testing.T) {
+	got, err := ultravoxRealtimeCreateCallJoinURL([]byte(`{"joinUrl":"wss://ultravox.example/join"}`))
+	if err != nil {
+		t.Fatalf("joinUrl parse error = %v, want nil", err)
+	}
+	if got != "wss://ultravox.example/join" {
+		t.Fatalf("joinUrl = %q, want reference response URL", got)
+	}
+
+	for _, body := range []string{
+		`{}`,
+		`{"joinUrl":""}`,
+	} {
+		if _, err := ultravoxRealtimeCreateCallJoinURL([]byte(body)); err == nil || err.Error() != "Ultravox call created, but no joinUrl received." {
+			t.Fatalf("joinUrl parse error for %s = %v, want reference missing joinUrl error", body, err)
+		}
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
 		WithRealtimeSystemPrompt("stay concise"),
