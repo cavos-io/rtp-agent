@@ -2268,14 +2268,15 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 		if !inString && (r == ' ' || r == '\n' || r == '\r' || r == '\t') {
 			continue
 		}
-		if inString && !escaped && r > 0x7f {
-			writeUltravoxRealtimePythonJSONUnicodeEscape(&out, r)
-			continue
-		}
-		out.WriteRune(r)
 		if escaped {
-			if r == 'u' {
-				unicodeEscapeRemaining = 4
+			if r == '/' {
+				out.WriteRune(r)
+			} else {
+				out.WriteByte('\\')
+				out.WriteRune(r)
+				if r == 'u' {
+					unicodeEscapeRemaining = 4
+				}
 			}
 			escaped = false
 			continue
@@ -2284,6 +2285,11 @@ func ultravoxRealtimePythonJSONSpacingRaw(value string) string {
 			escaped = true
 			continue
 		}
+		if inString && !escaped && r > 0x7f {
+			writeUltravoxRealtimePythonJSONUnicodeEscape(&out, r)
+			continue
+		}
+		out.WriteRune(r)
 		if r == '"' {
 			inString = !inString
 			continue

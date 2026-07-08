@@ -3417,6 +3417,34 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedUnicodeA
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceEscapedSlashArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-escaped-slash","parameters":{"url":"https:\/\/example.com\/search","path":"\/v1\/tools"}}`)); err != nil {
+		t.Fatalf("handle escaped slash tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"url": "https://example.com/search", "path": "/v1/tools"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps escaped slash normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for escaped slash function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
