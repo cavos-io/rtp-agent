@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,7 @@ type RealtimeModel struct {
 	baseURL             string
 	systemPrompt        string
 	outputMedium        string
+	audioOutput         bool
 	inputSampleRate     int
 	outputSampleRate    int
 	temperature         float64
@@ -90,7 +92,7 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		apiKey = os.Getenv("ULTRAVOX_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("ultravox API key is required. Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable")
+		return nil, ultravoxRealtimeMissingAPIKeyError{}
 	}
 	model := &RealtimeModel{
 		apiKey:           apiKey,
@@ -109,7 +111,14 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 	for _, opt := range opts {
 		opt(model)
 	}
+	model.audioOutput = model.outputMedium == "voice"
 	return model, nil
+}
+
+type ultravoxRealtimeMissingAPIKeyError struct{}
+
+func (ultravoxRealtimeMissingAPIKeyError) Error() string {
+	return "Ultravox API key is required. Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
 }
 
 func WithRealtimeModel(model string) RealtimeOption {
@@ -146,17 +155,13 @@ func WithRealtimeOutputMedium(outputMedium string) RealtimeOption {
 
 func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate >= 0 {
-			m.inputSampleRate = sampleRate
-		}
+		m.inputSampleRate = sampleRate
 	}
 }
 
 func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate >= 0 {
-			m.outputSampleRate = sampleRate
-		}
+		m.outputSampleRate = sampleRate
 	}
 }
 
@@ -237,7 +242,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		TurnDetection:           true,
 		UserTranscription:       true,
 		AutoToolReplyGeneration: true,
-		AudioOutput:             m.outputMedium == "voice",
+		AudioOutput:             m.audioOutput,
 		ManualFunctionCalls:     false,
 		PerResponseToolChoice:   false,
 	}
@@ -251,22 +256,23 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 		}
 	}
 	if update.outputMedium != nil {
-		if !ultravoxRealtimeValidOutputMedium(*update.outputMedium) {
-			return
-		}
 		m.outputMedium = *update.outputMedium
 		sessions := m.realtimeSessions()
 		for _, session := range sessions {
-			_ = session.updateOptions(llm.RealtimeSessionOptions{
+			if err := session.updateOptions(llm.RealtimeSessionOptions{
 				OutputMedium:    *update.outputMedium,
 				OutputMediumSet: true,
-			}, true)
+			}, true); err != nil {
+				return
+			}
 		}
+		m.audioOutput = m.outputMedium == "voice"
 	}
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	audioChunkSamples := uint32(m.inputSampleRate) / 10
+	runtimeInputSampleRate := ultravoxRealtimeRuntimeSampleRate(m.inputSampleRate)
+	audioChunkSamples := runtimeInputSampleRate / 10
 	if audioChunkSamples == 0 {
 		audioChunkSamples = 1
 	}
@@ -278,27 +284,18 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		clientEventCh:         make(chan map[string]any, ultravoxClientEventQueueSize),
 		outboundCh:            make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
 		model:                 m,
-		inputSampleRate:       uint32(m.inputSampleRate),
-		outputSampleRate:      uint32(m.outputSampleRate),
+		inputSampleRate:       m.inputSampleRate,
+		outputSampleRate:      m.outputSampleRate,
 		outputMedium:          m.outputMedium,
 		audioOutput:           m.outputMedium == "voice",
 		systemPrompt:          m.systemPrompt,
 		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
 		recoverableErrorDelay: time.Second,
-		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, audioChunkSamples),
+		audioStream:           coreaudio.NewAudioByteStream(runtimeInputSampleRate, ultravoxRealtimeInputChannels, audioChunkSamples),
 		toolNames:             make(map[string]struct{}),
 		toolResults:           make(map[string]struct{}),
 		contextItems:          make(map[string]struct{}),
 		chatCtx:               llm.NewChatContext(),
-	}
-	if m.outputMedium == "text" {
-		event := map[string]any{
-			"type":   "set_output_medium",
-			"medium": "text",
-		}
-		session.mu.Lock()
-		_ = session.enqueueClientEventLocked(event)
-		session.mu.Unlock()
 	}
 	m.registerRealtimeSession(session)
 	if m.autoStart {
@@ -308,6 +305,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 }
 
 func (m *RealtimeModel) Close() error { return nil }
+
+func ultravoxRealtimeRuntimeSampleRate(sampleRate int) uint32 {
+	if sampleRate <= 0 {
+		return 1
+	}
+	return uint32(sampleRate)
+}
 
 func (s *realtimeSession) startRealtimeMainTask(client ultravoxRealtimeHTTPDoer) {
 	if client == nil {
@@ -704,8 +708,8 @@ type realtimeSession struct {
 	clientEventCh         chan map[string]any
 	outboundCh            chan ultravoxRealtimeOutboundMessage
 	model                 *RealtimeModel
-	inputSampleRate       uint32
-	outputSampleRate      uint32
+	inputSampleRate       int
+	outputSampleRate      int
 	outputMedium          string
 	audioOutput           bool
 	systemPrompt          string
@@ -1020,16 +1024,24 @@ func ultravoxRealtimeToolResultKey(output *llm.FunctionCallOutput) string {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	nextToolNames := make(map[string]struct{}, len(tools))
+	nextToolByName := make(map[string]llm.Tool, len(tools))
 	nextTools := make([]llm.Tool, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
-		if _, exists := nextToolNames[tool.Name()]; exists {
+		if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+			continue
+		}
+		if existing, exists := nextToolByName[tool.Name()]; exists {
+			if ultravoxRealtimeSameToolInstance(existing, tool) {
+				continue
+			}
 			return fmt.Errorf("duplicate function name: %s", tool.Name())
 		}
 		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
+		nextToolByName[tool.Name()] = tool
 	}
 
 	s.mu.Lock()
@@ -1151,6 +1163,9 @@ func (s *realtimeSession) Close() error {
 		generation = s.generation
 		s.closed = true
 		s.generation = nil
+		s.pendingReply = false
+		s.pendingReplyAt = time.Time{}
+		s.pendingReplySeq++
 		s.stopGenerateReplyTimerLocked()
 		close(s.audioCh)
 		close(s.clientEventCh)
@@ -1182,8 +1197,11 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if s.closed {
 		return nil
 	}
+	if s.inputSampleRate <= 0 {
+		return nil
+	}
 
-	audioFrame, err := s.inputNormalizer.Normalize(frame, s.inputSampleRate)
+	audioFrame, err := s.inputNormalizer.Normalize(frame, uint32(s.inputSampleRate))
 	if err != nil {
 		return nil
 	}
@@ -1243,8 +1261,8 @@ func (s *realtimeSession) createCallRequestE() (string, map[string]string, map[s
 	s.mu.Lock()
 	tools := append([]llm.Tool(nil), s.tools...)
 	systemPrompt := s.systemPrompt
-	inputSampleRate := int(s.inputSampleRate)
-	outputSampleRate := int(s.outputSampleRate)
+	inputSampleRate := s.inputSampleRate
+	outputSampleRate := s.outputSampleRate
 	s.mu.Unlock()
 
 	m := s.model
@@ -1349,13 +1367,27 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		reason := http.StatusText(resp.StatusCode)
-		if reason == "" {
-			reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
+		reason := ultravoxRealtimeHTTPReason(resp)
 		return "", llm.NewAPIError(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, reason), nil, false)
 	}
 	return ultravoxRealtimeCreateCallJoinURL(data)
+}
+
+func ultravoxRealtimeHTTPReason(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	prefix := fmt.Sprintf("%d ", resp.StatusCode)
+	if strings.HasPrefix(resp.Status, prefix) {
+		reason := strings.TrimSpace(strings.TrimPrefix(resp.Status, prefix))
+		if reason != "" {
+			return reason
+		}
+	}
+	if reason := http.StatusText(resp.StatusCode); reason != "" {
+		return reason
+	}
+	return fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
 func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client ultravoxRealtimeHTTPDoer) (ultravoxRealtimeWebsocketConn, error) {
@@ -1363,7 +1395,13 @@ func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client u
 	if err != nil {
 		return nil, err
 	}
-	return s.model.dialRealtimeWebsocket(ctx, joinURL)
+	start := time.Now()
+	conn, err := s.model.dialRealtimeWebsocket(ctx, joinURL)
+	if err != nil {
+		return nil, err
+	}
+	s.emitConnectionAcquiredMetrics(time.Since(start))
+	return conn, nil
 }
 
 func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
@@ -1371,7 +1409,32 @@ func (s *realtimeSession) runRealtimeOnce(ctx context.Context, client ultravoxRe
 	if err != nil {
 		return err
 	}
+	s.queueStartupOutputMedium()
 	return s.runRealtimeConnectionWithContext(ctx, conn)
+}
+
+func (s *realtimeSession) emitConnectionAcquiredMetrics(acquireTime time.Duration) {
+	if acquireTime < 0 {
+		acquireTime = 0
+	}
+	modelName := ""
+	modelProvider := ""
+	if s.model != nil {
+		modelName = s.model.model
+		modelProvider = s.model.Provider()
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			Timestamp:        time.Now(),
+			AcquireTime:      acquireTime.Seconds(),
+			ConnectionReused: false,
+			Metadata: &telemetry.Metadata{
+				ModelName:     modelName,
+				ModelProvider: modelProvider,
+			},
+		},
+	})
 }
 
 func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ultravoxRealtimeHTTPDoer) error {
@@ -1569,6 +1632,12 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 			}
 			return errUltravoxRealtimeReconnectAfterReceive
 		}
+		s.mu.Lock()
+		restarted = s.restartCount != restartCount
+		s.mu.Unlock()
+		if restarted {
+			return nil
+		}
 		switch messageType {
 		case ultravoxRealtimeWebsocketTextFrame:
 			if err := s.handleServerTextMessage(data); err != nil {
@@ -1613,9 +1682,19 @@ func (s *realtimeSession) runRealtimeConnectionWithContext(parent context.Contex
 	}()
 	select {
 	case err := <-sendErrCh:
+		if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
+			s.mu.Lock()
+			s.restartCount++
+			s.mu.Unlock()
+		}
 		cancel()
 		return err
 	case err := <-receiveErrCh:
+		if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) || errors.Is(err, errUltravoxRealtimeReconnectAfterReceive) {
+			s.mu.Lock()
+			s.restartCount++
+			s.mu.Unlock()
+		}
 		cancel()
 		return err
 	}
@@ -1630,6 +1709,9 @@ func ultravoxRealtimeToolPayloadsE(tools []llm.Tool) ([]map[string]any, error) {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
+			continue
+		}
+		if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
 			continue
 		}
 		name, description, parameters, rawSchema, err := ultravoxRealtimeToolSchemaE(tool)
@@ -1979,14 +2061,20 @@ func (s *realtimeSession) markRestartNeededLocked() {
 	s.clientEventCh = make(chan map[string]any, cap(s.clientEventCh))
 	close(s.outboundCh)
 	s.outboundCh = make(chan ultravoxRealtimeOutboundMessage, cap(s.outboundCh))
-	if s.outputMedium == "text" {
-		_ = s.enqueueClientEventLocked(map[string]any{
-			"type":   "set_output_medium",
-			"medium": "text",
-		})
-	}
 	close(s.audioCh)
 	s.audioCh = make(chan []byte, cap(s.audioCh))
+}
+
+func (s *realtimeSession) queueStartupOutputMedium() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.outputMedium != "text" {
+		return
+	}
+	_ = s.enqueueClientEventLocked(map[string]any{
+		"type":   "set_output_medium",
+		"medium": "text",
+	})
 }
 
 func (s *realtimeSession) enqueueOutboundAudioLocked(audioData []byte) {
@@ -2043,6 +2131,26 @@ func ultravoxRealtimeToolNameSetsEqual(a, b map[string]struct{}) bool {
 	return true
 }
 
+func ultravoxRealtimeSameToolInstance(a, b llm.Tool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() != bv.Type() {
+		return false
+	}
+	switch av.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return av.Pointer() == bv.Pointer()
+	default:
+		if av.Type().Comparable() {
+			return a == b
+		}
+		return false
+	}
+}
+
 func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 	hasSignal := ultravoxRealtimeAudioHasSignal(audioData)
 	s.mu.Lock()
@@ -2056,13 +2164,20 @@ func (s *realtimeSession) handleOutputAudio(audioData []byte) {
 	}
 	frame := &model.AudioFrame{
 		Data:              append([]byte(nil), audioData...),
-		SampleRate:        s.outputSampleRate,
+		SampleRate:        ultravoxRealtimeOutputAudioSampleRate(s.outputSampleRate),
 		NumChannels:       ultravoxRealtimeInputChannels,
 		SamplesPerChannel: uint32(len(audioData)) / (2 * ultravoxRealtimeInputChannels),
 	}
 	s.mu.Unlock()
 
 	generation.audioStream.Send(frame)
+}
+
+func ultravoxRealtimeOutputAudioSampleRate(sampleRate int) uint32 {
+	if sampleRate <= 0 {
+		return 0
+	}
+	return uint32(sampleRate)
 }
 
 func (s *realtimeSession) handleServerTextMessage(data []byte) error {
@@ -2372,9 +2487,6 @@ func (s *realtimeSession) generationMetricsLocked(generation *ultravoxRealtimeGe
 	ttft := -1.0
 	if !generation.firstToken.IsZero() {
 		ttft = generation.firstToken.Sub(createdAt).Seconds()
-		if ttft < 0 {
-			ttft = 0
-		}
 	}
 	modelName := ""
 	modelProvider := ""
