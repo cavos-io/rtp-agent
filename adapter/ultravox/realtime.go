@@ -353,6 +353,7 @@ type realtimeSession struct {
 	audioOutput      bool
 	systemPrompt     string
 	audioStream      *coreaudio.AudioByteStream
+	inputNormalizer  ultravoxRealtimeInputNormalizer
 	generation       *ultravoxRealtimeGeneration
 	generationSeq    uint64
 	tools            []llm.Tool
@@ -648,7 +649,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		return nil
 	}
 
-	audioFrame, err := ultravoxRealtimeInputAudioFrame(frame, s.inputSampleRate)
+	audioFrame, err := s.inputNormalizer.Normalize(frame, s.inputSampleRate)
 	if err != nil {
 		return err
 	}
@@ -1204,41 +1205,133 @@ func (s *realtimeSession) handlePongEvent(float64) {
 	})
 }
 
-func ultravoxRealtimeInputAudioFrame(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
-	resampled, err := coreaudio.ResampleAudioFrame(frame, sampleRate)
+type ultravoxRealtimeInputNormalizer struct {
+	inputRate       uint32
+	outputRate      uint32
+	bufferStart     uint64
+	totalInput      uint64
+	nextOutputNumer uint64
+	mono            []byte
+	lastParticipant string
+}
+
+func (n *ultravoxRealtimeInputNormalizer) Normalize(frame *model.AudioFrame, sampleRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || sampleRate == 0 || len(frame.Data) == 0 {
+		return nil, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, errors.New("ultravox realtime audio input has zero sample rate")
+	}
+	mono, samplesPerChannel, err := ultravoxRealtimeDownmixInput(frame)
 	if err != nil {
 		return nil, err
 	}
-	if resampled == nil || resampled.NumChannels <= ultravoxRealtimeInputChannels {
-		return resampled, nil
-	}
-	if len(resampled.Data)%2 != 0 {
-		return nil, errors.New("ultravox realtime audio input must be 16-bit PCM")
-	}
-	channels := int(resampled.NumChannels)
-	samplesPerChannel := int(resampled.SamplesPerChannel)
 	if samplesPerChannel == 0 {
-		samplesPerChannel = (len(resampled.Data) / 2) / channels
+		return nil, nil
+	}
+	if frame.SampleRate == sampleRate {
+		n.Reset()
+		return &model.AudioFrame{
+			Data:              mono,
+			SampleRate:        sampleRate,
+			NumChannels:       ultravoxRealtimeInputChannels,
+			SamplesPerChannel: samplesPerChannel,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+	if n.inputRate != frame.SampleRate || n.outputRate != sampleRate {
+		n.Reset()
+		n.inputRate = frame.SampleRate
+		n.outputRate = sampleRate
+	}
+	n.lastParticipant = frame.ParticipantID
+	n.mono = append(n.mono, mono...)
+	n.totalInput += uint64(samplesPerChannel)
+
+	output := make([]byte, 0, int(uint64(samplesPerChannel)*uint64(sampleRate)/uint64(frame.SampleRate)+1)*2)
+	for {
+		sourceIndex := n.nextOutputNumer / uint64(n.outputRate)
+		if sourceIndex >= n.totalInput {
+			break
+		}
+		relative := sourceIndex - n.bufferStart
+		offset := int(relative) * 2
+		if offset+2 > len(n.mono) {
+			break
+		}
+		output = append(output, n.mono[offset:offset+2]...)
+		n.nextOutputNumer += uint64(n.inputRate)
+	}
+	n.dropConsumed()
+	if len(output) == 0 {
+		return nil, nil
+	}
+	return &model.AudioFrame{
+		Data:              output,
+		SampleRate:        sampleRate,
+		NumChannels:       ultravoxRealtimeInputChannels,
+		SamplesPerChannel: uint32(len(output) / 2),
+		ParticipantID:     n.lastParticipant,
+	}, nil
+}
+
+func (n *ultravoxRealtimeInputNormalizer) Reset() {
+	n.inputRate = 0
+	n.outputRate = 0
+	n.bufferStart = 0
+	n.totalInput = 0
+	n.nextOutputNumer = 0
+	n.mono = nil
+	n.lastParticipant = ""
+}
+
+func (n *ultravoxRealtimeInputNormalizer) dropConsumed() {
+	if n.outputRate == 0 {
+		return
+	}
+	nextSource := n.nextOutputNumer / uint64(n.outputRate)
+	if nextSource <= n.bufferStart {
+		return
+	}
+	dropSamples := nextSource - n.bufferStart
+	dropBytes := int(dropSamples) * 2
+	if dropBytes > len(n.mono) {
+		dropBytes = len(n.mono)
+		dropSamples = uint64(dropBytes / 2)
+	}
+	n.mono = append([]byte(nil), n.mono[dropBytes:]...)
+	n.bufferStart += dropSamples
+}
+
+func ultravoxRealtimeDownmixInput(frame *model.AudioFrame) ([]byte, uint32, error) {
+	if len(frame.Data)%2 != 0 {
+		return nil, 0, errors.New("ultravox realtime audio input must be 16-bit PCM")
+	}
+	if frame.NumChannels == 0 {
+		return nil, 0, errors.New("ultravox realtime audio input has zero channels")
+	}
+	channels := int(frame.NumChannels)
+	samplesPerChannel := int(frame.SamplesPerChannel)
+	if samplesPerChannel == 0 {
+		samplesPerChannel = (len(frame.Data) / 2) / channels
 	}
 	expectedBytes := samplesPerChannel * channels * 2
-	if len(resampled.Data) < expectedBytes {
-		return nil, errors.New("ultravox realtime audio input is shorter than declared sample count")
+	if len(frame.Data) < expectedBytes {
+		return nil, 0, errors.New("ultravox realtime audio input is shorter than declared sample count")
 	}
 
 	mono := make([]byte, samplesPerChannel*2)
+	if channels == ultravoxRealtimeInputChannels {
+		copy(mono, frame.Data[:expectedBytes])
+		return mono, uint32(samplesPerChannel), nil
+	}
 	for sample := 0; sample < samplesPerChannel; sample++ {
 		var sum int32
 		for channel := 0; channel < channels; channel++ {
 			offset := (sample*channels + channel) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(resampled.Data[offset:])))
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
 		}
 		binary.LittleEndian.PutUint16(mono[sample*2:], uint16(int16(sum/int32(channels))))
 	}
-	return &model.AudioFrame{
-		Data:              mono,
-		SampleRate:        sampleRate,
-		NumChannels:       ultravoxRealtimeInputChannels,
-		SamplesPerChannel: uint32(samplesPerChannel),
-		ParticipantID:     resampled.ParticipantID,
-	}, nil
+	return mono, uint32(samplesPerChannel), nil
 }

@@ -598,6 +598,47 @@ func TestUltravoxRealtimeSessionPushAudioQueuesReferenceInputChunk(t *testing.T)
 	}
 }
 
+func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	for sample := 0; sample < 4410; sample++ {
+		value := int16(sample % 32767)
+		pcm := make([]byte, 2)
+		binary.LittleEndian.PutUint16(pcm, uint16(value))
+		if err := session.PushAudio(&audiomodel.AudioFrame{
+			Data:              pcm,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushAudio split 44.1k sample %d error = %v", sample, err)
+		}
+	}
+
+	select {
+	case got := <-session.audioCh:
+		if gotLen, wantLen := len(got), 3200; gotLen != wantLen {
+			t.Fatalf("split-frame resampled chunk bytes = %d, want %d from reference stateful resampler", gotLen, wantLen)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("split-frame PushAudio did not queue one reference 100ms chunk")
+	}
+	select {
+	case extra := <-session.audioCh:
+		t.Fatalf("extra resampled chunk bytes = %d, want phase preserved without over-emitting", len(extra))
+	default:
+	}
+}
+
 func TestUltravoxRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
