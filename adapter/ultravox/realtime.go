@@ -1061,8 +1061,11 @@ func (s *realtimeSession) receiveRealtimeMessagesFrom(conn ultravoxRealtimeWebso
 		}
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, context.Canceled) {
 				return nil
+			}
+			if errors.Is(err, io.EOF) {
+				return ultravoxRealtimeUnexpectedWebsocketClose
 			}
 			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) {

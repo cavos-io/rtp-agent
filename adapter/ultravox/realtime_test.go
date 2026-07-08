@@ -2830,7 +2830,7 @@ func TestUltravoxRealtimeSessionReceiveTaskDispatchesReferenceFrames(t *testing.
 			{typ: ultravoxRealtimeWebsocketTextFrame, data: []byte(`{"type":"transcript","role":"user","medium":"voice","text":"hello","final":true,"ordinal":8}`)},
 			{typ: ultravoxRealtimeWebsocketBinaryFrame, data: audio},
 		},
-		readErr: io.EOF,
+		readErr: context.Canceled,
 	}
 
 	if err := session.receiveRealtimeMessages(conn); err != nil {
@@ -2871,7 +2871,7 @@ func TestUltravoxRealtimeSessionReceiveTaskStopsStaleFramesAfterReferenceRestart
 		readMessages: []ultravoxRealtimeTestWebsocketFrame{
 			{typ: ultravoxRealtimeWebsocketTextFrame, data: []byte(`{"type":"transcript","role":"user","medium":"voice","text":"stale","final":true,"ordinal":9}`)},
 		},
-		readErr: io.EOF,
+		readErr: context.Canceled,
 	}
 
 	if err := session.receiveRealtimeMessagesFrom(conn, restartCount); err != nil {
@@ -2903,6 +2903,12 @@ func TestUltravoxRealtimeSessionReceiveTaskUnexpectedCloseReturnsReferenceError(
 	if err == nil || err.Error() != "Ultravox S2S connection closed unexpectedly" {
 		t.Fatalf("receive close error = %v, want reference unexpected close error", err)
 	}
+
+	conn = &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	err = session.receiveRealtimeMessages(conn)
+	if err == nil || err.Error() != "Ultravox S2S connection closed unexpectedly" {
+		t.Fatalf("receive EOF error = %v, want reference unexpected close error", err)
+	}
 }
 
 func TestUltravoxRealtimeSessionRunConnectionClosesReferenceWebsocket(t *testing.T) {
@@ -2917,7 +2923,7 @@ func TestUltravoxRealtimeSessionRunConnectionClosesReferenceWebsocket(t *testing
 	session := sessionInterface.(*realtimeSession)
 	defer session.Close()
 
-	conn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
 	if err := session.runRealtimeConnection(conn); err != nil {
 		t.Fatalf("runRealtimeConnection error = %v, want nil after receive loop exits", err)
 	}
@@ -2956,7 +2962,7 @@ func TestUltravoxRealtimeSessionRunConnectionStartsReferenceSendTask(t *testing.
 	conn := &ultravoxRealtimeTestWebsocketConn{
 		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeCh: writeCh},
 		readBlock:                           readBlock,
-		readErr:                             io.EOF,
+		readErr:                             context.Canceled,
 	}
 	errCh := make(chan error, 1)
 	go func() {
@@ -3016,7 +3022,7 @@ func TestUltravoxRealtimeSessionRunOnceConnectsAndRunsReferenceConnection(t *tes
 	conn := &ultravoxRealtimeTestWebsocketConn{
 		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeCh: writeCh},
 		readBlock:                           readBlock,
-		readErr:                             io.EOF,
+		readErr:                             context.Canceled,
 	}
 	var gotEndpoint string
 	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
@@ -3079,9 +3085,9 @@ func TestUltravoxRealtimeSessionRestartLoopReconnectsAfterReferenceRestartSignal
 	firstReadBlock := make(chan struct{})
 	firstConn := &ultravoxRealtimeTestWebsocketConn{
 		readBlock: firstReadBlock,
-		readErr:   io.EOF,
+		readErr:   context.Canceled,
 	}
-	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
 	dialCh := make(chan int, 2)
 	var conns = []*ultravoxRealtimeTestWebsocketConn{firstConn, secondConn}
 	var dialCount int
@@ -3232,7 +3238,7 @@ func TestUltravoxRealtimeSessionRetriesReferenceRecoverableConnectionError(t *te
 		responseStatus: http.StatusOK,
 		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
 	}
-	conn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
 	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
 		return conn, nil
 	}
@@ -3297,9 +3303,9 @@ func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) 
 	firstConn := &ultravoxRealtimeTestWebsocketConn{
 		ultravoxRealtimeTestWebsocketWriter: ultravoxRealtimeTestWebsocketWriter{writeErr: errors.New("socket write failed")},
 		readBlock:                           firstReadBlock,
-		readErr:                             io.EOF,
+		readErr:                             context.Canceled,
 	}
-	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	secondConn := &ultravoxRealtimeTestWebsocketConn{readErr: context.Canceled}
 	conns := []*ultravoxRealtimeTestWebsocketConn{firstConn, secondConn}
 	dialCh := make(chan int, 2)
 	var dialCount int
@@ -3694,7 +3700,7 @@ func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
 		if c.readErr != nil {
 			return 0, nil, c.readErr
 		}
-		return 0, nil, io.EOF
+		return 0, nil, context.Canceled
 	}
 	message := c.readMessages[0]
 	c.readMessages = c.readMessages[1:]
