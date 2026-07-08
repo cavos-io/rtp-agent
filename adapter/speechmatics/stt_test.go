@@ -1764,6 +1764,71 @@ func TestSpeechmaticsSTTEndOfTranscriptFlushesPendingRawFinalBeforeEOF(t *testin
 	}
 }
 
+func TestSpeechmaticsSTTEndOfTranscriptQueuesPendingRawFinalWhenEventsFull(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		state: &speechmaticsStreamState{
+			includePartials: true,
+			bufferRawFinals: true,
+		},
+		closeConn: func() error { return nil },
+	}
+	stream.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "already queued"},
+		},
+	}
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.5,
+			"alternatives":[{"content":"pending final","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal final response: %v", err)
+	}
+	if keepReading := stream.handleResponse(final); !keepReading {
+		t.Fatal("AddTranscript stopped read loop")
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- stream.handleResponse(smResponse{Message: "EndOfTranscript"})
+	}()
+	select {
+	case keepReading := <-done:
+		if keepReading {
+			t.Fatal("EndOfTranscript handler continued reading, want terminal cleanup")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("EndOfTranscript blocked on full events channel while flushing pending raw final")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want queued transcript before EOF", err)
+	}
+	if got := event.Alternatives[0].Text; got != "already queued" {
+		t.Fatalf("first transcript = %q, want queued transcript before pending raw final", got)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want pending raw final before EOF", err)
+	}
+	if got := event.Alternatives[0].Text; got != "pending final" {
+		t.Fatalf("second transcript = %q, want pending raw final", got)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("third Next = (%#v, %v), want EOF after terminal drain", event, err)
+	}
+}
+
 func TestSpeechmaticsSTTCloseFlushesPendingRawFinalBeforeEOF(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		events: make(chan *stt.SpeechEvent, 2),

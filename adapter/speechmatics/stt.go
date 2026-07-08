@@ -1106,11 +1106,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
 		_ = s.closeTransportOnce()
 		s.closeLocalEndpointingTurn()
-		for _, event := range s.flushPendingRawFinalEvents() {
-			if !s.enqueueEvent(event) {
-				return false
-			}
-		}
+		s.prepareDrainPendingRawFinals()
 		s.markClosedDrainingEvents()
 		return false
 	}
