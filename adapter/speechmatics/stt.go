@@ -1719,6 +1719,7 @@ type speechmaticsRawTranscriptFragment struct {
 	text            string
 	kind            string
 	speakerID       string
+	speakerGroupID  string
 	formatSpeakerID string
 	language        string
 	attaches        string
@@ -1833,6 +1834,10 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if speechmaticsRawSpeakerNull(resp, i) {
 			formatSpeakerID = "None"
 		}
+		speakerGroupID := resultSpeakerID
+		if speechmaticsRawSpeakerNull(resp, i) {
+			speakerGroupID = "\x00null"
+		}
 		language := speechmaticsRawFragmentLanguage(alt.Language, speechmaticsRawLanguagePresent(resp, i))
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
@@ -1847,6 +1852,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			text:            alt.Content,
 			kind:            kind,
 			speakerID:       resultSpeakerID,
+			speakerGroupID:  speakerGroupID,
 			formatSpeakerID: formatSpeakerID,
 			language:        language,
 			attaches:        result.Attaches,
@@ -1986,7 +1992,7 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	var events []*stt.SpeechEvent
 	groupStart := 0
 	for i := 1; i <= len(fragments); i++ {
-		if i < len(fragments) && fragments[i].speakerID == fragments[groupStart].speakerID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
+		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
 			continue
 		}
 		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {

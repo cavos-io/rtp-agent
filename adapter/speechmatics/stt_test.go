@@ -603,6 +603,41 @@ func TestSpeechmaticsEventsRawTranscriptFormatsReferenceNullSpeaker(t *testing.T
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptSeparatesReferenceNullAndEmptySpeakers(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"nullish","confidence":0.9,"speaker":null}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"empty","confidence":0.8,"speaker":""}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{
+		focusSpeakers:        []string{"agent"},
+		focusMode:            "retain",
+		speakerPassiveFormat: "@{speaker_id}: {text}",
+	})
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want separate reference segments for null and empty speakers", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@None: nullish" {
+		t.Fatalf("first text = %q, want null speaker formatted separately", got)
+	}
+	if got := events[1].Alternatives[0].Text; got != "@: empty" {
+		t.Fatalf("second text = %q, want empty speaker formatted separately", got)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
