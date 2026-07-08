@@ -384,9 +384,6 @@ func (s *speechmaticsTTSChunkedStream) closeTerminalResponse() {
 	if stream != nil {
 		_ = stream.Close()
 	}
-	if s.owner != nil {
-		s.owner.unregisterStream(s)
-	}
 }
 
 func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {

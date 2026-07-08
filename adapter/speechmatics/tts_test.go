@@ -1232,6 +1232,36 @@ func TestSpeechmaticsTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSProviderCloseCancelsBufferedTerminalAudio(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	stream := &speechmaticsTTSChunkedStream{
+		stream: io.NopCloser(&chunkedFinalEOFReader{chunks: [][]byte{
+			bytes.Repeat([]byte{0x01, 0x02}, 2048),
+		}}),
+		cancel:     func() {},
+		sampleRate: 4000,
+		owner:      provider,
+	}
+	if !provider.registerStream(stream) {
+		t.Fatal("register stream = false, want active stream")
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want buffered terminal audio", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want non-final audio before provider Close", audio)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after provider Close = (%+v, %v), want EOF without stale buffered audio", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(bytes.NewReader(nil)),
@@ -1472,6 +1502,26 @@ func (r *finalEOFReader) Read(p []byte) (int, error) {
 	r.done = true
 	copy(p, r.data)
 	return len(r.data), io.EOF
+}
+
+type chunkedFinalEOFReader struct {
+	chunks [][]byte
+}
+
+func (r *chunkedFinalEOFReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, errors.New("read after final eof")
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	n := copy(p, chunk)
+	if n != len(chunk) {
+		return n, errors.New("chunk too large for read buffer")
+	}
+	if len(r.chunks) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 type speechmaticsCloseCountBody struct {
