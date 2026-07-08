@@ -1261,7 +1261,25 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 	return false, fmt.Errorf("unsupported truthy bool")
 }
 
-func speechmaticsNormalizeSegmentIsActive(data []byte) ([]byte, error) {
+func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "None", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	return "", fmt.Errorf("unsupported segment text")
+}
+
+func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 	var raw struct {
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
@@ -1274,6 +1292,18 @@ func speechmaticsNormalizeSegmentIsActive(data []byte) ([]byte, error) {
 	}
 	changed := false
 	for i, segment := range raw.Segments {
+		if text, ok := segment["text"]; ok {
+			value, err := speechmaticsUnmarshalReferenceSegmentText(text)
+			if err != nil {
+				return nil, fmt.Errorf("segments[%d].text: %w", i, err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			segment["text"] = encoded
+			changed = true
+		}
 		isActive, ok := segment["is_active"]
 		if !ok || string(isActive) == "null" {
 			continue
@@ -1334,7 +1364,7 @@ type smResponse struct {
 
 func (r *smResponse) UnmarshalJSON(data []byte) error {
 	var err error
-	data, err = speechmaticsNormalizeSegmentIsActive(data)
+	data, err = speechmaticsNormalizeSegments(data)
 	if err != nil {
 		return err
 	}
