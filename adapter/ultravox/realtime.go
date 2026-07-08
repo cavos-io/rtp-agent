@@ -1361,13 +1361,27 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 		return "", err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		reason := http.StatusText(resp.StatusCode)
-		if reason == "" {
-			reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
+		reason := ultravoxRealtimeHTTPReason(resp)
 		return "", llm.NewAPIError(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, reason), nil, false)
 	}
 	return ultravoxRealtimeCreateCallJoinURL(data)
+}
+
+func ultravoxRealtimeHTTPReason(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	prefix := fmt.Sprintf("%d ", resp.StatusCode)
+	if strings.HasPrefix(resp.Status, prefix) {
+		reason := strings.TrimSpace(strings.TrimPrefix(resp.Status, prefix))
+		if reason != "" {
+			return reason
+		}
+	}
+	if reason := http.StatusText(resp.StatusCode); reason != "" {
+		return reason
+	}
+	return fmt.Sprintf("HTTP %d", resp.StatusCode)
 }
 
 func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client ultravoxRealtimeHTTPDoer) (ultravoxRealtimeWebsocketConn, error) {

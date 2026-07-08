@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -5177,6 +5178,7 @@ func TestUltravoxRealtimeSessionRestartLoopMapsReferenceHTTPStatusError(t *testi
 
 	if err := session.runRealtimeRestartLoop(context.Background(), &ultravoxRealtimeTestHTTPDoer{
 		responseStatus: http.StatusServiceUnavailable,
+		responseReason: "Ultravox overloaded",
 		responseBody:   `service unavailable`,
 	}); err != nil {
 		t.Fatalf("runRealtimeRestartLoop error = %v, want reference error event", err)
@@ -5191,7 +5193,7 @@ func TestUltravoxRealtimeSessionRestartLoopMapsReferenceHTTPStatusError(t *testi
 			t.Fatalf("event error = %#v, want non-recoverable RealtimeModelError", event.Error)
 		}
 		var apiErr *llm.APIError
-		if !errors.As(modelErr, &apiErr) || apiErr.Error() != "HTTP 503: Service Unavailable" {
+		if !errors.As(modelErr, &apiErr) || apiErr.Error() != "HTTP 503: Ultravox overloaded" {
 			t.Fatalf("RealtimeModelError unwrap = %v, want reference APIError HTTP status", modelErr)
 		}
 	case <-time.After(time.Second):
@@ -5951,6 +5953,7 @@ type ultravoxRealtimeTestHTTPDoer struct {
 	requestCount   int
 	errs           []error
 	responseStatus int
+	responseReason string
 	responseBody   string
 	err            error
 }
@@ -5979,8 +5982,17 @@ func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, er
 	if status == 0 {
 		status = http.StatusOK
 	}
+	reason := d.responseReason
+	if reason == "" {
+		reason = http.StatusText(status)
+	}
+	statusLine := fmt.Sprintf("%d", status)
+	if reason != "" {
+		statusLine += " " + reason
+	}
 	return &http.Response{
 		StatusCode: status,
+		Status:     statusLine,
 		Body:       io.NopCloser(strings.NewReader(d.responseBody)),
 		Header:     make(http.Header),
 	}, nil
