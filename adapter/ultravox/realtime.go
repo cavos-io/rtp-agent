@@ -850,6 +850,14 @@ func (s *realtimeSession) createCall(ctx context.Context, client ultravoxRealtim
 	return ultravoxRealtimeCreateCallJoinURL(data)
 }
 
+func (s *realtimeSession) connectRealtimeWebsocket(ctx context.Context, client ultravoxRealtimeHTTPDoer) (ultravoxRealtimeWebsocketConn, error) {
+	joinURL, err := s.createCall(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	return s.model.dialRealtimeWebsocket(ctx, joinURL)
+}
+
 func (m *RealtimeModel) dialRealtimeWebsocket(ctx context.Context, joinURL string) (ultravoxRealtimeWebsocketConn, error) {
 	return m.dialWebsocket(ctx, joinURL, http.Header{})
 }

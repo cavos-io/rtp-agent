@@ -458,6 +458,47 @@ func TestUltravoxRealtimeModelDialsReferenceJoinURL(t *testing.T) {
 	}
 }
 
+func TestUltravoxRealtimeSessionConnectsReferenceCreateCallToWebsocket(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	wantConn := &ultravoxRealtimeTestWebsocketConn{}
+	var gotEndpoint string
+	model.dialWebsocket = func(_ context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		gotEndpoint = endpoint
+		if len(headers) != 0 {
+			t.Fatalf("websocket headers = %#v, want reference empty headers", headers)
+		}
+		return wantConn, nil
+	}
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+
+	gotConn, err := session.connectRealtimeWebsocket(context.Background(), doer)
+	if err != nil {
+		t.Fatalf("connectRealtimeWebsocket error = %v, want nil", err)
+	}
+	if gotConn != wantConn {
+		t.Fatalf("connection = %#v, want websocket conn from dialer", gotConn)
+	}
+	if doer.request == nil || doer.request.Method != http.MethodPost {
+		t.Fatalf("create-call request = %#v, want POST before websocket dial", doer.request)
+	}
+	if gotEndpoint != "wss://ultravox.example/join" {
+		t.Fatalf("websocket endpoint = %q, want joinUrl from create-call response", gotEndpoint)
+	}
+}
+
 func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
 		WithRealtimeSystemPrompt("stay concise"),
