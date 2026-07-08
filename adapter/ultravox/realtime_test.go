@@ -822,6 +822,71 @@ func TestUltravoxRealtimeOutboundMessageSerializesReferenceFrames(t *testing.T) 
 	}
 }
 
+func TestUltravoxRealtimeSessionSendTaskWritesReferenceOutboundStream(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+
+	writer := &ultravoxRealtimeTestWebsocketWriter{}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.sendOutboundMessages(writer)
+	}()
+
+	pcm := make([]byte, 3200)
+	for i := range pcm {
+		pcm[i] = byte(i % 251)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              pcm,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "respond now",
+		InstructionsSet: true,
+	}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("send task error = %v, want nil after channel close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send task did not exit after session Close")
+	}
+	if len(writer.frames) != 2 {
+		t.Fatalf("websocket frame count = %d, want audio then client event", len(writer.frames))
+	}
+	if writer.frames[0].typ != ultravoxRealtimeWebsocketBinaryFrame || !bytes.Equal(writer.frames[0].data, pcm) {
+		t.Fatalf("first websocket frame = %#v, want binary audio", writer.frames[0])
+	}
+	if writer.frames[1].typ != ultravoxRealtimeWebsocketTextFrame {
+		t.Fatalf("second websocket frame type = %d, want text", writer.frames[1].typ)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(writer.frames[1].data, &event); err != nil {
+		t.Fatalf("client event frame JSON = %q failed decode: %v", writer.frames[1].data, err)
+	}
+	if event["type"] != "user_text_message" || event["text"] != "<instruction>respond now</instruction>" {
+		t.Fatalf("client event frame = %#v, want reference user_text_message", event)
+	}
+}
+
 func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

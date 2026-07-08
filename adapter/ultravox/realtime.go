@@ -818,6 +818,15 @@ func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter
 	return writer.WriteMessage(ultravoxRealtimeWebsocketTextFrame, data)
 }
 
+func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
+	for message := range s.outboundCh {
+		if err := writeUltravoxRealtimeOutboundMessage(writer, message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
