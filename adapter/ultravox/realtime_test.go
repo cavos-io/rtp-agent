@@ -163,6 +163,39 @@ func TestUltravoxRealtimeOptionsPreserveReferenceEmptyOutputMedium(t *testing.T)
 	}
 }
 
+func TestUltravoxRealtimeOptionsPreserveReferenceZeroSampleRates(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithRealtimeInputSampleRate(0),
+		WithRealtimeOutputSampleRate(0),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	if got := model.InputSampleRate(); got != 0 {
+		t.Fatalf("input sample rate = %d, want explicit zero reference input_sample_rate", got)
+	}
+	if got := model.OutputSampleRate(); got != 0 {
+		t.Fatalf("output sample rate = %d, want explicit zero reference output_sample_rate", got)
+	}
+
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	_, _, payload := session.createCallRequest()
+	medium := payload["medium"].(map[string]any)
+	serverWebsocket := medium["serverWebSocket"].(map[string]any)
+	if got := serverWebsocket["inputSampleRate"]; got != 0 {
+		t.Fatalf("inputSampleRate payload = %#v, want explicit zero reference input_sample_rate", got)
+	}
+	if got := serverWebsocket["outputSampleRate"]; got != 0 {
+		t.Fatalf("outputSampleRate payload = %#v, want explicit zero reference output_sample_rate", got)
+	}
+}
+
 func TestUltravoxRealtimeUpdateOptionsMatchReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

@@ -141,7 +141,7 @@ func WithRealtimeOutputMedium(outputMedium string) RealtimeOption {
 
 func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			m.inputSampleRate = sampleRate
 		}
 	}
@@ -149,7 +149,7 @@ func WithRealtimeInputSampleRate(sampleRate int) RealtimeOption {
 
 func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			m.outputSampleRate = sampleRate
 		}
 	}
@@ -258,6 +258,10 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
+	audioChunkSamples := uint32(m.inputSampleRate) / 10
+	if audioChunkSamples == 0 {
+		audioChunkSamples = 1
+	}
 	session := &realtimeSession{
 		eventCh:               make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
 		audioCh:               make(chan []byte, 256),
@@ -270,7 +274,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		systemPrompt:          m.systemPrompt,
 		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
 		recoverableErrorDelay: time.Second,
-		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, audioChunkSamples),
 		toolNames:             make(map[string]struct{}),
 		toolResults:           make(map[string]struct{}),
 		contextItems:          make(map[string]struct{}),
