@@ -248,7 +248,7 @@ func TestUltravoxRealtimeModelUpdateOptionsPropagatesReferenceSessions(t *testin
 	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
 }
 
-func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t *testing.T) {
+func TestUltravoxRealtimeModelUpdateOptionsRejectsInvalidReferenceOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -261,21 +261,22 @@ func TestUltravoxRealtimeModelUpdateOptionsPreservesReferenceEmptyOutputMedium(t
 	defer session.Close()
 
 	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
-	if got := model.OutputMedium(); got != "" {
-		t.Fatalf("output medium = %q, want explicit empty reference output_medium", got)
+	if got := model.OutputMedium(); got != "voice" {
+		t.Fatalf("output medium = %q, want unchanged voice after invalid reference output_medium update", got)
 	}
-	if model.Capabilities().AudioOutput {
-		t.Fatal("audio output = true, want false after empty output_medium")
+	if !model.Capabilities().AudioOutput {
+		t.Fatal("audio output = false, want unchanged true after invalid output_medium update")
 	}
-	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-		"type":   "set_output_medium",
-		"medium": "",
-	})
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected client event for invalid output_medium update = %#v", got)
+	default:
+	}
 
 	session.handleStateEvent(ultravoxRealtimeStateEvent{State: "thinking"})
 	generation := requireUltravoxRealtimeGeneration(t, session)
 	message := requireUltravoxRealtimeMessage(t, generation)
-	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"text"})
+	requireUltravoxRealtimeModalities(t, message.ModalitiesCh, []string{"audio", "text"})
 }
 
 func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *testing.T) {
@@ -307,6 +308,18 @@ func TestUltravoxRealtimeSessionUpdateOptionsQueuesReferenceOutputMedium(t *test
 	select {
 	case got := <-session.clientEventCh:
 		t.Fatalf("unexpected client event for empty UpdateOptions = %#v", got)
+	default:
+	}
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		OutputMedium:    "",
+		OutputMediumSet: true,
+	}); err == nil {
+		t.Fatal("UpdateOptions invalid output medium error = nil, want reference set_output_medium validation error")
+	}
+	select {
+	case got := <-session.clientEventCh:
+		t.Fatalf("unexpected client event for invalid UpdateOptions = %#v", got)
 	default:
 	}
 }
@@ -922,7 +935,7 @@ func TestUltravoxRealtimeSessionRestartRequeuesReferenceTextOutputMedium(t *test
 	})
 }
 
-func TestUltravoxRealtimeSessionRestartKeepsReferenceEmptyOutputMediumUnset(t *testing.T) {
+func TestUltravoxRealtimeSessionRestartIgnoresInvalidReferenceOutputMedium(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeSystemPrompt("stay concise"))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -935,16 +948,17 @@ func TestUltravoxRealtimeSessionRestartKeepsReferenceEmptyOutputMediumUnset(t *t
 	defer session.Close()
 
 	model.UpdateOptions(WithRealtimeUpdateOutputMedium(""))
-	requireUltravoxRealtimeClientEvent(t, session, map[string]any{
-		"type":   "set_output_medium",
-		"medium": "",
-	})
+	select {
+	case event := <-session.clientEventCh:
+		t.Fatalf("invalid output-medium event = %#v, want no provider control event", event)
+	default:
+	}
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
 		t.Fatalf("UpdateInstructions error = %v", err)
 	}
 	select {
 	case event := <-session.clientEventCh:
-		t.Fatalf("restart output-medium event = %#v, want no text fallback for empty reference output_medium", event)
+		t.Fatalf("restart output-medium event = %#v, want no invalid or text fallback output_medium event", event)
 	default:
 	}
 }

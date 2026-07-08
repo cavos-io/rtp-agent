@@ -250,6 +250,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 		}
 	}
 	if update.outputMedium != nil {
+		if !ultravoxRealtimeValidOutputMedium(*update.outputMedium) {
+			return
+		}
 		m.outputMedium = *update.outputMedium
 		sessions := m.realtimeSessions()
 		for _, session := range sessions {
@@ -1048,6 +1051,9 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 	if !options.OutputMediumSet {
 		return nil
 	}
+	if !ultravoxRealtimeValidOutputMedium(options.OutputMedium) {
+		return fmt.Errorf("ultravox realtime output medium must be voice or text")
+	}
 	if err := s.sendClientEvent(map[string]any{
 		"type":   "set_output_medium",
 		"medium": options.OutputMedium,
@@ -1063,6 +1069,11 @@ func (s *realtimeSession) updateOptions(options llm.RealtimeSessionOptions, upda
 	s.mu.Unlock()
 	return nil
 }
+
+func ultravoxRealtimeValidOutputMedium(outputMedium string) bool {
+	return outputMedium == "voice" || outputMedium == "text"
+}
+
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	text := ""
 	if options.InstructionsSet {
