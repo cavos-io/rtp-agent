@@ -2638,6 +2638,43 @@ func TestUltravoxRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T
 	}
 }
 
+func TestUltravoxRealtimeSessionReceiveTaskDispatchesReferenceFrames(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	audio := []byte{1, 0, 2, 0}
+	conn := &ultravoxRealtimeTestWebsocketConn{
+		readMessages: []ultravoxRealtimeTestWebsocketFrame{
+			{typ: ultravoxRealtimeWebsocketTextFrame, data: []byte(`{"type":"transcript","role":"user","medium":"voice","text":"hello","final":true,"ordinal":8}`)},
+			{typ: ultravoxRealtimeWebsocketBinaryFrame, data: audio},
+		},
+		readErr: io.EOF,
+	}
+
+	if err := session.receiveRealtimeMessages(conn); err != nil {
+		t.Fatalf("receiveRealtimeMessages error = %v, want nil after reference receive loop drains test frames", err)
+	}
+	requireUltravoxRealtimeTranscriptEvent(t, session, "msg_user_8", "hello", true)
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	message := requireUltravoxRealtimeMessage(t, generation)
+	select {
+	case got := <-message.AudioCh:
+		if !bytes.Equal(got.Data, audio) {
+			t.Fatalf("received audio bytes = %v, want websocket binary payload", got.Data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket binary audio frame")
+	}
+}
+
 func TestUltravoxRealtimeSessionServerJSONIgnoresUnknownReferenceEvents(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -2954,10 +2991,20 @@ func (w *ultravoxRealtimeTestWebsocketWriter) WriteMessage(typ int, data []byte)
 
 type ultravoxRealtimeTestWebsocketConn struct {
 	ultravoxRealtimeTestWebsocketWriter
+	readMessages []ultravoxRealtimeTestWebsocketFrame
+	readErr      error
 }
 
 func (c *ultravoxRealtimeTestWebsocketConn) ReadMessage() (int, []byte, error) {
-	return 0, nil, io.EOF
+	if len(c.readMessages) == 0 {
+		if c.readErr != nil {
+			return 0, nil, c.readErr
+		}
+		return 0, nil, io.EOF
+	}
+	message := c.readMessages[0]
+	c.readMessages = c.readMessages[1:]
+	return message.typ, append([]byte(nil), message.data...), nil
 }
 
 func (c *ultravoxRealtimeTestWebsocketConn) Close() error {

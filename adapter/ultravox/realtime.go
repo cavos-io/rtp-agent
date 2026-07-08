@@ -893,6 +893,26 @@ func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketW
 	return nil
 }
 
+func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocketConn) error {
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		switch messageType {
+		case ultravoxRealtimeWebsocketTextFrame:
+			if err := s.handleServerTextMessage(data); err != nil {
+				return err
+			}
+		case ultravoxRealtimeWebsocketBinaryFrame:
+			s.handleOutputAudio(data)
+		}
+	}
+}
+
 func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 	payloads := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
