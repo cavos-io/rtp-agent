@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1132,7 +1133,7 @@ func TestSpeechmaticsSTTProviderCloseClosesReferenceVAD(t *testing.T) {
 	if err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want reference provider close error", err)
 	}
-	if !vadStream.closed {
+	if !vadStream.isClosed() {
 		t.Fatal("VAD stream closed = false after provider close")
 	}
 }
@@ -1273,7 +1274,7 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
-	if !vadStream.closed {
+	if !vadStream.isClosed() {
 		t.Fatal("VAD stream closed = false after startup write failure")
 	}
 }
@@ -1281,15 +1282,15 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 func TestSpeechmaticsSTTStreamRetriesReferenceStartupWriteFailure(t *testing.T) {
 	withSpeechmaticsSTTRetryInterval(t, 0)
 	upgrader := websocket.Upgrader{}
-	var attempts int
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		attempt := attempts.Add(1)
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		if attempts == 1 {
+		if attempt == 1 {
 			if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
 				_ = tcpConn.SetLinger(0)
 			}
@@ -1309,8 +1310,8 @@ func TestSpeechmaticsSTTStreamRetriesReferenceStartupWriteFailure(t *testing.T) 
 		t.Fatalf("Stream error = %T %v, want retry success", err, err)
 	}
 	defer stream.Close()
-	if attempts != 2 {
-		t.Fatalf("startup attempts = %d, want one reference retry after StartRecognition write failure", attempts)
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("startup attempts = %d, want one reference retry after StartRecognition write failure", got)
 	}
 }
 
@@ -1739,7 +1740,7 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 		t.Fatalf("turn detection mode = %q, want external when explicit VAD is provided", provider.turnDetectionMode)
 	}
 
-	var controlMessages []map[string]interface{}
+	controlMessages := make(chan map[string]interface{}, 4)
 	stream := &speechmaticsSTTStream{
 		owner: provider,
 		writeBinary: func([]byte) error {
@@ -1750,7 +1751,7 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 			if !ok {
 				t.Fatalf("control message = %#v, want JSON object", message)
 			}
-			controlMessages = append(controlMessages, control)
+			controlMessages <- control
 			return nil
 		},
 	}
@@ -1768,12 +1769,12 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 	if err := stream.PushFrame(frame); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	if got := vadStream.pushed[0]; got != frame {
+	if got := vadStream.pushedFrames()[0]; got != frame {
 		t.Fatalf("VAD pushed frame = %#v, want original pre-normalized frame", got)
 	}
 
 	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
-	waitForSpeechmaticsControlMessage(t, &controlMessages, "ForceEndOfUtterance")
+	waitForSpeechmaticsControlMessage(t, controlMessages, "ForceEndOfUtterance")
 }
 
 func TestSpeechmaticsSTTVADFinalizeFailureSurfacesToNext(t *testing.T) {
@@ -1851,8 +1852,9 @@ func TestSpeechmaticsSTTExplicitVADForcesReferenceExternalTurnDetectionAfterLate
 
 func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.nextErr = errors.New("vad failed")
-	vadStream.nextStarted = make(chan struct{})
+	vadStream.setNextErr(errors.New("vad failed"))
+	nextStarted := make(chan struct{})
+	vadStream.setNextStarted(nextStarted)
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTVAD(&fakeSpeechmaticsVAD{stream: vadStream}),
 	)
@@ -1873,7 +1875,7 @@ func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 		t.Fatalf("startVAD error = %v", err)
 	}
 	select {
-	case <-vadStream.nextStarted:
+	case <-nextStarted:
 	case <-time.After(time.Second):
 		t.Fatal("VAD stream did not start")
 	}
@@ -1893,7 +1895,7 @@ func TestSpeechmaticsSTTVADErrorClosesReferenceStream(t *testing.T) {
 func TestSpeechmaticsSTTVADPushFailureSurfacesToNext(t *testing.T) {
 	vadErr := errors.New("vad push failed")
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.pushErr = vadErr
+	vadStream.setPushErr(vadErr)
 	transportClosed := make(chan struct{})
 	var closeOnce sync.Once
 	stream := &speechmaticsSTTStream{
@@ -1932,7 +1934,7 @@ func TestSpeechmaticsSTTVADPushFailureSurfacesToNext(t *testing.T) {
 func TestSpeechmaticsSTTVADEndInputFailureSurfacesToNext(t *testing.T) {
 	vadErr := errors.New("vad end input failed")
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.endInputErr = vadErr
+	vadStream.setEndInputErr(vadErr)
 	transportClosed := make(chan struct{})
 	var closeOnce sync.Once
 	stream := &speechmaticsSTTStream{
@@ -2136,7 +2138,7 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 		waitForRecognitionStarted: true,
 		vadStream:                 vadStream,
 		writeBinary: func(data []byte) error {
-			if vadStream.ended {
+			if vadStream.isEnded() {
 				t.Fatal("provider audio wrote after VAD EndInput, want provider audio before VAD end input")
 			}
 			writes = append(writes, append([]byte(nil), data...))
@@ -2150,8 +2152,8 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	if err := stream.PushFrame(frame); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	if len(vadStream.pushed) != 0 {
-		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered original audio", len(vadStream.pushed))
+	if pushed := vadStream.pushedFrames(); len(pushed) != 0 {
+		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered original audio", len(pushed))
 	}
 	if len(writes) != 0 {
 		t.Fatalf("provider writes before RecognitionStarted = %d, want buffered provider audio", len(writes))
@@ -2159,17 +2161,17 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	if err := stream.EndInput(); err != nil {
 		t.Fatalf("EndInput() before RecognitionStarted error = %v", err)
 	}
-	if vadStream.ended {
+	if vadStream.isEnded() {
 		t.Fatal("VAD EndInput before RecognitionStarted = true, want buffered end input")
 	}
 
 	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
 		t.Fatal("RecognitionStarted stopped read loop")
 	}
-	if len(vadStream.pushed) != 1 || vadStream.pushed[0] != frame {
-		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want original frame", vadStream.pushed)
+	if pushed := vadStream.pushedFrames(); len(pushed) != 1 || pushed[0] != frame {
+		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want original frame", pushed)
 	}
-	if !vadStream.ended {
+	if !vadStream.isEnded() {
 		t.Fatal("VAD EndInput after RecognitionStarted = false, want drained end input after frames")
 	}
 	if len(writes) != 1 {
@@ -2179,7 +2181,8 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 
 func TestSpeechmaticsCloseUnblocksReferenceVADStartupDrain(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.pushStarted = make(chan struct{})
+	pushStarted := make(chan struct{})
+	vadStream.setPushStarted(pushStarted)
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 3200),
 		SampleRate:        16000,
@@ -2206,7 +2209,7 @@ func TestSpeechmaticsCloseUnblocksReferenceVADStartupDrain(t *testing.T) {
 		close(readyDone)
 	}()
 	select {
-	case <-vadStream.pushStarted:
+	case <-pushStarted:
 	case <-time.After(time.Second):
 		t.Fatal("VAD startup drain did not begin")
 	}
@@ -2505,18 +2508,22 @@ func drainSpeechmaticsControlMessages(messages <-chan string) []string {
 	}
 }
 
-func waitForSpeechmaticsControlMessage(t *testing.T, messages *[]map[string]interface{}, want string) {
+func waitForSpeechmaticsControlMessage(t *testing.T, messages <-chan map[string]interface{}, want string) {
 	t.Helper()
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		for _, message := range *messages {
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	var seen []map[string]interface{}
+	for {
+		select {
+		case message := <-messages:
+			seen = append(seen, message)
 			if message["message"] == want {
 				return
 			}
+		case <-timer.C:
+			t.Fatalf("control messages = %#v, want %s", seen, want)
 		}
-		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("control messages = %#v, want %s", *messages, want)
 }
 
 func waitSpeechmaticsStreamReady(t *testing.T, stream *speechmaticsSTTStream) {
@@ -2587,8 +2594,8 @@ func TestSpeechmaticsSTTRejectsSampleRateChangeBeforeVADLikeReference(t *testing
 	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
 		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
 	}
-	if len(vadStream.pushed) != 1 {
-		t.Fatalf("VAD pushed frames = %d, want only first valid sample-rate frame", len(vadStream.pushed))
+	if pushed := vadStream.pushedFrames(); len(pushed) != 1 {
+		t.Fatalf("VAD pushed frames = %d, want only first valid sample-rate frame", len(pushed))
 	}
 }
 
@@ -4116,7 +4123,8 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightPushFrameLikeReference(t *testing.T
 
 func TestSpeechmaticsSTTCloseUnblocksInFlightVADPushFrameLikeReference(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.pushStarted = make(chan struct{})
+	pushStarted := make(chan struct{})
+	vadStream.setPushStarted(pushStarted)
 	stream := &speechmaticsSTTStream{
 		vadStream: vadStream,
 		writeBinary: func([]byte) error {
@@ -4138,7 +4146,7 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightVADPushFrameLikeReference(t *testin
 	}()
 
 	select {
-	case <-vadStream.pushStarted:
+	case <-pushStarted:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("PushFrame did not start VAD push")
 	}
@@ -4169,7 +4177,8 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightVADPushFrameLikeReference(t *testin
 
 func TestSpeechmaticsSTTCloseUnblocksInFlightVADEndInputLikeReference(t *testing.T) {
 	vadStream := newFakeSpeechmaticsVADStream()
-	vadStream.endInputStarted = make(chan struct{})
+	endInputStarted := make(chan struct{})
+	vadStream.setEndInputStarted(endInputStarted)
 	stream := &speechmaticsSTTStream{
 		vadStream: vadStream,
 		writeJSON: func(interface{}) error {
@@ -4186,7 +4195,7 @@ func TestSpeechmaticsSTTCloseUnblocksInFlightVADEndInputLikeReference(t *testing
 	}()
 
 	select {
-	case <-vadStream.endInputStarted:
+	case <-endInputStarted:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("EndInput did not start VAD end input")
 	}
@@ -4805,6 +4814,7 @@ func (f *fakeSpeechmaticsVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeSpeechmaticsVADStream struct {
+	mu              sync.Mutex
 	events          chan *vad.VADEvent
 	nextErr         error
 	pushErr         error
@@ -4822,51 +4832,123 @@ func newFakeSpeechmaticsVADStream() *fakeSpeechmaticsVADStream {
 	return &fakeSpeechmaticsVADStream{events: make(chan *vad.VADEvent, 1)}
 }
 
+func (s *fakeSpeechmaticsVADStream) setNextErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextErr = err
+}
+
+func (s *fakeSpeechmaticsVADStream) setPushErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pushErr = err
+}
+
+func (s *fakeSpeechmaticsVADStream) setEndInputErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.endInputErr = err
+}
+
+func (s *fakeSpeechmaticsVADStream) setNextStarted(ch chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextStarted = ch
+}
+
+func (s *fakeSpeechmaticsVADStream) setPushStarted(ch chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pushStarted = ch
+}
+
+func (s *fakeSpeechmaticsVADStream) setEndInputStarted(ch chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.endInputStarted = ch
+}
+
+func (s *fakeSpeechmaticsVADStream) pushedFrames() []*model.AudioFrame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*model.AudioFrame(nil), s.pushed...)
+}
+
+func (s *fakeSpeechmaticsVADStream) isEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
+}
+
+func (s *fakeSpeechmaticsVADStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *fakeSpeechmaticsVADStream) PushFrame(frame *model.AudioFrame) error {
-	if s.pushErr != nil {
-		return s.pushErr
+	s.mu.Lock()
+	pushErr := s.pushErr
+	pushStarted := s.pushStarted
+	s.pushStarted = nil
+	s.mu.Unlock()
+	if pushErr != nil {
+		return pushErr
 	}
-	if s.pushStarted != nil {
-		close(s.pushStarted)
-		s.pushStarted = nil
+	if pushStarted != nil {
+		close(pushStarted)
 		if _, ok := <-s.events; !ok {
 			return io.ErrClosedPipe
 		}
 	}
+	s.mu.Lock()
 	s.pushed = append(s.pushed, frame)
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *fakeSpeechmaticsVADStream) Flush() error { return nil }
 func (s *fakeSpeechmaticsVADStream) EndInput() error {
-	if s.endInputErr != nil {
-		return s.endInputErr
+	s.mu.Lock()
+	endInputErr := s.endInputErr
+	endInputStarted := s.endInputStarted
+	s.endInputStarted = nil
+	s.mu.Unlock()
+	if endInputErr != nil {
+		return endInputErr
 	}
-	if s.endInputStarted != nil {
-		close(s.endInputStarted)
-		s.endInputStarted = nil
+	if endInputStarted != nil {
+		close(endInputStarted)
 		if _, ok := <-s.events; !ok {
 			return io.ErrClosedPipe
 		}
 	}
+	s.mu.Lock()
 	s.ended = true
+	s.mu.Unlock()
 	s.closedOnce.Do(func() { close(s.events) })
 	return nil
 }
 func (s *fakeSpeechmaticsVADStream) Close() error {
 	s.closedOnce.Do(func() {
+		s.mu.Lock()
 		s.closed = true
+		s.mu.Unlock()
 		close(s.events)
 	})
 	return nil
 }
 func (s *fakeSpeechmaticsVADStream) Next() (*vad.VADEvent, error) {
-	if s.nextStarted != nil {
-		close(s.nextStarted)
-		s.nextStarted = nil
+	s.mu.Lock()
+	nextStarted := s.nextStarted
+	s.nextStarted = nil
+	nextErr := s.nextErr
+	s.mu.Unlock()
+	if nextStarted != nil {
+		close(nextStarted)
 	}
-	if s.nextErr != nil {
-		return nil, s.nextErr
+	if nextErr != nil {
+		return nil, nextErr
 	}
 	event, ok := <-s.events
 	if !ok {
