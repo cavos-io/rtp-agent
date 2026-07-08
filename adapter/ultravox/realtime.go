@@ -177,10 +177,8 @@ func WithRealtimeLanguageHint(languageHint string) RealtimeOption {
 
 func WithRealtimeMaxDuration(maxDuration string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if maxDuration != "" {
-			m.maxDuration = maxDuration
-			m.maxDurationSet = true
-		}
+		m.maxDuration = maxDuration
+		m.maxDurationSet = true
 	}
 }
 
