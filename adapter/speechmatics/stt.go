@@ -1021,6 +1021,7 @@ type speechmaticsStreamState struct {
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
 	latestRawPartialEvents     []*stt.SpeechEvent
+	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
 }
@@ -1293,11 +1294,13 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
 		speechmaticsClearLatestRawPartialEvents(state)
+		speechmaticsClearTurnTranscriptEvidence(state)
 		events := speechmaticsFlushPendingRawFinals(state)
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		return events
 	case "EndOfTurn":
 		defer speechmaticsClearLatestRawPartialEvents(state)
+		defer speechmaticsClearTurnTranscriptEvidence(state)
 		return speechmaticsEndOfTurnEvents(state)
 	}
 	return nil
@@ -1306,6 +1309,12 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 func speechmaticsClearLatestRawPartialEvents(state *speechmaticsStreamState) {
 	if state != nil {
 		state.latestRawPartialEvents = nil
+	}
+}
+
+func speechmaticsClearTurnTranscriptEvidence(state *speechmaticsStreamState) {
+	if state != nil {
+		state.turnHasTranscript = false
 	}
 }
 
@@ -1363,6 +1372,9 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 	}
 	events := speechmaticsRawTranscriptEvents(resp, state, eventType)
 	if resp.Message == "AddTranscript" && state != nil && state.bufferRawFinals {
+		if len(events) > 0 {
+			state.turnHasTranscript = true
+		}
 		state.pendingRawFinals = append(state.pendingRawFinals, events...)
 		return nil
 	}
@@ -1464,13 +1476,20 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 
 	if len(fragments) > 0 {
 		speechmaticsRecordLatestRawTranscriptAnnotation(state, eventType, fragments)
-		return speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
+		events := speechmaticsRawTranscriptEventsFromFragments(eventType, fragments, state)
+		if len(events) > 0 && state != nil {
+			state.turnHasTranscript = true
+		}
+		return events
 	}
 	if len(resp.Results) > 0 || resp.Metadata.Transcript == "" {
 		return nil
 	}
 	if speechmaticsRawFragmentTrimmed(state, resp.Metadata.StartTime+startTimeOffset) {
 		return nil
+	}
+	if state != nil {
+		state.turnHasTranscript = true
 	}
 	return []*stt.SpeechEvent{
 		{
@@ -1708,6 +1727,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 	if eventType == stt.SpeechEventFinalTranscript {
 		speechmaticsDropOverlappedPendingRawFinals(state, events)
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+	}
+	if len(events) > 0 && state != nil {
+		state.turnHasTranscript = true
 	}
 	return events
 }
@@ -2319,7 +2341,9 @@ func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
 		return nil
 	}
-	return speechmaticsEndOfTurnEvents(s.state)
+	events := speechmaticsEndOfTurnEvents(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
+	return events
 }
 
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
@@ -2335,11 +2359,13 @@ func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	if !speechmaticsHasReferenceTurnEndEvidence(s.state) {
 		return nil
 	}
-	return speechmaticsEndOfTurnEvents(s.state)
+	events := speechmaticsEndOfTurnEvents(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
+	return events
 }
 
 func speechmaticsHasReferenceTurnEndEvidence(state *speechmaticsStreamState) bool {
-	return state != nil && (state.speechDuration > 0 || len(state.pendingRawFinals) > 0)
+	return state != nil && (state.turnHasTranscript || len(state.pendingRawFinals) > 0)
 }
 
 func (s *speechmaticsSTTStream) consumeCompletedForcedEOU() bool {

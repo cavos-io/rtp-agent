@@ -4719,7 +4719,7 @@ func TestSpeechmaticsSTTFinalizeTimesOutReferenceForcedEOU(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 2),
-		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		state:  &speechmaticsStreamState{speechDuration: 0.25, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			payload, ok := message.(map[string]interface{})
 			if !ok {
@@ -4793,6 +4793,41 @@ func TestSpeechmaticsSTTFinalizeTimeoutWithoutSpeechSuppressesReferenceEndOfTurn
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeTimeoutWithoutTranscriptSuppressesReferenceEndOfTurn(t *testing.T) {
+	oldTimeout := speechmaticsForcedEOUTimeout
+	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { speechmaticsForcedEOUTimeout = oldTimeout })
+
+	provider := NewSpeechmaticsSTT("test-key")
+	stream := &speechmaticsSTTStream{
+		owner:  provider,
+		events: make(chan *stt.SpeechEvent, 2),
+		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		writeJSON: func(message interface{}) error {
+			payload, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("finalize message = %#v, want JSON object", message)
+			}
+			if got, want := payload["message"], "ForceEndOfUtterance"; got != want {
+				t.Fatalf("finalize message = %#v, want %#v", got, want)
+			}
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+
+	select {
+	case event := <-stream.events:
+		t.Fatalf("forced EOU timeout without transcript emitted %#v, want no reference end_of_speech", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *testing.T) {
 	oldTimeout := speechmaticsForcedEOUTimeout
 	speechmaticsForcedEOUTimeout = 10 * time.Millisecond
@@ -4802,7 +4837,7 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutDoesNotDuplicate(t *te
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 4),
-		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		state:  &speechmaticsStreamState{speechDuration: 0.25, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			return nil
 		},
@@ -4840,7 +4875,7 @@ func TestSpeechmaticsSTTLateEndOfTurnAfterForcedEOUTimeoutAndNewStartDoesNotDupl
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 4),
-		state:  &speechmaticsStreamState{speechDuration: 0.25},
+		state:  &speechmaticsStreamState{speechDuration: 0.25, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			return nil
 		},
@@ -5010,7 +5045,7 @@ func TestSpeechmaticsSTTFinalizeSuppressesDuplicateReferenceForcedEOU(t *testing
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 2),
-		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		state:  &speechmaticsStreamState{speechDuration: 0.3, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			writes++
 			return nil
@@ -5040,7 +5075,7 @@ func TestSpeechmaticsSTTFinalizeAfterForcedEOUTimeoutSuppressesDuplicateReferenc
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 4),
-		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		state:  &speechmaticsStreamState{speechDuration: 0.3, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			writes++
 			return nil
@@ -5076,7 +5111,7 @@ func TestSpeechmaticsSTTFinalizeAfterVADRestartSendsReferenceForceEOU(t *testing
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 4),
-		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		state:  &speechmaticsStreamState{speechDuration: 0.3, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			writes++
 			return nil
@@ -5110,7 +5145,7 @@ func TestSpeechmaticsSTTForcedEOUEndsOnReferenceEndOfUtteranceAck(t *testing.T) 
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 2),
-		state:  &speechmaticsStreamState{speechDuration: 0.3},
+		state:  &speechmaticsStreamState{speechDuration: 0.3, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			return nil
 		},
@@ -5150,7 +5185,7 @@ func TestSpeechmaticsSTTFixedEndOfUtteranceEmitsReferenceEndOfSpeech(t *testing.
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 2),
-		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		state:  &speechmaticsStreamState{speechDuration: 0.4, turnHasTranscript: true},
 	}
 
 	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
@@ -5185,7 +5220,7 @@ func TestSpeechmaticsSTTFixedLateEndOfTurnAfterEndOfUtteranceDoesNotDuplicate(t 
 	stream := &speechmaticsSTTStream{
 		owner:  provider,
 		events: make(chan *stt.SpeechEvent, 4),
-		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		state:  &speechmaticsStreamState{speechDuration: 0.4, turnHasTranscript: true},
 	}
 
 	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
@@ -5244,7 +5279,7 @@ func TestSpeechmaticsSTTFinalizeFixedModeEmitsReferenceLocalTurnEnd(t *testing.T
 		events: make(chan *stt.SpeechEvent, 2),
 		errCh:  make(chan error, 1),
 		done:   make(chan struct{}),
-		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		state:  &speechmaticsStreamState{speechDuration: 0.4, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			t.Fatalf("finalize write = %#v, want local reference finalization for fixed mode", message)
 			return nil
@@ -5276,7 +5311,7 @@ func TestSpeechmaticsSTTFinalizeFixedModeSuppressesDuplicateReferenceLocalTurnEn
 		events: make(chan *stt.SpeechEvent, 4),
 		errCh:  make(chan error, 1),
 		done:   make(chan struct{}),
-		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		state:  &speechmaticsStreamState{speechDuration: 0.4, turnHasTranscript: true},
 		writeJSON: func(message interface{}) error {
 			t.Fatalf("finalize write = %#v, want local reference finalization for fixed mode", message)
 			return nil
@@ -5308,7 +5343,7 @@ func TestSpeechmaticsSTTFinalizeFixedModeSuppressesLateReferenceEndOfUtterance(t
 		events: make(chan *stt.SpeechEvent, 4),
 		errCh:  make(chan error, 1),
 		done:   make(chan struct{}),
-		state:  &speechmaticsStreamState{speechDuration: 0.4},
+		state:  &speechmaticsStreamState{speechDuration: 0.4, turnHasTranscript: true},
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 	provider.registerStream(stream)
