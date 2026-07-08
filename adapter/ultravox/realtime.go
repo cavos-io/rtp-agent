@@ -1617,7 +1617,7 @@ func ultravoxRealtimeToolPayloads(tools []llm.Tool) []map[string]any {
 			"temporaryTool": map[string]any{
 				"modelToolName":     name,
 				"description":       description,
-				"dynamicParameters": ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema),
+				"dynamicParameters": ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema, rawSchema),
 				"client":            map[string]any{},
 			},
 		})
@@ -1647,10 +1647,10 @@ func ultravoxRealtimeToolSchema(tool llm.Tool) (string, any, map[string]any, boo
 
 func ultravoxRealtimeToolDynamicParameters(tool llm.Tool) []map[string]any {
 	_, _, parameters, rawSchema := ultravoxRealtimeToolSchema(tool)
-	return ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema)
+	return ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters, !rawSchema, rawSchema)
 }
 
-func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters map[string]any, relaxNullableRequired bool) []map[string]any {
+func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters map[string]any, relaxNullableRequired bool, preserveTypeSchema bool) []map[string]any {
 	properties, _ := parameters["properties"].(map[string]any)
 	required := ultravoxRealtimeRequiredParameterSet(parameters["required"])
 
@@ -1659,7 +1659,7 @@ func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters 
 	dynamicParameters := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		prop, _ := properties[name].(map[string]any)
-		schema := ultravoxRealtimeToolParameterSchema(prop)
+		schema := ultravoxRealtimeToolParameterSchema(prop, preserveTypeSchema)
 		_, isRequired := required[name]
 		if relaxNullableRequired && isRequired && name != llm.ConfirmDuplicateParam && ultravoxRealtimeSchemaAllowsNull(prop) {
 			isRequired = false
@@ -1674,7 +1674,12 @@ func ultravoxRealtimeToolDynamicParametersFromSchemaWithRequiredMode(parameters 
 	return dynamicParameters
 }
 
-func ultravoxRealtimeToolParameterSchema(prop map[string]any) any {
+func ultravoxRealtimeToolParameterSchema(prop map[string]any, preserveTypeSchema bool) any {
+	if preserveTypeSchema {
+		if _, ok := prop["type"]; ok {
+			return prop
+		}
+	}
 	if typ := ultravoxRealtimeNonNullType(prop["type"]); typ != "" {
 		if _, nullable := prop["type"].([]string); nullable {
 			return ultravoxRealtimeMinimalParameterSchema(prop, typ)

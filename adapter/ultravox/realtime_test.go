@@ -636,6 +636,16 @@ func TestUltravoxRealtimeToolPayloadsKeepReferenceRawNullableRequired(t *testing
 	if params[0]["required"] != true {
 		t.Fatalf("raw nullable parameter required = %#v, want reference required true", params[0]["required"])
 	}
+	schema, ok := params[0]["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw nullable parameter schema = %#v, want map", params[0]["schema"])
+	}
+	if !reflect.DeepEqual(schema["type"], []interface{}{"string", "null"}) {
+		t.Fatalf("raw nullable parameter schema type = %#v, want reference raw type list", schema["type"])
+	}
+	if schema["description"] != "Search text" {
+		t.Fatalf("raw nullable parameter schema description = %#v, want reference raw description", schema["description"])
+	}
 }
 
 func TestUltravoxRealtimeSessionCreateCallDefaultDisablesReferenceGreetingPrompt(t *testing.T) {
