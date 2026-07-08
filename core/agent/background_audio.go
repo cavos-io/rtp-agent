@@ -13,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/hraban/opus"
 	"github.com/jfreymuth/oggvorbis"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -61,6 +62,9 @@ type BackgroundAudioPlayer struct {
 	room         *lksdk.Room
 	agentSession *AgentSession
 	publication  *lksdk.LocalTrackPublication
+
+	opusEnc *opus.Encoder
+	opusBuf []byte
 
 	mu              sync.Mutex
 	mixerTaskCtx    context.Context
@@ -405,6 +409,13 @@ func (p *BackgroundAudioPlayer) Start(room *lksdk.Room, agentSession *AgentSessi
 		return err
 	}
 
+	enc, err := opus.NewEncoder(48000, 1, opus.AppAudio)
+	if err != nil {
+		return err
+	}
+	p.opusEnc = enc
+	p.opusBuf = make([]byte, 4000)
+
 	pub, err := room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
 		Name: "background_audio",
 	})
@@ -502,12 +513,6 @@ func (p *BackgroundAudioPlayer) runMixerTask(track *lksdk.LocalSampleTrack) {
 			}
 			p.mu.Unlock()
 
-			if len(streams) == 0 {
-				silence := audio.SilenceFrame(0.02, 48000, 1)
-				track.WriteSample(media.Sample{Data: silence.Data, Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
-				continue
-			}
-
 			mixedData := make([]int32, 48000*20/1000)
 			for _, s := range streams {
 				select {
@@ -524,17 +529,22 @@ func (p *BackgroundAudioPlayer) runMixerTask(track *lksdk.LocalSampleTrack) {
 				}
 			}
 
-			outData := make([]byte, len(mixedData)*2)
+			pcm := make([]int16, len(mixedData))
 			for i, val := range mixedData {
 				if val > 32767 {
 					val = 32767
 				} else if val < -32768 {
 					val = -32768
 				}
-				outData[i*2] = byte(int16(val))
-				outData[i*2+1] = byte(int16(val) >> 8)
+				pcm[i] = int16(val)
 			}
-			track.WriteSample(media.Sample{Data: outData, Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
+
+			n, err := p.opusEnc.Encode(pcm, p.opusBuf)
+			if err != nil {
+				logger.Logger.Errorw("background audio opus encode failed", err)
+				continue
+			}
+			track.WriteSample(media.Sample{Data: p.opusBuf[:n], Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
 		}
 	}
 }
