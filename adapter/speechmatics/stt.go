@@ -1610,17 +1610,7 @@ func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamStat
 }
 
 func speechmaticsSystemSpeakerID(speakerID string) bool {
-	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
-		return false
-	}
-	inner := speakerID[2 : len(speakerID)-2]
-	if len(inner) < 2 {
-		return false
-	}
-	for _, r := range inner {
-		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
-		}
+	if len(speakerID) <= 4 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
 		return false
 	}
 	return true
