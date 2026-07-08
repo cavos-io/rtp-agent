@@ -117,9 +117,7 @@ func WithRealtimeModel(model string) RealtimeOption {
 
 func WithRealtimeVoice(voice string) RealtimeOption {
 	return func(m *RealtimeModel) {
-		if voice != "" {
-			m.voice = voice
-		}
+		m.voice = voice
 	}
 }
 
