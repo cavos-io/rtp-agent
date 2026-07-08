@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -272,20 +273,21 @@ func (m *RealtimeModel) UpdateOptions(opts ...RealtimeUpdateOption) {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &realtimeSession{
-		eventCh:              make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
-		audioCh:              make(chan []byte, 256),
-		clientEventCh:        make(chan map[string]any, ultravoxClientEventQueueSize),
-		outboundCh:           make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
-		model:                m,
-		inputSampleRate:      uint32(m.inputSampleRate),
-		outputSampleRate:     uint32(m.outputSampleRate),
-		audioOutput:          m.outputMedium == "voice",
-		systemPrompt:         m.systemPrompt,
-		generateReplyTimeout: ultravoxGenerateReplyTimeout,
-		audioStream:          coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
-		toolNames:            make(map[string]struct{}),
-		toolResults:          make(map[string]struct{}),
-		contextItems:         make(map[string]struct{}),
+		eventCh:               make(chan llm.RealtimeEvent, ultravoxRealtimeEventQueueSize),
+		audioCh:               make(chan []byte, 256),
+		clientEventCh:         make(chan map[string]any, ultravoxClientEventQueueSize),
+		outboundCh:            make(chan ultravoxRealtimeOutboundMessage, ultravoxOutboundQueueSize),
+		model:                 m,
+		inputSampleRate:       uint32(m.inputSampleRate),
+		outputSampleRate:      uint32(m.outputSampleRate),
+		audioOutput:           m.outputMedium == "voice",
+		systemPrompt:          m.systemPrompt,
+		generateReplyTimeout:  ultravoxGenerateReplyTimeout,
+		recoverableErrorDelay: time.Second,
+		audioStream:           coreaudio.NewAudioByteStream(uint32(m.inputSampleRate), ultravoxRealtimeInputChannels, uint32(m.inputSampleRate)/10),
+		toolNames:             make(map[string]struct{}),
+		toolResults:           make(map[string]struct{}),
+		contextItems:          make(map[string]struct{}),
 	}
 	if m.outputMedium == "text" {
 		event := map[string]any{
@@ -389,33 +391,34 @@ type ultravoxRealtimeHTTPDoer interface {
 }
 
 type realtimeSession struct {
-	mu                   sync.Mutex
-	eventCh              chan llm.RealtimeEvent
-	audioCh              chan []byte
-	clientEventCh        chan map[string]any
-	outboundCh           chan ultravoxRealtimeOutboundMessage
-	model                *RealtimeModel
-	inputSampleRate      uint32
-	outputSampleRate     uint32
-	audioOutput          bool
-	systemPrompt         string
-	audioStream          *coreaudio.AudioByteStream
-	inputNormalizer      ultravoxRealtimeInputNormalizer
-	generation           *ultravoxRealtimeGeneration
-	generationSeq        uint64
-	tools                []llm.Tool
-	toolNames            map[string]struct{}
-	toolResults          map[string]struct{}
-	contextItems         map[string]struct{}
-	pendingReply         bool
-	pendingReplyAt       time.Time
-	pendingReplySeq      uint64
-	pendingReplyTimer    *time.Timer
-	generateReplyTimeout time.Duration
-	restartCount         uint64
-	lastUserFinalAt      time.Time
-	closed               bool
-	closeOnce            sync.Once
+	mu                    sync.Mutex
+	eventCh               chan llm.RealtimeEvent
+	audioCh               chan []byte
+	clientEventCh         chan map[string]any
+	outboundCh            chan ultravoxRealtimeOutboundMessage
+	model                 *RealtimeModel
+	inputSampleRate       uint32
+	outputSampleRate      uint32
+	audioOutput           bool
+	systemPrompt          string
+	audioStream           *coreaudio.AudioByteStream
+	inputNormalizer       ultravoxRealtimeInputNormalizer
+	generation            *ultravoxRealtimeGeneration
+	generationSeq         uint64
+	tools                 []llm.Tool
+	toolNames             map[string]struct{}
+	toolResults           map[string]struct{}
+	contextItems          map[string]struct{}
+	pendingReply          bool
+	pendingReplyAt        time.Time
+	pendingReplySeq       uint64
+	pendingReplyTimer     *time.Timer
+	generateReplyTimeout  time.Duration
+	recoverableErrorDelay time.Duration
+	restartCount          uint64
+	lastUserFinalAt       time.Time
+	closed                bool
+	closeOnce             sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -888,8 +891,15 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 			if errors.Is(err, errUltravoxRealtimeReconnectAfterSend) {
 				continue
 			}
-			s.emitRealtimeModelError(err, false)
-			return nil
+			recoverable := ultravoxRealtimeRecoverableError(err)
+			s.emitRealtimeModelError(err, recoverable)
+			if !recoverable {
+				return nil
+			}
+			if err := s.waitRecoverableErrorDelay(ctx); err != nil {
+				return err
+			}
+			continue
 		}
 
 		s.mu.Lock()
@@ -899,6 +909,21 @@ func (s *realtimeSession) runRealtimeRestartLoop(ctx context.Context, client ult
 		if closed || !restarted {
 			return nil
 		}
+	}
+}
+
+func (s *realtimeSession) waitRecoverableErrorDelay(ctx context.Context) error {
+	delay := s.recoverableErrorDelay
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -915,6 +940,18 @@ func (s *realtimeSession) emitRealtimeModelError(err error, recoverable bool) {
 	case s.eventCh <- event:
 	default:
 	}
+}
+
+func ultravoxRealtimeRecoverableError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
 }
 
 func ultravoxRealtimeAPIError(err error) error {

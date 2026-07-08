@@ -3013,6 +3013,56 @@ func TestUltravoxRealtimeSessionRestartLoopEmitsReferenceConnectionError(t *test
 	}
 }
 
+func TestUltravoxRealtimeSessionRetriesReferenceRecoverableConnectionError(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+	session.recoverableErrorDelay = 0
+
+	doer := &ultravoxRealtimeTestHTTPDoer{
+		errs:           []error{ultravoxRealtimeTestTimeoutError("temporary timeout"), nil},
+		responseStatus: http.StatusOK,
+		responseBody:   `{"joinUrl":"wss://ultravox.example/join"}`,
+	}
+	conn := &ultravoxRealtimeTestWebsocketConn{readErr: io.EOF}
+	model.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (ultravoxRealtimeWebsocketConn, error) {
+		return conn, nil
+	}
+
+	if err := session.runRealtimeRestartLoop(context.Background(), doer); err != nil {
+		t.Fatalf("runRealtimeRestartLoop error = %v, want nil after reference recoverable retry", err)
+	}
+	if doer.requestCount != 2 {
+		t.Fatalf("create-call count = %d, want retry after recoverable timeout", doer.requestCount)
+	}
+	if conn.closeCount != 1 {
+		t.Fatalf("websocket close count = %d, want successful retry connection closed", conn.closeCount)
+	}
+	select {
+	case event := <-session.EventCh():
+		if event.Type != llm.RealtimeEventTypeError {
+			t.Fatalf("event type = %s, want recoverable error", event.Type)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(event.Error, &modelErr) || !modelErr.Recoverable {
+			t.Fatalf("event error = %#v, want recoverable RealtimeModelError", event.Error)
+		}
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(modelErr, &connectionErr) || connectionErr.Error() != "Connection failed: temporary timeout" {
+			t.Fatalf("recoverable error unwrap = %v, want reference connection error", modelErr)
+		}
+	default:
+		t.Fatal("missing recoverable error event before retry")
+	}
+}
+
 func TestUltravoxRealtimeSessionReconnectsAfterReferenceSendError(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithRealtimeBaseURL("https://ultravox.example/api/"))
 	if err != nil {
@@ -3455,6 +3505,7 @@ type ultravoxRealtimeTestHTTPDoer struct {
 	request        *http.Request
 	requestBody    []byte
 	requestCount   int
+	errs           []error
 	responseStatus int
 	responseBody   string
 	err            error
@@ -3470,6 +3521,13 @@ func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, er
 		}
 		d.requestBody = body
 	}
+	if len(d.errs) > 0 {
+		err := d.errs[0]
+		d.errs = d.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if d.err != nil {
 		return nil, d.err
 	}
@@ -3483,6 +3541,12 @@ func (d *ultravoxRealtimeTestHTTPDoer) Do(req *http.Request) (*http.Response, er
 		Header:     make(http.Header),
 	}, nil
 }
+
+type ultravoxRealtimeTestTimeoutError string
+
+func (e ultravoxRealtimeTestTimeoutError) Error() string   { return string(e) }
+func (e ultravoxRealtimeTestTimeoutError) Timeout() bool   { return true }
+func (e ultravoxRealtimeTestTimeoutError) Temporary() bool { return true }
 
 type ultravoxRealtimeTestTool struct {
 	name        string
