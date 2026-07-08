@@ -914,10 +914,10 @@ type smResponse struct {
 	} `json:"metadata"`
 	Results []struct {
 		Alternatives []struct {
-			Content    string  `json:"content"`
-			Confidence float64 `json:"confidence"`
-			SpeakerID  string  `json:"speaker"`
-			Language   string  `json:"language"`
+			Content    string   `json:"content"`
+			Confidence *float64 `json:"confidence"`
+			SpeakerID  string   `json:"speaker"`
+			Language   string   `json:"language"`
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
 		Attaches  string  `json:"attaches_to"`
@@ -1233,7 +1233,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			isEOS:      result.IsEOS,
 			startTime:  startTime,
 			endTime:    endTime,
-			confidence: alt.Confidence,
+			confidence: speechmaticsAlternativeConfidence(alt.Confidence),
 		})
 	}
 
@@ -1257,6 +1257,13 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			},
 		},
 	}
+}
+
+func speechmaticsAlternativeConfidence(confidence *float64) float64 {
+	if confidence == nil {
+		return 1.0
+	}
+	return *confidence
 }
 
 func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) []*stt.SpeechEvent {

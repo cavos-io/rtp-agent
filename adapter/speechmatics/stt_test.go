@@ -26,15 +26,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func speechmaticsTestFloat64(value float64) *float64 {
+	return &value
+}
+
 func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
 		Results: []struct {
 			Alternatives []struct {
-				Content    string  `json:"content"`
-				Confidence float64 `json:"confidence"`
-				SpeakerID  string  `json:"speaker"`
-				Language   string  `json:"language"`
+				Content    string   `json:"content"`
+				Confidence *float64 `json:"confidence"`
+				SpeakerID  string   `json:"speaker"`
+				Language   string   `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			Attaches  string  `json:"attaches_to"`
@@ -47,11 +51,11 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				StartTime: 0.1,
 				EndTime:   0.3,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: "hello", Confidence: 0.92}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
 			},
 			{
 				Type:      "punctuation",
@@ -59,22 +63,22 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 				StartTime: 0.3,
 				EndTime:   0.3,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: ",", Confidence: 1.0}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
 			},
 			{
 				Type:      "word",
 				StartTime: 0.4,
 				EndTime:   0.8,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: "world", Confidence: 0.88}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
 			},
 		},
 	}
@@ -106,10 +110,10 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *te
 		Message: "AddTranscript",
 		Results: []struct {
 			Alternatives []struct {
-				Content    string  `json:"content"`
-				Confidence float64 `json:"confidence"`
-				SpeakerID  string  `json:"speaker"`
-				Language   string  `json:"language"`
+				Content    string   `json:"content"`
+				Confidence *float64 `json:"confidence"`
+				SpeakerID  string   `json:"speaker"`
+				Language   string   `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			Attaches  string  `json:"attaches_to"`
@@ -121,11 +125,11 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *te
 				StartTime: 0.15,
 				EndTime:   0.45,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: "defaulted", Confidence: 0.91, SpeakerID: "S1", Language: "en"}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: "defaulted", Confidence: speechmaticsTestFloat64(0.91), SpeakerID: "S1", Language: "en"}},
 			},
 		},
 	}
@@ -144,15 +148,42 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *te
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptDefaultsMissingConfidenceToReferenceOne(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hello","speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	event := speechmaticsTranscriptEvent(resp, &speechmaticsStreamState{language: "en"})
+	if event == nil {
+		t.Fatal("speechmaticsTranscriptEvent returned nil")
+	}
+	alt := event.Alternatives[0]
+	if alt.Confidence != 1.0 {
+		t.Fatalf("confidence = %v, want reference default 1.0", alt.Confidence)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Confidence != 1.0 {
+		t.Fatalf("words = %#v, want reference default word confidence 1.0", alt.Words)
+	}
+}
+
 func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
 		Results: []struct {
 			Alternatives []struct {
-				Content    string  `json:"content"`
-				Confidence float64 `json:"confidence"`
-				SpeakerID  string  `json:"speaker"`
-				Language   string  `json:"language"`
+				Content    string   `json:"content"`
+				Confidence *float64 `json:"confidence"`
+				SpeakerID  string   `json:"speaker"`
+				Language   string   `json:"language"`
 			} `json:"alternatives"`
 			Type      string  `json:"type"`
 			Attaches  string  `json:"attaches_to"`
@@ -165,11 +196,11 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				StartTime: 0.1,
 				EndTime:   0.3,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: "hello", Confidence: 0.92}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
 			},
 			{
 				Type:      "punctuation",
@@ -177,22 +208,22 @@ func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 				StartTime: 0.3,
 				EndTime:   0.3,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: ",", Confidence: 1.0}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
 			},
 			{
 				Type:      "word",
 				StartTime: 0.4,
 				EndTime:   0.8,
 				Alternatives: []struct {
-					Content    string  `json:"content"`
-					Confidence float64 `json:"confidence"`
-					SpeakerID  string  `json:"speaker"`
-					Language   string  `json:"language"`
-				}{{Content: "world", Confidence: 0.88}},
+					Content    string   `json:"content"`
+					Confidence *float64 `json:"confidence"`
+					SpeakerID  string   `json:"speaker"`
+					Language   string   `json:"language"`
+				}{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
 			},
 		},
 	}
