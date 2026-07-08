@@ -2388,6 +2388,13 @@ func ultravoxRealtimeDecodePythonJSONASCIIEscapes(value string) string {
 		c := value[i]
 		if escaped {
 			if c == 'u' && i+4 < len(value) {
+				if decoded, ok := ultravoxRealtimePythonJSONControlUnicodeEscape(value[i+1 : i+5]); ok {
+					out.WriteByte('\\')
+					out.WriteByte(decoded)
+					i += 4
+					escaped = false
+					continue
+				}
 				if decoded, ok := ultravoxRealtimePrintableASCIIUnicodeEscape(value[i+1 : i+5]); ok {
 					out.WriteByte(decoded)
 					i += 4
@@ -2413,6 +2420,23 @@ func ultravoxRealtimeDecodePythonJSONASCIIEscapes(value string) string {
 		out.WriteByte('\\')
 	}
 	return out.String()
+}
+
+func ultravoxRealtimePythonJSONControlUnicodeEscape(hex string) (byte, bool) {
+	switch strings.ToLower(hex) {
+	case "0008":
+		return 'b', true
+	case "0009":
+		return 't', true
+	case "000a":
+		return 'n', true
+	case "000c":
+		return 'f', true
+	case "000d":
+		return 'r', true
+	default:
+		return 0, false
+	}
 }
 
 func ultravoxRealtimePrintableASCIIUnicodeEscape(hex string) (byte, bool) {

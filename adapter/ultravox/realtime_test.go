@@ -3529,6 +3529,34 @@ func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceNegativeZeroInt
 	}
 }
 
+func TestUltravoxRealtimeSessionToolInvocationNormalizesReferenceControlUnicodeArguments(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	if err := session.handleServerTextMessage([]byte(`{"type":"client_tool_invocation","toolName":"lookup","invocationId":"call-control-unicode","parameters":{"backspace":"\u0008","form":"\u000c","tab":"\u0009","line":"\u000a","return":"\u000d","escape":"\u001b"}}`)); err != nil {
+		t.Fatalf("handle control-unicode tool JSON error = %v", err)
+	}
+
+	generation := requireUltravoxRealtimeGeneration(t, session)
+	select {
+	case call := <-generation.FunctionCh:
+		want := `{"backspace": "\b", "form": "\f", "tab": "\t", "line": "\n", "return": "\r", "escape": "\u001b"}`
+		if call.Arguments != want {
+			t.Fatalf("function call arguments = %q, want Python json.dumps control unicode normalization %q", call.Arguments, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control-unicode function call")
+	}
+}
+
 func TestUltravoxRealtimeSessionToolInvocationDoesNotConsumeReferencePendingGenerateReply(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
