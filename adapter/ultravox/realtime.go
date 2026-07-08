@@ -1025,6 +1025,9 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		if tool == nil {
 			return errors.New("ultravox realtime update tools received nil tool")
 		}
+		if _, exists := nextToolNames[tool.Name()]; exists {
+			return fmt.Errorf("duplicate function name: %s", tool.Name())
+		}
 		nextTools = append(nextTools, tool)
 		nextToolNames[tool.Name()] = struct{}{}
 	}
