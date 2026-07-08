@@ -3566,6 +3566,31 @@ func TestSpeechmaticsSTTFinalizeFixedModeEmitsReferenceLocalTurnEnd(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSTTFinalizeFixedModeSuppressesLateReferenceEndOfUtterance(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTFixedTurnDetection())
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 4),
+		errCh:  make(chan error, 1),
+		done:   make(chan struct{}),
+		state:  &speechmaticsStreamState{speechDuration: 0.4},
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	provider.registerStream(stream)
+
+	if err := provider.Finalize(); err != nil {
+		t.Fatalf("Finalize error = %v", err)
+	}
+	readSpeechmaticsTestEvent(t, stream.events)
+	readSpeechmaticsTestEvent(t, stream.events)
+
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("late EndOfUtterance stopped read loop")
+	}
+	if len(stream.events) != 0 {
+		t.Fatalf("late fixed EndOfUtterance events = %d, want no duplicate end_of_speech", len(stream.events))
+	}
+}
+
 func readSpeechmaticsTestEvent(t *testing.T, events <-chan *stt.SpeechEvent) *stt.SpeechEvent {
 	t.Helper()
 	select {

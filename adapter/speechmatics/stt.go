@@ -995,6 +995,9 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	}
 	if resp.Message == "EndOfUtterance" {
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
+			if s.consumeCompletedFixedEOU() {
+				return true
+			}
 			s.clearForcedEOU()
 			for _, event := range s.fixedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
