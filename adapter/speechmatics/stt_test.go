@@ -1251,6 +1251,43 @@ func TestSpeechmaticsSegmentEventsPreserveReferenceEmptySpeakerID(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsSegmentEventsKeepReferenceMissingSpeakerDuringFocusIgnore(t *testing.T) {
+	state := &speechmaticsStreamState{
+		focusSpeakers: []string{"agent"},
+		focusMode:     "ignore",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"unassigned words",
+			"language":"en",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		},{
+			"text":"agent words",
+			"language":"en",
+			"speaker_id":"agent",
+			"metadata":{"start_time":0.5,"end_time":0.8}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want missing-speaker segment retained before focused speaker", events)
+	}
+	if got := events[0].Alternatives[0].SpeakerID; got != "UU" {
+		t.Fatalf("missing speaker id = %q, want reference default UU", got)
+	}
+	if got := events[0].Alternatives[0].Text; got != "unassigned words" {
+		t.Fatalf("missing speaker text = %q, want unassigned words", got)
+	}
+	if got := events[1].Alternatives[0].Text; got != "agent words" {
+		t.Fatalf("focused speaker text = %q, want agent words", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",

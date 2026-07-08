@@ -1751,8 +1751,10 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for i, segment := range resp.Segments {
-		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID, speechmaticsSegmentSpeakerIDPresent(resp, i))
-		if speechmaticsSpeakerFiltered(speakerID, state) {
+		speakerPresent := speechmaticsSegmentSpeakerIDPresent(resp, i)
+		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID, speakerPresent)
+		if speechmaticsSystemSpeakerID(speakerID) ||
+			(speakerPresent && segment.SpeakerID != "" && speechmaticsConfiguredSpeakerFiltered(speakerID, state)) {
 			continue
 		}
 		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
@@ -1870,6 +1872,10 @@ func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamStat
 	if speechmaticsSystemSpeakerID(speakerID) {
 		return true
 	}
+	return speechmaticsConfiguredSpeakerFiltered(speakerID, state)
+}
+
+func speechmaticsConfiguredSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
 	if state == nil {
 		return false
 	}
