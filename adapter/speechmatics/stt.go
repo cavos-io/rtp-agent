@@ -327,91 +327,107 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		defer close(stopCloseWatch)
 	}
 
-	conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
-	if err != nil {
-		return nil, err
-	}
-	if s.isClosed() {
-		conn.Close()
-		return nil, io.ErrClosedPipe
-	}
 	streamLanguage := speechmaticsSTTStreamLanguage(s, language)
+	startupAttempt := 0
 
-	stream := &speechmaticsSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
-		done:   make(chan struct{}),
-		state: &speechmaticsStreamState{
-			language:             streamLanguage,
-			speakerActiveFormat:  s.speakerActiveFormat,
-			speakerPassiveFormat: s.speakerPassiveFormat,
-			focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
-			ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
-			focusMode:            s.focusMode,
-			includePartials:      speechmaticsIncludePartials(s),
-			bufferRawFinals:      true,
-		},
-		owner:                     s,
-		waitForRecognitionStarted: true,
+	for {
+		conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header, &startupAttempt)
+		if err != nil {
+			return nil, err
+		}
+		if s.isClosed() {
+			conn.Close()
+			return nil, io.ErrClosedPipe
+		}
+
+		stream := &speechmaticsSTTStream{
+			conn:   conn,
+			events: make(chan *stt.SpeechEvent, 10),
+			errCh:  make(chan error, 1),
+			done:   make(chan struct{}),
+			state: &speechmaticsStreamState{
+				language:             streamLanguage,
+				speakerActiveFormat:  s.speakerActiveFormat,
+				speakerPassiveFormat: s.speakerPassiveFormat,
+				focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
+				ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+				focusMode:            s.focusMode,
+				includePartials:      speechmaticsIncludePartials(s),
+				bufferRawFinals:      true,
+			},
+			owner:                     s,
+			waitForRecognitionStarted: true,
+		}
+		stream.writeBinary = stream.writeBinaryMessage
+		stream.writeJSON = stream.writeJSONMessage
+		if err := stream.startVAD(ctx); err != nil {
+			conn.Close()
+			return nil, err
+		}
+
+		initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
+
+		if err := conn.WriteJSON(initMsg); err != nil {
+			_ = stream.Close()
+			if retryErr := s.waitBeforeStartupRetry(dialCtx, err, &startupAttempt); retryErr != nil {
+				return nil, retryErr
+			}
+			continue
+		}
+
+		if !s.registerStream(stream) {
+			_ = stream.Close()
+			return nil, io.ErrClosedPipe
+		}
+		go stream.readLoop()
+
+		return stream, nil
 	}
-	stream.writeBinary = stream.writeBinaryMessage
-	stream.writeJSON = stream.writeJSONMessage
-	if err := stream.startVAD(ctx); err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	initMsg := buildSpeechmaticsSTTStartMessage(s, streamLanguage)
-
-	if err := conn.WriteJSON(initMsg); err != nil {
-		_ = stream.Close()
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if !s.registerStream(stream) {
-		_ = stream.Close()
-		return nil, io.ErrClosedPipe
-	}
-	go stream.readLoop()
-
-	return stream, nil
 }
 
-func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, header http.Header) (*websocket.Conn, error) {
-	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
-	attempt := 0
+func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, header http.Header, startupAttempt *int) (*websocket.Conn, error) {
 	for {
 		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 		if err == nil {
 			return conn, nil
 		}
-		if s.isClosed() {
-			return nil, io.ErrClosedPipe
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
-		}
-		connectionErr := llm.NewAPIConnectionError(err.Error())
-		if attempt >= maxRetry {
-			return nil, connectionErr
-		}
-		interval := speechmaticsSTTRetryInterval(attempt)
-		attempt++
-		if interval <= 0 {
-			continue
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			if s.isClosed() {
-				return nil, io.ErrClosedPipe
-			}
-			return nil, ctx.Err()
+		if retryErr := s.waitBeforeStartupRetry(ctx, err, startupAttempt); retryErr != nil {
+			return nil, retryErr
 		}
 	}
+}
+
+func (s *SpeechmaticsSTT) waitBeforeStartupRetry(ctx context.Context, err error, startupAttempt *int) error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	connectionErr := llm.NewAPIConnectionError(err.Error())
+	if startupAttempt == nil {
+		return connectionErr
+	}
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	if *startupAttempt >= maxRetry {
+		return connectionErr
+	}
+	interval := speechmaticsSTTRetryInterval(*startupAttempt)
+	*startupAttempt = *startupAttempt + 1
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		timer.Stop()
+		if s.isClosed() {
+			return io.ErrClosedPipe
+		}
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

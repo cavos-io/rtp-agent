@@ -1230,6 +1230,7 @@ func TestSpeechmaticsSTTReadLoopErrorDeliveryDoesNotBlockWhenErrorQueued(t *test
 }
 
 func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClosesVAD(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	vadStream := newFakeSpeechmaticsVADStream()
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1262,6 +1263,42 @@ func TestSpeechmaticsSTTStartupWriteFailureReturnsReferenceConnectionErrorAndClo
 	}
 	if !vadStream.closed {
 		t.Fatal("VAD stream closed = false after startup write failure")
+	}
+}
+
+func TestSpeechmaticsSTTStreamRetriesReferenceStartupWriteFailure(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
+	upgrader := websocket.Upgrader{}
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		if attempts == 1 {
+			if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+				_ = tcpConn.SetLinger(0)
+			}
+			_ = conn.UnderlyingConn().Close()
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	if attempts != 2 {
+		t.Fatalf("startup attempts = %d, want one reference retry after StartRecognition write failure", attempts)
 	}
 }
 
