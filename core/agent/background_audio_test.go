@@ -189,6 +189,18 @@ func TestPlayHandleStopWithFadeOutWaitsForPlayoutDone(t *testing.T) {
 	}
 }
 
+func TestBackgroundAudioStartTwiceWithoutCloseReturnsError(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	player.mixerTaskCtx = ctx
+	player.mixerTaskCancel = cancel
+
+	if err := player.Start(nil, nil); err == nil {
+		t.Fatal("Start() while already started returned nil error, want already-started guard")
+	}
+}
+
 func waitForBackgroundHandleDone(t *testing.T, handle *PlayHandle) {
 	t.Helper()
 	done := make(chan struct{})
