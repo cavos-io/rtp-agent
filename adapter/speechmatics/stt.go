@@ -1068,6 +1068,7 @@ type smResponse struct {
 	Speakers                []SpeechmaticsSpeakerIdentifier `json:"speakers"`
 	rawLanguagePresent      []bool
 	rawSpeakerPresent       []bool
+	segmentLanguagePresent  []bool
 	segmentIsActivePresent  []bool
 	segmentSpeakerIDPresent []bool
 }
@@ -1099,9 +1100,11 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		}
 	}
 	if len(raw.Segments) > 0 {
+		decoded.segmentLanguagePresent = make([]bool, len(raw.Segments))
 		decoded.segmentIsActivePresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			_, decoded.segmentLanguagePresent[i] = segment["language"]
 			_, decoded.segmentIsActivePresent[i] = segment["is_active"]
 			_, decoded.segmentSpeakerIDPresent[i] = segment["speaker_id"]
 		}
@@ -1539,7 +1542,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			Alternatives: []stt.SpeechData{
 				{
 					Text:       resp.Metadata.Transcript,
-					Language:   speechmaticsSegmentLanguage("", state),
+					Language:   speechmaticsSegmentLanguage("", false, state),
 					Confidence: 1.0,
 					StartTime:  resp.Metadata.StartTime + startTimeOffset,
 					EndTime:    resp.Metadata.EndTime + startTimeOffset,
@@ -1759,7 +1762,7 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			Alternatives: []stt.SpeechData{
 				{
 					Text:      text,
-					Language:  speechmaticsSegmentLanguage(segment.Language, state),
+					Language:  speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state),
 					SpeakerID: speakerID,
 					StartTime: segment.Metadata.StartTime + startTimeOffset,
 					EndTime:   segment.Metadata.EndTime + startTimeOffset,
@@ -1889,8 +1892,12 @@ func speechmaticsStringInSlice(value string, values []string) bool {
 	return false
 }
 
-func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState) string {
-	if language != "" {
+func speechmaticsSegmentLanguagePresent(resp smResponse, index int) bool {
+	return index >= 0 && index < len(resp.segmentLanguagePresent) && resp.segmentLanguagePresent[index]
+}
+
+func speechmaticsSegmentLanguage(language string, present bool, state *speechmaticsStreamState) string {
+	if present || language != "" {
 		return language
 	}
 	if state != nil {
