@@ -90,17 +90,25 @@ func (t *SpeechmaticsTTS) Provider() string {
 func (t *SpeechmaticsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
+func (t *SpeechmaticsTTS) SampleRate() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sampleRate
+}
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	t.mu.Lock()
 	closed := t.closed
+	apiKey := t.apiKey
+	baseURL := t.baseURL
+	voice := t.voice
+	sampleRate := t.sampleRate
 	t.mu.Unlock()
 	if closed {
 		return nil, io.ErrClosedPipe
 	}
-	if t.apiKey == "" {
+	if apiKey == "" {
 		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -108,10 +116,10 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 		ctx:        streamCtx,
 		cancel:     cancel,
 		text:       text,
-		apiKey:     t.apiKey,
-		baseURL:    t.baseURL,
-		voice:      t.voice,
-		sampleRate: t.sampleRate,
+		apiKey:     apiKey,
+		baseURL:    baseURL,
+		voice:      voice,
+		sampleRate: sampleRate,
 		requestID:  uuid.NewString(),
 		owner:      t,
 	}
@@ -122,12 +130,18 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 }
 
 func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text string) (*http.Request, error) {
+	t.mu.Lock()
+	apiKey := t.apiKey
+	baseURL := t.baseURL
+	voice := t.voice
+	sampleRate := t.sampleRate
+	t.mu.Unlock()
 	return buildSpeechmaticsTTSRequestFromOptions(ctx, speechmaticsTTSRequestOptions{
 		text:       text,
-		apiKey:     t.apiKey,
-		baseURL:    t.baseURL,
-		voice:      t.voice,
-		sampleRate: t.sampleRate,
+		apiKey:     apiKey,
+		baseURL:    baseURL,
+		voice:      voice,
+		sampleRate: sampleRate,
 	})
 }
 
@@ -166,6 +180,8 @@ func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmati
 }
 
 func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	sampleRate := t.sampleRate
 	baseURL := t.baseURL
 	for _, opt := range opts {
@@ -182,7 +198,7 @@ func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, err
 	if closed {
 		return nil, io.ErrClosedPipe
 	}
-	return nil, fmt.Errorf("speechmatics streaming tts is unsupported")
+	return nil, fmt.Errorf("streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter")
 }
 
 func (t *SpeechmaticsTTS) Close() error {
@@ -384,9 +400,6 @@ func (s *speechmaticsTTSChunkedStream) closeTerminalResponse() {
 	if stream != nil {
 		_ = stream.Close()
 	}
-	if s.owner != nil {
-		s.owner.unregisterStream(s)
-	}
 }
 
 func (s *speechmaticsTTSChunkedStream) pcmStream() *audio.AudioByteStream {
@@ -467,21 +480,21 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 		return speechmaticsTTSConnectionAPIError()
 	}
 	if resp.StatusCode == 499 {
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		return io.EOF
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		message := speechmaticsTTSStatusReason(resp)
 		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	s.mu.Lock()
 	if s.closed || s.finalSent {
 		s.mu.Unlock()
-		resp.Body.Close()
 		requestCancel()
+		resp.Body.Close()
 		return io.EOF
 	}
 	s.stream = resp.Body
@@ -574,7 +587,7 @@ func speechmaticsTTSTimeoutError(err error) bool {
 }
 
 func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
-	if s.finalSent {
+	if s.isClosedOrFinal() {
 		return nil, io.EOF
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
@@ -592,9 +605,21 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		s.finish()
 		return nil, err
 	}
-	s.finalSent = true
+	if !s.markFinalSent() {
+		return nil, io.EOF
+	}
 	s.finish()
 	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
+}
+
+func (s *speechmaticsTTSChunkedStream) markFinalSent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.finalSent {
+		return false
+	}
+	s.finalSent = true
+	return true
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {

@@ -138,6 +138,21 @@ func TestSpeechmaticsTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSStreamReportsReferenceUnsupported(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+
+	stream, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("Stream error = nil, want unsupported streaming error")
+	}
+	if got, want := err.Error(), "streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter"; got != want {
+		t.Fatalf("Stream error = %q, want %q", got, want)
+	}
+	if stream != nil {
+		t.Fatalf("Stream stream = %#v, want nil", stream)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewSpeechmaticsTTS("test-key",
 		WithSpeechmaticsTTSVoice("theo"),
@@ -277,6 +292,36 @@ func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceBaseURL(t *testing.T) {
 	if req.URL.Host != "tts.example.com" {
 		t.Fatalf("request host = %q, want constructor route", req.URL.Host)
 	}
+}
+
+func TestSpeechmaticsTTSConcurrentUpdateAndSynthesizeSnapshot(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			provider.UpdateOptions(WithSpeechmaticsTTSVoice(fmt.Sprintf("voice-%d", i)))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			stream, err := provider.Synthesize(ctx, "hello")
+			if err != nil {
+				t.Errorf("Synthesize error = %v", err)
+				return
+			}
+			if err := stream.Close(); err != nil {
+				t.Errorf("Close error = %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func TestSpeechmaticsTTSRequestPreservesReferenceBaseURLPath(t *testing.T) {
@@ -896,6 +941,47 @@ func TestSpeechmaticsTTSSynthesizeStatusErrorUsesReferenceResponseReason(t *test
 	}
 }
 
+func TestSpeechmaticsTTSSynthesizeStatusErrorCancelsRequestBeforeBodyClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := newSpeechmaticsContextCloseBody()
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body.ctx = r.Context()
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechmaticsTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+		}
+	case <-time.After(100 * time.Millisecond):
+		body.release()
+		t.Fatal("Next blocked closing status response body, want request canceled before body close")
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -1176,6 +1262,36 @@ func TestSpeechmaticsTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSProviderCloseCancelsBufferedTerminalAudio(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key")
+	stream := &speechmaticsTTSChunkedStream{
+		stream: io.NopCloser(&chunkedFinalEOFReader{chunks: [][]byte{
+			bytes.Repeat([]byte{0x01, 0x02}, 2048),
+		}}),
+		cancel:     func() {},
+		sampleRate: 4000,
+		owner:      provider,
+	}
+	if !provider.registerStream(stream) {
+		t.Fatal("register stream = false, want active stream")
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want buffered terminal audio", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want non-final audio before provider Close", audio)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after provider Close = (%+v, %v), want EOF without stale buffered audio", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(bytes.NewReader(nil)),
@@ -1217,6 +1333,34 @@ func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if err != io.EOF {
 		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamConcurrentCloseAndFinalNext(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		stream := &speechmaticsTTSChunkedStream{
+			finalReady: true,
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = stream.Next()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = stream.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		if audio, err := stream.Next(); audio != nil || err != io.EOF {
+			t.Fatalf("Next after concurrent Close = (%+v, %v), want EOF", audio, err)
+		}
 	}
 }
 
@@ -1290,6 +1434,48 @@ func TestSpeechmaticsTTSChunkedStreamCloseCancelsPendingRequest(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		releaseOnce.Do(func() { close(release) })
 		t.Fatal("Close did not cancel pending Speechmatics request")
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamCancelsStaleResponseBeforeClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := newSpeechmaticsContextCloseBody()
+	stream := &speechmaticsTTSChunkedStream{
+		ctx:        context.Background(),
+		cancel:     func() {},
+		text:       "hello",
+		apiKey:     "test-key",
+		baseURL:    "https://tts.example.com",
+		voice:      "sarah",
+		sampleRate: 16000,
+	}
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body.ctx = r.Context()
+		stream.mu.Lock()
+		stream.closed = true
+		stream.mu.Unlock()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != io.EOF {
+			t.Fatalf("Next error = %v, want EOF for stale response after Close", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		body.release()
+		t.Fatal("Next blocked closing stale response body, want request canceled before body close")
 	}
 }
 
@@ -1374,6 +1560,26 @@ func (r *finalEOFReader) Read(p []byte) (int, error) {
 	r.done = true
 	copy(p, r.data)
 	return len(r.data), io.EOF
+}
+
+type chunkedFinalEOFReader struct {
+	chunks [][]byte
+}
+
+func (r *chunkedFinalEOFReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, errors.New("read after final eof")
+	}
+	chunk := r.chunks[0]
+	r.chunks = r.chunks[1:]
+	n := copy(p, chunk)
+	if n != len(chunk) {
+		return n, errors.New("chunk too large for read buffer")
+	}
+	if len(r.chunks) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 type speechmaticsCloseCountBody struct {
@@ -1470,6 +1676,38 @@ func (b *speechmaticsBlockingBody) Read([]byte) (int, error) {
 func (b *speechmaticsBlockingBody) Close() error {
 	close(b.closeDone)
 	return nil
+}
+
+type speechmaticsContextCloseBody struct {
+	ctx         context.Context
+	releaseCh   chan struct{}
+	releaseOnce sync.Once
+}
+
+func newSpeechmaticsContextCloseBody() *speechmaticsContextCloseBody {
+	return &speechmaticsContextCloseBody{
+		releaseCh: make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsContextCloseBody) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b *speechmaticsContextCloseBody) Close() error {
+	if b.ctx == nil {
+		return errors.New("response body closed before request context was captured")
+	}
+	select {
+	case <-b.ctx.Done():
+		return nil
+	case <-b.releaseCh:
+		return nil
+	}
+}
+
+func (b *speechmaticsContextCloseBody) release() {
+	b.releaseOnce.Do(func() { close(b.releaseCh) })
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

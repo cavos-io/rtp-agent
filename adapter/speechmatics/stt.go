@@ -976,7 +976,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 
 func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 	if resp.Message == "EndOfTranscript" {
-		for _, event := range speechmaticsFlushPendingRawFinals(s.state) {
+		for _, event := range s.flushPendingRawFinalEvents() {
 			if !s.enqueueEvent(event) {
 				return false
 			}
@@ -1015,7 +1015,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return true
 	}
 	if s.forcedEOUActive() && speechmaticsPartialMessage(resp.Message) {
-		for _, event := range speechmaticsForcedEOUPartialEvents(resp, s.state) {
+		for _, event := range s.forcedEOUPartialEvents(resp) {
 			if !s.enqueueEvent(event) {
 				return false
 			}
@@ -1031,7 +1031,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		}
 		s.clearForcedEOU()
 	}
-	for _, event := range speechmaticsEvents(resp, s.state) {
+	for _, event := range s.responseEvents(resp) {
 		if !s.enqueueEvent(event) {
 			return false
 		}
@@ -1050,10 +1050,30 @@ func speechmaticsForcedEOUPartialEvents(resp smResponse, state *speechmaticsStre
 	return nil
 }
 
+func (s *speechmaticsSTTStream) flushPendingRawFinalEvents() []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsFlushPendingRawFinals(s.state)
+}
+
+func (s *speechmaticsSTTStream) forcedEOUPartialEvents(resp smResponse) []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsForcedEOUPartialEvents(resp, s.state)
+}
+
+func (s *speechmaticsSTTStream) responseEvents(resp smResponse) []*stt.SpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return speechmaticsEvents(resp, s.state)
+}
+
 func (s *speechmaticsSTTStream) recordRecognitionStarted(resp smResponse) {
 	if s == nil || resp.LanguagePackInfo.WordDelimiter == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &speechmaticsStreamState{}
 	}
@@ -1502,6 +1522,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Unlock()
 	if vadStream != nil && !bufferVAD {
 		if err := vadStream.PushFrame(frame); err != nil {
+			s.enqueueError(err)
 			_ = s.Close()
 			return err
 		}
@@ -1537,6 +1558,7 @@ func (s *speechmaticsSTTStream) writeAudioFrameLocked(frame *model.AudioFrame) e
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
 		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+			s.enqueueError(err)
 			_ = s.closeLocked()
 			return err
 		}
@@ -1568,6 +1590,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		}
 		for _, chunk := range s.audioBuf.Flush() {
 			if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+				s.enqueueError(err)
 				_ = s.closeLocked()
 				s.mu.Unlock()
 				return err
@@ -1584,6 +1607,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 
 	if vadStream != nil && !bufferVADEndInput {
 		if err := vadStream.EndInput(); err != nil {
+			s.enqueueError(err)
 			_ = s.Close()
 			return err
 		}
@@ -1603,6 +1627,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		return nil
 	}
 	if err := s.writeJSONData(map[string]interface{}{"message": "EndOfStream"}); err != nil {
+		s.enqueueError(err)
 		_ = s.closeLocked()
 		return err
 	}
@@ -1700,6 +1725,7 @@ func (s *speechmaticsSTTStream) markReadyForAudio() error {
 		}
 		if vadStream != nil && pendingVADEndInput {
 			if err := vadStream.EndInput(); err != nil {
+				s.enqueueError(err)
 				_ = s.Close()
 				return err
 			}
@@ -1735,7 +1761,12 @@ func (s *speechmaticsSTTStream) Finalize() error {
 		return nil
 	}
 	s.mu.Unlock()
-	return s.sendForceEndOfUtterance()
+	if err := s.sendForceEndOfUtterance(); err != nil {
+		s.enqueueError(err)
+		_ = s.Close()
+		return err
+	}
+	return nil
 }
 
 func (s *speechmaticsSTTStream) sendForceEndOfUtterance() error {
@@ -1827,19 +1858,19 @@ func (s *speechmaticsSTTStream) forcedEOUActive() bool {
 
 func (s *speechmaticsSTTStream) forcedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed {
 		s.forcedEOUCompleted = true
 	}
-	s.mu.Unlock()
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 
 func (s *speechmaticsSTTStream) fixedEOUEndEvents() []*stt.SpeechEvent {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed {
 		s.fixedEOUCompleted = true
 	}
-	s.mu.Unlock()
 	return speechmaticsEndOfTurnEvents(s.state)
 }
 
@@ -1909,11 +1940,13 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 			if errors.Is(err, io.EOF) {
 				return
 			}
+			s.enqueueError(err)
 			_ = s.Close()
 			return
 		}
 		if event != nil && event.Type == corevad.VADEventEndOfSpeech {
 			if err := s.Finalize(); err != nil {
+				s.enqueueError(err)
 				_ = s.Close()
 				return
 			}
@@ -2032,6 +2065,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 	}
 	for _, chunk := range s.audioBuf.Flush() {
 		if err := s.writeAudioChunkLocked(chunk.Data); err != nil {
+			s.enqueueError(err)
 			_ = s.closeLocked()
 			return err
 		}
