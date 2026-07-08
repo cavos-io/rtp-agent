@@ -1039,12 +1039,20 @@ func (a *smAlternative) UnmarshalJSON(data []byte) error {
 	type alternative smAlternative
 	var raw struct {
 		alternative
-		Tags json.RawMessage `json:"tags"`
+		Confidence json.RawMessage `json:"confidence"`
+		Tags       json.RawMessage `json:"tags"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	*a = smAlternative(raw.alternative)
+	if len(raw.Confidence) > 0 {
+		confidence, err := speechmaticsUnmarshalReferenceFloat(raw.Confidence)
+		if err != nil {
+			return fmt.Errorf("confidence: %w", err)
+		}
+		a.Confidence = &confidence
+	}
 	if len(raw.Tags) == 0 {
 		return nil
 	}
