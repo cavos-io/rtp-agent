@@ -996,15 +996,33 @@ func writeUltravoxRealtimeOutboundMessage(writer ultravoxRealtimeWebsocketWriter
 }
 
 func (s *realtimeSession) sendOutboundMessages(writer ultravoxRealtimeWebsocketWriter) error {
+	return s.sendOutboundMessagesWithContext(context.Background(), writer)
+}
+
+func (s *realtimeSession) sendOutboundMessagesWithContext(ctx context.Context, writer ultravoxRealtimeWebsocketWriter) error {
 	s.mu.Lock()
 	outboundCh := s.outboundCh
 	restartCount := s.restartCount
 	s.mu.Unlock()
-	return s.sendOutboundMessagesFrom(writer, outboundCh, restartCount)
+	return s.sendOutboundMessagesFromContext(ctx, writer, outboundCh, restartCount)
 }
 
 func (s *realtimeSession) sendOutboundMessagesFrom(writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
-	for message := range outboundCh {
+	return s.sendOutboundMessagesFromContext(context.Background(), writer, outboundCh, restartCount)
+}
+
+func (s *realtimeSession) sendOutboundMessagesFromContext(ctx context.Context, writer ultravoxRealtimeWebsocketWriter, outboundCh <-chan ultravoxRealtimeOutboundMessage, restartCount uint64) error {
+	for {
+		var message ultravoxRealtimeOutboundMessage
+		select {
+		case <-ctx.Done():
+			return nil
+		case next, ok := <-outboundCh:
+			if !ok {
+				return nil
+			}
+			message = next
+		}
 		s.mu.Lock()
 		restarted := s.restartCount != restartCount
 		s.mu.Unlock()
@@ -1044,18 +1062,22 @@ func (s *realtimeSession) receiveRealtimeMessages(conn ultravoxRealtimeWebsocket
 
 func (s *realtimeSession) runRealtimeConnection(conn ultravoxRealtimeWebsocketConn) error {
 	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sendErrCh := make(chan error, 1)
 	receiveErrCh := make(chan error, 1)
 	go func() {
-		sendErrCh <- s.sendOutboundMessages(conn)
+		sendErrCh <- s.sendOutboundMessagesWithContext(ctx, conn)
 	}()
 	go func() {
 		receiveErrCh <- s.receiveRealtimeMessages(conn)
 	}()
 	select {
 	case err := <-sendErrCh:
+		cancel()
 		return err
 	case err := <-receiveErrCh:
+		cancel()
 		return err
 	}
 }

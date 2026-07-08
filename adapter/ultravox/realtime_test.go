@@ -1057,6 +1057,35 @@ func TestUltravoxRealtimeSessionSendTaskStopsStaleOutboundAfterReferenceRestart(
 	}
 }
 
+func TestUltravoxRealtimeSessionSendTaskStopsOnReferenceConnectionCancel(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*realtimeSession)
+	defer session.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.sendOutboundMessagesWithContext(ctx, &ultravoxRealtimeTestWebsocketWriter{})
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("send task cancel error = %v, want nil like reference cancel_and_wait", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send task did not exit after reference connection cancel")
+	}
+}
+
 func TestUltravoxRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
