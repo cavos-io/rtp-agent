@@ -146,7 +146,7 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 }
 
 func speechmaticsRoundEndOfTurnDelay(seconds float64) float64 {
-	return math.Round(seconds*1000) / 1000
+	return math.Round(seconds*1000+1e-9) / 1000
 }
 
 func speechmaticsClampLocalEndpointingDelay(seconds float64) time.Duration {
@@ -1013,6 +1013,23 @@ type speechmaticsStreamState struct {
 	latestSegmentAnnotation    []string
 }
 
+type smAlternative struct {
+	Content    string   `json:"content"`
+	Confidence *float64 `json:"confidence"`
+	SpeakerID  string   `json:"speaker"`
+	Language   string   `json:"language"`
+	Tags       []string `json:"tags,omitempty"`
+}
+
+type smResult struct {
+	Alternatives []smAlternative `json:"alternatives"`
+	Type         string          `json:"type"`
+	Attaches     string          `json:"attaches_to"`
+	IsEOS        bool            `json:"is_eos"`
+	StartTime    float64         `json:"start_time"`
+	EndTime      float64         `json:"end_time"`
+}
+
 type smResponse struct {
 	Message  string `json:"message"`
 	Metadata struct {
@@ -1020,19 +1037,7 @@ type smResponse struct {
 		StartTime  float64 `json:"start_time"`
 		EndTime    float64 `json:"end_time"`
 	} `json:"metadata"`
-	Results []struct {
-		Alternatives []struct {
-			Content    string   `json:"content"`
-			Confidence *float64 `json:"confidence"`
-			SpeakerID  string   `json:"speaker"`
-			Language   string   `json:"language"`
-		} `json:"alternatives"`
-		Type      string  `json:"type"`
-		Attaches  string  `json:"attaches_to"`
-		IsEOS     bool    `json:"is_eos"`
-		StartTime float64 `json:"start_time"`
-		EndTime   float64 `json:"end_time"`
-	} `json:"results"`
+	Results  []smResult `json:"results"`
 	Segments []struct {
 		Text       string   `json:"text"`
 		Language   string   `json:"language"`
@@ -1272,6 +1277,7 @@ type speechmaticsRawTranscriptFragment struct {
 	startTime  float64
 	endTime    float64
 	confidence float64
+	disfluency bool
 }
 
 func speechmaticsTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -1348,6 +1354,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 			startTime:  startTime,
 			endTime:    endTime,
 			confidence: speechmaticsAlternativeConfidence(alt.Confidence),
+			disfluency: speechmaticsStringInSlice("disfluency", alt.Tags),
 		})
 	}
 
@@ -1389,9 +1396,30 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	if fragments[len(fragments)-1].isEOS {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithEOS)
 	}
+	annotations = speechmaticsAppendRawDisfluencyAnnotation(annotations, fragments)
 	annotations = speechmaticsAppendRawSpeechRateAnnotation(annotations, fragments)
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
+}
+
+func speechmaticsAppendRawDisfluencyAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
+	if len(fragments) == 0 {
+		return annotations
+	}
+	for _, fragment := range fragments {
+		if fragment.disfluency {
+			annotations = append(annotations, speechmaticsAnnotationHasDisfluency)
+			break
+		}
+	}
+	if fragments[0].disfluency {
+		annotations = append(annotations, "starts_with_disfluency")
+	}
+	last := fragments[len(fragments)-1]
+	if last.disfluency || (len(fragments) > 1 && (last.isEOS || last.kind == "punctuation") && fragments[len(fragments)-2].disfluency) {
+		annotations = append(annotations, speechmaticsAnnotationEndsWithDisfluency)
+	}
+	return annotations
 }
 
 func speechmaticsAppendRawSpeechRateAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {

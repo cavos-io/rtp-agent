@@ -33,52 +33,25 @@ func speechmaticsTestFloat64(value float64) *float64 {
 func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
-		Results: []struct {
-			Alternatives []struct {
-				Content    string   `json:"content"`
-				Confidence *float64 `json:"confidence"`
-				SpeakerID  string   `json:"speaker"`
-				Language   string   `json:"language"`
-			} `json:"alternatives"`
-			Type      string  `json:"type"`
-			Attaches  string  `json:"attaches_to"`
-			IsEOS     bool    `json:"is_eos"`
-			StartTime float64 `json:"start_time"`
-			EndTime   float64 `json:"end_time"`
-		}{
+		Results: []smResult{
 			{
-				Type:      "word",
-				StartTime: 0.1,
-				EndTime:   0.3,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
+				Type:         "word",
+				StartTime:    0.1,
+				EndTime:      0.3,
+				Alternatives: []smAlternative{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
 			},
 			{
-				Type:      "punctuation",
-				Attaches:  "previous",
-				StartTime: 0.3,
-				EndTime:   0.3,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
+				Type:         "punctuation",
+				Attaches:     "previous",
+				StartTime:    0.3,
+				EndTime:      0.3,
+				Alternatives: []smAlternative{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
 			},
 			{
-				Type:      "word",
-				StartTime: 0.4,
-				EndTime:   0.8,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
+				Type:         "word",
+				StartTime:    0.4,
+				EndTime:      0.8,
+				Alternatives: []smAlternative{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
 			},
 		},
 	}
@@ -108,28 +81,11 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 func TestSpeechmaticsEventsRawTranscriptDefaultsMissingTypeToReferenceWord(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
-		Results: []struct {
-			Alternatives []struct {
-				Content    string   `json:"content"`
-				Confidence *float64 `json:"confidence"`
-				SpeakerID  string   `json:"speaker"`
-				Language   string   `json:"language"`
-			} `json:"alternatives"`
-			Type      string  `json:"type"`
-			Attaches  string  `json:"attaches_to"`
-			IsEOS     bool    `json:"is_eos"`
-			StartTime float64 `json:"start_time"`
-			EndTime   float64 `json:"end_time"`
-		}{
+		Results: []smResult{
 			{
-				StartTime: 0.15,
-				EndTime:   0.45,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: "defaulted", Confidence: speechmaticsTestFloat64(0.91), SpeakerID: "S1", Language: "en"}},
+				StartTime:    0.15,
+				EndTime:      0.45,
+				Alternatives: []smAlternative{{Content: "defaulted", Confidence: speechmaticsTestFloat64(0.91), SpeakerID: "S1", Language: "en"}},
 			},
 		},
 	}
@@ -178,52 +134,25 @@ func TestSpeechmaticsEventsRawTranscriptDefaultsMissingConfidenceToReferenceOne(
 func TestSpeechmaticsEventsMapReferenceRawTranscriptFallback(t *testing.T) {
 	resp := smResponse{
 		Message: "AddTranscript",
-		Results: []struct {
-			Alternatives []struct {
-				Content    string   `json:"content"`
-				Confidence *float64 `json:"confidence"`
-				SpeakerID  string   `json:"speaker"`
-				Language   string   `json:"language"`
-			} `json:"alternatives"`
-			Type      string  `json:"type"`
-			Attaches  string  `json:"attaches_to"`
-			IsEOS     bool    `json:"is_eos"`
-			StartTime float64 `json:"start_time"`
-			EndTime   float64 `json:"end_time"`
-		}{
+		Results: []smResult{
 			{
-				Type:      "word",
-				StartTime: 0.1,
-				EndTime:   0.3,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
+				Type:         "word",
+				StartTime:    0.1,
+				EndTime:      0.3,
+				Alternatives: []smAlternative{{Content: "hello", Confidence: speechmaticsTestFloat64(0.92)}},
 			},
 			{
-				Type:      "punctuation",
-				Attaches:  "previous",
-				StartTime: 0.3,
-				EndTime:   0.3,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
+				Type:         "punctuation",
+				Attaches:     "previous",
+				StartTime:    0.3,
+				EndTime:      0.3,
+				Alternatives: []smAlternative{{Content: ",", Confidence: speechmaticsTestFloat64(1.0)}},
 			},
 			{
-				Type:      "word",
-				StartTime: 0.4,
-				EndTime:   0.8,
-				Alternatives: []struct {
-					Content    string   `json:"content"`
-					Confidence *float64 `json:"confidence"`
-					SpeakerID  string   `json:"speaker"`
-					Language   string   `json:"language"`
-				}{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
+				Type:         "word",
+				StartTime:    0.4,
+				EndTime:      0.8,
+				Alternatives: []smAlternative{{Content: "world", Confidence: speechmaticsTestFloat64(0.88)}},
 			},
 		},
 	}
@@ -1937,27 +1866,10 @@ func TestSpeechmaticsSegmentEventsRecordReferenceActiveSegmentAnnotations(t *tes
 func TestSpeechmaticsRawTranscriptRecordsReferenceFinalEOSAnnotationForLocalVAD(t *testing.T) {
 	state := &speechmaticsStreamState{}
 	resp := smResponse{Message: "AddTranscript"}
-	resp.Results = append(resp.Results, struct {
-		Alternatives []struct {
-			Content    string   `json:"content"`
-			Confidence *float64 `json:"confidence"`
-			SpeakerID  string   `json:"speaker"`
-			Language   string   `json:"language"`
-		} `json:"alternatives"`
-		Type      string  `json:"type"`
-		Attaches  string  `json:"attaches_to"`
-		IsEOS     bool    `json:"is_eos"`
-		StartTime float64 `json:"start_time"`
-		EndTime   float64 `json:"end_time"`
-	}{
-		Alternatives: []struct {
-			Content    string   `json:"content"`
-			Confidence *float64 `json:"confidence"`
-			SpeakerID  string   `json:"speaker"`
-			Language   string   `json:"language"`
-		}{{Content: "done"}},
-		Type:  "word",
-		IsEOS: true,
+	resp.Results = append(resp.Results, smResult{
+		Alternatives: []smAlternative{{Content: "done"}},
+		Type:         "word",
+		IsEOS:        true,
 	})
 
 	events := speechmaticsEvents(resp, state)
@@ -1981,29 +1893,12 @@ func TestSpeechmaticsRawTranscriptRecordsReferenceSlowSpeakerAnnotationForLocalV
 	state := &speechmaticsStreamState{}
 	resp := smResponse{Message: "AddTranscript"}
 	for i := 0; i < 10; i++ {
-		resp.Results = append(resp.Results, struct {
-			Alternatives []struct {
-				Content    string   `json:"content"`
-				Confidence *float64 `json:"confidence"`
-				SpeakerID  string   `json:"speaker"`
-				Language   string   `json:"language"`
-			} `json:"alternatives"`
-			Type      string  `json:"type"`
-			Attaches  string  `json:"attaches_to"`
-			IsEOS     bool    `json:"is_eos"`
-			StartTime float64 `json:"start_time"`
-			EndTime   float64 `json:"end_time"`
-		}{
-			Alternatives: []struct {
-				Content    string   `json:"content"`
-				Confidence *float64 `json:"confidence"`
-				SpeakerID  string   `json:"speaker"`
-				Language   string   `json:"language"`
-			}{{Content: fmt.Sprintf("w%d", i)}},
-			Type:      "word",
-			IsEOS:     i == 9,
-			StartTime: float64(i),
-			EndTime:   float64(i + 1),
+		resp.Results = append(resp.Results, smResult{
+			Alternatives: []smAlternative{{Content: fmt.Sprintf("w%d", i)}},
+			Type:         "word",
+			IsEOS:        i == 9,
+			StartTime:    float64(i),
+			EndTime:      float64(i + 1),
 		})
 	}
 
@@ -2021,6 +1916,116 @@ func TestSpeechmaticsRawTranscriptRecordsReferenceSlowSpeakerAnnotationForLocalV
 	}
 	if got, want := stream.localEndpointingDelay(), 210*time.Millisecond; got != want {
 		t.Fatalf("local endpointing delay = %s, want very-slow reference delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsRawTranscriptRecordsReferenceDisfluencyAnnotationForLocalVAD(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	resp := smResponse{Message: "AddTranscript"}
+	resp.Results = append(resp.Results, smResult{
+		Alternatives: []smAlternative{{Content: "um", Tags: []string{"disfluency"}}},
+		Type:         "word",
+		StartTime:    0,
+		EndTime:      0.2,
+	})
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	for _, want := range []string{"has_disfluency", "ends_with_disfluency"} {
+		if !speechmaticsStringInSlice(want, state.latestSegmentAnnotation) {
+			t.Fatalf("latest raw annotation = %#v, want reference %s", state.latestSegmentAnnotation, want)
+		}
+	}
+
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 770*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want disfluency reference delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsRawTranscriptDecodesReferenceDisfluencyTagsForLocalVAD(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	payload := []byte(`{
+		"message": "AddTranscript",
+		"results": [
+			{
+				"type": "word",
+				"start_time": 0,
+				"end_time": 0.2,
+				"alternatives": [
+					{
+						"content": "uh",
+						"tags": ["disfluency"]
+					}
+				]
+			}
+		]
+	}`)
+	var resp smResponse
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	for _, want := range []string{"has_disfluency", "starts_with_disfluency", "ends_with_disfluency"} {
+		if !speechmaticsStringInSlice(want, state.latestSegmentAnnotation) {
+			t.Fatalf("latest raw annotation = %#v, want decoded reference %s", state.latestSegmentAnnotation, want)
+		}
+	}
+
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 770*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want decoded disfluency reference delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsRawTranscriptRecordsReferencePenultimateDisfluencyBeforeEOS(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	resp := smResponse{Message: "AddTranscript"}
+	resp.Results = append(resp.Results,
+		smResult{
+			Alternatives: []smAlternative{{Content: "well", Tags: []string{"disfluency"}}},
+			Type:         "word",
+			StartTime:    0,
+			EndTime:      0.2,
+		},
+		smResult{
+			Alternatives: []smAlternative{{Content: "..."}},
+			Type:         "punctuation",
+			Attaches:     "previous",
+			IsEOS:        true,
+			StartTime:    0.2,
+			EndTime:      0.2,
+		},
+	)
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one raw final transcript", len(events))
+	}
+	for _, want := range []string{"has_disfluency", "starts_with_disfluency", "ends_with_disfluency", "ends_with_eos"} {
+		if !speechmaticsStringInSlice(want, state.latestSegmentAnnotation) {
+			t.Fatalf("latest raw annotation = %#v, want reference %s", state.latestSegmentAnnotation, want)
+		}
+	}
+
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), 193*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want penultimate disfluency reference delay %s", got, want)
 	}
 }
 
