@@ -315,6 +315,29 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferenceLanguage(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptDefaultsMissingLanguageToReferenceEnglish(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"agent"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{language: "de"})
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want reference raw fragment default en", got)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptDoesNotFallbackAfterFilteredResults(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{

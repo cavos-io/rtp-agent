@@ -1422,7 +1422,7 @@ func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamS
 		if speechmaticsSpeakerFiltered(resultSpeakerID, state) {
 			continue
 		}
-		language := speechmaticsSegmentLanguage(alt.Language, state)
+		language := speechmaticsRawFragmentLanguage(alt.Language)
 		startTime := result.StartTime + startTimeOffset
 		endTime := result.EndTime + startTimeOffset
 		if speechmaticsRawFragmentTrimmed(state, startTime) {
@@ -1818,6 +1818,13 @@ func speechmaticsSegmentLanguage(language string, state *speechmaticsStreamState
 	}
 	if state != nil {
 		return state.language
+	}
+	return "en"
+}
+
+func speechmaticsRawFragmentLanguage(language string) string {
+	if language != "" {
+		return language
 	}
 	return "en"
 }
