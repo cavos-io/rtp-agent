@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -64,6 +65,9 @@ const (
 
 var speechmaticsSpeakerResultTimeout = 5 * time.Second
 var speechmaticsForcedEOUTimeout = time.Second
+var speechmaticsSTTRetryInterval = func(retryAttempt int) time.Duration {
+	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
+}
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -298,7 +302,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	if err := validateSpeechmaticsSTTOptions(s); err != nil {
 		return nil, err
 	}
-	header := make(map[string][]string)
+	header := make(http.Header)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
 	dialCtx := ctx
@@ -323,15 +327,9 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		defer close(stopCloseWatch)
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
+	conn, err := s.dialStream(dialCtx, buildSpeechmaticsSTTStreamURL(s), header)
 	if err != nil {
-		if s.isClosed() {
-			return nil, io.ErrClosedPipe
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, err
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -378,6 +376,42 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, header http.Header) (*websocket.Conn, error) {
+	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
+	attempt := 0
+	for {
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
+		if err == nil {
+			return conn, nil
+		}
+		if s.isClosed() {
+			return nil, io.ErrClosedPipe
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		connectionErr := llm.NewAPIConnectionError(err.Error())
+		if attempt >= maxRetry {
+			return nil, connectionErr
+		}
+		interval := speechmaticsSTTRetryInterval(attempt)
+		attempt++
+		if interval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			if s.isClosed() {
+				return nil, io.ErrClosedPipe
+			}
+			return nil, ctx.Err()
+		}
+	}
 }
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

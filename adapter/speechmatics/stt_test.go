@@ -2519,6 +2519,7 @@ func TestSpeechmaticsSTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 }
 
 func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -2537,6 +2538,55 @@ func TestSpeechmaticsSTTStreamDialFailureReturnsReferenceConnectionError(t *test
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
+}
+
+func TestSpeechmaticsSTTStreamRetriesReferenceTransientDialFailure(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	var attempts int
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("transient dial failed")
+			}
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, network, addr)
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %T %v, want retry success", err, err)
+	}
+	defer stream.Close()
+	if attempts != 2 {
+		t.Fatalf("dial attempts = %d, want one reference retry after transient failure", attempts)
+	}
+}
+
+func withSpeechmaticsSTTRetryInterval(t *testing.T, interval time.Duration) {
+	t.Helper()
+	previous := speechmaticsSTTRetryInterval
+	speechmaticsSTTRetryInterval = func(int) time.Duration { return interval }
+	t.Cleanup(func() { speechmaticsSTTRetryInterval = previous })
 }
 
 func TestSpeechmaticsSTTStreamRejectsInvalidReferenceEndpointingOptions(t *testing.T) {
@@ -2587,6 +2637,7 @@ func TestSpeechmaticsSTTAllowsReferenceEndOfUtteranceMaxDelayWithoutTrigger(t *t
 }
 
 func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	tests := []struct {
 		name       string
 		sampleRate int
@@ -2607,8 +2658,9 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for i, tt := range tests {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			dialsBefore := dials
 			provider := NewSpeechmaticsSTT("test-key",
 				WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2"),
 				WithSpeechmaticsSTTSampleRate(tt.sampleRate),
@@ -2622,7 +2674,7 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 			if !errors.As(err, &connectionErr) {
 				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
 			}
-			if dials != i+1 {
+			if dials <= dialsBefore {
 				t.Fatalf("dials = %d, want provider dial for reference sample_rate %d", dials, tt.sampleRate)
 			}
 		})
@@ -2630,6 +2682,7 @@ func TestSpeechmaticsSTTStreamAllowsReferenceSampleRatesToReachProvider(t *testi
 }
 
 func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachProvider(t *testing.T) {
+	withSpeechmaticsSTTRetryInterval(t, 0)
 	tests := []struct {
 		name string
 		opts []SpeechmaticsSTTOption
@@ -2668,8 +2721,9 @@ func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachPr
 	}
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
-	for i, tt := range tests {
+	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			dialsBefore := dials
 			opts := append([]SpeechmaticsSTTOption{WithSpeechmaticsSTTBaseURL("ws://speechmatics.example/v2")}, tt.opts...)
 			provider := NewSpeechmaticsSTT("test-key", opts...)
 			if err := validateSpeechmaticsSTTOptions(provider); err != nil {
@@ -2692,7 +2746,7 @@ func TestSpeechmaticsSTTStreamAllowsReferenceDisabledDiarizationOptionsToReachPr
 			if !errors.As(err, &connectionErr) {
 				t.Fatalf("Stream error = %T %v, want provider dial APIConnectionError", err, err)
 			}
-			if dials != i+1 {
+			if dials <= dialsBefore {
 				t.Fatalf("dials = %d, want provider dial for reference disabled-diarization options", dials)
 			}
 		})
