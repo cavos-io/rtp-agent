@@ -297,8 +297,11 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.finishCanceled()
 		return nil, context.Canceled
 	}
-	if len(s.pendingAudio) > 0 {
-		return s.emitAudio(s.popPendingAudio())
+	for len(s.pendingAudio) > 0 {
+		audio := s.popPendingAudio()
+		if audio != nil {
+			return s.emitAudio(audio)
+		}
 	}
 	if s.pendingErr != nil {
 		err := s.pendingErr
@@ -355,16 +358,15 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.queueHeldTailAudio()
 				s.finalReady = true
 			} else if err != nil {
-				s.queuePCMFrames(append(frames, s.pcmStream().Flush()...))
+				s.queuePCMFrames(frames)
 				s.pendingErr = err
 			} else {
 				s.queuePCMFrames(frames)
 			}
-			if err != nil && err != io.EOF && len(s.pendingAudio) == 0 && s.pendingTail != nil {
-				s.queueHeldTailAudio()
-			}
 			if len(s.pendingAudio) == 0 {
 				if err != nil {
+					s.pendingErr = nil
+					s.pendingTail = nil
 					if err == io.EOF {
 						return s.emitFinal()
 					}
@@ -389,6 +391,7 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				continue
 			}
 			if err != nil {
+				s.pendingTail = nil
 				s.closeTerminalResponse()
 			}
 			return s.emitAudio(s.popPendingAudio())
