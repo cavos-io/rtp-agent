@@ -632,15 +632,22 @@ func (s *speechmaticsRealtimeSession) handleResponseDone(event map[string]any) b
 	response, _ := event["response"].(map[string]any)
 	s.mu.Lock()
 	metrics := s.responseDoneMetricsLocked(response)
+	errorEvent := speechmaticsRealtimeResponseDoneError(response)
 	s.closeCurrentGenerationLocked()
 	s.mu.Unlock()
+	ok := true
 	if metrics == nil {
-		return true
-	}
-	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		ok = true
+	} else if !s.emitRealtimeEvent(llm.RealtimeEvent{
 		Type:    llm.RealtimeEventTypeMetricsCollected,
 		Metrics: metrics,
-	})
+	}) {
+		ok = false
+	}
+	if errorEvent != nil && !s.emitRealtimeEvent(*errorEvent) {
+		ok = false
+	}
+	return ok
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string]any) bool {
@@ -729,6 +736,27 @@ func (s *speechmaticsRealtimeSession) responseDoneMetricsLocked(response map[str
 			ModelName:     s.model,
 			ModelProvider: "Speechmatics",
 		},
+	}
+}
+
+func speechmaticsRealtimeResponseDoneError(response map[string]any) *llm.RealtimeEvent {
+	if speechmaticsRealtimeString(response, "status") != "failed" {
+		return nil
+	}
+	var errorBody any
+	message := "Speechmatics response failed with unknown error"
+	statusDetails, _ := response["status_details"].(map[string]any)
+	if statusDetails != nil {
+		if body, _ := statusDetails["error"].(map[string]any); body != nil {
+			errorBody = body
+			if errorType := speechmaticsRealtimeString(body, "type"); errorType != "" {
+				message = fmt.Sprintf("Speechmatics response failed with error type: %s", errorType)
+			}
+		}
+	}
+	return &llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewAPIError(message, errorBody, true),
 	}
 }
 

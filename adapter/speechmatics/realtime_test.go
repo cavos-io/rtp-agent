@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -464,6 +465,55 @@ func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing
 	}
 	if metrics.TTFT < 0 || metrics.Duration < 0 || metrics.TokensPerSecond < 0 {
 		t.Fatalf("metrics timing = ttft %f duration %f tps %f, want non-negative", metrics.TTFT, metrics.Duration, metrics.TokensPerSecond)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionResponseDoneFailedEmitsReferenceError(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_failed"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_failed",
+			"status": "failed",
+			"status_details": map[string]any{
+				"error": map[string]any{
+					"type": "invalid_request_error",
+					"code": "inference_rate_limit_exceeded",
+				},
+			},
+		},
+	}); !ok {
+		t.Fatal("response.done ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	errorEvent := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "Speechmatics response failed with error type: invalid_request_error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["code"] != "inference_rate_limit_exceeded" {
+		t.Fatalf("APIError body = %#v, want provider error body with code", apiErr.Body)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
 	}
 }
 
