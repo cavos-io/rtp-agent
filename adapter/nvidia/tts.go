@@ -49,9 +49,7 @@ func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
 
 func WithNvidiaTTSLanguageCode(languageCode string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if languageCode != "" {
-			t.languageCode = languageCode
-		}
+		t.languageCode = languageCode
 	}
 }
 

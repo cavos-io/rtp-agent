@@ -288,6 +288,16 @@ func TestNvidiaTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAllowsEmptyLanguageCodeLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "", WithNvidiaTTSLanguageCode(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	if got, want := provider.languageCode, ""; got != want {
+		t.Fatalf("languageCode = %q, want explicit empty language code", got)
+	}
+}
+
 func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
