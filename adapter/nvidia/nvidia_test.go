@@ -2166,6 +2166,32 @@ func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTEndInputFlushesBeforeCloseLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if !concrete.flushed {
+		t.Fatal("EndInput() left flushed=false, want implicit flush boundary before input close")
+	}
+}
+
 func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {

@@ -294,6 +294,7 @@ func (s *nvidiaSTTStream) EndInput() error {
 			return err
 		}
 	}
+	s.flushed = true
 	s.inputEnded = true
 	s.notifyLocked()
 	return nil
