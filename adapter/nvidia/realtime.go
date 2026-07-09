@@ -58,6 +58,7 @@ type nvidiaRealtimeSession struct {
 	seed               *int
 	silenceThresholdMS int
 	useSSL             bool
+	preconnect         bool
 	label              string
 	modelName          string
 	provider           string
@@ -295,6 +296,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		seed:               cloneNvidiaRealtimeSeed(m.seed),
 		silenceThresholdMS: m.silenceThresholdMS,
 		useSSL:             m.useSSL,
+		preconnect:         m.preconnect,
 		label:              m.Label(),
 		modelName:          m.Model(),
 		provider:           m.Provider(),
@@ -461,12 +463,21 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	}
 	wasStarted := s.transportStarted
 	transportDone := s.transportDone
+	wasRetrying := s.retryTimer != nil
 	s.textPrompt = instructions
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
 		go s.emitSessionReconnectedAfterTransportDone(transportDone)
 		s.startRealtimeTransportLocked()
+	} else if s.preconnect {
+		s.startRealtimeTransportLocked()
+		if !wasRetrying {
+			s.events.send(llm.RealtimeEvent{
+				Type:      llm.RealtimeEventTypeSessionReconnected,
+				Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+			})
+		}
 	} else {
 		s.events.send(llm.RealtimeEvent{
 			Type:      llm.RealtimeEventTypeSessionReconnected,

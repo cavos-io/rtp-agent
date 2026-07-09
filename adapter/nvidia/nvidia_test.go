@@ -1920,6 +1920,77 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateDuringRetryReconnectsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	requestPaths := make(chan string, 4)
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths <- r.URL.RawQuery
+		if attempts.Add(1) == 1 {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry update: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial retryable dial error")
+	}
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry reconnect: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnect after instruction update during retry")
+	}
+
+	var sawNewPrompt bool
+	for {
+		select {
+		case query := <-requestPaths:
+			if strings.Contains(query, "text_prompt=new%20prompt") {
+				sawNewPrompt = true
+			}
+		default:
+			if !sawNewPrompt {
+				t.Fatal("reconnect did not use updated text_prompt")
+			}
+			return
+		}
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
