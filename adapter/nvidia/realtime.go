@@ -50,6 +50,7 @@ type nvidiaRealtimeSession struct {
 	modelName          string
 	provider           string
 	chatCtx            *llm.ChatContext
+	outboundAudio      []*model.AudioFrame
 	events             chan llm.RealtimeEvent
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
@@ -220,6 +221,17 @@ func cloneNvidiaRealtimeSeed(seed *int) *int {
 	return &seedValue
 }
 
+func cloneNvidiaRealtimeAudioFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	cloned := *frame
+	if frame.Data != nil {
+		cloned.Data = append([]byte(nil), frame.Data...)
+	}
+	return &cloned
+}
+
 func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -287,7 +299,13 @@ func (s *nvidiaRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 	return s.events
 }
 
-func (s *nvidiaRealtimeSession) PushAudio(_ *model.AudioFrame) error {
+func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	s.outboundAudio = append(s.outboundAudio, cloneNvidiaRealtimeAudioFrame(frame))
 	return nil
 }
 

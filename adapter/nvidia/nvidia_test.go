@@ -166,6 +166,20 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
 	}
+	if got, want := len(concrete.outboundAudio), 0; got != want {
+		t.Fatalf("outboundAudio after empty PushAudio = %d, want %d", got, want)
+	}
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(non-empty) error = %v", err)
+	}
+	frame.Data[0] = 9
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio count = %d, want copied frame count %d", got, want)
+	}
+	if got, want := concrete.outboundAudio[0].Data[0], byte(1); got != want {
+		t.Fatalf("outboundAudio copied data[0] = %d, want immutable copy %d", got, want)
+	}
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt() error = %v", err)
 	}
@@ -190,8 +204,11 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if _, ok := <-session.EventCh(); ok {
 		t.Fatal("EventCh() open after Close, want closed")
 	}
-	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
+	if err := session.PushAudio(&model.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() after Close error = %v, want nil ignored input", err)
+	}
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio after Close = %d, want unchanged count %d", got, want)
 	}
 }
 
