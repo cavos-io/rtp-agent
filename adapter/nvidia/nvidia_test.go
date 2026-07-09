@@ -1817,7 +1817,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	blank := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -1837,6 +1837,7 @@ func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testi
 		}},
 	})
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
+		RequestID: "nvidia-response-explicit",
 		Results: []nvidiaSTTResult{{
 			RequestID: "explicit-result",
 			IsFinal:   true,
@@ -1860,8 +1861,8 @@ func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testi
 	if got, want := first[1].RequestID, "nvidia-response-1"; got != want {
 		t.Fatalf("first fallback RequestID = %q, want %q", got, want)
 	}
-	if got, want := second[0].RequestID, "explicit-result"; got != want {
-		t.Fatalf("explicit result RequestID = %q, want %q", got, want)
+	if got, want := second[0].RequestID, "nvidia-response-explicit"; got != want {
+		t.Fatalf("result RequestID = %q, want response-level id %q", got, want)
 	}
 	if got, want := third[0].RequestID, "nvidia-response-2"; got != want {
 		t.Fatalf("third fallback RequestID = %q, want %q", got, want)

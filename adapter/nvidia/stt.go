@@ -382,13 +382,11 @@ func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.S
 		if strings.TrimSpace(result.Alternative.Transcript) == "" {
 			continue
 		}
-		if result.RequestID == "" {
-			if requestID == "" {
-				s.requestSeq++
-				requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
-			}
-			result.RequestID = requestID
+		if requestID == "" {
+			s.requestSeq++
+			requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
 		}
+		result.RequestID = requestID
 		events = append(events, s.eventsFromResult(result)...)
 	}
 	return events
