@@ -442,28 +442,41 @@ func nvidiaTTSProtectedAbbreviation(prefix string) bool {
 }
 
 func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
-	if dot < 1 || text[dot-1] < 'A' || text[dot-1] > 'Z' {
+	if dot < 1 || !nvidiaTTSASCIIAlpha(text[dot-1]) {
 		return false
 	}
 	if letters := nvidiaTTSAcronymLettersEndingAt(text, dot); letters >= 2 {
 		if letters > 3 {
 			return false
 		}
-		return !nvidiaTTSTailStartsSentence(tail)
+		return !nvidiaTTSAcronymEndingAtIsUppercase(text, dot, letters) || !nvidiaTTSTailStartsSentence(tail)
 	}
 	next := dot + 1
-	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
+	return next+1 < len(text) && nvidiaTTSASCIIAlpha(text[next]) && text[next+1] == '.'
 }
 
 func nvidiaTTSAcronymLettersEndingAt(text string, dot int) int {
 	letters := 0
 	for i := dot; i >= 1; i -= 2 {
-		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
+		if text[i] != '.' || !nvidiaTTSASCIIAlpha(text[i-1]) {
 			break
 		}
 		letters++
 	}
 	return letters
+}
+
+func nvidiaTTSAcronymEndingAtIsUppercase(text string, dot int, letters int) bool {
+	for i := dot; letters > 0 && i >= 1; i, letters = i-2, letters-1 {
+		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func nvidiaTTSASCIIAlpha(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }
 
 func nvidiaTTSProtectedPhD(text string, dot int) bool {
