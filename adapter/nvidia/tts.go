@@ -503,12 +503,21 @@ func nvidiaTTSProtectedInitial(text string, dot int) bool {
 func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 	for _, suffix := range []string{"Inc", "Ltd", "Jr", "Sr", "Co"} {
 		start := dot - len(suffix)
-		if start <= 0 || text[start-1] != ' ' || text[start:dot] != suffix {
+		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
 	return false
+}
+
+func nvidiaTTSASCIIWhitespace(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
+		return true
+	default:
+		return false
+	}
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {

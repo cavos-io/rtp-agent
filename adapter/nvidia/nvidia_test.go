@@ -3056,7 +3056,7 @@ func TestNvidiaTTSStreamDoesNotSplitCompanySuffixLikeReference(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamSplitsTabCompanySuffixLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitTabCompanySuffixLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -3082,22 +3082,30 @@ func TestNvidiaTTSStreamSplitsTabCompanySuffixLikeReference(t *testing.T) {
 	if err := stream.PushText("Please call Acme\tInc. tomorrow"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
-	if !concrete.flushed {
-		t.Fatal("flushed = false after tab company suffix, want reference sentence boundary")
+	if concrete.flushed {
+		t.Fatal("flushed = true after tab company suffix, want NVIDIA blingfire tokenizer to keep sentence pending")
 	}
-	if got, want := concrete.text, "Please call Acme\tInc."; got != want {
-		t.Fatalf("text = %q, want first sentence %q", got, want)
+	if got, want := concrete.text, "Please call Acme\tInc. tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit tab company suffix text %q", got, want)
 	}
-	if got, want := concrete.pendingText, "tomorrow"; got != want {
-		t.Fatalf("pendingText = %q, want tail %q", got, want)
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after tab company suffix returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
 	}
 	select {
 	case got := <-done:
 		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after tab suffix boundary = (%v, %v), want unsupported stream error", got.audio, got.err)
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after tab suffix boundary")
+		t.Fatal("Next() did not start after Flush")
 	}
 }
 
