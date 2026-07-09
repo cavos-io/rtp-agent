@@ -5,13 +5,19 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 )
 
 func TestSpeechmaticsRealtimeModelRequiresAPIKey(t *testing.T) {
@@ -59,6 +65,7 @@ func TestSpeechmaticsRealtimeModelMetadataAndCapabilities(t *testing.T) {
 
 func TestSpeechmaticsRealtimeModelOptionsAndSessionSnapshot(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeWebsocketDisabled(),
 		WithRealtimeBaseURL("wss://flow.example/v1"),
 		WithRealtimeModel("flow-pro"),
 		WithRealtimeVoice("theo"),
@@ -88,8 +95,268 @@ func TestSpeechmaticsRealtimeModelOptionsAndSessionSnapshot(t *testing.T) {
 	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow-pro")
 }
 
+func TestSpeechmaticsRealtimeSessionConnectsAndRelaysWebsocketEvents(t *testing.T) {
+	messages := make(chan map[string]any, 2)
+	requests := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		requests <- r
+		for i := 0; i < 2; i++ {
+			var message map[string]any
+			if err := conn.ReadJSON(&message); err != nil {
+				t.Errorf("ReadJSON client message error = %v", err)
+				return
+			}
+			messages <- message
+		}
+		if err := conn.WriteJSON(map[string]any{"type": "input_audio_buffer.speech_started"}); err != nil {
+			t.Errorf("WriteJSON server event error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := assertSpeechmaticsRealtimeRequest(t, requests)
+	if got := req.Header.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer key", got)
+	}
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" || first["model"] != "flow" {
+		t.Fatalf("initial websocket message = %#v, want session.create flow", first)
+	}
+	if err := session.UpdateInstructions("socket update"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.update" || second["instructions"] != "socket update" {
+		t.Fatalf("update websocket message = %#v, want instructions update", second)
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+}
+
+func TestSpeechmaticsRealtimeSessionInitialSendFailureReturnsConnectionError(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(newSpeechmaticsRealtimeWriteFailAfterDialer(t, errors.New("write refused"))),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	_, err = rtModel.Session()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to initialize Speechmatics realtime session") ||
+		!strings.Contains(connectionErr.Error(), "write refused") {
+		t.Fatalf("APIConnectionError = %q, want initial send context", connectionErr.Error())
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionReconnectsAfterProviderClose(t *testing.T) {
+	messages := make(chan map[string]any, 3)
+	dialCount := atomic.Int32{}
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		dial := dialCount.Add(1)
+		var initial map[string]any
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("ReadJSON initial message error = %v", err)
+			return
+		}
+		messages <- initial
+		if dial == 1 {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "recycle"), time.Now().Add(time.Second))
+			_ = conn.Close()
+			return
+		}
+		var update map[string]any
+		if err := conn.ReadJSON(&update); err != nil {
+			t.Errorf("ReadJSON update message error = %v", err)
+			return
+		}
+		messages <- update
+		<-releaseSecond
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" {
+		t.Fatalf("first initial message = %#v, want session.create", first)
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.create" {
+		t.Fatalf("reconnect initial message = %#v, want session.create", second)
+	}
+	if err := session.UpdateInstructions("after reconnect"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	update := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if update["type"] != "session.update" || update["instructions"] != "after reconnect" {
+		t.Fatalf("post-reconnect update = %#v, want instructions update", update)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionReconnectReplaysTools(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	dialCount := atomic.Int32{}
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		dial := dialCount.Add(1)
+		var initial map[string]any
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("ReadJSON initial message error = %v", err)
+			return
+		}
+		messages <- initial
+		var tools map[string]any
+		if err := conn.ReadJSON(&tools); err != nil {
+			t.Errorf("ReadJSON tools message error = %v", err)
+			return
+		}
+		messages <- tools
+		if dial == 1 {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "recycle"), time.Now().Add(time.Second))
+			_ = conn.Close()
+			return
+		}
+		<-releaseSecond
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" {
+		t.Fatalf("first initial = %#v, want session.create", first)
+	}
+	if err := session.UpdateTools([]llm.Tool{speechmaticsRealtimeTestTool{
+		name:        "lookup_weather",
+		description: "look up weather",
+		parameters:  map[string]any{"type": "object"},
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	firstTools := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	assertSpeechmaticsRealtimeToolsUpdate(t, firstTools, "lookup_weather")
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.create" {
+		t.Fatalf("reconnect initial = %#v, want session.create", second)
+	}
+	replayedTools := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	assertSpeechmaticsRealtimeToolsUpdate(t, replayedTools, "lookup_weather")
+}
+
+func TestSpeechmaticsRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
+	messages := make(chan map[string]any, 3)
+	dialCount := atomic.Int32{}
+	releaseFirstClose := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		dial := dialCount.Add(1)
+		var initial map[string]any
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("ReadJSON initial message error = %v", err)
+			return
+		}
+		messages <- initial
+		if dial == 1 {
+			<-releaseFirstClose
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "recycle"), time.Now().Add(time.Second))
+			_ = conn.Close()
+			return
+		}
+		var contextMessage map[string]any
+		if err := conn.ReadJSON(&contextMessage); err != nil {
+			t.Errorf("ReadJSON chat context message error = %v", err)
+			return
+		}
+		messages <- contextMessage
+		<-releaseSecond
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" {
+		t.Fatalf("first initial = %#v, want session.create", first)
+	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	close(releaseFirstClose)
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.create" {
+		t.Fatalf("reconnect initial = %#v, want session.create", second)
+	}
+	replayedContext := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	assertSpeechmaticsRealtimeChatContextMessage(t, replayedContext, "user", "hello")
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -140,7 +407,7 @@ func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 }
 
 func TestSpeechmaticsRealtimeGenerateReplyPreservesPerResponseTools(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -193,7 +460,7 @@ func TestSpeechmaticsRealtimeGenerateReplyPreservesPerResponseTools(t *testing.T
 }
 
 func TestSpeechmaticsRealtimeSessionBuffersBurstAudioCommandsInOrder(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -227,7 +494,7 @@ func TestSpeechmaticsRealtimeSessionBuffersBurstAudioCommandsInOrder(t *testing.
 }
 
 func TestSpeechmaticsRealtimeSessionCloseIsIdempotent(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -251,7 +518,7 @@ func TestSpeechmaticsRealtimeSessionCloseIsIdempotent(t *testing.T) {
 }
 
 func TestSpeechmaticsRealtimeSessionIgnoresLateClientEventsAfterClose(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -299,7 +566,7 @@ func TestSpeechmaticsRealtimeSessionIgnoresLateClientEventsAfterClose(t *testing
 }
 
 func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key", WithRealtimeOutputSampleRate(24000))
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled(), WithRealtimeOutputSampleRate(24000))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -370,7 +637,7 @@ func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t
 }
 
 func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -407,7 +674,7 @@ func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(
 }
 
 func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -463,7 +730,7 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference
 }
 
 func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferencePartial(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -508,7 +775,7 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 }
 
 func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -546,7 +813,7 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 }
 
 func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key", WithRealtimeModel("flow-pro"))
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled(), WithRealtimeModel("flow-pro"))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -607,7 +874,7 @@ func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing
 }
 
 func TestSpeechmaticsRealtimeSessionResponseDoneFailedEmitsReferenceError(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -656,7 +923,7 @@ func TestSpeechmaticsRealtimeSessionResponseDoneFailedEmitsReferenceError(t *tes
 }
 
 func TestSpeechmaticsRealtimeSessionProviderErrorEmitsReferenceError(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -701,7 +968,7 @@ func TestSpeechmaticsRealtimeSessionProviderErrorEmitsReferenceError(t *testing.
 }
 
 func TestSpeechmaticsRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T) {
-	rtModel, err := NewRealtimeModel("test-key")
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -749,6 +1016,198 @@ func assertSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession
 		t.Fatalf("command[%q] = %#v, want %#v", key, got, want)
 	}
 }
+
+func assertSpeechmaticsRealtimeRequest(t *testing.T, ch <-chan *http.Request) *http.Request {
+	t.Helper()
+	select {
+	case req := <-ch:
+		return req
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket request")
+	}
+	return nil
+}
+
+func assertSpeechmaticsRealtimeOutboundJSON(t *testing.T, ch <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case message := <-ch:
+		return message
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket message")
+	}
+	return nil
+}
+
+func assertSpeechmaticsRealtimeToolsUpdate(t *testing.T, message map[string]any, wantName string) {
+	t.Helper()
+	if message["type"] != "session.update" {
+		t.Fatalf("tools message type = %#v, want session.update in %#v", message["type"], message)
+	}
+	tools, ok := message["tools"].([]any)
+	if !ok {
+		typedTools, typedOK := message["tools"].([]map[string]any)
+		if !typedOK {
+			t.Fatalf("tools = %#v, want tool list", message["tools"])
+		}
+		tools = make([]any, 0, len(typedTools))
+		for _, tool := range typedTools {
+			tools = append(tools, tool)
+		}
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(tools))
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok || tool["name"] != wantName {
+		t.Fatalf("tool = %#v, want %s", tools[0], wantName)
+	}
+}
+
+func assertSpeechmaticsRealtimeChatContextMessage(t *testing.T, message map[string]any, wantRole, wantText string) {
+	t.Helper()
+	if message["type"] != "conversation.item.create" {
+		t.Fatalf("chat context message type = %#v, want conversation.item.create in %#v", message["type"], message)
+	}
+	if message["role"] != wantRole || message["text"] != wantText {
+		t.Fatalf("chat context message = %#v, want role %q text %q", message, wantRole, wantText)
+	}
+}
+
+func newSpeechmaticsRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) SpeechmaticsRealtimeWebsocketDialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		handler(conn, r)
+	}))
+	t.Cleanup(server.Close)
+
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return net.Dial("tcp", server.Listener.Addr().String())
+		},
+	}
+	return func(endpoint string, header http.Header) (*websocket.Conn, *http.Response, error) {
+		return dialer.Dial(endpoint, header)
+	}
+}
+
+func newSpeechmaticsRealtimeWriteFailAfterDialer(t *testing.T, writeErr error) SpeechmaticsRealtimeWebsocketDialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		failConn := &speechmaticsRealtimeFailWriteConn{Conn: clientConn, err: writeErr}
+		listener := newSpeechmaticsSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade error = %v", err)
+					return
+				}
+				defer conn.Close()
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}),
+		}
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return failConn, nil
+			},
+		}
+		conn, response, err := dialer.Dial(endpoint, headers)
+		if err != nil {
+			return nil, response, err
+		}
+		failConn.fail.Store(true)
+		return conn, response, nil
+	}
+}
+
+type speechmaticsRealtimeFailWriteConn struct {
+	net.Conn
+	fail atomic.Bool
+	err  error
+}
+
+func (c *speechmaticsRealtimeFailWriteConn) Write(p []byte) (int, error) {
+	if c.fail.Load() {
+		if c.err != nil {
+			return 0, c.err
+		}
+		return 0, errors.New("write failed")
+	}
+	return c.Conn.Write(p)
+}
+
+type speechmaticsSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newSpeechmaticsSingleConnListener(conn net.Conn) *speechmaticsSingleConnListener {
+	return &speechmaticsSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *speechmaticsSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *speechmaticsSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *speechmaticsSingleConnListener) Addr() net.Addr {
+	return speechmaticsDummyAddr("pipe")
+}
+
+type speechmaticsDummyAddr string
+
+func (a speechmaticsDummyAddr) Network() string { return string(a) }
+func (a speechmaticsDummyAddr) String() string  { return string(a) }
 
 func nextSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession) map[string]any {
 	t.Helper()
