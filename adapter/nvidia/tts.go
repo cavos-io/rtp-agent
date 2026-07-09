@@ -429,7 +429,7 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 }
 
 func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
-	if nvidiaTTSProtectedAbbreviation(text[:dot]) {
+	if nvidiaTTSProtectedAbbreviation(text[:dot], text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedInitial(text, dot, text[next:]) {
@@ -479,14 +479,14 @@ func nvidiaTTSProtectedMultipleDots(text string, dot int, next int, tail string)
 	return false
 }
 
-func nvidiaTTSProtectedAbbreviation(prefix string) bool {
+func nvidiaTTSProtectedAbbreviation(prefix string, tail string) bool {
 	fields := strings.Fields(prefix)
 	if len(fields) == 0 {
 		return false
 	}
 	switch fields[len(fields)-1] {
 	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt":
-		return true
+		return !nvidiaTTSTailStartsSentence(tail)
 	default:
 		return false
 	}
