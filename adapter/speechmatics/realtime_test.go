@@ -425,6 +425,51 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferencePartial(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_failed",
+		"content_index": 1,
+		"delta":         "half ",
+	}); !ok {
+		t.Fatal("input transcript delta ignored")
+	}
+	partial := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if partial.InputTranscription == nil || partial.InputTranscription.Transcript != "half " || partial.InputTranscription.IsFinal {
+		t.Fatalf("partial transcript = %#v, want half final=false", partial.InputTranscription)
+	}
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.failed",
+		"item_id":       "msg_user_failed",
+		"content_index": 1,
+	}); !ok {
+		t.Fatal("input transcript failed ignored")
+	}
+	final := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "half " || !final.InputTranscription.IsFinal {
+		t.Fatalf("failed transcript final = %#v, want accumulated partial final=true", final.InputTranscription)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.failed",
+		"item_id":       "msg_user_failed",
+		"content_index": 1,
+	}); ok {
+		t.Fatal("second failed event handled, want ignored after accumulator cleared")
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {
