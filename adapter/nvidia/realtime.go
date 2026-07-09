@@ -503,7 +503,7 @@ func (s *nvidiaRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || frame == nil || len(frame.Data) == 0 {
+	if s.closed || frame == nil || len(frame.Data) == 0 || frame.SampleRate == 0 {
 		return nil
 	}
 	normalized, err := s.normalizeInputFrameLocked(frame)
