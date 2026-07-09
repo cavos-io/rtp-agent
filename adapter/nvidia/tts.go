@@ -500,7 +500,7 @@ func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
 		if letters > 3 {
 			return false
 		}
-		return !nvidiaTTSAcronymEndingAtIsUppercase(text, dot, letters) || !nvidiaTTSTailStartsSentence(tail)
+		return !nvidiaTTSTailStartsSentence(tail)
 	}
 	next := dot + 1
 	return next+1 < len(text) && nvidiaTTSASCIIAlpha(text[next]) && text[next+1] == '.'
@@ -515,15 +515,6 @@ func nvidiaTTSAcronymLettersEndingAt(text string, dot int) int {
 		letters++
 	}
 	return letters
-}
-
-func nvidiaTTSAcronymEndingAtIsUppercase(text string, dot int, letters int) bool {
-	for i := dot; letters > 0 && i >= 1; i, letters = i-2, letters-1 {
-		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
-			return false
-		}
-	}
-	return true
 }
 
 func nvidiaTTSASCIIAlpha(b byte) bool {
