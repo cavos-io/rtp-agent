@@ -368,6 +368,44 @@ func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t
 	assertSpeechmaticsRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":        "response.created",
+		"response_id": "resp_tools",
+	}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"city":"Paris"}`,
+		},
+	}); !ok {
+		t.Fatal("function call output item ignored")
+	}
+	call := assertSpeechmaticsRealtimeFunctionCall(t, created.Generation.FunctionCh)
+	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
+		t.Fatalf("function call = %#v, want reference function call item", call)
+	}
+}
+
 func assertSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession, wantType, key string, want any) {
 	t.Helper()
 	command := nextSpeechmaticsRealtimeCommand(t, session)
@@ -484,6 +522,20 @@ func assertSpeechmaticsRealtimeClosedAudio(t *testing.T, ch <-chan *model.AudioF
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for closed audio channel")
 	}
+}
+
+func assertSpeechmaticsRealtimeFunctionCall(t *testing.T, ch <-chan *llm.FunctionCall) *llm.FunctionCall {
+	t.Helper()
+	select {
+	case call, ok := <-ch:
+		if !ok {
+			t.Fatal("function call channel closed")
+		}
+		return call
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function call")
+	}
+	return nil
 }
 
 type speechmaticsRealtimeTestTool struct {

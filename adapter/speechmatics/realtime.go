@@ -590,6 +590,11 @@ func (s *speechmaticsRealtimeSession) handleResponseAudioDelta(event map[string]
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[string]any) bool {
+	if item, _ := event["item"].(map[string]any); item != nil {
+		if speechmaticsRealtimeString(item, "type") == "function_call" {
+			return s.handleResponseFunctionCall(item)
+		}
+	}
 	itemID := speechmaticsRealtimeString(event, "item_id")
 	if itemID == "" {
 		if item, _ := event["item"].(map[string]any); item != nil {
@@ -608,6 +613,30 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[str
 	}
 	s.mu.Unlock()
 	return message != nil
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string]any) bool {
+	call := &llm.FunctionCall{
+		ID:        speechmaticsRealtimeString(item, "id"),
+		CallID:    speechmaticsRealtimeString(item, "call_id"),
+		Name:      speechmaticsRealtimeString(item, "name"),
+		Arguments: speechmaticsRealtimeString(item, "arguments"),
+	}
+	if call.ID == "" || call.CallID == "" || call.Name == "" || call.Arguments == "" {
+		return false
+	}
+	s.mu.Lock()
+	generation := s.generation
+	if s.closed || generation == nil || generation.done {
+		s.mu.Unlock()
+		return false
+	}
+	s.mu.Unlock()
+	select {
+	case generation.functionCh <- call:
+	default:
+	}
+	return true
 }
 
 func (s *speechmaticsRealtimeSession) realtimeMessageLocked(itemID string) *speechmaticsRealtimeMessage {
