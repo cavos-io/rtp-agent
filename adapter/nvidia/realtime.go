@@ -700,6 +700,7 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context) {
 	}()
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.websocketURL(), nil)
 	if err != nil {
+		s.failRealtimeTransport(ctx, llm.NewAPIConnectionError(fmt.Sprintf("Connection failed: %v", err)))
 		return
 	}
 	defer conn.Close()
@@ -774,6 +775,20 @@ func (s *nvidiaRealtimeSession) finishRealtimeTransportReceive(ctx context.Conte
 			Error: llm.NewRealtimeModelError(s.label, llm.NewAPIConnectionError("PersonaPlex connection closed unexpectedly"), true),
 		})
 	}
+	s.resetRealtimeTransportLocked()
+}
+
+func (s *nvidiaRealtimeSession) failRealtimeTransport(ctx context.Context, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transportCtx != ctx || s.closed {
+		return
+	}
+	s.finalizeGenerationLocked(true)
+	s.events.send(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewRealtimeModelError(s.label, err, true),
+	})
 	s.resetRealtimeTransportLocked()
 }
 

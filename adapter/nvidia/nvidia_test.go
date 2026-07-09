@@ -613,6 +613,49 @@ func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "Connection failed:") {
+			t.Fatalf("error = %v, want Connection failed wrapper", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dial failure error event")
+	}
+}
+
 func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverErr := make(chan error, 1)
