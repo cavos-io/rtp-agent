@@ -3,7 +3,9 @@ package nvidia
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -104,6 +106,55 @@ func (t *NvidiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	return &nvidiaTTSSynthesizeStream{ctx: ctx}, nil
+}
+
+type nvidiaTTSSynthesizeStream struct {
+	ctx    context.Context
+	closed bool
+}
+
+func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return fmt.Errorf("nvidia riva tts streaming is not implemented")
+}
+
+func (s *nvidiaTTSSynthesizeStream) Flush() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return nil, fmt.Errorf("nvidia riva tts streaming is not implemented")
 }

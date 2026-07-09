@@ -143,8 +143,41 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if _, err := provider.Synthesize(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
 		t.Fatalf("Synthesize() error = %v, want explicit unsupported synthesis error", err)
 	}
-	if _, err := provider.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-		t.Fatalf("Stream() error = %v, want explicit unsupported stream error", err)
+}
+
+func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want stream construction before native transport", err)
+	}
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText(empty) error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v, want nil", err)
+	}
+	if err := stream.PushText("hello"); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("PushText(non-empty) error = %v, want explicit unsupported stream error", err)
+	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported stream error", audio, err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != io.ErrClosedPipe {
+		t.Fatalf("PushText() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); err != io.ErrClosedPipe {
+		t.Fatalf("Flush() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if audio, err := stream.Next(); err != io.EOF || audio != nil {
+		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", audio, err)
 	}
 }
 
