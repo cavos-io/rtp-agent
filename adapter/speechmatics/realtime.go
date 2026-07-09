@@ -303,6 +303,7 @@ type speechmaticsRealtimeSession struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	conn             *websocket.Conn
+	reconnecting     bool
 	closed           bool
 	drainingCommands bool
 	closeOnce        sync.Once
@@ -484,7 +485,7 @@ func (s *speechmaticsRealtimeSession) connectRealtimeWebsocket(initialCommand ma
 	s.cancel = cancel
 	s.conn = conn
 	s.mu.Unlock()
-	go s.websocketWriteLoop(conn)
+	go s.websocketWriteLoop()
 	go s.websocketReadLoop(conn)
 	return nil
 }
@@ -546,7 +547,7 @@ func (s *speechmaticsRealtimeSession) dialRealtimeWebsocketAttempt(ctx context.C
 	}
 }
 
-func (s *speechmaticsRealtimeSession) websocketWriteLoop(conn *websocket.Conn) {
+func (s *speechmaticsRealtimeSession) websocketWriteLoop() {
 	for {
 		select {
 		case <-s.closedCh:
@@ -555,13 +556,16 @@ func (s *speechmaticsRealtimeSession) websocketWriteLoop(conn *websocket.Conn) {
 			if command == nil {
 				continue
 			}
+			conn := s.currentRealtimeConn()
+			if conn == nil {
+				continue
+			}
 			if err := conn.WriteJSON(command); err != nil {
 				s.emitRealtimeEvent(llm.RealtimeEvent{
 					Type:  llm.RealtimeEventTypeError,
 					Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime send failed: %v", err)),
 				})
-				_ = s.Close()
-				return
+				s.reconnectRealtimeWebsocket()
 			}
 		}
 	}
@@ -571,20 +575,86 @@ func (s *speechmaticsRealtimeSession) websocketReadLoop(conn *websocket.Conn) {
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
-			if s.isClosed() || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if s.isClosed() {
 				return
 			}
-			s.emitRealtimeEvent(llm.RealtimeEvent{
-				Type:  llm.RealtimeEventTypeError,
-				Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime receive failed: %v", err)),
-			})
-			_ = s.Close()
+			go s.reconnectRealtimeWebsocket()
 			return
 		}
 		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
 			continue
 		}
 		s.handleServerJSON(data)
+	}
+}
+
+func (s *speechmaticsRealtimeSession) currentRealtimeConn() *websocket.Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn
+}
+
+func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
+	s.mu.Lock()
+	if s.closed || s.reconnecting {
+		s.mu.Unlock()
+		return
+	}
+	s.reconnecting = true
+	oldConn := s.conn
+	s.mu.Unlock()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+
+	conn, err := s.dialRealtimeWebsocket(context.Background(), buildSpeechmaticsRealtimeWebsocketURL(s.baseURL), buildSpeechmaticsRealtimeHeaders(s.apiKey))
+	if err != nil {
+		s.mu.Lock()
+		s.reconnecting = false
+		s.mu.Unlock()
+		s.emitRealtimeEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime reconnect failed: %v", err)),
+		})
+		_ = s.Close()
+		return
+	}
+	if err := conn.WriteJSON(s.sessionCreateCommand()); err != nil {
+		s.mu.Lock()
+		s.reconnecting = false
+		s.mu.Unlock()
+		_ = conn.Close()
+		s.emitRealtimeEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to reinitialize Speechmatics realtime session: %v", err)),
+		})
+		_ = s.Close()
+		return
+	}
+
+	s.mu.Lock()
+	s.conn = conn
+	s.reconnecting = false
+	s.inputTranscripts = nil
+	s.closeCurrentGenerationLocked()
+	s.mu.Unlock()
+	go s.websocketReadLoop(conn)
+	s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+}
+
+func (s *speechmaticsRealtimeSession) sessionCreateCommand() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]any{
+		"type":               "session.create",
+		"model":              s.model,
+		"voice":              s.voice,
+		"instructions":       s.instructions,
+		"input_sample_rate":  s.inputSampleRate,
+		"output_sample_rate": s.outputSampleRate,
 	}
 }
 

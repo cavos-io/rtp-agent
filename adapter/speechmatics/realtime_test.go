@@ -171,6 +171,65 @@ func TestSpeechmaticsRealtimeSessionInitialSendFailureReturnsConnectionError(t *
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionReconnectsAfterProviderClose(t *testing.T) {
+	messages := make(chan map[string]any, 3)
+	dialCount := atomic.Int32{}
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		dial := dialCount.Add(1)
+		var initial map[string]any
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("ReadJSON initial message error = %v", err)
+			return
+		}
+		messages <- initial
+		if dial == 1 {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "recycle"), time.Now().Add(time.Second))
+			_ = conn.Close()
+			return
+		}
+		var update map[string]any
+		if err := conn.ReadJSON(&update); err != nil {
+			t.Errorf("ReadJSON update message error = %v", err)
+			return
+		}
+		messages <- update
+		<-releaseSecond
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" {
+		t.Fatalf("first initial message = %#v, want session.create", first)
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.create" {
+		t.Fatalf("reconnect initial message = %#v, want session.create", second)
+	}
+	if err := session.UpdateInstructions("after reconnect"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	update := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if update["type"] != "session.update" || update["instructions"] != "after reconnect" {
+		t.Fatalf("post-reconnect update = %#v, want instructions update", update)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
