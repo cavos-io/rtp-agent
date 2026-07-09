@@ -48,6 +48,12 @@ func WithNvidiaSTTFunctionID(functionID string) NvidiaSTTOption {
 	}
 }
 
+func WithNvidiaSTTModel(model string) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.model = model
+	}
+}
+
 func WithNvidiaSTTLanguage(language string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
 		s.language = language

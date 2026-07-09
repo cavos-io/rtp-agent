@@ -1460,6 +1460,19 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTAllowsEmptyModelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTModel(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	if got := provider.model; got != "" {
+		t.Fatalf("model = %q, want explicit empty model", got)
+	}
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() = %q, want explicit empty model", got)
+	}
+}
+
 func TestNvidiaSTTAllowsEmptyLanguageLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTLanguage(""))
 	if err != nil {
