@@ -1860,6 +1860,28 @@ func TestNvidiaSTTStreamAcceptsAudioBeforeTransportErrorLikeReference(t *testing
 	}
 }
 
+func TestNvidiaSTTFlushAfterAudioReportsTransportErrorLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() after audio then Flush = (%v, %v), want nil unsupported transport error", event, err)
+	}
+}
+
 func TestNvidiaSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {

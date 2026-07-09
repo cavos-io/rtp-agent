@@ -300,6 +300,17 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 			s.mu.Unlock()
 			return nil, io.EOF
 		}
+		if s.ctx != nil {
+			if err := s.ctx.Err(); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+		}
+		if s.streamErr != nil {
+			err := s.streamErr
+			s.mu.Unlock()
+			return nil, err
+		}
 		if s.inputEnded {
 			s.mu.Unlock()
 			return nil, io.EOF
@@ -307,17 +318,6 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 		if s.flushed {
 			s.mu.Unlock()
 			return nil, io.EOF
-		}
-		if s.streamErr != nil {
-			err := s.streamErr
-			s.mu.Unlock()
-			return nil, err
-		}
-		if s.ctx != nil {
-			if err := s.ctx.Err(); err != nil {
-				s.mu.Unlock()
-				return nil, err
-			}
 		}
 		changed := s.stateChanged
 		ctx := s.ctx
