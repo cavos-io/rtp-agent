@@ -1606,7 +1606,7 @@ func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamIgnoresSecondSegmentLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -1627,13 +1627,10 @@ func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 	if err := stream.PushText("second"); err != nil {
-		t.Fatalf("PushText(second) error = %v, want nil accepted second segment", err)
+		t.Fatalf("PushText(second) error = %v, want nil ignored second segment", err)
 	}
-	if got, want := concrete.text, "firstsecond"; got != want {
-		t.Fatalf("stream text = %q, want text after flush preserved as %q", got, want)
-	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("second Flush() error = %v, want nil for next segment boundary", err)
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text = %q, want only first segment %q", got, want)
 	}
 }
 
@@ -1666,33 +1663,57 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText("late"); err != nil {
 		t.Fatalf("PushText(late) error = %v", err)
 	}
-	if got, want := concrete.text, "   late"; got != want {
-		t.Fatalf("text after second segment = %q, want preserved whitespace and late text %q", got, want)
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after second segment = %q, want preserved first whitespace segment %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamIgnoredSecondSegmentDoesNotTriggerTransportLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText(late) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		audio, err := stream.Next()
 		if audio != nil {
-			t.Errorf("Next() audio = %v, want nil before native transport", audio)
+			t.Errorf("Next() audio = %v, want nil before close", audio)
 		}
 		done <- err
 	}()
 	select {
 	case err := <-done:
-		t.Fatalf("Next() after unflushed late text returned %v, want wait for next flush", err)
+		t.Fatalf("Next() after ignored second segment returned %v, want wait like reference", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("second Flush() error = %v", err)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after second Flush error = %v, want unsupported stream error", err)
+		if err != io.EOF {
+			t.Fatalf("Next() after Close error = %v, want EOF", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not unblock after second Flush")
+		t.Fatal("Next() did not unblock after Close")
 	}
 }
 
