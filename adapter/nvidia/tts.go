@@ -199,6 +199,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	text = strings.ReplaceAll(text, "\n", " ")
 	if s.flushed && s.pendingText != "" {
 		s.pendingText += text
 		s.notifyLocked()
