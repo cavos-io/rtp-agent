@@ -211,6 +211,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 			s.pendingText = strings.TrimRight(s.pendingText, nvidiaTTSWhitespaceCutset)
 		}
 		s.pendingText += text
+		s.queueCompletedSentenceCandidatesLocked(s.pendingText)
 		s.notifyLocked()
 		return nil
 	}
@@ -222,12 +223,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 		}
 	}
 	s.text += text
-	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
-		s.text = prefix
-		s.pendingText = tail
-		s.queueReadyTextLocked(prefix)
-		s.flushed = true
-	}
+	s.queueCompletedSentenceCandidatesLocked(s.text)
 	s.notifyLocked()
 	return nil
 }
@@ -357,6 +353,20 @@ func (s *nvidiaTTSSynthesizeStream) queuePendingInputLocked() {
 		s.queuedLen = len(s.text)
 	}
 	s.queueReadyTextLocked(s.text[s.queuedLen:])
+}
+
+func (s *nvidiaTTSSynthesizeStream) queueCompletedSentenceCandidatesLocked(text string) {
+	for {
+		prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(text)
+		if !ok {
+			return
+		}
+		s.text = prefix
+		s.pendingText = tail
+		s.queueReadyTextLocked(prefix)
+		s.flushed = true
+		text = tail
+	}
 }
 
 func (s *nvidiaTTSSynthesizeStream) queueReadyTextLocked(text string) {

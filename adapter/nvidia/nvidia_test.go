@@ -2902,6 +2902,32 @@ func TestNvidiaTTSStreamFlushQueuesPendingSentenceTailLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaTTSStreamQueuesMultipleCompletedSentencesBeforeFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long enough. Next sentence is long enough. Third"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	wantReady := []string{"This sentence is long enough.", "Next sentence is long enough."}
+	if got := concrete.readyText; !slices.Equal(got, wantReady) {
+		t.Fatalf("readyText = %q, want all completed sentences before flush %q", got, wantReady)
+	}
+	if got, want := concrete.pendingText, "Third"; got != want {
+		t.Fatalf("pendingText = %q, want unfinished tail %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamNormalizesNewlineSentenceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
