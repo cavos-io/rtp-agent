@@ -1818,6 +1818,12 @@ func (s *speechmaticsSTTStream) readLoop() {
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			if json.Valid(message) {
+				if speechmaticsMessageName(message) == "RecognitionStarted" {
+					if !s.handleResponse(smResponse{Message: "RecognitionStarted"}) {
+						return
+					}
+					continue
+				}
 				if speechmaticsSpeakersResultMessage(message) {
 					s.recordSpeakerResult(nil)
 					continue
@@ -1845,27 +1851,23 @@ func (s *speechmaticsSTTStream) readLoop() {
 }
 
 func speechmaticsSpeakersResultMessage(data []byte) bool {
+	return speechmaticsMessageName(data) == "SpeakersResult"
+}
+
+func speechmaticsMessageName(data []byte) string {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return false
+		return ""
 	}
 	var message string
 	if err := json.Unmarshal(raw["message"], &message); err != nil {
-		return false
+		return ""
 	}
-	return message == "SpeakersResult"
+	return message
 }
 
 func speechmaticsDataMessage(data []byte) bool {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return false
-	}
-	var message string
-	if err := json.Unmarshal(raw["message"], &message); err != nil {
-		return false
-	}
-	switch message {
+	switch speechmaticsMessageName(data) {
 	case "AddPartialSegment", "AddSegment", "AddPartialTranscript", "AddTranscript", "SpeakersResult":
 		return true
 	default:

@@ -6435,6 +6435,87 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsMalformedRecognitionStartedStillOpensReferenceAudioGate(t *testing.T) {
+	audioWrites := make(chan []byte, 1)
+	started := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				audioWrites <- append([]byte(nil), data...)
+				return
+			}
+			var control map[string]interface{}
+			if err := json.Unmarshal(data, &control); err != nil {
+				t.Errorf("unmarshal control: %v", err)
+				return
+			}
+			if control["message"] == "StartRecognition" {
+				started <- struct{}{}
+				if err := conn.WriteJSON(map[string]interface{}{
+					"message": "RecognitionStarted",
+					"language_pack_info": map[string]interface{}{
+						"word_delimiter": 7,
+					},
+				}); err != nil {
+					t.Errorf("write malformed RecognitionStarted: %v", err)
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("StartRecognition not sent")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	select {
+	case data := <-audioWrites:
+		if got := len(data); got != 3200 {
+			t.Fatalf("binary audio length = %d, want 3200", got)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("buffered audio not sent after malformed RecognitionStarted")
+	}
+}
+
 func TestSpeechmaticsSTTStartupDrainWriteFailureSurfacesToNext(t *testing.T) {
 	writeErr := errors.New("startup write failed")
 	stream := &speechmaticsSTTStream{
