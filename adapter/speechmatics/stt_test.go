@@ -1174,6 +1174,57 @@ func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *test
 	}
 }
 
+func TestSpeechmaticsEventsRawPartialDoesNotPrefixAcrossReferenceSpeakerBoundary(t *testing.T) {
+	var firstFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.0,
+			"end_time":0.2,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &firstFinal); err != nil {
+		t.Fatalf("unmarshal first final: %v", err)
+	}
+	var secondFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.4,
+			"alternatives":[{"content":"world","confidence":0.8,"speaker":"S2","language":"en"}]
+		}]
+	}`), &secondFinal); err != nil {
+		t.Fatalf("unmarshal second final: %v", err)
+	}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"again","confidence":0.7,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial: %v", err)
+	}
+
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	_ = speechmaticsEvents(firstFinal, state)
+	_ = speechmaticsEvents(secondFinal, state)
+
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 3 {
+		t.Fatalf("events after following partial = %#v, want two finals then partial", events)
+	}
+	if events[2].Type != stt.SpeechEventInterimTranscript || events[2].Alternatives[0].Text != "again" {
+		t.Fatalf("third event = %#v, want reference partial without non-adjacent final context", events[2])
+	}
+}
+
 func speechmaticsTimedWordTexts(words []stt.TimedString) []string {
 	texts := make([]string, 0, len(words))
 	for _, word := range words {

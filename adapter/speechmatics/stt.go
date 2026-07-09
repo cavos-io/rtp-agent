@@ -2430,17 +2430,14 @@ func speechmaticsPrefixRawFinalContextToPartial(partial *stt.SpeechEvent, finals
 		return partial
 	}
 	prefixed := speechmaticsCloneTranscriptEvent(partial)
-	for i := len(finals) - 1; i >= 0; i-- {
-		final := finals[i]
-		if !speechmaticsCanPrefixTranscriptEvent(final, prefixed) {
-			continue
-		}
-		merged := speechmaticsCloneTranscriptEvent(final)
-		merged.Type = stt.SpeechEventInterimTranscript
-		speechmaticsMergeTranscriptEvent(merged, prefixed, speechmaticsRawWordDelimiter(state))
-		return merged
+	final := finals[len(finals)-1]
+	if !speechmaticsCanPrefixTranscriptEvent(final, prefixed) {
+		return partial
 	}
-	return partial
+	merged := speechmaticsCloneTranscriptEvent(final)
+	merged.Type = stt.SpeechEventInterimTranscript
+	speechmaticsMergeTranscriptEvent(merged, prefixed, speechmaticsRawWordDelimiter(state))
+	return merged
 }
 
 func speechmaticsCloneTranscriptEvents(events []*stt.SpeechEvent) []*stt.SpeechEvent {
