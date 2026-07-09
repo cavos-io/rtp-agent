@@ -2247,6 +2247,52 @@ func TestMultimodalAgentRealtimeMessageWaitsForPlayoutBeforeCommit(t *testing.T)
 	}
 }
 
+func TestMultimodalAgentFullPlaybackUsesGeneratedTextDespiteEmptySynchronizedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          100 * time.Millisecond,
+			SynchronizedTranscript:    "",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model:   &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AudioOutput: true}},
+		session: session,
+		chatCtx: chatCtx,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "fully played realtime text"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	close(audioCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_full_empty_sync",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one assistant message", chatCtx.Items)
+	}
+	msg := chatCtx.Items[0].(*llm.ChatMessage)
+	if msg.TextContent() != "fully played realtime text" || msg.Interrupted {
+		t.Fatalf("assistant text/interrupted = %q/%v, want full generated text/false", msg.TextContent(), msg.Interrupted)
+	}
+}
+
 func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
