@@ -1023,6 +1023,8 @@ type speechmaticsSTTStream struct {
 	drainEvents                []*stt.SpeechEvent
 	overflowEvents             []*stt.SpeechEvent
 	forcedEOUPending           bool
+	forcedEOUStartedAt         time.Time
+	lastForcedEOULatency       time.Duration
 	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
@@ -2072,6 +2074,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 			if s.consumeCompletedFixedEOU() {
 				return true
 			}
+			s.recordForcedEOULatency()
 			s.clearForcedEOU()
 			for _, event := range s.fixedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
@@ -3465,6 +3468,7 @@ func (s *speechmaticsSTTStream) beginForcedEOU(allowProviderManaged bool) (uint6
 		return 0, 0, false
 	}
 	s.forcedEOUPending = true
+	s.forcedEOUStartedAt = time.Now()
 	s.forcedEOUSeq++
 	timestamp := 0.0
 	if s.state != nil {
@@ -3519,6 +3523,7 @@ func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
 	if s.closed || !s.forcedEOUPending {
 		return false
 	}
+	s.recordForcedEOULatencyLocked()
 	s.forcedEOUPending = false
 	s.forcedEOUSeq++
 	return true
@@ -3627,6 +3632,7 @@ func (s *speechmaticsSTTStream) clearForcedEOU() {
 	}
 	s.mu.Lock()
 	s.forcedEOUPending = false
+	s.forcedEOUStartedAt = time.Time{}
 	s.forcedEOUSeq++
 	s.mu.Unlock()
 }
@@ -3740,25 +3746,32 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	}
 	s.mu.Unlock()
 	if annotationsSet {
-		return s.subtractReferenceTTFBFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations))
+		return s.subtractReferenceLatenciesFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations))
 	}
 	if hasTranscript {
-		return s.subtractReferenceTTFBFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped}))
+		return s.subtractReferenceLatenciesFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped}))
 	}
 	return speechmaticsLocalEndpointingDelay(s.owner)
 }
 
-func (s *speechmaticsSTTStream) subtractReferenceTTFBFromEndpointingDelay(delay time.Duration) time.Duration {
+func (s *speechmaticsSTTStream) subtractReferenceLatenciesFromEndpointingDelay(delay time.Duration) time.Duration {
 	if s == nil || delay <= speechmaticsMinEndOfTurnDelay {
 		return delay
 	}
 	s.mu.Lock()
 	state := s.state
+	forcedEOULatency := s.lastForcedEOULatency
 	var lag float64
 	if state != nil && state.latestSegmentEndTimeSet && state.audioSecondsSent > state.latestSegmentEndTime {
 		lag = state.audioSecondsSent - state.latestSegmentEndTime
 	}
 	s.mu.Unlock()
+	if forcedEOULatency > 0 {
+		delay -= forcedEOULatency
+		if delay <= speechmaticsMinEndOfTurnDelay {
+			return speechmaticsMinEndOfTurnDelay
+		}
+	}
 	if lag <= 0 {
 		return delay
 	}
@@ -3767,6 +3780,23 @@ func (s *speechmaticsSTTStream) subtractReferenceTTFBFromEndpointingDelay(delay 
 		return speechmaticsMinEndOfTurnDelay
 	}
 	return delay
+}
+
+func (s *speechmaticsSTTStream) recordForcedEOULatency() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordForcedEOULatencyLocked()
+}
+
+func (s *speechmaticsSTTStream) recordForcedEOULatencyLocked() {
+	if s == nil || s.forcedEOUStartedAt.IsZero() {
+		return
+	}
+	s.lastForcedEOULatency = time.Since(s.forcedEOUStartedAt)
+	s.forcedEOUStartedAt = time.Time{}
 }
 
 func (s *speechmaticsSTTStream) sendScheduledLocalEndpointingForceEndOfUtterance(seq uint64) {

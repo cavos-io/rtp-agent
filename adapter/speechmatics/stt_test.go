@@ -5661,6 +5661,22 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceTTFB(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceForcedEOULatency(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		},
+		lastForcedEOULatency: 60 * time.Millisecond,
+	}
+
+	if got, want := stream.localEndpointingDelay(), speechmaticsMinEndOfTurnDelay; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference forced-EOU-latency-subtracted minimum %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceSmartTurnPenalty(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
 	stream := &speechmaticsSTTStream{
