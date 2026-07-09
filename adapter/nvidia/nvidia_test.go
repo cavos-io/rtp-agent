@@ -4319,6 +4319,42 @@ func TestNvidiaTTSStreamDoesNotSplitLegalAbbreviationNonStarterLikeReference(t *
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitMedicalAbbreviationNonStarterLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "Med", text: "Please route medical Med. Tomorrow follows"},
+		{name: "MedWould", text: "Please route medical Med. Would follow now"},
+		{name: "Hosp", text: "Please route medical Hosp. Thanks follow now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if concrete.flushed {
+				t.Fatal("flushed = true after medical abbreviation non-starter, want wait for real sentence boundary")
+			}
+			if got := concrete.text; got != tc.text {
+				t.Fatalf("text = %q, want unsplit medical abbreviation text %q", got, tc.text)
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitAcronymLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
