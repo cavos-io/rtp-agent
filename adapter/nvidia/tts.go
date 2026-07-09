@@ -125,6 +125,7 @@ type nvidiaTTSSynthesizeStream struct {
 	hasText      bool
 	flushed      bool
 	text         string
+	pendingText  string
 	exception    error
 }
 
@@ -199,7 +200,9 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.hasText = true
 	s.text += text
-	if nvidiaTTSHasCompletedSentencePrefix(s.text) {
+	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
+		s.text = prefix
+		s.pendingText = tail
 		s.flushed = true
 	}
 	s.notifyLocked()
@@ -331,10 +334,10 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 	return s.exception
 }
 
-func nvidiaTTSHasCompletedSentencePrefix(text string) bool {
+func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) < 21 {
-		return false
+		return "", "", false
 	}
 	for i := 0; i < len(trimmed)-1; i++ {
 		switch trimmed[i] {
@@ -343,9 +346,9 @@ func nvidiaTTSHasCompletedSentencePrefix(text string) bool {
 				continue
 			}
 			if len(strings.TrimSpace(trimmed[:i+1])) >= 20 && strings.TrimSpace(trimmed[i+1:]) != "" {
-				return true
+				return strings.TrimSpace(trimmed[:i+1]), strings.TrimSpace(trimmed[i+1:]), true
 			}
 		}
 	}
-	return false
+	return "", "", false
 }
