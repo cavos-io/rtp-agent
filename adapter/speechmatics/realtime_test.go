@@ -406,6 +406,33 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerJSON([]byte(`{"type":"input_audio_buffer.speech_stopped"}`)); !ok {
+		t.Fatal("speech stopped JSON ignored")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStopped)
+	if event.SpeechStopped == nil || !event.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("speech stopped = %#v, want user transcription enabled", event.SpeechStopped)
+	}
+	if ok := session.handleServerJSON([]byte(`{`)); ok {
+		t.Fatal("malformed JSON handled, want ignored")
+	}
+	if ok := session.handleServerJSON([]byte(`{"type":"provider.future_event"}`)); ok {
+		t.Fatal("unknown JSON event handled, want ignored")
+	}
+}
+
 func assertSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession, wantType, key string, want any) {
 	t.Helper()
 	command := nextSpeechmaticsRealtimeCommand(t, session)

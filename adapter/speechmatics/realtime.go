@@ -2,6 +2,7 @@ package speechmatics
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -412,6 +413,14 @@ func (s *speechmaticsRealtimeSession) enqueueCommand(command map[string]any) err
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *speechmaticsRealtimeSession) handleServerJSON(data []byte) bool {
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		return false
+	}
+	return s.handleServerEvent(event)
 }
 
 func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bool {
