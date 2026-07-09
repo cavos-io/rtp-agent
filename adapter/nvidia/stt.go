@@ -162,6 +162,7 @@ type nvidiaSTTStream struct {
 	language        string
 	closed          bool
 	inputEnded      bool
+	flushed         bool
 	speaking        bool
 	inputSampleRate uint32
 	startTimeOffset float64
@@ -202,6 +203,9 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
+	if s.flushed {
+		return nil
+	}
 	if err := s.checkInputSampleRate(frame); err != nil {
 		return err
 	}
@@ -237,6 +241,7 @@ func (s *nvidiaSTTStream) Flush() error {
 			return err
 		}
 	}
+	s.flushed = true
 	return nil
 }
 
@@ -266,6 +271,9 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, io.EOF
 	}
 	if s.inputEnded {
+		return nil, io.EOF
+	}
+	if s.flushed {
 		return nil, io.EOF
 	}
 	if s.ctx != nil {

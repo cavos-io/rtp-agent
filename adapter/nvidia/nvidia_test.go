@@ -1620,6 +1620,27 @@ func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTFlushStopsWorkerLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(non-empty) after Flush error = %v, want nil ignored late audio", err)
+	}
+	if event, err := stream.Next(); err != io.EOF || event != nil {
+		t.Fatalf("Next() after Flush = (%v, %v), want nil EOF", event, err)
+	}
+}
+
 func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
