@@ -352,6 +352,9 @@ func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *t
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("PushFrame() error = %v, want context.Canceled", err)
 	}
+	if err := stream.Flush(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Flush() error = %v, want context.Canceled", err)
+	}
 	if event, err := stream.Next(); !errors.Is(err, context.Canceled) || event != nil {
 		t.Fatalf("Next() = (%v, %v), want nil context.Canceled", event, err)
 	}

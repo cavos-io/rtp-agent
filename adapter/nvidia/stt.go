@@ -183,6 +183,11 @@ func (s *nvidiaSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
