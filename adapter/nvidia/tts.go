@@ -358,6 +358,9 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if r == '.' && nvidiaTTSProtectedAcronym(trimmed, i) {
 				continue
 			}
+			if r == '.' && nvidiaTTSProtectedPhD(trimmed, i) {
+				continue
+			}
 			if trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
 				continue
 			}
@@ -395,6 +398,13 @@ func nvidiaTTSProtectedAcronym(text string, dot int) bool {
 	}
 	next := dot + 1
 	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
+}
+
+func nvidiaTTSProtectedPhD(text string, dot int) bool {
+	if dot >= 2 && text[dot-2:dot+1] == "Ph." {
+		return true
+	}
+	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
 }
 
 func nvidiaTTSProtectedInitial(prefix string) bool {

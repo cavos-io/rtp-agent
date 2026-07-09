@@ -2758,6 +2758,31 @@ func TestNvidiaTTSStreamDoesNotSplitAcronymLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitPhDLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("Please connect me to Ph.D. support tomorrow"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after Ph.D., want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "Please connect me to Ph.D. support tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit Ph.D. text %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
