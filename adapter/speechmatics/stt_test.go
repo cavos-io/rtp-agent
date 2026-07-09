@@ -5082,6 +5082,18 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceStoppedPenalty(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceMissingEOSWithoutSegmentAnnotation(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{turnHasTranscript: true},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 280*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference transcript missing-EOS delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPenalties(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
 
@@ -5161,6 +5173,18 @@ func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceFallbackVADPenalty
 
 	if got, want := stream.localEndpointingDelay(), 80*time.Millisecond; got != want {
 		t.Fatalf("local endpointing delay = %s, want reference smart-turn fallback final EOS delay %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceFallbackMissingEOSPenalty(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{turnHasTranscript: true},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 320*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference smart-turn fallback missing-EOS delay %s", got, want)
 	}
 }
 

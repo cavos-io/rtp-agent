@@ -3342,6 +3342,7 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	}
 	s.mu.Lock()
 	annotationsSet := s.state != nil && s.state.latestSegmentAnnotationSet
+	hasTranscript := s.state != nil && s.state.turnHasTranscript
 	var annotations []string
 	if annotationsSet {
 		annotations = cloneSpeechmaticsStringSlice(s.state.latestSegmentAnnotation)
@@ -3349,6 +3350,9 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	s.mu.Unlock()
 	if annotationsSet {
 		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations)
+	}
+	if hasTranscript {
+		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped})
 	}
 	return speechmaticsLocalEndpointingDelay(s.owner)
 }
