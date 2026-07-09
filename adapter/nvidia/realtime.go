@@ -75,6 +75,7 @@ type nvidiaRealtimeSession struct {
 	transportStarted   bool
 	transportCtx       context.Context
 	transportCancel    context.CancelFunc
+	transportDone      chan struct{}
 	transportNotify    chan struct{}
 	transportSent      int
 	retryDelay         time.Duration
@@ -451,13 +452,20 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	if s.textPrompt == instructions {
 		return nil
 	}
+	wasStarted := s.transportStarted
+	transportDone := s.transportDone
 	s.textPrompt = instructions
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
-	s.events.send(llm.RealtimeEvent{
-		Type:      llm.RealtimeEventTypeSessionReconnected,
-		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-	})
+	if wasStarted && transportDone != nil {
+		go s.emitSessionReconnectedAfterTransportDone(transportDone)
+		s.startRealtimeTransportLocked()
+	} else {
+		s.events.send(llm.RealtimeEvent{
+			Type:      llm.RealtimeEventTypeSessionReconnected,
+			Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+		})
+	}
 	return nil
 }
 
@@ -576,6 +584,7 @@ func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
 	}
 	s.transportStarted = false
 	s.transportCtx = nil
+	s.transportDone = nil
 	s.notifyRealtimeTransportLocked()
 }
 
@@ -698,19 +707,23 @@ func (s *nvidiaRealtimeSession) startRealtimeTransportLocked() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	s.transportStarted = true
 	s.transportCtx = ctx
 	s.transportCancel = cancel
-	go s.runRealtimeTransport(ctx)
+	s.transportDone = done
+	go s.runRealtimeTransport(ctx, done)
 }
 
-func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context) {
+func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context, done chan struct{}) {
 	defer func() {
+		close(done)
 		s.mu.Lock()
 		if s.transportCtx == ctx {
 			s.transportStarted = false
 			s.transportCtx = nil
 			s.transportCancel = nil
+			s.transportDone = nil
 		}
 		s.mu.Unlock()
 	}()
@@ -740,6 +753,19 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context) {
 	}
 	go s.receiveRealtimeTransport(ctx, conn)
 	s.sendRealtimeTransport(ctx, conn)
+}
+
+func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-chan struct{}) {
+	<-done
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.events.send(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
 }
 
 func (s *nvidiaRealtimeSession) waitRealtimeHandshake(ctx context.Context, conn *websocket.Conn) bool {

@@ -1652,6 +1652,85 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			connected <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instruction-triggered provider reconnect")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("event after instruction reconnect = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session_reconnected after provider reconnect")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
@@ -1703,6 +1782,11 @@ func TestNvidiaRealtimeCloseClearsPendingAudioLikeReference(t *testing.T) {
 	if !ok {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	concrete.transportStarted = true
+	concrete.transportCtx = ctx
+	concrete.transportCancel = cancel
 
 	full := makeNvidiaRealtimePCMInputFrame()
 	if err := session.PushAudio(&model.AudioFrame{
