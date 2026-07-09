@@ -2650,6 +2650,31 @@ func TestNvidiaTTSStreamDoesNotSplitAbbreviationLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitInitialLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("Please connect me to agent A. tomorrow"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after initial, want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "Please connect me to agent A. tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit initial text %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

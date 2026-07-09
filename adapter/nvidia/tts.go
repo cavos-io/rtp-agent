@@ -345,6 +345,9 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if trimmed[i] == '.' && nvidiaTTSProtectedAbbreviation(trimmed[:i]) {
 				continue
 			}
+			if trimmed[i] == '.' && nvidiaTTSProtectedInitial(trimmed[:i]) {
+				continue
+			}
 			if trimmed[i+1] != ' ' && trimmed[i+1] != '\n' && trimmed[i+1] != '\t' {
 				continue
 			}
@@ -367,4 +370,16 @@ func nvidiaTTSProtectedAbbreviation(prefix string) bool {
 	default:
 		return false
 	}
+}
+
+func nvidiaTTSProtectedInitial(prefix string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	token := fields[len(fields)-1]
+	if len(token) != 1 {
+		return false
+	}
+	return (token[0] >= 'A' && token[0] <= 'Z') || (token[0] >= 'a' && token[0] <= 'z')
 }
