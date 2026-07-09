@@ -2928,6 +2928,32 @@ func TestNvidiaTTSStreamQueuesMultipleCompletedSentencesBeforeFlushLikeReference
 	}
 }
 
+func TestNvidiaTTSStreamNextConsumesQueuedSegmentLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long enough. Next sentence is long enough. Third"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if _, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("Next() error = %v, want unsupported transport after first queued segment starts", err)
+	}
+	wantReady := []string{"Next sentence is long enough."}
+	if got := concrete.readyText; !slices.Equal(got, wantReady) {
+		t.Fatalf("readyText after Next = %q, want first queued segment consumed and remaining %q", got, wantReady)
+	}
+}
+
 func TestNvidiaTTSStreamNormalizesNewlineSentenceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

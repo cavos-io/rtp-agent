@@ -318,6 +318,7 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 		}
 		if s.flushed && s.hasText && s.nextReadyTextLocked() != "" {
+			s.popReadyTextLocked()
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
@@ -383,6 +384,15 @@ func (s *nvidiaTTSSynthesizeStream) nextReadyTextLocked() string {
 		return s.readyText[0]
 	}
 	return strings.TrimSpace(s.text)
+}
+
+func (s *nvidiaTTSSynthesizeStream) popReadyTextLocked() {
+	if len(s.readyText) == 0 {
+		return
+	}
+	copy(s.readyText, s.readyText[1:])
+	s.readyText[len(s.readyText)-1] = ""
+	s.readyText = s.readyText[:len(s.readyText)-1]
 }
 
 func (s *nvidiaTTSSynthesizeStream) Done() bool {
