@@ -1038,11 +1038,18 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := stream.PushText("late"); err != io.ErrClosedPipe {
-		t.Fatalf("PushText() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText() after Close error = %v, want nil like reference", err)
 	}
-	if err := stream.Flush(); err != io.ErrClosedPipe {
-		t.Fatalf("Flush() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() after Close error = %v, want nil like reference", err)
+	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("synthesize stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() after Close error = %v, want nil like reference", err)
 	}
 	if audio, err := stream.Next(); err != io.EOF || audio != nil {
 		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", audio, err)
