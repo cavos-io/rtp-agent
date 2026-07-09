@@ -3993,8 +3993,14 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 	select {
 	case resultCh <- result:
 	default:
-		<-resultCh
-		resultCh <- result
+		select {
+		case <-resultCh:
+		default:
+		}
+		select {
+		case resultCh <- result:
+		default:
+		}
 	}
 }
 

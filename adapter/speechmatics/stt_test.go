@@ -9316,6 +9316,25 @@ func TestSpeechmaticsSTTGetSpeakerIDsRequestsReferenceSpeakersResult(t *testing.
 	}
 }
 
+func TestSpeechmaticsSTTSpeakersResultDoesNotBlockReferenceReadLoopWithoutWaiter(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		speakerResultCh: make(chan []SpeechmaticsSpeakerIdentifier),
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.recordSpeakerResult([]SpeechmaticsSpeakerIdentifier{
+			{Label: "agent", SpeakerID: "spk-1"},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recordSpeakerResult blocked without waiter, want reference nonblocking SpeakersResult handling")
+	}
+}
+
 func TestSpeechmaticsSTTGetSpeakerIDGroupsPreservesReferenceStreamShape(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	for _, speakerID := range []string{"stream-1", "stream-2"} {
