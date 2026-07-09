@@ -230,7 +230,7 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	err := fmt.Errorf("nvidia riva stt streaming is not implemented")
 	s.streamErr = err
 	s.notifyLocked()
-	return err
+	return nil
 }
 
 func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {

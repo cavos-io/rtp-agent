@@ -1751,8 +1751,11 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{}); err != nil {
 		t.Fatalf("PushFrame(empty) error = %v, want nil", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame(non-empty) error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
 	}
 }
 
@@ -1829,6 +1832,31 @@ func TestNvidiaSTTStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Next() did not unblock after cancellation")
+	}
+}
+
+func TestNvidiaSTTStreamAcceptsAudioBeforeTransportErrorLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{1, 0},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	event, err := stream.Next()
+	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
 	}
 }
 
@@ -1961,8 +1989,8 @@ func TestNvidiaSTTFlushStillRejectsMismatchedSampleRateLikeReference(t *testing.
 		t.Fatalf("Stream() error = %v", err)
 	}
 
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame(first) error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) error = %v, want nil queued input like reference", err)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
@@ -2037,8 +2065,11 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if got, want := concrete.language, "id-ID"; got != want {
 		t.Fatalf("stream language = %q, want %q", got, want)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame() error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame() error = %v, want nil queued input like reference", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
