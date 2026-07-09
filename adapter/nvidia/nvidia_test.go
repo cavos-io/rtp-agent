@@ -857,18 +857,30 @@ func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(
 
 func TestNvidiaRealtimeHandshakeNormalCloseClearsPendingAudioLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
 	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			serverErr <- err
 			return
 		}
 		defer conn.Close()
-		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+		if attempt == 1 {
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
+			}
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
 			serverErr <- err
 			return
 		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
@@ -890,33 +902,82 @@ func TestNvidiaRealtimeHandshakeNormalCloseClearsPendingAudioLikeReference(t *te
 		t.Fatalf("PushAudio() error = %v", err)
 	}
 
-	deadline := time.After(time.Second)
-	for {
-		concrete.mu.Lock()
-		started := concrete.transportStarted
-		pendingMessages := len(concrete.outboundMessages)
-		pendingAudio := len(concrete.inputAudioBuffer)
-		encoder := concrete.opusEncoder
-		concrete.mu.Unlock()
-		if !started {
-			if pendingMessages != 0 {
-				t.Fatalf("outboundMessages after pre-handshake normal close = %d, want cleared", pendingMessages)
-			}
-			if pendingAudio != 0 {
-				t.Fatalf("inputAudioBuffer after pre-handshake normal close = %d, want cleared", pendingAudio)
-			}
-			if encoder != nil {
-				t.Fatal("opusEncoder after pre-handshake normal close != nil, want reset")
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before normal-close cleanup: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pre-handshake normal close cleanup")
+	}
+
+	concrete.mu.Lock()
+	pendingMessages := len(concrete.outboundMessages)
+	pendingAudio := len(concrete.inputAudioBuffer)
+	encoder := concrete.opusEncoder
+	concrete.mu.Unlock()
+	if pendingMessages != 0 {
+		t.Fatalf("outboundMessages after pre-handshake normal close = %d, want cleared", pendingMessages)
+	}
+	if pendingAudio != 0 {
+		t.Fatalf("inputAudioBuffer after pre-handshake normal close = %d, want cleared", pendingAudio)
+	}
+	if encoder != nil {
+		t.Fatal("opusEncoder after pre-handshake normal close != nil, want reset")
+	}
+}
+
+func TestNvidiaRealtimeHandshakeNormalCloseReconnectsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if attempt == 1 {
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
 			}
 			return
 		}
-		select {
-		case err := <-serverErr:
-			t.Fatalf("websocket server error before normal-close cleanup: %v", err)
-		case <-deadline:
-			t.Fatal("timed out waiting for pre-handshake normal close cleanup")
-		case <-time.After(10 * time.Millisecond):
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
 		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect after pre-handshake normal close")
 	}
 }
 

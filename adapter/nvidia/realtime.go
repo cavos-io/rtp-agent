@@ -755,6 +755,7 @@ func (s *nvidiaRealtimeSession) waitRealtimeHandshake(ctx context.Context, conn 
 				s.mu.Lock()
 				if s.transportCtx == ctx && !s.closed {
 					s.resetRealtimeTransportLocked()
+					s.startRealtimeTransportLocked()
 				}
 				s.mu.Unlock()
 			} else {
