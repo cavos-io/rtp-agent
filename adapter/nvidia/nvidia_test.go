@@ -1669,6 +1669,31 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if got, want := concrete.text, "   late"; got != want {
 		t.Fatalf("text after second segment = %q, want preserved whitespace and late text %q", got, want)
 	}
+
+	done := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			t.Errorf("Next() audio = %v, want nil before native transport", audio)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Next() after unflushed late text returned %v, want wait for next flush", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after second Flush error = %v, want unsupported stream error", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after second Flush")
+	}
 }
 
 func TestNvidiaTTSStreamWhitespaceOnlyEndInputDrainsLikeReference(t *testing.T) {

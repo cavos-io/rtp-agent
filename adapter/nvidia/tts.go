@@ -124,6 +124,7 @@ type nvidiaTTSSynthesizeStream struct {
 	inputEnded   bool
 	hasText      bool
 	flushed      bool
+	flushIndex   int
 	text         string
 	exception    error
 }
@@ -222,6 +223,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	}
 	if s.hasText {
 		s.flushed = true
+		s.flushIndex = len(s.text)
 		s.notifyLocked()
 	}
 	return nil
@@ -244,8 +246,9 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 			return err
 		}
 	}
-	if !s.flushed {
-		s.flushed = s.hasText
+	if s.hasText {
+		s.flushed = true
+		s.flushIndex = len(s.text)
 	}
 	s.inputEnded = true
 	if !s.hasText {
@@ -290,7 +293,7 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				return nil, err
 			}
 		}
-		if s.flushed && s.hasText && strings.TrimSpace(s.text) != "" {
+		if s.flushed && strings.TrimSpace(s.committedTextLocked()) != "" {
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
@@ -314,6 +317,16 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (s *nvidiaTTSSynthesizeStream) committedTextLocked() string {
+	if s.flushIndex <= 0 {
+		return ""
+	}
+	if s.flushIndex > len(s.text) {
+		return s.text
+	}
+	return s.text[:s.flushIndex]
 }
 
 func (s *nvidiaTTSSynthesizeStream) Done() bool {
