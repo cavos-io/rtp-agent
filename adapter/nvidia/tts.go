@@ -116,6 +116,8 @@ type nvidiaTTSSynthesizeStream struct {
 	closed     bool
 	inputEnded bool
 	hasText    bool
+	flushed    bool
+	text       string
 	exception  error
 }
 
@@ -174,7 +176,11 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	if s.flushed {
+		return nil
+	}
 	s.hasText = true
+	s.text += text
 	return nil
 }
 
@@ -188,6 +194,9 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 			s.exception = err
 			return err
 		}
+	}
+	if s.hasText {
+		s.flushed = true
 	}
 	return nil
 }
@@ -205,6 +214,9 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 			s.exception = err
 			return err
 		}
+	}
+	if !s.flushed {
+		s.flushed = s.hasText
 	}
 	s.inputEnded = true
 	if !s.hasText {
