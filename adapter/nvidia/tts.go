@@ -197,9 +197,6 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	if s.flushed {
-		return nil
-	}
 	s.hasText = true
 	s.text += text
 	s.notifyLocked()
