@@ -486,6 +486,7 @@ func nvidiaTTSProtectedAbbreviation(prefix string, tail string) bool {
 	}
 	switch fields[len(fields)-1] {
 	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt",
+		"Adm", "Col", "Gen", "Gov", "Maj", "Pres", "Rep", "Rev", "Sen", "Sgt",
 		"Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Sept", "Oct", "Nov", "Dec":
 		return !nvidiaTTSTailStartsSentence(tail)
 	default:
