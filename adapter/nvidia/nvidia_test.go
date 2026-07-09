@@ -2587,7 +2587,7 @@ func TestNvidiaTTSStreamStartsCompletedSentenceBeforeFlushLikeReference(t *testi
 		done <- result{audio: audio, err: err}
 	}()
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	select {
@@ -2614,13 +2614,38 @@ func TestNvidiaTTSStreamKeepsSentenceTailPendingLikeReference(t *testing.T) {
 		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	if got, want := concrete.text, "This sentence is long enough."; got != want {
 		t.Fatalf("released text = %q, want completed sentence only %q", got, want)
 	}
-	if got, want := concrete.pendingText, "next"; got != want {
+	if got, want := concrete.pendingText, "Next"; got != want {
+		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamNormalizesNewlineSentenceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long\nenough. Next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if got, want := concrete.text, "This sentence is long enough."; got != want {
+		t.Fatalf("released text = %q, want normalized completed sentence %q", got, want)
+	}
+	if got, want := concrete.pendingText, "Next"; got != want {
 		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
 	}
 }
@@ -2639,7 +2664,7 @@ func TestNvidiaTTSStreamAppendsTextToPendingTailLikeReference(t *testing.T) {
 		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText(initial) error = %v", err)
 	}
 	if err := stream.PushText(" piece"); err != nil {
@@ -2648,7 +2673,7 @@ func TestNvidiaTTSStreamAppendsTextToPendingTailLikeReference(t *testing.T) {
 	if got, want := concrete.text, "This sentence is long enough."; got != want {
 		t.Fatalf("released text = %q, want completed sentence only %q", got, want)
 	}
-	if got, want := concrete.pendingText, "next piece"; got != want {
+	if got, want := concrete.pendingText, "Next piece"; got != want {
 		t.Fatalf("pending text = %q, want tail plus later delta %q", got, want)
 	}
 }
@@ -2703,6 +2728,51 @@ func TestNvidiaTTSStreamDoesNotSplitInitialLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamStartsInitialBeforeCapitalLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please choose option A. Next step"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !concrete.flushed {
+		t.Fatal("flushed = false after initial before capitalized sentence, want NVIDIA blingfire sentence boundary")
+	}
+	if got, want := concrete.text, "Please choose option A."; got != want {
+		t.Fatalf("text = %q, want first sentence %q", got, want)
+	}
+	if got, want := concrete.pendingText, "Next step"; got != want {
+		t.Fatalf("pendingText = %q, want tail %q", got, want)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after initial-capital boundary = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after initial-capital boundary")
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitInitialWithoutSpaceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
@@ -2738,6 +2808,59 @@ func TestNvidiaTTSStreamDoesNotSplitInitialWithoutSpaceLikeReference(t *testing.
 	select {
 	case got := <-done:
 		t.Fatalf("Next() after initial without space returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitTabInitialLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please choose option\tA.Next step"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after tab initial without space, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "Please choose option\tA.Next step"; got != want {
+		t.Fatalf("text = %q, want unsplit tab initial text %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after tab initial returned (%v, %v), want wait for Flush", got.audio, got.err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	if err := stream.Flush(); err != nil {
@@ -2844,7 +2967,7 @@ func TestNvidiaTTSStreamStartsQuotedSentenceBeforeFlushLikeReference(t *testing.
 	}
 }
 
-func TestNvidiaTTSStreamStartsAdjacentSentenceBeforeFlushLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamStartsSingleQuotedSentenceBeforeFlushLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2864,16 +2987,156 @@ func TestNvidiaTTSStreamStartsAdjacentSentenceBeforeFlushLikeReference(t *testin
 		done <- result{audio: audio, err: err}
 	}()
 
-	if err := stream.PushText("This sentence is ready.Next"); err != nil {
+	if err := stream.PushText("He said this sentence is ready.' Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	select {
 	case got := <-done:
 		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after adjacent sentence = (%v, %v), want unsupported stream error", got.audio, got.err)
+			t.Fatalf("Next() after single-quoted sentence = (%v, %v), want unsupported stream error", got.audio, got.err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after adjacent sentence before Flush")
+		t.Fatal("Next() did not start after single-quoted sentence before Flush")
+	}
+}
+
+func TestNvidiaTTSStreamStartsParentheticalSentenceBeforeFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("He said this sentence is ready.) Next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after parenthetical sentence = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after parenthetical sentence before Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitAdjacentSentenceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("This sentence is ready.Next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after adjacent ASCII sentence text, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "This sentence is ready.Next"; got != want {
+		t.Fatalf("text = %q, want unsplit adjacent sentence text %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after adjacent sentence returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitLowercaseSentenceTailLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("This sentence is ready. next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after lowercase sentence tail, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "This sentence is ready. next"; got != want {
+		t.Fatalf("text = %q, want unsplit lowercase sentence tail %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after lowercase sentence tail returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
 	}
 }
 
@@ -2914,7 +3177,7 @@ func TestNvidiaTTSStreamDoesNotSplitProtectedPeriodsLikeReference(t *testing.T) 
 	}
 }
 
-func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitUppercaseWebsiteLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2923,7 +3186,10 @@ func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
 	type result struct {
 		audio *tts.SynthesizedAudio
 		err   error
@@ -2937,13 +3203,16 @@ func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T
 	if err := stream.PushText("Please visit longdomain.COM tomorrow"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after uppercase website suffix, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "Please visit longdomain.COM tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit uppercase website text %q", got, want)
+	}
 	select {
 	case got := <-done:
-		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after uppercase website suffix = (%v, %v), want unsupported stream error", got.audio, got.err)
-		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after uppercase website suffix boundary")
+		t.Fatalf("Next() after uppercase website suffix returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -2972,6 +3241,59 @@ func TestNvidiaTTSStreamDoesNotSplitCompanySuffixLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitTabCompanySuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please call Acme\tInc. tomorrow"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after tab company suffix, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "Please call Acme\tInc. tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit tab company suffix text %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after tab company suffix returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitAcronymLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
@@ -2994,6 +3316,31 @@ func TestNvidiaTTSStreamDoesNotSplitAcronymLikeReference(t *testing.T) {
 	}
 	if got, want := concrete.text, "Please verify the U.S. address tomorrow"; got != want {
 		t.Fatalf("text = %q, want unsplit acronym text %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitLowercaseAcronymLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("Please verify the u.s. address tomorrow"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after lowercase acronym, want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "Please verify the u.s. address tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit lowercase acronym text %q", got, want)
 	}
 }
 
@@ -3027,6 +3374,72 @@ func TestNvidiaTTSStreamStartsAcronymBeforeStarterLikeReference(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Next() did not start after acronym before reference starter")
+	}
+}
+
+func TestNvidiaTTSStreamWaitsForIncompleteAcronymStarterLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("The office is in the U.S. He"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after incomplete acronym starter returned (%v, %v), want wait for more text", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.PushText(" left"); err != nil {
+		t.Fatalf("PushText(tail) error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after completed acronym starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after completed acronym starter")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitAcronymStarterWithoutSpaceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("The office is in the U.S.We should continue"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after acronym starter without space, want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "The office is in the U.S.We should continue"; got != want {
+		t.Fatalf("text = %q, want unsplit acronym starter text %q", got, want)
 	}
 }
 
@@ -3088,7 +3501,7 @@ func TestNvidiaTTSStreamDoesNotSplitPhDLikeReference(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamStartsBarePhBeforeFlushLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitBarePhLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -3096,6 +3509,10 @@ func TestNvidiaTTSStreamStartsBarePhBeforeFlushLikeReference(t *testing.T) {
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
 	type result struct {
@@ -3111,13 +3528,30 @@ func TestNvidiaTTSStreamStartsBarePhBeforeFlushLikeReference(t *testing.T) {
 	if err := stream.PushText("Please discuss topic Ph.Next step"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after bare Ph. adjacent text, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "Please discuss topic Ph.Next step"; got != want {
+		t.Fatalf("text = %q, want unsplit bare Ph. text %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after bare Ph. returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 	select {
 	case got := <-done:
 		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after bare Ph. = (%v, %v), want unsupported stream error", got.audio, got.err)
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after bare Ph. boundary")
+		t.Fatal("Next() did not start after Flush")
 	}
 }
 
