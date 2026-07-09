@@ -29,6 +29,8 @@ const (
 	defaultNvidiaRealtimeNumChannels        = 1
 	defaultNvidiaRealtimeInputChunkSamples  = 1920
 	defaultNvidiaRealtimeResampleMinSamples = 960
+	defaultNvidiaRealtimeInitialRetryDelay  = time.Second
+	defaultNvidiaRealtimeMaxRetryDelay      = 30 * time.Second
 	nvidiaRealtimeEventBuffer               = 1024
 	nvidiaRealtimeGenerationStreamBuffer    = 1024
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
@@ -75,6 +77,8 @@ type nvidiaRealtimeSession struct {
 	transportCancel    context.CancelFunc
 	transportNotify    chan struct{}
 	transportSent      int
+	retryDelay         time.Duration
+	retryTimer         *time.Timer
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -293,6 +297,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		chatCtx:            llm.EmptyChatContext(),
 		events:             newNvidiaRealtimeEventStream(),
 		transportNotify:    make(chan struct{}),
+		retryDelay:         defaultNvidiaRealtimeInitialRetryDelay,
 	}, nil
 }
 
@@ -565,6 +570,10 @@ func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
 		s.transportCancel()
 		s.transportCancel = nil
 	}
+	if s.retryTimer != nil {
+		s.retryTimer.Stop()
+		s.retryTimer = nil
+	}
 	s.transportStarted = false
 	s.transportCtx = nil
 	s.notifyRealtimeTransportLocked()
@@ -681,6 +690,13 @@ func (s *nvidiaRealtimeSession) ensureRealtimeTransportLocked() {
 	if s.closed || s.transportStarted || len(s.outboundMessages) == 0 {
 		return
 	}
+	s.startRealtimeTransportLocked()
+}
+
+func (s *nvidiaRealtimeSession) startRealtimeTransportLocked() {
+	if s.closed || s.transportStarted {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.transportStarted = true
 	s.transportCtx = ctx
@@ -703,6 +719,11 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context) {
 		s.failRealtimeTransport(ctx, llm.NewAPIConnectionError(fmt.Sprintf("Connection failed: %v", err)))
 		return
 	}
+	s.mu.Lock()
+	if s.transportCtx == ctx && !s.closed {
+		s.retryDelay = defaultNvidiaRealtimeInitialRetryDelay
+	}
+	s.mu.Unlock()
 	defer conn.Close()
 	connDone := make(chan struct{})
 	go func() {
@@ -799,6 +820,28 @@ func (s *nvidiaRealtimeSession) failRealtimeTransport(ctx context.Context, err e
 		Error: llm.NewRealtimeModelError(s.label, err, true),
 	})
 	s.resetRealtimeTransportLocked()
+	s.scheduleRealtimeRetryLocked()
+}
+
+func (s *nvidiaRealtimeSession) scheduleRealtimeRetryLocked() {
+	if s.closed || s.retryTimer != nil {
+		return
+	}
+	delay := s.retryDelay
+	if delay <= 0 {
+		delay = defaultNvidiaRealtimeInitialRetryDelay
+	}
+	nextDelay := delay * 2
+	if nextDelay > defaultNvidiaRealtimeMaxRetryDelay {
+		nextDelay = defaultNvidiaRealtimeMaxRetryDelay
+	}
+	s.retryDelay = nextDelay
+	s.retryTimer = time.AfterFunc(delay, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.retryTimer = nil
+		s.startRealtimeTransportLocked()
+	})
 }
 
 func (s *nvidiaRealtimeSession) sendRealtimeTransport(ctx context.Context, conn *websocket.Conn) {

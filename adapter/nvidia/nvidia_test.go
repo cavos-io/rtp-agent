@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -653,6 +654,67 @@ func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for dial failure error event")
+	}
+}
+
+func TestNvidiaRealtimeDialFailureRetriesLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want initial dial error event", ev)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before dial failure event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial dial failure event")
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before reconnect: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for retry reconnect after recoverable dial failure")
 	}
 }
 
