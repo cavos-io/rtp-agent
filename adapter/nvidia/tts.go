@@ -446,11 +446,25 @@ func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
 	if dot < 1 || text[dot-1] < 'A' || text[dot-1] > 'Z' {
 		return false
 	}
-	if dot >= 2 && text[dot-2] == '.' && dot >= 3 && text[dot-3] >= 'A' && text[dot-3] <= 'Z' {
+	if letters := nvidiaTTSAcronymLettersEndingAt(text, dot); letters >= 2 {
+		if letters > 3 {
+			return false
+		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
 	next := dot + 1
 	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
+}
+
+func nvidiaTTSAcronymLettersEndingAt(text string, dot int) int {
+	letters := 0
+	for i := dot; i >= 1; i -= 2 {
+		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
+			break
+		}
+		letters++
+	}
+	return letters
 }
 
 func nvidiaTTSProtectedPhD(text string, dot int) bool {
