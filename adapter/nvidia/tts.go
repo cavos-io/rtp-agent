@@ -512,7 +512,10 @@ func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
-	trimmed := strings.TrimLeft(tail, " \t\n\r")
+	if !strings.HasPrefix(tail, " ") {
+		return false
+	}
+	trimmed := strings.TrimPrefix(tail, " ")
 	if trimmed == "" {
 		return false
 	}

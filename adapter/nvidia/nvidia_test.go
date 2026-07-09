@@ -3096,6 +3096,31 @@ func TestNvidiaTTSStreamWaitsForIncompleteAcronymStarterLikeReference(t *testing
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitAcronymStarterWithoutSpaceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("The office is in the U.S.We should continue"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after acronym starter without space, want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "The office is in the U.S.We should continue"; got != want {
+		t.Fatalf("text = %q, want unsplit acronym starter text %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamStartsLongAcronymBoundaryLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
