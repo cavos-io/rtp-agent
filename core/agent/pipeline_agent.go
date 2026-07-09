@@ -41,6 +41,8 @@ type PipelineAgent struct {
 	session          *AgentSession
 	vadStream        vad.VADStream
 	vadSpeechStarted bool
+	vadStallTimeout  time.Duration
+	vadStallTimer    *time.Timer
 	sttStream        stt.RecognizeStream
 	lastSTTFrame     *model.AudioFrame
 
@@ -91,6 +93,11 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	va.mu.Lock()
 	va.session = s
 	va.rootCtx = ctx
+	if s != nil && !s.Options.DisableUserSpeechStallTimeout && s.Options.UserSpeechStallTimeout > 0 {
+		va.vadStallTimeout = time.Duration(s.Options.UserSpeechStallTimeout * float64(time.Second))
+	} else {
+		va.vadStallTimeout = 0
+	}
 	va.resetGenerationCtxLocked()
 	va.mu.Unlock()
 
@@ -395,6 +402,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User started speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = true
+			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnStartOfSpeech(ev)
@@ -409,6 +417,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User stopped speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = false
+			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
 			va.finalizeActiveSTTStream()
 			if va.session != nil && va.session.activity != nil {
@@ -417,6 +426,13 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.UpdateUserState(UserStateListening)
 			}
 		} else if ev.Type == vad.VADEventInferenceDone {
+			// Frames are still flowing, so push the stall deadline out. If the
+			// input stalls mid-speech (e.g. SIP silence suppression stops sending
+			// RTP), inference stops too and the timer fires to synthesize an end
+			// of speech.
+			va.mu.Lock()
+			va.resetVADStallTimerLocked()
+			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnVADInferenceDone(ev)
 			}
@@ -454,11 +470,56 @@ func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
 	va.mu.Lock()
 	started := va.vadSpeechStarted
 	va.vadSpeechStarted = false
+	va.resetVADStallTimerLocked()
 	session := va.session
 	va.mu.Unlock()
 	if !started {
 		return
 	}
+	if session != nil && session.activity != nil {
+		session.activity.OnEndOfSpeech(nil)
+		return
+	}
+	if session != nil {
+		session.UpdateUserState(UserStateListening)
+	}
+}
+
+// resetVADStallTimerLocked (re)arms the speech-stall watchdog while the user is
+// in the VAD speaking state and stops it otherwise. It must be called with
+// va.mu held. The VAD only emits an end-of-speech event once it has processed
+// MinSilenceDuration of trailing silence, and that only happens while audio
+// frames keep arriving. If the input stalls mid-speech the session would stay
+// pinned to UserStateSpeaking forever, so this timer synthesizes an end of
+// speech when no VAD activity has advanced for vadStallTimeout.
+func (va *PipelineAgent) resetVADStallTimerLocked() {
+	if va.vadStallTimer != nil {
+		va.vadStallTimer.Stop()
+		va.vadStallTimer = nil
+	}
+	if va.vadStallTimeout <= 0 || !va.vadSpeechStarted {
+		return
+	}
+	va.vadStallTimer = time.AfterFunc(va.vadStallTimeout, va.onVADStall)
+}
+
+func (va *PipelineAgent) onVADStall() {
+	va.mu.Lock()
+	if !va.vadSpeechStarted {
+		va.mu.Unlock()
+		return
+	}
+	va.vadSpeechStarted = false
+	if va.vadStallTimer != nil {
+		va.vadStallTimer.Stop()
+		va.vadStallTimer = nil
+	}
+	timeout := va.vadStallTimeout
+	session := va.session
+	va.mu.Unlock()
+
+	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
+
 	if session != nil && session.activity != nil {
 		session.activity.OnEndOfSpeech(nil)
 		return
@@ -1901,6 +1962,9 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			session.UpdateAgentState(AgentStateSpeaking)
 			startedSpeaking = true
 		}
+		// Push the speaking-stall watchdog deadline out: audio is still
+		// advancing, so the agent is legitimately speaking rather than stuck.
+		session.notifyAgentSpeakingProgress()
 		if speech != nil && speech.IsInterrupted() {
 			transcriptSync.Close()
 			<-transcriptionDone

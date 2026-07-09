@@ -3232,6 +3232,80 @@ func TestPipelineAgentVADLoopEndsActiveSpeechWhenStreamCloses(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentVADLoopSynthesizesEndOfSpeechOnStall(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+	pipeline.vadStallTimeout = 20 * time.Millisecond
+
+	// The stream reports start-of-speech then blocks in Next(), mimicking an
+	// input that stalls mid-speech (e.g. SIP silence suppression stops sending
+	// RTP). No end-of-speech event is ever produced by the VAD itself.
+	stream := &blockingVADStream{
+		events:  []*vad.VADEvent{{Type: vad.VADEventStartOfSpeech, Timestamp: 1.25}},
+		release: make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		pipeline.vadLoop(stream)
+		close(done)
+	}()
+
+	waitForUserState(t, session, UserStateSpeaking)
+	// The watchdog, not the VAD stream, must move the user out of speaking.
+	waitForUserState(t, session, UserStateListening)
+
+	close(stream.release)
+	<-done
+
+	if endpointing.endCount != 1 {
+		t.Fatalf("endpointing end calls = %d, want 1 from stall watchdog", endpointing.endCount)
+	}
+}
+
+func waitForUserState(t *testing.T, session *AgentSession, want UserState) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if session.UserState() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("UserState() = %q, want %q", session.UserState(), want)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+type blockingVADStream struct {
+	events  []*vad.VADEvent
+	index   int
+	release chan struct{}
+}
+
+func (b *blockingVADStream) PushFrame(*model.AudioFrame) error { return nil }
+
+func (b *blockingVADStream) Flush() error { return nil }
+
+func (b *blockingVADStream) EndInput() error { return nil }
+
+func (b *blockingVADStream) Close() error { return nil }
+
+func (b *blockingVADStream) Next() (*vad.VADEvent, error) {
+	if b.index < len(b.events) {
+		ev := b.events[b.index]
+		b.index++
+		return ev, nil
+	}
+	<-b.release
+	return nil, io.EOF
+}
+
 func TestPipelineAgentVADLoopForwardsInferenceEventsToActivity(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

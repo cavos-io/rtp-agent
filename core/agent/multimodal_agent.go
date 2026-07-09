@@ -603,6 +603,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				}
 			} else if ma.session != nil {
 				ma.session.UpdateAgentState(AgentStateSpeaking)
+				ma.session.notifyAgentSpeakingProgress()
 			}
 		}
 
@@ -826,6 +827,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					session.UpdateAgentState(AgentStateSpeaking)
 					startedSpeaking = true
 				}
+				if session != nil {
+					session.notifyAgentSpeakingProgress()
+				}
 				publishedAudio = true
 			}
 		}
@@ -952,6 +956,7 @@ func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context
 				session.UpdateAgentState(AgentStateSpeaking)
 				startedSpeaking = true
 			}
+			session.notifyAgentSpeakingProgress()
 		}
 	}
 	if ttsGen.StreamErr != nil {
