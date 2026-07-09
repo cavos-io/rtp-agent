@@ -199,6 +199,9 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.hasText = true
 	s.text += text
+	if nvidiaTTSHasCompletedSentencePrefix(s.text) {
+		s.flushed = true
+	}
 	s.notifyLocked()
 	return nil
 }
@@ -326,4 +329,23 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.exception
+}
+
+func nvidiaTTSHasCompletedSentencePrefix(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) < 21 {
+		return false
+	}
+	for i := 0; i < len(trimmed)-1; i++ {
+		switch trimmed[i] {
+		case '.', '!', '?':
+			if trimmed[i+1] != ' ' && trimmed[i+1] != '\n' && trimmed[i+1] != '\t' {
+				continue
+			}
+			if len(strings.TrimSpace(trimmed[:i+1])) >= 20 && strings.TrimSpace(trimmed[i+1:]) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
