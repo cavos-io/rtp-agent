@@ -184,7 +184,7 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := len(concrete.outboundAudio), 0; got != want {
 		t.Fatalf("outboundAudio after empty PushAudio = %d, want %d", got, want)
 	}
-	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio(non-empty) error = %v", err)
 	}
@@ -242,11 +242,15 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
 
+	stereo := make([]int16, 0, 960*2)
+	for i := 0; i < 960; i++ {
+		stereo = append(stereo, int16(i), int16(-i))
+	}
 	frame := &model.AudioFrame{
-		Data:              int16SliceToLittleEndianBytes([]int16{1000, -1000, 500, -500}),
+		Data:              int16SliceToLittleEndianBytes(stereo),
 		SampleRate:        16000,
 		NumChannels:       2,
-		SamplesPerChannel: 2,
+		SamplesPerChannel: 960,
 		ParticipantID:     "caller-1",
 	}
 	if err := session.PushAudio(frame); err != nil {
@@ -261,8 +265,8 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	if got.SampleRate != 24000 || got.NumChannels != 1 {
 		t.Fatalf("outbound audio format = %d Hz/%d ch, want 24000 Hz/1 ch", got.SampleRate, got.NumChannels)
 	}
-	if got.SamplesPerChannel != 3 {
-		t.Fatalf("outbound SamplesPerChannel = %d, want 3 from 16 kHz to 24 kHz resample", got.SamplesPerChannel)
+	if got.SamplesPerChannel == 0 {
+		t.Fatal("outbound SamplesPerChannel = 0, want resampled output after reference buffering threshold")
 	}
 	if got.ParticipantID != "caller-1" {
 		t.Fatalf("outbound ParticipantID = %q, want caller-1", got.ParticipantID)
@@ -286,15 +290,23 @@ func TestNvidiaRealtimePushAudioPreservesResampleRemainderLikeReference(t *testi
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
 
-	for i := 0; i < 2; i++ {
+	samples := make([]int16, 960)
+	for i := range samples {
+		samples[i] = int16(100 + i)
+	}
+	for i := 0; i < 3; i++ {
+		chunk := samples[i*320 : (i+1)*320]
 		frame := &model.AudioFrame{
-			Data:              int16SliceToLittleEndianBytes([]int16{int16(100 + i)}),
+			Data:              int16SliceToLittleEndianBytes(chunk),
 			SampleRate:        16000,
 			NumChannels:       1,
-			SamplesPerChannel: 1,
+			SamplesPerChannel: uint32(len(chunk)),
 		}
 		if err := session.PushAudio(frame); err != nil {
 			t.Fatalf("PushAudio(%d) error = %v", i, err)
+		}
+		if i < 2 && len(concrete.outboundAudio) != 0 {
+			t.Fatalf("outboundAudio after partial chunk %d = %d, want buffered input until reference resampler emits", i, len(concrete.outboundAudio))
 		}
 	}
 
@@ -302,8 +314,8 @@ func TestNvidiaRealtimePushAudioPreservesResampleRemainderLikeReference(t *testi
 	for _, frame := range concrete.outboundAudio {
 		total += frame.SamplesPerChannel
 	}
-	if got, want := total, uint32(3); got != want {
-		t.Fatalf("total resampled samples = %d, want %d from stateful 16 kHz -> 24 kHz resampler", got, want)
+	if total == 0 {
+		t.Fatal("total resampled samples = 0, want output after accumulated 16 kHz input reaches reference buffering threshold")
 	}
 }
 
@@ -326,27 +338,74 @@ func TestNvidiaRealtimePushAudioPreservesResamplePhaseLikeReference(t *testing.T
 		t.Fatalf("split session type = %T, want *nvidiaRealtimeSession", splitSession)
 	}
 
+	samples := make([]int16, 960)
+	for i := range samples {
+		samples[i] = int16((i%64 - 32) * 32)
+	}
 	if err := wholeSession.PushAudio(&model.AudioFrame{
-		Data:              int16SliceToLittleEndianBytes([]int16{10, 20}),
+		Data:              int16SliceToLittleEndianBytes(samples),
 		SampleRate:        16000,
 		NumChannels:       1,
-		SamplesPerChannel: 2,
+		SamplesPerChannel: uint32(len(samples)),
 	}); err != nil {
 		t.Fatalf("whole PushAudio() error = %v", err)
 	}
-	for i, sample := range []int16{10, 20} {
+	for i := 0; i < 2; i++ {
+		chunk := samples[i*480 : (i+1)*480]
 		if err := splitSession.PushAudio(&model.AudioFrame{
-			Data:              int16SliceToLittleEndianBytes([]int16{sample}),
+			Data:              int16SliceToLittleEndianBytes(chunk),
 			SampleRate:        16000,
 			NumChannels:       1,
-			SamplesPerChannel: 1,
+			SamplesPerChannel: uint32(len(chunk)),
 		}); err != nil {
 			t.Fatalf("split PushAudio(%d) error = %v", i, err)
 		}
 	}
 
+	if len(whole.outboundAudio) == 0 || len(split.outboundAudio) == 0 {
+		t.Fatalf("resampled output missing: whole=%d split=%d", len(whole.outboundAudio), len(split.outboundAudio))
+	}
 	if got, want := concatNvidiaRealtimeOutboundAudioData(split.outboundAudio), concatNvidiaRealtimeOutboundAudioData(whole.outboundAudio); !bytes.Equal(got, want) {
 		t.Fatalf("split resampled PCM = %v, want whole-frame PCM %v from stateful resampler phase", littleEndianBytesToInt16Slice(got), littleEndianBytesToInt16Slice(want))
+	}
+}
+
+func TestNvidiaRealtimePushAudioBuffersSmallResampledFramesLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sampleRate uint32
+		samples    int
+	}{
+		{name: "sixteen-kilohertz", sampleRate: 16000, samples: 160},
+		{name: "forty-eight-kilohertz", sampleRate: 48000, samples: 960},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			realtimeModel := NewNvidiaRealtimeModel()
+			session, err := realtimeModel.Session()
+			if err != nil {
+				t.Fatalf("Session() error = %v", err)
+			}
+			concrete, ok := session.(*nvidiaRealtimeSession)
+			if !ok {
+				t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+			}
+
+			samples := make([]int16, tc.samples)
+			for i := range samples {
+				samples[i] = int16(i)
+			}
+			if err := session.PushAudio(&model.AudioFrame{
+				Data:              int16SliceToLittleEndianBytes(samples),
+				SampleRate:        tc.sampleRate,
+				NumChannels:       1,
+				SamplesPerChannel: uint32(len(samples)),
+			}); err != nil {
+				t.Fatalf("PushAudio(small resampled frame) error = %v", err)
+			}
+			if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+				t.Fatalf("small resampled frame queued audio=%d messages=%d buffered=%d, want pending resampler input only", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+			}
+		})
 	}
 }
 
