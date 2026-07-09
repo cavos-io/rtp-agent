@@ -240,6 +240,10 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		s.done = true
 		return nil, io.EOF
 	}
+	if s.inputEnded && strings.TrimSpace(s.text) == "" {
+		s.done = true
+		return nil, io.EOF
+	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true

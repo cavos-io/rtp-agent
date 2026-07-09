@@ -1063,6 +1063,41 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamWhitespaceOnlyEndInputDrainsLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.ExceptionStream")
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+	if audio, err := stream.Next(); err != io.EOF || audio != nil {
+		t.Fatalf("Next() after whitespace EndInput = (%v, %v), want nil EOF", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after whitespace EndInput EOF")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after whitespace EndInput EOF = %v, want nil", err)
+	}
+}
+
 func TestNvidiaTTSReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
