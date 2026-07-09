@@ -4195,6 +4195,61 @@ func TestNvidiaTTSStreamDoesNotSplitLowercaseOrgAbbreviationNonStarterLikeRefere
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitAdministrativeAbbreviationNonStarterLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "adj", text: "Please ask about adj. Tomorrow follows"},
+		{name: "adv", text: "Please ask about adv. Tomorrow follows"},
+		{name: "Assn", text: "Please ask about Assn. Tomorrow follows"},
+		{name: "assn", text: "Please ask about assn. Tomorrow follows"},
+		{name: "Bldg", text: "Please ask about Bldg. Tomorrow follows"},
+		{name: "bldg", text: "Please ask about bldg. Tomorrow follows"},
+		{name: "Cmdr", text: "Please ask about Cmdr. Tomorrow follows"},
+		{name: "Cong", text: "Please ask about Cong. Tomorrow follows"},
+		{name: "cong", text: "Please ask about cong. Tomorrow follows"},
+		{name: "Govt", text: "Please ask about Govt. Tomorrow follows"},
+		{name: "govt", text: "Please ask about govt. Tomorrow follows"},
+		{name: "Hr", text: "Please ask about Hr. Tomorrow follows"},
+		{name: "hr", text: "Please ask about hr. Tomorrow follows"},
+		{name: "Inst", text: "Please ask about Inst. Tomorrow follows"},
+		{name: "inst", text: "Please ask about inst. Tomorrow follows"},
+		{name: "Mtg", text: "Please ask about Mtg. Tomorrow follows"},
+		{name: "mtg", text: "Please ask about mtg. Tomorrow follows"},
+		{name: "Rd", text: "Please ask about Rd. Tomorrow follows"},
+		{name: "rd", text: "Please ask about rd. Tomorrow follows"},
+		{name: "rev", text: "Please ask about rev. Tomorrow follows"},
+		{name: "Sta", text: "Please ask about Sta. Tomorrow follows"},
+		{name: "sta", text: "Please ask about sta. Tomorrow follows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if concrete.flushed {
+				t.Fatal("flushed = true after administrative abbreviation, want wait for real sentence boundary")
+			}
+			if got := concrete.text; got != tc.text {
+				t.Fatalf("text = %q, want unsplit administrative abbreviation text %q", got, tc.text)
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitCapitalAbbreviationNonStarterLikeReference(t *testing.T) {
 	for _, tc := range []struct {
 		name string

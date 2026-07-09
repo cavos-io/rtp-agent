@@ -560,14 +560,14 @@ func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"agric", "appt", "approx", "assoc", "avg", "chem", "co", "comm", "comp", "corp", "dept", "dist", "div", "dr", "eng", "engr", "est", "etc", "fig", "inc", "intl", "jr", "ltd", "mach", "mfg", "min", "misc", "mktg", "natl", "org", "pp", "prof", "ref", "sec", "serv", "sr", "tech", "tel", "trans", "univ", "util", "vol", "vs"} {
+	for _, suffix := range []string{"adj", "adv", "agric", "appt", "approx", "assoc", "assn", "avg", "bldg", "chem", "co", "comm", "comp", "cong", "corp", "dept", "dist", "div", "dr", "eng", "engr", "est", "etc", "fig", "govt", "hr", "inc", "inst", "intl", "jr", "ltd", "mach", "mfg", "min", "misc", "mktg", "mtg", "natl", "org", "pp", "prof", "rd", "ref", "rev", "sec", "serv", "sr", "sta", "tech", "tel", "trans", "univ", "util", "vol", "vs"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"Agric", "Assoc", "Asst", "Atty", "Ave", "Blvd", "Bros", "Ch", "Chem", "Comm", "Comp", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fr", "Hon", "Hosp", "Intl", "Lab", "Mach", "Med", "Mfg", "Mgr", "Messrs", "Mktg", "Mmes", "Msgr", "Mt", "Natl", "No", "Org", "Ref", "Sec", "Serv", "Supt", "Tech", "Tel", "Trans", "Univ", "Util", "Vol"} {
+	for _, suffix := range []string{"Agric", "Assoc", "Assn", "Asst", "Atty", "Ave", "Bldg", "Blvd", "Bros", "Ch", "Chem", "Cmdr", "Comm", "Comp", "Cong", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fr", "Govt", "Hon", "Hosp", "Hr", "Inst", "Intl", "Lab", "Mach", "Med", "Mfg", "Mgr", "Messrs", "Mktg", "Mmes", "Msgr", "Mt", "Mtg", "Natl", "No", "Org", "Rd", "Ref", "Sec", "Serv", "Sta", "Supt", "Tech", "Tel", "Trans", "Univ", "Util", "Vol"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
