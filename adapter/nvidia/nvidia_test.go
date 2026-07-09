@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/hraban/opus"
 )
 
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
@@ -151,8 +152,34 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := realtimeModel.websocketURL(), "wss://personaplex.example:9443/api/chat?voice_prompt=VARF1.pt&text_prompt=old%20prompt&seed=7"; got != want {
 		t.Fatalf("model websocketURL() after session update = %q, want unchanged reference URL %q", got, want)
 	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{ID: "first", Role: llm.ChatRoleUser, Text: "hello"})
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext() error = %v", err)
+	}
+	chatCtx.AddMessage(llm.ChatMessageArgs{ID: "second", Role: llm.ChatRoleUser, Text: "late"})
+	if concrete.chatCtx == chatCtx {
+		t.Fatal("session chatCtx aliases source, want reference copy")
+	}
+	if got, want := len(concrete.chatCtx.Items), 1; got != want {
+		t.Fatalf("session chatCtx item count = %d, want copied snapshot count %d", got, want)
+	}
 	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
+	}
+	if got, want := len(concrete.outboundAudio), 0; got != want {
+		t.Fatalf("outboundAudio after empty PushAudio = %d, want %d", got, want)
+	}
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(non-empty) error = %v", err)
+	}
+	frame.Data[0] = 9
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio count = %d, want copied frame count %d", got, want)
+	}
+	if got, want := concrete.outboundAudio[0].Data[0], byte(1); got != want {
+		t.Fatalf("outboundAudio copied data[0] = %d, want immutable copy %d", got, want)
 	}
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt() error = %v", err)
@@ -178,8 +205,306 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if _, ok := <-session.EventCh(); ok {
 		t.Fatal("EventCh() open after Close, want closed")
 	}
-	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
+	if err := session.PushAudio(&model.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() after Close error = %v, want nil ignored input", err)
+	}
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio after Close = %d, want unchanged count %d", got, want)
+	}
+}
+
+func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{1000, -1000, 500, -500}),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+		ParticipantID:     "caller-1",
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	frame.Data[0] = 99
+
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio count = %d, want %d", got, want)
+	}
+	got := concrete.outboundAudio[0]
+	if got.SampleRate != 24000 || got.NumChannels != 1 {
+		t.Fatalf("outbound audio format = %d Hz/%d ch, want 24000 Hz/1 ch", got.SampleRate, got.NumChannels)
+	}
+	if got.SamplesPerChannel != 3 {
+		t.Fatalf("outbound SamplesPerChannel = %d, want 3 from 16 kHz to 24 kHz resample", got.SamplesPerChannel)
+	}
+	if got.ParticipantID != "caller-1" {
+		t.Fatalf("outbound ParticipantID = %q, want caller-1", got.ParticipantID)
+	}
+	if len(got.Data) != int(got.SamplesPerChannel)*2 {
+		t.Fatalf("outbound data len = %d, want samples_per_channel*2", len(got.Data))
+	}
+	if got.Data[0] == 99 {
+		t.Fatal("outbound audio aliases source frame, want immutable copy")
+	}
+}
+
+func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	if got, want := len(concrete.outboundMessages), 1; got != want {
+		t.Fatalf("outboundMessages count = %d, want %d", got, want)
+	}
+	message := concrete.outboundMessages[0]
+	if len(message) < 2 {
+		t.Fatalf("outbound message len = %d, want audio type + opus payload", len(message))
+	}
+	if message[0] != nvidiaRealtimeMsgAudio {
+		t.Fatalf("outbound message type = 0x%02x, want audio 0x%02x", message[0], nvidiaRealtimeMsgAudio)
+	}
+	decoder, err := opus.NewDecoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels)
+	if err != nil {
+		t.Fatalf("NewDecoder() error = %v", err)
+	}
+	decoded := make([]int16, 5760)
+	n, err := decoder.Decode(message[1:], decoded)
+	if err != nil {
+		t.Fatalf("Decode(outbound opus) error = %v", err)
+	}
+	if n == 0 {
+		t.Fatal("Decode(outbound opus) samples = 0, want speech packet")
+	}
+}
+
+func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgHandshake})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 0})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 3})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 0xff})
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("event after handshake/special/invalid payload = %+v, want none", ev)
+	default:
+	}
+
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 'h', 'e', 'l'})
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if msg.MessageID != ev.Generation.ResponseID {
+		t.Fatalf("MessageID = %q, want response id %q", msg.MessageID, ev.Generation.ResponseID)
+	}
+	modalities := <-msg.ModalitiesCh
+	if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+		t.Fatalf("modalities = %v, want [audio text]", modalities)
+	}
+	if got, want := <-msg.TextCh, "hel"; got != want {
+		t.Fatalf("text delta = %q, want %q", got, want)
+	}
+
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	concrete.handleAudioFrame(frame)
+	if got := <-msg.AudioCh; got != frame {
+		t.Fatalf("audio frame = %p, want original frame %p", got, frame)
+	}
+	concrete.handleTextToken("lo")
+	if got, want := <-msg.TextCh, "lo"; got != want {
+		t.Fatalf("second text delta = %q, want %q", got, want)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	metricsEvent := <-session.EventCh()
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || !metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=true", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if metricsEvent.Metrics.Metadata == nil || metricsEvent.Metrics.Metadata.ModelName != "personaplex-7b" || metricsEvent.Metrics.Metadata.ModelProvider != "nvidia" {
+		t.Fatalf("metrics metadata = %+v, want personaplex-7b/nvidia", metricsEvent.Metrics.Metadata)
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after interrupt, want closed")
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after interrupt, want closed")
+	}
+	if got, want := len(concrete.chatCtx.Items), 1; got != want {
+		t.Fatalf("chatCtx item count = %d, want assistant output appended", got)
+	}
+	if got, want := concrete.chatCtx.Items[0].GetID(), ev.Generation.ResponseID; got != want {
+		t.Fatalf("assistant item id = %q, want response id %q", got, want)
+	}
+}
+
+func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	packet := encodeNvidiaRealtimeOpusPacket(t, makeNvidiaRealtimePCMFrame())
+	message := append([]byte{nvidiaRealtimeMsgAudio}, packet...)
+	concrete.handleBinaryMessage(message)
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	frame := <-msg.AudioCh
+	if frame == nil {
+		t.Fatal("audio frame = nil, want decoded PCM frame")
+	}
+	if frame.SampleRate != 24000 || frame.NumChannels != 1 {
+		t.Fatalf("audio format = %d Hz/%d ch, want 24000 Hz/1 ch", frame.SampleRate, frame.NumChannels)
+	}
+	if frame.SamplesPerChannel == 0 || len(frame.Data) == 0 {
+		t.Fatalf("audio payload = %d samples/%d bytes, want decoded PCM", frame.SamplesPerChannel, len(frame.Data))
+	}
+	if len(frame.Data) != int(frame.SamplesPerChannel)*2 {
+		t.Fatalf("audio bytes = %d, want samples_per_channel*2 (%d)", len(frame.Data), frame.SamplesPerChannel*2)
+	}
+
+	var metricsEvent llm.RealtimeEvent
+	select {
+	case metricsEvent = <-session.EventCh():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for silence metrics event")
+	}
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=false", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after silence finalization, want closed")
+	}
+}
+
+func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	concrete.handleTextToken("draft")
+	ev := <-session.EventCh()
+	msg := <-ev.Generation.MessageCh
+	if got, want := <-msg.TextCh, "draft"; got != want {
+		t.Fatalf("text delta = %q, want %q", got, want)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got, want := concrete.textPrompt, "new prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want %q", got, want)
+	}
+	metricsEvent := <-session.EventCh()
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if !metricsEvent.Metrics.Cancelled || metricsEvent.Metrics.RequestID != ev.Generation.ResponseID {
+		t.Fatalf("metrics = %+v, want cancelled active generation %q", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after instruction update, want closed")
+	}
+}
+
+func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	concrete.handleAudioFrame(frame)
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got := <-msg.AudioCh; got != frame {
+		t.Fatalf("audio frame = %p, want original frame %p", got, frame)
+	}
+
+	var metricsEvent llm.RealtimeEvent
+	select {
+	case metricsEvent = <-session.EventCh():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for silence metrics event")
+	}
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=false", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after silence finalization, want closed")
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after silence finalization, want closed")
 	}
 }
 
@@ -1204,4 +1529,37 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if event, err := stream.Next(); err != io.EOF || event != nil {
 		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", event, err)
 	}
+}
+
+func encodeNvidiaRealtimeOpusPacket(t *testing.T, pcm []int16) []byte {
+	t.Helper()
+	encoder, err := opus.NewEncoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels, opus.AppVoIP)
+	if err != nil {
+		t.Fatalf("NewEncoder() error = %v", err)
+	}
+	buf := make([]byte, 256)
+	n, err := encoder.Encode(pcm, buf)
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	if n == 0 {
+		t.Fatal("Encode() wrote zero bytes")
+	}
+	return append([]byte(nil), buf[:n]...)
+}
+
+func makeNvidiaRealtimePCMFrame() []int16 {
+	pcm := make([]int16, 480)
+	for i := range pcm {
+		pcm[i] = int16((i%32 - 16) * 128)
+	}
+	return pcm
+}
+
+func makeNvidiaRealtimePCMInputFrame() []int16 {
+	pcm := make([]int16, 1920)
+	for i := range pcm {
+		pcm[i] = int16((i%64 - 32) * 64)
+	}
+	return pcm
 }
