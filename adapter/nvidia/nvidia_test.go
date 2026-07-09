@@ -374,8 +374,11 @@ func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
 		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
 	}
-	if err := stream.PushText("late"); err != io.ErrClosedPipe {
-		t.Fatalf("PushText() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText() after EndInput error = %v, want nil ignored late text", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() after EndInput error = %v, want nil no-op", err)
 	}
 	if audio, err := stream.Next(); err != io.EOF || audio != nil {
 		t.Fatalf("Next() after empty EndInput = (%v, %v), want nil EOF", audio, err)

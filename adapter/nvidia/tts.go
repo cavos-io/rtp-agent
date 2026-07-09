@@ -163,8 +163,11 @@ func (s *nvidiaTTSChunkedStream) Exception() error {
 }
 
 func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
-	if s.closed || s.inputEnded {
+	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
@@ -185,8 +188,11 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 }
 
 func (s *nvidiaTTSSynthesizeStream) Flush() error {
-	if s.closed || s.inputEnded {
+	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
