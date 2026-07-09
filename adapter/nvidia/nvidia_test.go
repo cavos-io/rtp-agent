@@ -4025,6 +4025,83 @@ func TestNvidiaTTSStreamStartsCommandStarterAfterSuffixLikeReference(t *testing.
 	}
 }
 
+func TestNvidiaTTSStreamStartsConjunctionStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "And", text: "Please contact Foo Inc. And follows now"},
+		{name: "Or", text: "Please contact Foo Inc. Or follows now"},
+		{name: "Yet", text: "Please contact Foo Inc. Yet follows now"},
+		{name: "Still", text: "Please contact Foo Inc. Still follows now"},
+		{name: "Instead", text: "Please contact Foo Inc. Instead follows now"},
+		{name: "Meanwhile", text: "Please contact Foo Inc. Meanwhile follows now"},
+		{name: "Later", text: "Please contact Foo Inc. Later follows now"},
+		{name: "Soon", text: "Please contact Foo Inc. Soon follows now"},
+		{name: "There", text: "Please contact Foo Inc. There follows now"},
+		{name: "Here", text: "Please contact Foo Inc. Here follows now"},
+		{name: "These", text: "Please contact Foo Inc. These follows now"},
+		{name: "Those", text: "Please contact Foo Inc. Those follows now"},
+		{name: "Another", text: "Please contact Foo Inc. Another follows now"},
+		{name: "Any", text: "Please contact Foo Inc. Any follows now"},
+		{name: "Some", text: "Please contact Foo Inc. Some follows now"},
+		{name: "All", text: "Please contact Foo Inc. All follows now"},
+		{name: "Each", text: "Please contact Foo Inc. Each follows now"},
+		{name: "Every", text: "Please contact Foo Inc. Every follows now"},
+		{name: "Most", text: "Please contact Foo Inc. Most follows now"},
+		{name: "Many", text: "Please contact Foo Inc. Many follows now"},
+		{name: "Much", text: "Please contact Foo Inc. Much follows now"},
+		{name: "Several", text: "Please contact Foo Inc. Several follows now"},
+		{name: "Both", text: "Please contact Foo Inc. Both follows now"},
+		{name: "Neither", text: "Please contact Foo Inc. Neither follows now"},
+		{name: "One", text: "Please contact Foo Inc. One follows now"},
+		{name: "Two", text: "Please contact Foo Inc. Two follows now"},
+		{name: "Three", text: "Please contact Foo Inc. Three follows now"},
+		{name: "Last", text: "Please contact Foo Inc. Last follows now"},
+		{name: "Previous", text: "Please contact Foo Inc. Previous follows now"},
+		{name: "New", text: "Please contact Foo Inc. New follows now"},
+		{name: "Only", text: "Please contact Foo Inc. Only follows now"},
+		{name: "Other", text: "Please contact Foo Inc. Other follows now"},
+		{name: "More", text: "Please contact Foo Inc. More follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after conjunction starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix conjunction starter boundary")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsStarterAfterRepeatedSpacesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
