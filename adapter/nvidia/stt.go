@@ -216,10 +216,13 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
-	if frame == nil || frame.SampleRate == 0 {
+	if frame == nil {
 		return nil
 	}
 	if s.inputSampleRate == 0 {
+		if frame.SampleRate == 0 {
+			return nil
+		}
 		s.inputSampleRate = frame.SampleRate
 		return nil
 	}

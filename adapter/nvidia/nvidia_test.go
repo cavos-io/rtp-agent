@@ -954,6 +954,18 @@ func TestNvidiaSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
 		t.Fatalf("PushFrame(mismatched sample rate) error = %v, want reference consistency error", err)
 	}
+
+	stream, err = provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(second) error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{SampleRate: 16000, NumChannels: 1}); err != nil {
+		t.Fatalf("PushFrame(nonzero first frame) error = %v, want nil", err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{SampleRate: 0, NumChannels: 1})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("PushFrame(zero after nonzero) error = %v, want reference consistency error", err)
+	}
 }
 
 func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
