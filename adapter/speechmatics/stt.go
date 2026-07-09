@@ -1648,6 +1648,35 @@ func speechmaticsNormalizeFalseyRawResults(data []byte) ([]byte, error) {
 	return json.Marshal(top)
 }
 
+func speechmaticsNormalizeFinalRawMetadataWithResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil || message != "AddTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	metadata, ok := top["metadata"]
+	if !ok || string(metadata) == "null" {
+		return data, nil
+	}
+	var metadataObject map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &metadataObject); err != nil {
+		return data, nil
+	}
+	top["metadata"] = []byte(`{}`)
+	return json.Marshal(top)
+}
+
 func speechmaticsRawResultHasReferenceContent(data []byte) (bool, bool) {
 	var result map[string]json.RawMessage
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -1721,6 +1750,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	data, err = speechmaticsNormalizeFalseyRawResults(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizeFinalRawMetadataWithResults(data)
 	if err != nil {
 		return err
 	}
