@@ -6256,6 +6256,39 @@ func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *t
 	}
 }
 
+func TestAgentActivityEOUEmitsFinalTranscriptBeforeReply(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	events := make([]string, 0, 3)
+	session.On("user_input_transcribed", func(Event) { events = append(events, "transcript") })
+	session.On("conversation_item_added", func(Event) { events = append(events, "conversation") })
+	session.On("speech_created", func(Event) { events = append(events, "reply") })
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "order this turn", Confidence: 0.9}},
+	})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+
+	want := []string{"transcript", "conversation", "reply"}
+	if len(events) != len(want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("events = %#v, want %#v", events, want)
+		}
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationSchedulesMatchingFinalTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD

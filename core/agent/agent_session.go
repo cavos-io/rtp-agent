@@ -1652,6 +1652,27 @@ func (s *AgentSession) insertChatItem(item llm.ChatItem) {
 	s.ChatCtx.Insert(item)
 }
 
+func (s *AgentSession) hasChatItem(item llm.ChatItem) bool {
+	if s == nil || item == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.ChatCtx == nil {
+		return false
+	}
+	for _, existing := range s.ChatCtx.Items {
+		if existing == item {
+			return true
+		}
+		if item.GetID() != "" && existing.GetID() == item.GetID() && existing.GetType() == item.GetType() {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecutedEvent {
 	return s.functionToolsExecutedEvents()
 }
@@ -2713,6 +2734,10 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if userMessage != nil && handle.Generation.UserMessage == nil {
 		handle.Generation.UserMessage = userMessage
 	}
+	userMessageCommitted := false
+	if userMessage != nil {
+		userMessageCommitted = s.hasChatItem(userMessage)
+	}
 
 	scheduleSpeech := true
 	if opts.ScheduleSpeech != nil {
@@ -2726,7 +2751,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return nil, err
 	}
-	if userMessage != nil {
+	if userMessage != nil && !userMessageCommitted {
 		s.EmitConversationItemAdded(userMessage)
 	}
 	s.watchActiveRunSpeechHandle(handle)
