@@ -361,19 +361,34 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if r == '.' && nvidiaTTSProtectedPhD(trimmed, i) {
 				continue
 			}
-			if trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
+			boundaryEnd, quoted := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if !quoted && trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
 				continue
 			}
-			if len(strings.TrimSpace(trimmed[:next])) >= 20 && strings.TrimSpace(trimmed[next:]) != "" {
-				return strings.TrimSpace(trimmed[:next]), strings.TrimSpace(trimmed[next:]), true
+			if len(strings.TrimSpace(trimmed[:boundaryEnd])) >= 20 && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
 		case '。', '！', '？':
-			if len(strings.TrimSpace(trimmed[:next])) >= 20 && strings.TrimSpace(trimmed[next:]) != "" {
-				return strings.TrimSpace(trimmed[:next]), strings.TrimSpace(trimmed[next:]), true
+			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if len(strings.TrimSpace(trimmed[:boundaryEnd])) >= 20 && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
 		}
 	}
 	return "", "", false
+}
+
+func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
+	if next >= len(text) {
+		return next, false
+	}
+	if text[next] == '"' {
+		return next + 1, true
+	}
+	if strings.HasPrefix(text[next:], "”") {
+		return next + len("”"), true
+	}
+	return next, false
 }
 
 func nvidiaTTSProtectedAbbreviation(prefix string) bool {
