@@ -2614,7 +2614,16 @@ func speechmaticsConfiguredSpeakerFiltered(speakerID string, state *speechmatics
 }
 
 func speechmaticsSystemSpeakerID(speakerID string) bool {
-	return len(speakerID) > 4 && strings.HasPrefix(speakerID, "__") && strings.HasSuffix(speakerID, "__")
+	if len(speakerID) < 6 || !strings.HasPrefix(speakerID, "__") || !strings.HasSuffix(speakerID, "__") {
+		return false
+	}
+	for _, r := range speakerID[2 : len(speakerID)-2] {
+		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func speechmaticsStringInSlice(value string, values []string) bool {

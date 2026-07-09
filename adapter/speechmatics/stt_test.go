@@ -5165,11 +5165,14 @@ func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceFallbackVADPenalty
 }
 
 func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
-	if !speechmaticsSystemSpeakerID("__assistant__") {
-		t.Fatal("lowercase wrapped speaker was not classified as reference system speaker")
+	if !speechmaticsSystemSpeakerID("__ASSISTANT__") {
+		t.Fatal("uppercase wrapped speaker was not classified as reference system speaker")
+	}
+	if speechmaticsSystemSpeakerID("__assistant__") {
+		t.Fatal("lowercase wrapped speaker was classified as reference system speaker")
 	}
 
-	for _, speakerID := range []string{"__ASSISTANT__", "__assistant__", "__Assistant__", "__a__", "__A1__", "__A_B__"} {
+	for _, speakerID := range []string{"__ASSISTANT__", "__A1__", "__A_B__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
@@ -5196,7 +5199,7 @@ func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *t
 }
 
 func TestSpeechmaticsSegmentEventsKeepReferenceNonWrappedSpeakerLabels(t *testing.T) {
-	for _, speakerID := range []string{"__", "__A", "A__", "_assistant_"} {
+	for _, speakerID := range []string{"__", "__A", "A__", "_assistant_", "__assistant__", "__Assistant__", "__a__", "__A-__"} {
 		t.Run(speakerID, func(t *testing.T) {
 			resp := smResponse{Message: "AddSegment"}
 			resp.Segments = append(resp.Segments, struct {
