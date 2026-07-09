@@ -3030,6 +3030,47 @@ func TestNvidiaTTSStreamStartsAcronymBeforeStarterLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamWaitsForIncompleteAcronymStarterLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("The office is in the U.S. He"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after incomplete acronym starter returned (%v, %v), want wait for more text", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.PushText(" left"); err != nil {
+		t.Fatalf("PushText(tail) error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after completed acronym starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after completed acronym starter")
+	}
+}
+
 func TestNvidiaTTSStreamStartsLongAcronymBoundaryLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

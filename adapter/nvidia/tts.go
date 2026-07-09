@@ -499,14 +499,22 @@ func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
-	tailFields := strings.Fields(tail)
-	if len(tailFields) == 0 {
+	trimmed := strings.TrimLeft(tail, " \t\n\r")
+	if trimmed == "" {
 		return false
 	}
-	switch tailFields[0] {
-	case "Mr", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Wherever":
-		return true
-	default:
-		return false
+	for _, starter := range []string{"Mr", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt", "Wherever"} {
+		if strings.HasPrefix(trimmed, starter) {
+			return true
+		}
 	}
+	for _, starter := range []string{"He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This"} {
+		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
+			switch trimmed[len(starter)] {
+			case ' ', '\t', '\n', '\r':
+				return true
+			}
+		}
+	}
+	return false
 }
