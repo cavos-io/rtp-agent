@@ -230,6 +230,68 @@ func TestSpeechmaticsRealtimeSessionReconnectsAfterProviderClose(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionReconnectReplaysTools(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	dialCount := atomic.Int32{}
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newSpeechmaticsRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		dial := dialCount.Add(1)
+		var initial map[string]any
+		if err := conn.ReadJSON(&initial); err != nil {
+			t.Errorf("ReadJSON initial message error = %v", err)
+			return
+		}
+		messages <- initial
+		var tools map[string]any
+		if err := conn.ReadJSON(&tools); err != nil {
+			t.Errorf("ReadJSON tools message error = %v", err)
+			return
+		}
+		messages <- tools
+		if dial == 1 {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "recycle"), time.Now().Add(time.Second))
+			_ = conn.Close()
+			return
+		}
+		<-releaseSecond
+	})
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(dialer),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	first := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if first["type"] != "session.create" {
+		t.Fatalf("first initial = %#v, want session.create", first)
+	}
+	if err := session.UpdateTools([]llm.Tool{speechmaticsRealtimeTestTool{
+		name:        "lookup_weather",
+		description: "look up weather",
+		parameters:  map[string]any{"type": "object"},
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	firstTools := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	assertSpeechmaticsRealtimeToolsUpdate(t, firstTools, "lookup_weather")
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	second := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	if second["type"] != "session.create" {
+		t.Fatalf("reconnect initial = %#v, want session.create", second)
+	}
+	replayedTools := assertSpeechmaticsRealtimeOutboundJSON(t, messages)
+	assertSpeechmaticsRealtimeToolsUpdate(t, replayedTools, "lookup_weather")
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -912,6 +974,31 @@ func assertSpeechmaticsRealtimeOutboundJSON(t *testing.T, ch <-chan map[string]a
 		t.Fatal("timed out waiting for websocket message")
 	}
 	return nil
+}
+
+func assertSpeechmaticsRealtimeToolsUpdate(t *testing.T, message map[string]any, wantName string) {
+	t.Helper()
+	if message["type"] != "session.update" {
+		t.Fatalf("tools message type = %#v, want session.update in %#v", message["type"], message)
+	}
+	tools, ok := message["tools"].([]any)
+	if !ok {
+		typedTools, typedOK := message["tools"].([]map[string]any)
+		if !typedOK {
+			t.Fatalf("tools = %#v, want tool list", message["tools"])
+		}
+		tools = make([]any, 0, len(typedTools))
+		for _, tool := range typedTools {
+			tools = append(tools, tool)
+		}
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(tools))
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok || tool["name"] != wantName {
+		t.Fatalf("tool = %#v, want %s", tools[0], wantName)
+	}
 }
 
 func newSpeechmaticsRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) SpeechmaticsRealtimeWebsocketDialer {

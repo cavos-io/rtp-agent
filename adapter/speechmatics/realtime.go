@@ -295,6 +295,7 @@ type speechmaticsRealtimeSession struct {
 	model            string
 	voice            string
 	instructions     string
+	tools            []map[string]any
 	inputSampleRate  int
 	outputSampleRate int
 	dialWebsocket    SpeechmaticsRealtimeWebsocketDialer
@@ -379,6 +380,9 @@ func (s *speechmaticsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.tools = cloneSpeechmaticsRealtimeTools(payload)
+	s.mu.Unlock()
 	return s.enqueueCommand(map[string]any{
 		"type":  "session.update",
 		"tools": payload,
@@ -631,6 +635,20 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 		_ = s.Close()
 		return
 	}
+	for _, command := range s.reconnectSessionCommands() {
+		if err := conn.WriteJSON(command); err != nil {
+			s.mu.Lock()
+			s.reconnecting = false
+			s.mu.Unlock()
+			_ = conn.Close()
+			s.emitRealtimeEvent(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to restore Speechmatics realtime session: %v", err)),
+			})
+			_ = s.Close()
+			return
+		}
+	}
 
 	s.mu.Lock()
 	s.conn = conn
@@ -645,6 +663,18 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 	})
 }
 
+func (s *speechmaticsRealtimeSession) reconnectSessionCommands() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tools) == 0 {
+		return nil
+	}
+	return []map[string]any{{
+		"type":  "session.update",
+		"tools": cloneSpeechmaticsRealtimeTools(s.tools),
+	}}
+}
+
 func (s *speechmaticsRealtimeSession) sessionCreateCommand() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -656,6 +686,21 @@ func (s *speechmaticsRealtimeSession) sessionCreateCommand() map[string]any {
 		"input_sample_rate":  s.inputSampleRate,
 		"output_sample_rate": s.outputSampleRate,
 	}
+}
+
+func cloneSpeechmaticsRealtimeTools(tools []map[string]any) []map[string]any {
+	if tools == nil {
+		return nil
+	}
+	cloned := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		next := make(map[string]any, len(tool))
+		for key, value := range tool {
+			next[key] = value
+		}
+		cloned = append(cloned, next)
+	}
+	return cloned
 }
 
 func (s *speechmaticsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
