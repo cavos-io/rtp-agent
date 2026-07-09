@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -21,6 +22,81 @@ func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	}
 	if PluginPackage != "rtp-agent.plugins.nvidia" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.nvidia", PluginPackage)
+	}
+}
+
+func TestNvidiaRealtimeDefaultsMatchReference(t *testing.T) {
+	t.Setenv("PERSONAPLEX_URL", "")
+
+	model := NewNvidiaRealtimeModel()
+
+	if got, want := model.Model(), "personaplex-7b"; got != want {
+		t.Fatalf("Model() = %q, want %q", got, want)
+	}
+	if got, want := model.Provider(), "nvidia"; got != want {
+		t.Fatalf("Provider() = %q, want %q", got, want)
+	}
+	if got, want := model.Label(), "personaplex-NATF2"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := model.baseURL, "localhost:8998"; got != want {
+		t.Fatalf("baseURL = %q, want %q", got, want)
+	}
+	if got, want := model.voice, "NATF2"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := model.textPrompt, "You are a helpful assistant."; got != want {
+		t.Fatalf("textPrompt = %q, want %q", got, want)
+	}
+	if model.seed != nil {
+		t.Fatalf("seed = %v, want nil", *model.seed)
+	}
+	if got, want := model.silenceThresholdMS, 500; got != want {
+		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
+	}
+	if model.useSSL {
+		t.Fatal("useSSL = true, want false for reference localhost default")
+	}
+	caps := model.Capabilities()
+	if caps.MessageTruncation || caps.TurnDetection || caps.UserTranscription || caps.AutoToolReplyGeneration || !caps.AudioOutput || caps.ManualFunctionCalls || caps.PerResponseToolChoice {
+		t.Fatalf("Capabilities() = %+v, want PersonaPlex reference audio-output-only realtime flags", caps)
+	}
+	var realtime llm.RealtimeModel = model
+	if err := realtime.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestNvidiaRealtimeOptionsMatchReference(t *testing.T) {
+	seed := 42
+	model := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("wss://personaplex.example:9443"),
+		WithNvidiaRealtimeVoice("VARF1"),
+		WithNvidiaRealtimeTextPrompt("Speak tersely."),
+		WithNvidiaRealtimeSeed(seed),
+		WithNvidiaRealtimeSilenceThresholdMS(750),
+	)
+
+	if got, want := model.baseURL, "personaplex.example:9443"; got != want {
+		t.Fatalf("baseURL = %q, want stripped host %q", got, want)
+	}
+	if !model.useSSL {
+		t.Fatal("useSSL = false, want true for wss URL")
+	}
+	if got, want := model.voice, "VARF1"; got != want {
+		t.Fatalf("voice = %q, want %q", got, want)
+	}
+	if got, want := model.textPrompt, "Speak tersely."; got != want {
+		t.Fatalf("textPrompt = %q, want %q", got, want)
+	}
+	if model.seed == nil || *model.seed != seed {
+		t.Fatalf("seed = %v, want %d", model.seed, seed)
+	}
+	if got, want := model.silenceThresholdMS, 750; got != want {
+		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
+	}
+	if _, err := model.Session(); err == nil || !strings.Contains(err.Error(), "personaplex realtime session is not implemented") {
+		t.Fatalf("Session() error = %v, want explicit unsupported realtime session error", err)
 	}
 }
 
