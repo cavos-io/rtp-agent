@@ -441,6 +441,37 @@ func TestNvidiaRealtimeFinalizeClearsCurrentGenerationLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaRealtimeTextDeltasDoNotBlockBeforeConsumerLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 64; i++ {
+			concrete.handleTextToken("x")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("handleTextToken blocked with unread deltas, want reference unbounded stream behavior")
+	}
+}
+
 func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()

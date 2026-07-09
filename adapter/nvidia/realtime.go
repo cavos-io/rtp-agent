@@ -27,6 +27,7 @@ const (
 	defaultNvidiaRealtimeSampleRate         = 24000
 	defaultNvidiaRealtimeNumChannels        = 1
 	defaultNvidiaRealtimeInputChunkSamples  = 1920
+	nvidiaRealtimeGenerationStreamBuffer    = 1024
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
 	nvidiaRealtimeMsgHandshake              = 0x00
 	nvidiaRealtimeMsgAudio                  = 0x01
@@ -519,9 +520,9 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 1),
-		textCh:       make(chan string, 16),
-		timedTextCh:  make(chan llm.RealtimeTimedText, 16),
-		audioCh:      make(chan *model.AudioFrame, 16),
+		textCh:       make(chan string, nvidiaRealtimeGenerationStreamBuffer),
+		timedTextCh:  make(chan llm.RealtimeTimedText, nvidiaRealtimeGenerationStreamBuffer),
+		audioCh:      make(chan *model.AudioFrame, nvidiaRealtimeGenerationStreamBuffer),
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
