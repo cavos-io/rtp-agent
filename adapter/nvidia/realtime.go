@@ -32,9 +32,9 @@ type NvidiaRealtimeModel struct {
 }
 
 type nvidiaRealtimeSession struct {
-	model  *NvidiaRealtimeModel
-	events chan llm.RealtimeEvent
-	closed bool
+	textPrompt string
+	events     chan llm.RealtimeEvent
+	closed     bool
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -156,8 +156,8 @@ func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 
 func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 	return &nvidiaRealtimeSession{
-		model:  m,
-		events: make(chan llm.RealtimeEvent),
+		textPrompt: m.textPrompt,
+		events:     make(chan llm.RealtimeEvent),
 	}, nil
 }
 
@@ -169,7 +169,7 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	if s.closed {
 		return nil
 	}
-	s.model.textPrompt = instructions
+	s.textPrompt = instructions
 	return nil
 }
 

@@ -120,8 +120,15 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if err := session.UpdateInstructions("new prompt"); err != nil {
 		t.Fatalf("UpdateInstructions() error = %v", err)
 	}
-	if got, want := realtimeModel.textPrompt, "new prompt"; got != want {
-		t.Fatalf("textPrompt = %q, want %q", got, want)
+	if got, want := realtimeModel.textPrompt, "old prompt"; got != want {
+		t.Fatalf("model textPrompt = %q, want unchanged reference prompt %q", got, want)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+	if got, want := concrete.textPrompt, "new prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want %q", got, want)
 	}
 	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
