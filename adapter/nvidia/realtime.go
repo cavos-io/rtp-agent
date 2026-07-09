@@ -369,6 +369,10 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	s.textPrompt = instructions
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
+	s.events.send(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
 	return nil
 }
 

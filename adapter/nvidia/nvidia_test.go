@@ -137,6 +137,9 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := concrete.textPrompt, "new prompt"; got != want {
 		t.Fatalf("session textPrompt = %q, want %q", got, want)
 	}
+	if ev := <-session.EventCh(); ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+		t.Fatalf("instruction update event = %+v, want session_reconnected", ev)
+	}
 	if got, want := concrete.voice, "VARF1"; got != want {
 		t.Fatalf("session voice = %q, want reference snapshot %q", got, want)
 	}
@@ -725,6 +728,34 @@ func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *tes
 	}
 	if _, ok := <-msg.TextCh; ok {
 		t.Fatal("TextCh open after instruction update, want closed")
+	}
+}
+
+func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got, want := concrete.textPrompt, "new prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want %q", got, want)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("event after instruction update = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for session_reconnected after instruction update")
 	}
 }
 
