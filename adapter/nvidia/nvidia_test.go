@@ -3191,6 +3191,51 @@ func TestNvidiaTTSStreamStartsBracketedSentenceBeforeFlushLikeReference(t *testi
 	}
 }
 
+func TestNvidiaTTSStreamStartsStackedClosingSentenceBeforeFlushLikeReference(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "quoted parenthesis", text: "Please read (\"Long enough sentence.\") Next starts now"},
+		{name: "quoted bracket", text: "Please read [\"Long enough sentence.\"] Next starts now"},
+		{name: "curly quote parenthesis", text: "Please read “Long enough sentence.”) Next starts now"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tt.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after stacked closing punctuation, want completed sentence boundary")
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after stacked closing sentence before Flush")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsEllipsisBeforeCapitalLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
@@ -3834,6 +3879,198 @@ func TestNvidiaTTSStreamStartsClosedSuffixBeforeStarterLikeReference(t *testing.
 	}
 }
 
+func TestNvidiaTTSStreamStartsQuotedStarterAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "ascii_quote", text: "Please contact Foo Inc. \"Next follows now\""},
+		{name: "curly_single_quote", text: "Please contact Foo Inc. ‘Next follows now’"},
+		{name: "curly_double_quote", text: "Please contact Foo Inc. “Next follows now”"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after quoted starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix quoted starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsOpenedStarterAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "paren", text: "Please contact Foo Inc. (Next follows now)"},
+		{name: "bracket", text: "Please contact Foo Inc. [Next follows now]"},
+		{name: "brace", text: "Please contact Foo Inc. {Next follows now}"},
+		{name: "dash", text: "Please contact Foo Inc. - Next follows now"},
+		{name: "emdash", text: "Please contact Foo Inc. — Next follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after opened starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix opened starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsMarkedStarterAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "hash", text: "Please contact Foo Inc. # Next follows now"},
+		{name: "asterisk", text: "Please contact Foo Inc. * Next follows now"},
+		{name: "bullet", text: "Please contact Foo Inc. • Next follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after marked starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix marked starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsSymbolStarterAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "slash", text: "Please contact Foo Inc. / Next follows now"},
+		{name: "backslash", text: "Please contact Foo Inc. \\ Next follows now"},
+		{name: "at", text: "Please contact Foo Inc. @ Next follows now"},
+		{name: "ampersand", text: "Please contact Foo Inc. & Next follows now"},
+		{name: "percent", text: "Please contact Foo Inc. % Next follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after symbol starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix symbol starter boundary")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsCommonStartersAfterSuffixLikeReference(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -4097,6 +4334,321 @@ func TestNvidiaTTSStreamStartsConjunctionStartersAfterSuffixLikeReference(t *tes
 			case <-done:
 			case <-time.After(200 * time.Millisecond):
 				t.Fatal("Next() did not start after suffix conjunction starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsAuxiliaryStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "Will", text: "Please contact Foo Inc. Will follows now"},
+		{name: "Have", text: "Please contact Foo Inc. Have follows now"},
+		{name: "Had", text: "Please contact Foo Inc. Had follows now"},
+		{name: "Did", text: "Please contact Foo Inc. Did follows now"},
+		{name: "Does", text: "Please contact Foo Inc. Does follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after auxiliary starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix auxiliary starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsContractedStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "we_will", text: "Please contact Foo Inc. We'll follow now"},
+		{name: "we_curly_will", text: "Please contact Foo Inc. We’ll follow now"},
+		{name: "you_will", text: "Please contact Foo Inc. You'll follow now"},
+		{name: "you_curly_will", text: "Please contact Foo Inc. You’ll follow now"},
+		{name: "i_will", text: "Please contact Foo Inc. I'll follow now"},
+		{name: "i_curly_will", text: "Please contact Foo Inc. I’ll follow now"},
+		{name: "i_would", text: "Please contact Foo Inc. I'd follow now"},
+		{name: "i_have", text: "Please contact Foo Inc. I've follow now"},
+		{name: "i_am", text: "Please contact Foo Inc. I'm follow now"},
+		{name: "it_is", text: "Please contact Foo Inc. It's follow now"},
+		{name: "that_is", text: "Please contact Foo Inc. That's follow now"},
+		{name: "there_is", text: "Please contact Foo Inc. There's follow now"},
+		{name: "they_are", text: "Please contact Foo Inc. They're follow now"},
+		{name: "we_have", text: "Please contact Foo Inc. We've follow now"},
+		{name: "you_are", text: "Please contact Foo Inc. You're follow now"},
+		{name: "we_are", text: "Please contact Foo Inc. We're follow now"},
+		{name: "can_not", text: "Please contact Foo Inc. Can't follow now"},
+		{name: "let_us", text: "Please contact Foo Inc. Let's follow now"},
+		{name: "do_not", text: "Please contact Foo Inc. Don't follow now"},
+		{name: "do_curly_not", text: "Please contact Foo Inc. Don’t follow now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after contracted starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix contracted starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsDeterminerStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "A", text: "Please contact Foo Inc. A follow-up arrives now"},
+		{name: "The", text: "Please contact Foo Inc. The update arrives now"},
+		{name: "My", text: "Please contact Foo Inc. My update arrives now"},
+		{name: "Your", text: "Please contact Foo Inc. Your update arrives now"},
+		{name: "His", text: "Please contact Foo Inc. His update arrives now"},
+		{name: "Her", text: "Please contact Foo Inc. Her update arrives now"},
+		{name: "Its", text: "Please contact Foo Inc. Its update arrives now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after determiner starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix determiner starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsQuestionStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "What", text: "Please contact Foo Inc. What follows now"},
+		{name: "Who", text: "Please contact Foo Inc. Who follows now"},
+		{name: "Which", text: "Please contact Foo Inc. Which follows now"},
+		{name: "How", text: "Please contact Foo Inc. How follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after question starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix question starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsPrepositionStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "About", text: "Please contact Foo Inc. About follows now"},
+		{name: "Over", text: "Please contact Foo Inc. Over follows now"},
+		{name: "Under", text: "Please contact Foo Inc. Under follows now"},
+		{name: "Through", text: "Please contact Foo Inc. Through follows now"},
+		{name: "From", text: "Please contact Foo Inc. From follows now"},
+		{name: "By", text: "Please contact Foo Inc. By follows now"},
+		{name: "With", text: "Please contact Foo Inc. With follows now"},
+		{name: "Without", text: "Please contact Foo Inc. Without follows now"},
+		{name: "During", text: "Please contact Foo Inc. During follows now"},
+		{name: "Until", text: "Please contact Foo Inc. Until follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after preposition starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix preposition starter boundary")
+			}
+		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsClauseStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "Though", text: "Please contact Foo Inc. Though follows now"},
+		{name: "Although", text: "Please contact Foo Inc. Although follows now"},
+		{name: "Whenever", text: "Please contact Foo Inc. Whenever follows now"},
+		{name: "Whatever", text: "Please contact Foo Inc. Whatever follows now"},
+		{name: "Whether", text: "Please contact Foo Inc. Whether follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after clause starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix clause starter boundary")
 			}
 		})
 	}
@@ -5925,6 +6477,43 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing.T) {
+	stream := &nvidiaSTTStream{language: "en-US"}
+
+	first := stream.eventsFromResponse(nvidiaSTTResponse{
+		Results: []nvidiaSTTResult{{
+			IsFinal: true,
+			Alternative: nvidiaSTTAlternative{
+				Transcript: "first utterance",
+			},
+		}},
+	})
+	if len(first) != 3 {
+		t.Fatalf("first event count = %d, want start, final, end", len(first))
+	}
+	if first[0].Type != stt.SpeechEventStartOfSpeech || first[1].Type != stt.SpeechEventFinalTranscript || first[2].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("first event types = %q, %q, %q; want start, final, end", first[0].Type, first[1].Type, first[2].Type)
+	}
+
+	second := stream.eventsFromResponse(nvidiaSTTResponse{
+		Results: []nvidiaSTTResult{{
+			IsFinal: false,
+			Alternative: nvidiaSTTAlternative{
+				Transcript: "second starts",
+			},
+		}},
+	})
+	if len(second) != 2 {
+		t.Fatalf("second event count = %d, want start + interim for new utterance", len(second))
+	}
+	if second[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("second event[0].Type = %q, want start_of_speech after prior final", second[0].Type)
+	}
+	if second[1].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("second event[1].Type = %q, want interim_transcript", second[1].Type)
+	}
+}
+
 func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
@@ -5983,7 +6572,10 @@ func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T)
 	if secondID == firstID {
 		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
 	}
-	thirdID := third[0].RequestID
+	if len(third) != 3 {
+		t.Fatalf("third event count = %d, want start, final, end after prior final", len(third))
+	}
+	thirdID := third[1].RequestID
 	if !strings.HasPrefix(thirdID, "nvidia-") {
 		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
 	}

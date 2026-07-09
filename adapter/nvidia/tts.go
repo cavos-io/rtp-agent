@@ -413,19 +413,23 @@ func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string, quoted bool) bool {
 }
 
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
-	if next >= len(text) {
-		return next, false
+	quoted := false
+	for next < len(text) {
+		if strings.HasPrefix(text[next:], "”") {
+			next += len("”")
+			continue
+		}
+		switch text[next] {
+		case '"':
+			quoted = true
+			next++
+		case '\'', ')', ']', '}', ',', ':', ';':
+			next++
+		default:
+			return next, quoted
+		}
 	}
-	if text[next] == '"' {
-		return next + 1, true
-	}
-	if strings.HasPrefix(text[next:], "”") {
-		return next + len("”"), false
-	}
-	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' || text[next] == ',' || text[next] == ':' || text[next] == ';' {
-		return next + 1, false
-	}
-	return next, false
+	return next, quoted
 }
 
 func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
@@ -549,6 +553,10 @@ func nvidiaTTSASCIITailStartsCapital(tail string) bool {
 		return false
 	}
 	trimmed := strings.TrimSpace(tail)
+	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
+	trimmed = strings.TrimLeft(trimmed, "-— ")
+	trimmed = strings.TrimLeft(trimmed, "#*• ")
+	trimmed = strings.TrimLeft(trimmed, `/\@&% `)
 	return trimmed != "" && trimmed[0] >= 'A' && trimmed[0] <= 'Z'
 }
 
@@ -592,6 +600,10 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 		return false
 	}
 	trimmed := strings.TrimLeft(tail, nvidiaTTSWhitespaceCutset)
+	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
+	trimmed = strings.TrimLeft(trimmed, "-— ")
+	trimmed = strings.TrimLeft(trimmed, "#*• ")
+	trimmed = strings.TrimLeft(trimmed, `/\@&% `)
 	if trimmed == "" {
 		return false
 	}
@@ -600,7 +612,12 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "No", "Not", "If", "As", "For", "On", "In", "At", "To", "Why", "When", "Where", "Also", "Then", "Let", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please", "Should", "Now", "Today", "After", "Before", "Because", "Since", "While", "Once", "Maybe", "Yes", "First", "Second", "Finally", "Take", "Go", "And", "Or", "Yet", "Still", "Instead", "Meanwhile", "Later", "Soon", "There", "Here", "These", "Those", "Another", "Any", "Some", "All", "Each", "Every", "Most", "Many", "Much", "Several", "Both", "Neither", "One", "Two", "Three", "Last", "Previous", "New", "Only", "Other", "More"} {
+	for _, starter := range []string{"I'd", "I've", "I'm", "It's", "That's", "There's", "They're", "We've", "You're", "We're", "Can't", "Let's", "We'll", "We’ll", "You'll", "You’ll", "I'll", "I’ll", "Don't", "Don’t"} {
+		if strings.HasPrefix(trimmed, starter) {
+			return true
+		}
+	}
+	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "No", "Not", "If", "As", "For", "On", "In", "At", "To", "Why", "When", "Where", "Also", "Then", "Let", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please", "Should", "Now", "Today", "After", "Before", "Because", "Since", "While", "Once", "Maybe", "Yes", "First", "Second", "Finally", "Take", "Go", "And", "Or", "Yet", "Still", "Instead", "Meanwhile", "Later", "Soon", "There", "Here", "These", "Those", "Another", "Any", "Some", "All", "Each", "Every", "Most", "Many", "Much", "Several", "Both", "Neither", "One", "Two", "Three", "Last", "Previous", "New", "Only", "Other", "More", "Will", "Have", "Had", "Did", "Does", "A", "The", "My", "Your", "His", "Her", "Its", "What", "Who", "Which", "How", "About", "Over", "Under", "Through", "From", "By", "With", "Without", "During", "Until", "Though", "Although", "Whenever", "Whatever", "Whether"} {
 		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
 			switch trimmed[len(starter)] {
 			case ' ', '\t', '\n', '\r':
