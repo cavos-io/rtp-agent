@@ -1112,6 +1112,30 @@ func TestSpeechmaticsEventsRawFinalIgnoresReferenceMalformedMetadataWithResults(
 	}
 }
 
+func TestSpeechmaticsEventsRawPartialIgnoresReferenceUnusedMetadataWithResults(t *testing.T) {
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"metadata":{"transcript":123,"start_time":"bad","end_time":true},
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"soon","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript = %v, want reference to ignore unused partial metadata when results exist", err)
+	}
+
+	events := speechmaticsEvents(partial, &speechmaticsStreamState{includePartials: true})
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("events = %#v, want one interim transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "soon" {
+		t.Fatalf("text = %q, want soon", got)
+	}
+}
+
 func TestSpeechmaticsEventsRawPartialAfterFinalTrimsReferenceDuplicate(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
 	var final smResponse

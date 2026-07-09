@@ -1677,6 +1677,52 @@ func speechmaticsNormalizeFinalRawMetadataWithResults(data []byte) ([]byte, erro
 	return json.Marshal(top)
 }
 
+func speechmaticsNormalizePartialRawMetadataWithResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil || message != "AddPartialTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	metadata, ok := top["metadata"]
+	if !ok || string(metadata) == "null" {
+		return data, nil
+	}
+	var metadataObject map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &metadataObject); err != nil {
+		return data, nil
+	}
+	normalized := map[string]json.RawMessage{}
+	if endTime, ok := metadataObject["end_time"]; ok {
+		var boolValue bool
+		if err := json.Unmarshal(endTime, &boolValue); err == nil {
+			if boolValue {
+				normalized["end_time"] = []byte(`1`)
+			} else {
+				normalized["end_time"] = []byte(`0`)
+			}
+		} else {
+			normalized["end_time"] = endTime
+		}
+	}
+	metadataData, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	top["metadata"] = metadataData
+	return json.Marshal(top)
+}
+
 func speechmaticsRawResultHasReferenceContent(data []byte) (bool, bool) {
 	var result map[string]json.RawMessage
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -1754,6 +1800,10 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	data, err = speechmaticsNormalizeFinalRawMetadataWithResults(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizePartialRawMetadataWithResults(data)
 	if err != nil {
 		return err
 	}
