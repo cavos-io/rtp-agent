@@ -6266,6 +6266,57 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartClearsReferenceEndpointTiming(t *te
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADCutoffIgnoresReferenceLateEndpointEvidence(t *testing.T) {
+	state := &speechmaticsStreamState{audioSecondsSent: 1.0, includePartials: true}
+	stream := &speechmaticsSTTStream{state: state}
+	stream.recordVADEndLatency(&vad.VADEvent{Timestamp: 0.8})
+
+	var late smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"late",
+			"language":"en",
+			"speaker_id":"agent",
+			"is_active":true,
+			"annotation":["ends_with_final","ends_with_eos"],
+			"metadata":{"start_time":0.4,"end_time":0.8}
+		}]
+	}`), &late); err != nil {
+		t.Fatalf("unmarshal late segment: %v", err)
+	}
+
+	events := speechmaticsEvents(late, state)
+	if len(events) != 1 || events[0].Alternatives[0].Text != "late" {
+		t.Fatalf("events = %#v, want transcript still emitted", events)
+	}
+	if state.latestSegmentAnnotationSet {
+		t.Fatalf("latest endpoint annotation = %#v, want late transcript before cutoff ignored", state.latestSegmentAnnotation)
+	}
+	if state.latestSegmentEndTimeSet {
+		t.Fatalf("latest endpoint end time = %v, want late transcript before cutoff ignored", state.latestSegmentEndTime)
+	}
+
+	var fresh smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"fresh",
+			"language":"en",
+			"speaker_id":"agent",
+			"is_active":true,
+			"annotation":["ends_with_final"],
+			"metadata":{"start_time":0.8,"end_time":0.95}
+		}]
+	}`), &fresh); err != nil {
+		t.Fatalf("unmarshal fresh segment: %v", err)
+	}
+	_ = speechmaticsEvents(fresh, state)
+	if !state.latestSegmentAnnotationSet || state.latestSegmentEndTime != 0.95 {
+		t.Fatalf("fresh endpoint evidence = (%v, %v), want recorded after cutoff", state.latestSegmentAnnotationSet, state.latestSegmentEndTime)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMinimumDelay(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdaptiveTurnDetection(),

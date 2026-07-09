@@ -1061,6 +1061,8 @@ type speechmaticsStreamState struct {
 	latestSegmentAnnotation    []string
 	latestSegmentEndTimeSet    bool
 	latestSegmentEndTime       float64
+	smartTurnCutoffSet         bool
+	smartTurnCutoff            float64
 }
 
 type smAlternative struct {
@@ -2622,6 +2624,10 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	if state == nil || len(fragments) == 0 {
 		return
 	}
+	endTime := fragments[len(fragments)-1].endTime - speechmaticsStartTimeOffset(state)
+	if !speechmaticsShouldRecordEndpointingEvidence(state, endTime) {
+		return
+	}
 	var annotations []string
 	if eventType == stt.SpeechEventFinalTranscript {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithFinal)
@@ -2634,7 +2640,7 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
 	state.latestSegmentEndTimeSet = true
-	state.latestSegmentEndTime = fragments[len(fragments)-1].endTime - speechmaticsStartTimeOffset(state)
+	state.latestSegmentEndTime = endTime
 }
 
 func speechmaticsAppendRawDisfluencyAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
@@ -2917,10 +2923,17 @@ func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, a
 	if state == nil || !active {
 		return
 	}
+	if !speechmaticsShouldRecordEndpointingEvidence(state, endTime) {
+		return
+	}
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
 	state.latestSegmentEndTimeSet = true
 	state.latestSegmentEndTime = endTime
+}
+
+func speechmaticsShouldRecordEndpointingEvidence(state *speechmaticsStreamState, endTime float64) bool {
+	return state == nil || !state.smartTurnCutoffSet || endTime > state.smartTurnCutoff
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
@@ -3742,7 +3755,12 @@ func (s *speechmaticsSTTStream) recordVADEndLatency(event *corevad.VADEvent) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state == nil || s.state.audioSecondsSent <= event.Timestamp {
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.smartTurnCutoffSet = true
+	s.state.smartTurnCutoff = event.Timestamp
+	if s.state.audioSecondsSent <= event.Timestamp {
 		s.lastSpeakEndLatency = 0
 		return
 	}
@@ -3877,6 +3895,8 @@ func speechmaticsClearLatestEndpointingAnnotation(state *speechmaticsStreamState
 	state.latestSegmentAnnotation = nil
 	state.latestSegmentEndTimeSet = false
 	state.latestSegmentEndTime = 0
+	state.smartTurnCutoffSet = false
+	state.smartTurnCutoff = 0
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
