@@ -422,7 +422,7 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 	if strings.HasPrefix(text[next:], "”") {
 		return next + len("”"), false
 	}
-	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' {
+	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' || text[next] == ',' || text[next] == ':' || text[next] == ';' {
 		return next + 1, false
 	}
 	return next, false
@@ -485,7 +485,9 @@ func nvidiaTTSProtectedAbbreviation(prefix string, tail string) bool {
 		return false
 	}
 	switch fields[len(fields)-1] {
-	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt":
+	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt",
+		"Adm", "Col", "Gen", "Gov", "Maj", "Pres", "Rep", "Rev", "Sen", "Sgt",
+		"Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Sept", "Oct", "Nov", "Dec":
 		return !nvidiaTTSTailStartsSentence(tail)
 	default:
 		return false
@@ -558,6 +560,20 @@ func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
+	for _, suffix := range []string{"appt", "approx", "dept", "est", "etc", "fig", "misc", "pp", "ref", "sec", "vol", "vs"} {
+		start := dot - len(suffix)
+		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
+			continue
+		}
+		return !nvidiaTTSTailStartsSentence(tail)
+	}
+	for _, suffix := range []string{"Assoc", "Asst", "Atty", "Ave", "Blvd", "Ch", "Dept", "Dir", "Esq", "Fig", "Hon", "Hosp", "Med", "Mgr", "Mt", "No", "Ref", "Sec", "Supt", "Vol"} {
+		start := dot - len(suffix)
+		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
+			continue
+		}
+		return !nvidiaTTSTailStartsSentence(tail)
+	}
 	return false
 }
 
@@ -571,6 +587,7 @@ func nvidiaTTSASCIIWhitespace(b byte) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
+	tail = strings.TrimLeft(tail, "\"',:;)]}”")
 	if tail == "" || !nvidiaTTSASCIIWhitespace(tail[0]) {
 		return false
 	}
@@ -583,7 +600,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "Why", "When", "Where", "Also", "Then", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
+	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "No", "Not", "If", "As", "For", "On", "In", "At", "To", "Why", "When", "Where", "Also", "Then", "Let", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
 		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
 			switch trimmed[len(starter)] {
 			case ' ', '\t', '\n', '\r':
