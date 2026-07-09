@@ -195,6 +195,62 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	concrete.handleTextToken("hel")
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if msg.MessageID != ev.Generation.ResponseID {
+		t.Fatalf("MessageID = %q, want response id %q", msg.MessageID, ev.Generation.ResponseID)
+	}
+	modalities := <-msg.ModalitiesCh
+	if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+		t.Fatalf("modalities = %v, want [audio text]", modalities)
+	}
+	if got, want := <-msg.TextCh, "hel"; got != want {
+		t.Fatalf("text delta = %q, want %q", got, want)
+	}
+
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	concrete.handleAudioFrame(frame)
+	if got := <-msg.AudioCh; got != frame {
+		t.Fatalf("audio frame = %p, want original frame %p", got, frame)
+	}
+	concrete.handleTextToken("lo")
+	if got, want := <-msg.TextCh, "lo"; got != want {
+		t.Fatalf("second text delta = %q, want %q", got, want)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after interrupt, want closed")
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after interrupt, want closed")
+	}
+	if got, want := len(concrete.chatCtx.Items), 1; got != want {
+		t.Fatalf("chatCtx item count = %d, want assistant output appended", got)
+	}
+	if got, want := concrete.chatCtx.Items[0].GetID(), ev.Generation.ResponseID; got != want {
+		t.Fatalf("assistant item id = %q, want response id %q", got, want)
+	}
+}
+
 func TestNvidiaRealtimeAllowsZeroSilenceThresholdLikeReference(t *testing.T) {
 	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(0))
 

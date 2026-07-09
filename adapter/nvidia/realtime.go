@@ -40,7 +40,21 @@ type nvidiaRealtimeSession struct {
 	useSSL             bool
 	chatCtx            *llm.ChatContext
 	events             chan llm.RealtimeEvent
+	currentGeneration  *nvidiaRealtimeGeneration
+	generationSeq      int
 	closed             bool
+}
+
+type nvidiaRealtimeGeneration struct {
+	responseID   string
+	messageCh    chan llm.MessageGeneration
+	functionCh   chan *llm.FunctionCall
+	textCh       chan string
+	timedTextCh  chan llm.RealtimeTimedText
+	audioCh      chan *model.AudioFrame
+	modalitiesCh chan []string
+	outputText   string
+	done         bool
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -173,7 +187,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		silenceThresholdMS: m.silenceThresholdMS,
 		useSSL:             m.useSSL,
 		chatCtx:            llm.EmptyChatContext(),
-		events:             make(chan llm.RealtimeEvent),
+		events:             make(chan llm.RealtimeEvent, 16),
 	}, nil
 }
 
@@ -226,6 +240,7 @@ func (s *nvidiaRealtimeSession) Truncate(_ llm.RealtimeTruncateOptions) error {
 }
 
 func (s *nvidiaRealtimeSession) Interrupt() error {
+	s.finalizeGeneration(true)
 	return nil
 }
 
@@ -233,6 +248,7 @@ func (s *nvidiaRealtimeSession) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.finalizeGeneration(true)
 	s.closed = true
 	close(s.events)
 	return nil
@@ -260,4 +276,82 @@ func (s *nvidiaRealtimeSession) ClearAudio() error {
 
 func (s *nvidiaRealtimeSession) websocketURL() string {
 	return buildNvidiaRealtimeWebsocketURL(s.useSSL, s.baseURL, s.voice, s.textPrompt, s.seed)
+}
+
+func (s *nvidiaRealtimeSession) handleTextToken(text string) {
+	if s.closed || text == "" || isNvidiaRealtimeSpecialToken(text) {
+		return
+	}
+	generation := s.ensureGeneration()
+	generation.outputText += text
+	generation.textCh <- text
+}
+
+func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
+	if s.closed || frame == nil || len(frame.Data) == 0 {
+		return
+	}
+	generation := s.ensureGeneration()
+	generation.audioCh <- frame
+}
+
+func (s *nvidiaRealtimeSession) ensureGeneration() *nvidiaRealtimeGeneration {
+	if s.currentGeneration != nil && !s.currentGeneration.done {
+		return s.currentGeneration
+	}
+	s.generationSeq++
+	responseID := fmt.Sprintf("personaplex-turn-%d", s.generationSeq)
+	generation := &nvidiaRealtimeGeneration{
+		responseID:   responseID,
+		messageCh:    make(chan llm.MessageGeneration, 1),
+		functionCh:   make(chan *llm.FunctionCall, 1),
+		textCh:       make(chan string, 16),
+		timedTextCh:  make(chan llm.RealtimeTimedText, 16),
+		audioCh:      make(chan *model.AudioFrame, 16),
+		modalitiesCh: make(chan []string, 1),
+	}
+	generation.modalitiesCh <- []string{"audio", "text"}
+	generation.messageCh <- llm.MessageGeneration{
+		MessageID:    responseID,
+		TextCh:       generation.textCh,
+		TimedTextCh:  generation.timedTextCh,
+		AudioCh:      generation.audioCh,
+		ModalitiesCh: generation.modalitiesCh,
+	}
+	s.currentGeneration = generation
+	s.events <- llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+			ResponseID: responseID,
+		},
+	}
+	return generation
+}
+
+func (s *nvidiaRealtimeSession) finalizeGeneration(interrupted bool) {
+	generation := s.currentGeneration
+	if generation == nil || generation.done {
+		return
+	}
+	generation.done = true
+	close(generation.textCh)
+	close(generation.timedTextCh)
+	close(generation.audioCh)
+	close(generation.functionCh)
+	close(generation.messageCh)
+	close(generation.modalitiesCh)
+	if generation.outputText != "" {
+		s.chatCtx.AddMessage(llm.ChatMessageArgs{
+			ID:   generation.responseID,
+			Role: llm.ChatRoleAssistant,
+			Text: generation.outputText,
+		})
+	}
+	_ = interrupted
+}
+
+func isNvidiaRealtimeSpecialToken(text string) bool {
+	return len(text) == 1 && (text[0] == 0 || text[0] == 3)
 }
