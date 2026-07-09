@@ -82,6 +82,9 @@ const (
 	speechmaticsAnnotationVerySlowSpeaker         = "very_slow_speaker"
 	speechmaticsAnnotationSlowSpeaker             = "slow_speaker"
 	speechmaticsAnnotationSmartTurnTrue           = "smart_turn_true"
+	speechmaticsAnnotationSmartTurnFalse          = "smart_turn_false"
+	speechmaticsAnnotationSmartTurnInactive       = "smart_turn_inactive"
+	speechmaticsAnnotationVADStopped              = "vad_stopped"
 	speechmaticsAdaptiveEndsWithDisfluencyPenalty = 2.5
 	speechmaticsAdaptiveHasDisfluencyPenalty      = 1.1
 	speechmaticsAdaptiveVerySlowSpeakerPenalty    = 3.0
@@ -114,7 +117,7 @@ func speechmaticsLocalEndpointingDelayWithAnnotations(s *SpeechmaticsSTT, annota
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
 		}
-		delay *= speechmaticsAdaptiveAnnotationPenalty(annotations)
+		delay *= speechmaticsAdaptiveAnnotationPenalty(speechmaticsSmartTurnLocalVADAnnotations(annotations))
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
@@ -151,7 +154,21 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 	if speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnTrue, annotations) {
 		penalty *= speechmaticsAdaptiveSmartTurnTruePenalty
 	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationVADStopped, annotations) &&
+		speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnInactive, annotations) {
+		penalty *= speechmaticsAdaptiveVADStoppedPenalty
+	}
 	return penalty
+}
+
+func speechmaticsSmartTurnLocalVADAnnotations(annotations []string) []string {
+	if speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnTrue, annotations) ||
+		speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnFalse, annotations) {
+		return annotations
+	}
+	withVAD := cloneSpeechmaticsStringSlice(annotations)
+	withVAD = append(withVAD, speechmaticsAnnotationVADStopped, speechmaticsAnnotationSmartTurnInactive)
+	return withVAD
 }
 
 func speechmaticsRoundEndOfTurnDelay(seconds float64) float64 {
