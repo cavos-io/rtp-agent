@@ -5499,8 +5499,12 @@ func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	if got := vadStream.pushed[0]; got != frame {
-		t.Fatalf("VAD frame = %#v, want original app STT input frame", got)
+	got := vadStream.pushed[0]
+	if got == frame {
+		t.Fatal("VAD received caller frame, want Speechmatics-normalized frame")
+	}
+	if got.SampleRate != 16000 || got.SamplesPerChannel != 533 {
+		t.Fatalf("VAD frame = %+v, want Speechmatics-normalized 16 kHz frame", got)
 	}
 
 	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}

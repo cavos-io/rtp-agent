@@ -6453,8 +6453,12 @@ func TestSpeechmaticsSTTVADEndOfSpeechFinalizesReferenceExternalTurn(t *testing.
 	if err := stream.PushFrame(frame); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	if got := vadStream.pushedFrames()[0]; got != frame {
-		t.Fatalf("VAD pushed frame = %#v, want original pre-normalized frame", got)
+	got := vadStream.pushedFrames()[0]
+	if got == frame {
+		t.Fatal("VAD pushed caller frame, want reference sample-rate-normalized frame")
+	}
+	if got.SampleRate != 16000 || got.SamplesPerChannel != 533 {
+		t.Fatalf("VAD pushed frame = %+v, want normalized 16 kHz frame", got)
 	}
 
 	vadStream.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
@@ -6971,12 +6975,13 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	vadStream := newFakeSpeechmaticsVADStream()
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 3200),
-		SampleRate:        16000,
+		SampleRate:        48000,
 		NumChannels:       1,
 		SamplesPerChannel: 1600,
 	}
 	var writes [][]byte
 	stream := &speechmaticsSTTStream{
+		owner:                     NewSpeechmaticsSTT("test-key"),
 		waitForRecognitionStarted: true,
 		vadStream:                 vadStream,
 		writeBinary: func(data []byte) error {
@@ -6995,7 +7000,7 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 		t.Fatalf("PushFrame() error = %v", err)
 	}
 	if pushed := vadStream.pushedFrames(); len(pushed) != 0 {
-		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered original audio", len(pushed))
+		t.Fatalf("VAD pushed frames before RecognitionStarted = %d, want buffered normalized audio", len(pushed))
 	}
 	if len(writes) != 0 {
 		t.Fatalf("provider writes before RecognitionStarted = %d, want buffered provider audio", len(writes))
@@ -7010,8 +7015,8 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
 		t.Fatal("RecognitionStarted stopped read loop")
 	}
-	if pushed := vadStream.pushedFrames(); len(pushed) != 1 || pushed[0] != frame {
-		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want original frame", pushed)
+	if pushed := vadStream.pushedFrames(); len(pushed) != 1 || pushed[0] == frame || pushed[0].SampleRate != 16000 {
+		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want normalized buffered frame", pushed)
 	}
 	if !vadStream.isEnded() {
 		t.Fatal("VAD EndInput after RecognitionStarted = false, want drained end input after frames")
