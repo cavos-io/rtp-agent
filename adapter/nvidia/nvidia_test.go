@@ -478,6 +478,79 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
+	stream := &nvidiaSTTStream{
+		language:        "en-US",
+		startTimeOffset: 1.25,
+		stt:             &NvidiaSTT{diarization: true},
+	}
+
+	events := stream.eventsFromResult(nvidiaSTTResult{
+		IsFinal: false,
+		Alternative: nvidiaSTTAlternative{
+			Transcript: "hello",
+			Confidence: 0.7,
+			Words: []nvidiaSTTWord{{
+				Word:       "hello",
+				StartTime:  100,
+				EndTime:    340,
+				SpeakerTag: 2,
+			}},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("interim event count = %d, want start_of_speech + interim_transcript", len(events))
+	}
+	if events[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event[0].Type = %q, want start_of_speech", events[0].Type)
+	}
+	if events[1].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event[1].Type = %q, want interim_transcript", events[1].Type)
+	}
+	interim := events[1].Alternatives[0]
+	if interim.Text != "hello" || interim.Language != "en-US" || interim.Confidence != 0.7 {
+		t.Fatalf("interim speech data = %+v, want transcript/language/confidence from Riva alternative", interim)
+	}
+	if interim.SpeakerID != "" {
+		t.Fatalf("interim SpeakerID = %q, want empty until final diarization", interim.SpeakerID)
+	}
+	if interim.StartTime != 1.35 || interim.EndTime != 1.59 {
+		t.Fatalf("interim timing = (%v, %v), want seconds plus offset", interim.StartTime, interim.EndTime)
+	}
+	if len(interim.Words) != 1 || interim.Words[0].Text != "hello" || interim.Words[0].StartTime != 101.25 || interim.Words[0].EndTime != 341.25 {
+		t.Fatalf("interim words = %+v, want reference millisecond word timings plus offset", interim.Words)
+	}
+
+	events = stream.eventsFromResult(nvidiaSTTResult{
+		IsFinal: true,
+		Alternative: nvidiaSTTAlternative{
+			Transcript: "hello there",
+			Confidence: 0.9,
+			Words: []nvidiaSTTWord{
+				{Word: "hello", StartTime: 100, EndTime: 340, SpeakerTag: 2},
+				{Word: "there", StartTime: 350, EndTime: 700, SpeakerTag: 2},
+				{Word: "aside", StartTime: 710, EndTime: 900, SpeakerTag: 1},
+			},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("final event count = %d, want final_transcript + end_of_speech", len(events))
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event[0].Type = %q, want final_transcript", events[0].Type)
+	}
+	if events[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event[1].Type = %q, want end_of_speech", events[1].Type)
+	}
+	final := events[0].Alternatives[0]
+	if final.SpeakerID != "S2" {
+		t.Fatalf("final SpeakerID = %q, want majority speaker S2", final.SpeakerID)
+	}
+	if final.StartTime != 1.35 || final.EndTime != 2.15 {
+		t.Fatalf("final timing = (%v, %v), want first/last word seconds plus offset", final.StartTime, final.EndTime)
+	}
+}
+
 func TestNvidiaSTTStreamExposesReferenceTimingOffset(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
