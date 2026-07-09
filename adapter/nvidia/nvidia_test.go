@@ -2703,7 +2703,7 @@ func TestNvidiaTTSStreamDoesNotSplitInitialLikeReference(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamStartsInitialWithoutSpaceLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitInitialWithoutSpaceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2712,7 +2712,10 @@ func TestNvidiaTTSStreamStartsInitialWithoutSpaceLikeReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
 	type result struct {
 		audio *tts.SynthesizedAudio
 		err   error
@@ -2726,13 +2729,27 @@ func TestNvidiaTTSStreamStartsInitialWithoutSpaceLikeReference(t *testing.T) {
 	if err := stream.PushText("Please choose option A.Next step"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after initial without space, want reference initial protection")
+	}
+	if got, want := concrete.text, "Please choose option A.Next step"; got != want {
+		t.Fatalf("text = %q, want unsplit initial text %q", got, want)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after initial without space returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 	select {
 	case got := <-done:
 		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after initial without space = (%v, %v), want unsupported stream error", got.audio, got.err)
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after initial without reference-protected space")
+		t.Fatal("Next() did not start after Flush")
 	}
 }
 
