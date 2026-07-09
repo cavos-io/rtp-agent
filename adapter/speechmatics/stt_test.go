@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1113,12 +1114,24 @@ func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *test
 	}`), &secondFinal); err != nil {
 		t.Fatalf("unmarshal second final: %v", err)
 	}
+	var thirdFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.5,
+			"alternatives":[{"content":"there","confidence":0.7,"speaker":"S1","language":"en"}]
+		}]
+	}`), &thirdFinal); err != nil {
+		t.Fatalf("unmarshal third final: %v", err)
+	}
 	var partial smResponse
 	if err := json.Unmarshal([]byte(`{
 		"message":"AddPartialTranscript",
 		"results":[{
 			"type":"word",
-			"start_time":0.4,
+			"start_time":0.5,
 			"end_time":0.6,
 			"alternatives":[{"content":"again","confidence":0.7,"speaker":"S1","language":"en"}]
 		}]
@@ -1133,12 +1146,18 @@ func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *test
 	if events := speechmaticsEvents(secondFinal, state); len(events) != 0 {
 		t.Fatalf("second final events before following partial = %#v, want buffered final", events)
 	}
+	if events := speechmaticsEvents(thirdFinal, state); len(events) != 0 {
+		t.Fatalf("third final events before following partial = %#v, want buffered final", events)
+	}
 	events := speechmaticsEvents(partial, state)
 	if len(events) != 2 {
 		t.Fatalf("events after following partial = %#v, want merged final then partial", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello world" {
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello world there" {
 		t.Fatalf("first event = %#v, want merged final transcript", events[0])
+	}
+	if got, want := events[0].Alternatives[0].Confidence, 0.8; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("merged confidence = %.3f, want reference fragment mean %.3f", got, want)
 	}
 	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "again" {
 		t.Fatalf("second event = %#v, want following interim transcript", events[1])

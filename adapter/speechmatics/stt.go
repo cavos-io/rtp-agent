@@ -2316,12 +2316,21 @@ func speechmaticsMergeTranscriptEvent(left, right *stt.SpeechEvent, delimiter st
 		leftAlt.Text += delimiter + rightAlt.Text
 	}
 	leftAlt.EndTime = rightAlt.EndTime
+	leftCount := speechmaticsTranscriptConfidenceWeight(*leftAlt)
+	rightCount := speechmaticsTranscriptConfidenceWeight(rightAlt)
 	leftAlt.Words = append(leftAlt.Words, rightAlt.Words...)
 	if leftAlt.Confidence == 0 {
 		leftAlt.Confidence = rightAlt.Confidence
 	} else if rightAlt.Confidence != 0 {
-		leftAlt.Confidence = (leftAlt.Confidence + rightAlt.Confidence) / 2
+		leftAlt.Confidence = (leftAlt.Confidence*float64(leftCount) + rightAlt.Confidence*float64(rightCount)) / float64(leftCount+rightCount)
 	}
+}
+
+func speechmaticsTranscriptConfidenceWeight(data stt.SpeechData) int {
+	if len(data.Words) > 0 {
+		return len(data.Words)
+	}
+	return 1
 }
 
 type speechmaticsRawTranscriptFragment struct {
