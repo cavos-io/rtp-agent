@@ -346,25 +346,10 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 		}
 		switch r {
 		case '.', '!', '?':
-			if r == '.' && nvidiaTTSProtectedAbbreviation(trimmed[:i]) {
+			if r == '.' && nvidiaTTSProtectedPeriod(trimmed, i, next) {
 				continue
 			}
-			if r == '.' && nvidiaTTSProtectedInitial(trimmed[:i]) {
-				continue
-			}
-			if r == '.' && nvidiaTTSProtectedSuffix(trimmed[:i], trimmed[next:]) {
-				continue
-			}
-			if r == '.' && nvidiaTTSProtectedAcronym(trimmed, i) {
-				continue
-			}
-			if r == '.' && nvidiaTTSProtectedPhD(trimmed, i) {
-				continue
-			}
-			boundaryEnd, quoted := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
-			if !quoted && trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
-				continue
-			}
+			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
 			if len(strings.TrimSpace(trimmed[:boundaryEnd])) >= 20 && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
 				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
@@ -389,6 +374,49 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 		return next + len("”"), true
 	}
 	return next, false
+}
+
+func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
+	if nvidiaTTSProtectedAbbreviation(text[:dot]) {
+		return true
+	}
+	if nvidiaTTSProtectedInitial(text[:dot]) {
+		return true
+	}
+	if nvidiaTTSProtectedSuffix(text[:dot], text[next:]) {
+		return true
+	}
+	if nvidiaTTSProtectedAcronym(text, dot) {
+		return true
+	}
+	if nvidiaTTSProtectedPhD(text, dot) {
+		return true
+	}
+	if nvidiaTTSProtectedDecimal(text, dot, next) {
+		return true
+	}
+	if nvidiaTTSProtectedWebsite(text[next:]) {
+		return true
+	}
+	return nvidiaTTSProtectedMultipleDots(text, dot, next)
+}
+
+func nvidiaTTSProtectedDecimal(text string, dot int, next int) bool {
+	return dot > 0 && next < len(text) && text[dot-1] >= '0' && text[dot-1] <= '9' && text[next] >= '0' && text[next] <= '9'
+}
+
+func nvidiaTTSProtectedWebsite(tail string) bool {
+	tail = strings.ToLower(tail)
+	for _, suffix := range []string{"com", "net", "org", "io", "gov", "edu", "me"} {
+		if strings.HasPrefix(tail, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func nvidiaTTSProtectedMultipleDots(text string, dot int, next int) bool {
+	return (dot > 0 && text[dot-1] == '.') || (next < len(text) && text[next] == '.')
 }
 
 func nvidiaTTSProtectedAbbreviation(prefix string) bool {

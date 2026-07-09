@@ -2741,6 +2741,76 @@ func TestNvidiaTTSStreamStartsQuotedSentenceBeforeFlushLikeReference(t *testing.
 	}
 }
 
+func TestNvidiaTTSStreamStartsAdjacentSentenceBeforeFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("This sentence is ready.Next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after adjacent sentence = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after adjacent sentence before Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitProtectedPeriodsLikeReference(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "decimal", text: "Please read version 3.14 tomorrow"},
+		{name: "website", text: "Please visit example.com tomorrow"},
+		{name: "ellipsis", text: "Please wait... tomorrow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			if err := stream.PushText(tt.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if concrete.flushed {
+				t.Fatalf("flushed = true for %s protected period, want wait for real sentence boundary", tt.name)
+			}
+			if got := concrete.text; got != tt.text {
+				t.Fatalf("text = %q, want unsplit protected period text %q", got, tt.text)
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitCompanySuffixLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
