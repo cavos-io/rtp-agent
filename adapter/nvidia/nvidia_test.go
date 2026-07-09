@@ -3721,6 +3721,57 @@ func TestNvidiaTTSStreamStartsCommonStartersAfterSuffixLikeReference(t *testing.
 	}
 }
 
+func TestNvidiaTTSStreamStartsAdditionalStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "No", text: "Please contact Foo Inc. No will follow now"},
+		{name: "Not", text: "Please contact Foo Inc. Not will follow now"},
+		{name: "If", text: "Please contact Foo Inc. If will follow now"},
+		{name: "As", text: "Please contact Foo Inc. As will follow now"},
+		{name: "For", text: "Please contact Foo Inc. For will follow now"},
+		{name: "On", text: "Please contact Foo Inc. On will follow now"},
+		{name: "In", text: "Please contact Foo Inc. In will follow now"},
+		{name: "At", text: "Please contact Foo Inc. At will follow now"},
+		{name: "To", text: "Please contact Foo Inc. To will follow now"},
+		{name: "Let", text: "Please contact Foo Inc. Let will follow now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+
+			type result struct {
+				audio *tts.SynthesizedAudio
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				audio, err := stream.Next()
+				done <- result{audio: audio, err: err}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			select {
+			case got := <-done:
+				if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+					t.Fatalf("Next() after additional starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after additional starter boundary")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsStarterAfterRepeatedSpacesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
