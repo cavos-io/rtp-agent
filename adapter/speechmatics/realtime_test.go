@@ -1,8 +1,6 @@
 package speechmatics
 
 import (
-	"errors"
-	"io"
 	"strings"
 	"testing"
 
@@ -155,8 +153,56 @@ func TestSpeechmaticsRealtimeSessionCloseIsIdempotent(t *testing.T) {
 	if _, ok := <-session.EventCh(); ok {
 		t.Fatal("EventCh still open after Close")
 	}
-	if err := session.PushAudio(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushAudio after Close error = %v, want io.ErrClosedPipe", err)
+	if err := session.PushAudio(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil", err)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionIgnoresLateClientEventsAfterClose(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	rtSession := session.(*speechmaticsRealtimeSession)
+
+	lateCalls := []struct {
+		name string
+		call func() error
+	}{
+		{name: "UpdateInstructions", call: func() error { return session.UpdateInstructions("late") }},
+		{name: "UpdateOptions", call: func() error { return session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "late", VoiceSet: true}) }},
+		{name: "GenerateReply", call: func() error {
+			return session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "late", InstructionsSet: true})
+		}},
+		{name: "Say", call: func() error { return session.Say("late") }},
+		{name: "PushAudio", call: func() error {
+			return session.PushAudio(&model.AudioFrame{Data: []byte{0x01}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+		}},
+		{name: "CommitAudio", call: session.CommitAudio},
+		{name: "ClearAudio", call: session.ClearAudio},
+		{name: "Interrupt", call: session.Interrupt},
+		{name: "Truncate", call: func() error { return session.Truncate(llm.RealtimeTruncateOptions{}) }},
+		{name: "PushVideo", call: func() error { return session.PushVideo(&images.VideoFrame{}) }},
+	}
+	for _, tc := range lateCalls {
+		if err := tc.call(); err != nil {
+			t.Fatalf("%s after Close error = %v, want nil", tc.name, err)
+		}
+	}
+	if rtSession.instructions != defaultSpeechmaticsRealtimeSystemPrompt {
+		t.Fatalf("instructions after late update = %q, want original", rtSession.instructions)
+	}
+	if rtSession.voice != defaultSpeechmaticsRealtimeVoice {
+		t.Fatalf("voice after late update = %q, want original", rtSession.voice)
 	}
 }
 

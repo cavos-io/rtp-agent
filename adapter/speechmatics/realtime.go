@@ -204,6 +204,9 @@ type speechmaticsRealtimeSession struct {
 }
 
 func (s *speechmaticsRealtimeSession) UpdateInstructions(instructions string) error {
+	if s.isClosed() {
+		return nil
+	}
 	s.mu.Lock()
 	s.instructions = instructions
 	s.mu.Unlock()
@@ -264,6 +267,9 @@ func (s *speechmaticsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 
 func (s *speechmaticsRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	if !options.VoiceSet {
+		return nil
+	}
+	if s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
@@ -333,6 +339,9 @@ func (s *speechmaticsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 }
 
 func (s *speechmaticsRealtimeSession) PushVideo(*images.VideoFrame) error {
+	if s.isClosed() {
+		return nil
+	}
 	return speechmaticsRealtimeUnsupported("push_video")
 }
 
@@ -348,7 +357,7 @@ func (s *speechmaticsRealtimeSession) enqueueCommand(command map[string]any) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	select {
 	case s.commandCh <- command:
@@ -356,6 +365,12 @@ func (s *speechmaticsRealtimeSession) enqueueCommand(command map[string]any) err
 	default:
 		return errors.New("speechmatics realtime command queue is full")
 	}
+}
+
+func (s *speechmaticsRealtimeSession) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func speechmaticsRealtimeUnsupported(operation string) error {
