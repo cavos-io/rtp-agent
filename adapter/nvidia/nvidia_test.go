@@ -151,6 +151,18 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := realtimeModel.websocketURL(), "wss://personaplex.example:9443/api/chat?voice_prompt=VARF1.pt&text_prompt=old%20prompt&seed=7"; got != want {
 		t.Fatalf("model websocketURL() after session update = %q, want unchanged reference URL %q", got, want)
 	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{ID: "first", Role: llm.ChatRoleUser, Text: "hello"})
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext() error = %v", err)
+	}
+	chatCtx.AddMessage(llm.ChatMessageArgs{ID: "second", Role: llm.ChatRoleUser, Text: "late"})
+	if concrete.chatCtx == chatCtx {
+		t.Fatal("session chatCtx aliases source, want reference copy")
+	}
+	if got, want := len(concrete.chatCtx.Items), 1; got != want {
+		t.Fatalf("session chatCtx item count = %d, want copied snapshot count %d", got, want)
+	}
 	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
 	}

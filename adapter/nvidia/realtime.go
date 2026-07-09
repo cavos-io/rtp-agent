@@ -38,6 +38,7 @@ type nvidiaRealtimeSession struct {
 	seed               *int
 	silenceThresholdMS int
 	useSSL             bool
+	chatCtx            *llm.ChatContext
 	events             chan llm.RealtimeEvent
 	closed             bool
 }
@@ -171,6 +172,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		seed:               cloneNvidiaRealtimeSeed(m.seed),
 		silenceThresholdMS: m.silenceThresholdMS,
 		useSSL:             m.useSSL,
+		chatCtx:            llm.EmptyChatContext(),
 		events:             make(chan llm.RealtimeEvent),
 	}, nil
 }
@@ -195,7 +197,11 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	return nil
 }
 
-func (s *nvidiaRealtimeSession) UpdateChatContext(_ *llm.ChatContext) error {
+func (s *nvidiaRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	if s.closed || chatCtx == nil {
+		return nil
+	}
+	s.chatCtx = chatCtx.Copy()
 	return nil
 }
 
