@@ -2390,19 +2390,24 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	var partialContext []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
 		flushedFinals = append(flushedFinals, speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)...)
-		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
-		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 		state.latestRawPartialContext = speechmaticsCloneTranscriptEvents(flushedFinals)
 	}
 	if state != nil {
 		partialContext = state.latestRawPartialContext
 	}
 	if state != nil && !state.includePartials {
+		partials := speechmaticsRawFinalContextAsPartials(partialContext)
+		if speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
+			return events
+		}
+		if len(partials) > 0 {
+			state.latestRawPartialEvents = partials
+		}
+		events = append(events, partials...)
 		return events
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
-	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
 	partials = speechmaticsPrefixRawFinalContextToPartials(partials, partialContext, state)
 	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
 		return events
@@ -2412,6 +2417,22 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	}
 	events = append(events, partials...)
 	return events
+}
+
+func speechmaticsRawFinalContextAsPartials(finals []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(finals) == 0 {
+		return nil
+	}
+	partials := make([]*stt.SpeechEvent, 0, len(finals))
+	for _, final := range finals {
+		if final == nil || final.Type != stt.SpeechEventFinalTranscript {
+			continue
+		}
+		partial := speechmaticsCloneTranscriptEvent(final)
+		partial.Type = stt.SpeechEventInterimTranscript
+		partials = append(partials, partial)
+	}
+	return partials
 }
 
 func speechmaticsPrefixRawFinalContextToPartials(partials, finals []*stt.SpeechEvent, state *speechmaticsStreamState) []*stt.SpeechEvent {
@@ -2477,32 +2498,6 @@ func speechmaticsCloneTranscriptEvent(event *stt.SpeechEvent) *stt.SpeechEvent {
 		}
 	}
 	return &clone
-}
-
-func speechmaticsDropDuplicateTranscriptPartials(partials, finals []*stt.SpeechEvent) []*stt.SpeechEvent {
-	if len(partials) == 0 || len(finals) == 0 {
-		return partials
-	}
-	kept := partials[:0]
-	for _, partial := range partials {
-		if speechmaticsTranscriptDuplicatesAny(partial, finals) {
-			continue
-		}
-		kept = append(kept, partial)
-	}
-	return kept
-}
-
-func speechmaticsTranscriptDuplicatesAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
-	if event == nil {
-		return false
-	}
-	for _, candidate := range candidates {
-		if speechmaticsTranscriptEventsSameTextTimingAndIdentity(event, candidate) {
-			return true
-		}
-	}
-	return false
 }
 
 func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamState, eventType stt.SpeechEventType) []*stt.SpeechEvent {

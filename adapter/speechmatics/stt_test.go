@@ -995,8 +995,20 @@ func TestSpeechmaticsEventsRawPartialRespectsReferenceIncludePartials(t *testing
 		t.Fatalf("final raw transcript before following partial = %#v, want buffered final", events)
 	}
 	events := speechmaticsEvents(partial, state)
-	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
-		t.Fatalf("final raw transcript events = %#v, want final transcript after following partial despite include_partials false", events)
+	if len(events) != 1 {
+		t.Fatalf("final raw transcript events = %#v, want one interim final-fragment view after following partial despite include_partials false", events)
+	}
+	if events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim final-fragment view after following partial", events[0].Type)
+	}
+	if got := events[0].Alternatives[0].Text; got != "unstable" {
+		t.Fatalf("event text = %q, want buffered final-fragment text", got)
+	}
+	if got := speechmaticsTimedWordTexts(events[0].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"unstable"}) {
+		t.Fatalf("event words = %#v, want only buffered final word when include_partials is false", got)
+	}
+	if repeated := speechmaticsEvents(partial, state); len(repeated) != 0 {
+		t.Fatalf("repeated include_partials=false partial events = %#v, want suppressed unchanged final-fragment view", repeated)
 	}
 }
 
@@ -1078,17 +1090,14 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 		t.Fatalf("unmarshal raw partial transcript: %v", err)
 	}
 	events := speechmaticsEvents(partial, state)
-	if len(events) != 2 {
-		t.Fatalf("events after following partial = %#v, want buffered final then partial", events)
+	if len(events) != 1 {
+		t.Fatalf("events after following partial = %#v, want contextual partial only", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
-		t.Fatalf("first event = %#v, want buffered final transcript", events[0])
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "done next" {
+		t.Fatalf("event = %#v, want reference interim transcript with buffered final context", events[0])
 	}
-	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "done next" {
-		t.Fatalf("second event = %#v, want reference interim transcript with buffered final context", events[1])
-	}
-	if got := speechmaticsTimedWordTexts(events[1].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"done", "next"}) {
-		t.Fatalf("second event words = %#v, want buffered final word before following partial word", got)
+	if got := speechmaticsTimedWordTexts(events[0].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"done", "next"}) {
+		t.Fatalf("event words = %#v, want buffered final word before following partial word", got)
 	}
 
 	if events := speechmaticsEvents(partial, state); len(events) != 0 {
@@ -1157,20 +1166,17 @@ func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *test
 		t.Fatalf("third final events before following partial = %#v, want buffered final", events)
 	}
 	events := speechmaticsEvents(partial, state)
-	if len(events) != 2 {
-		t.Fatalf("events after following partial = %#v, want merged final then partial", events)
+	if len(events) != 1 {
+		t.Fatalf("events after following partial = %#v, want contextual partial only", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello world there" {
-		t.Fatalf("first event = %#v, want merged final transcript", events[0])
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello world there again" {
+		t.Fatalf("event = %#v, want reference interim transcript with buffered final context", events[0])
 	}
-	if got, want := events[0].Alternatives[0].Confidence, 0.8; math.Abs(got-want) > 1e-9 {
-		t.Fatalf("merged confidence = %.3f, want reference fragment mean %.3f", got, want)
+	if got, want := events[0].Alternatives[0].Confidence, 0.775; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("merged confidence = %.3f, want reference contextual partial mean %.3f", got, want)
 	}
-	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "hello world there again" {
-		t.Fatalf("second event = %#v, want reference interim transcript with buffered final context", events[1])
-	}
-	if got := speechmaticsTimedWordTexts(events[1].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"hello", "world", "there", "again"}) {
-		t.Fatalf("second event words = %#v, want merged final words before following partial word", got)
+	if got := speechmaticsTimedWordTexts(events[0].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"hello", "world", "there", "again"}) {
+		t.Fatalf("event words = %#v, want merged final words before following partial word", got)
 	}
 }
 
@@ -1217,11 +1223,11 @@ func TestSpeechmaticsEventsRawPartialDoesNotPrefixAcrossReferenceSpeakerBoundary
 	_ = speechmaticsEvents(secondFinal, state)
 
 	events := speechmaticsEvents(partial, state)
-	if len(events) != 3 {
-		t.Fatalf("events after following partial = %#v, want two finals then partial", events)
+	if len(events) != 1 {
+		t.Fatalf("events after following partial = %#v, want partial only", events)
 	}
-	if events[2].Type != stt.SpeechEventInterimTranscript || events[2].Alternatives[0].Text != "again" {
-		t.Fatalf("third event = %#v, want reference partial without non-adjacent final context", events[2])
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "again" {
+		t.Fatalf("event = %#v, want reference partial without non-adjacent final context", events[0])
 	}
 }
 
@@ -1315,13 +1321,10 @@ func TestSpeechmaticsEventsRawPartialAfterFinalTrimsReferenceDuplicate(t *testin
 
 	events := speechmaticsEvents(partial, state)
 	if len(events) != 1 {
-		t.Fatalf("events = %#v, want only buffered final transcript without stale duplicate partial", events)
+		t.Fatalf("events = %#v, want contextual duplicate partial view", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript {
-		t.Fatalf("event type = %s, want final transcript", events[0].Type)
-	}
-	if got := events[0].Alternatives[0].Text; got != "hello" {
-		t.Fatalf("final text = %q, want hello", got)
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello hello" {
+		t.Fatalf("event = %#v, want reference duplicate contextual partial", events[0])
 	}
 }
 
@@ -1359,10 +1362,10 @@ func TestSpeechmaticsEventsMetadataPartialAfterFinalTrimsReferenceDuplicate(t *t
 
 	events := speechmaticsEvents(partial, state)
 	if len(events) != 1 {
-		t.Fatalf("events = %#v, want only buffered final transcript without stale metadata partial", events)
+		t.Fatalf("events = %#v, want metadata partial view", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript {
-		t.Fatalf("event type = %s, want final transcript", events[0].Type)
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want reference metadata partial", events[0])
 	}
 }
 
@@ -1395,10 +1398,10 @@ func TestSpeechmaticsEventsZeroTimingMetadataPartialAfterFinalTrimsReferenceDupl
 
 	events := speechmaticsEvents(partial, state)
 	if len(events) != 1 {
-		t.Fatalf("events = %#v, want only buffered final transcript without stale zero-timing metadata partial", events)
+		t.Fatalf("events = %#v, want zero-timing metadata partial view", events)
 	}
-	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello" {
-		t.Fatalf("event = %#v, want buffered final hello", events[0])
+	if events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hello hello" {
+		t.Fatalf("event = %#v, want contextual zero-timing metadata partial", events[0])
 	}
 }
 
