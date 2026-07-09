@@ -6914,17 +6914,66 @@ func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	if err := ending.EndInput(); err != nil {
 		t.Fatalf("EndInput() error = %v", err)
 	}
-	if err := ending.EndInput(); err != io.ErrClosedPipe {
-		t.Fatalf("second EndInput() error = %v, want %v", err, io.ErrClosedPipe)
+	if err := ending.EndInput(); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("second EndInput() error = %v, want input ended", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{}); err != io.ErrClosedPipe {
-		t.Fatalf("PushFrame() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.PushFrame(&model.AudioFrame{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after EndInput error = %v, want input ended", err)
 	}
-	if err := stream.Flush(); err != io.ErrClosedPipe {
-		t.Fatalf("Flush() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("Flush() after EndInput error = %v, want input ended", err)
 	}
 	if event, err := stream.Next(); err != io.EOF || event != nil {
 		t.Fatalf("Next() after empty EndInput = (%v, %v), want nil EOF", event, err)
+	}
+}
+
+func TestNvidiaSTTStreamClosedInputReportsInputEndedLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	for name, fn := range map[string]func() error{
+		"PushFrame": func() error { return stream.PushFrame(&model.AudioFrame{}) },
+		"Flush":     stream.Flush,
+		"EndInput":  ending.EndInput,
+	} {
+		if err := fn(); err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
+	}
+
+	stream, err = provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(second) error = %v", err)
+	}
+	ending, ok = stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("second stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	for name, fn := range map[string]func() error{
+		"PushFrame": func() error { return stream.PushFrame(&model.AudioFrame{}) },
+		"Flush":     stream.Flush,
+		"EndInput":  ending.EndInput,
+	} {
+		if err := fn(); err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after EndInput error = %v, want input ended", name, err)
+		}
 	}
 }
 
@@ -6982,8 +7031,8 @@ func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 	if err := ending.EndInput(); err != nil {
 		t.Fatalf("EndInput() after Flush error = %v", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{}); err != io.ErrClosedPipe {
-		t.Fatalf("PushFrame() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.PushFrame(&model.AudioFrame{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after EndInput error = %v, want input ended", err)
 	}
 	if event, err := stream.Next(); err != io.EOF || event != nil {
 		t.Fatalf("Next() after empty EndInput = (%v, %v), want nil EOF", event, err)
@@ -7107,11 +7156,11 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{}); err != io.ErrClosedPipe {
-		t.Fatalf("PushFrame() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.PushFrame(&model.AudioFrame{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after Close error = %v, want input ended", err)
 	}
-	if err := stream.Flush(); err != io.ErrClosedPipe {
-		t.Fatalf("Flush() after Close error = %v, want %v", err, io.ErrClosedPipe)
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("Flush() after Close error = %v, want input ended", err)
 	}
 	if event, err := stream.Next(); err != io.EOF || event != nil {
 		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", event, err)

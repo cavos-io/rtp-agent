@@ -2,6 +2,7 @@ package nvidia
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,8 @@ const (
 	nvidiaSTTRecognizeUnsupported = "Not implemented"
 	nvidiaSTTMissingAPIKey        = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
+
+var errNvidiaSTTStreamInputEnded = errors.New("stream input ended")
 
 type NvidiaSTT struct {
 	apiKey          string
@@ -227,7 +230,7 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.inputEnded {
-		return io.ErrClosedPipe
+		return errNvidiaSTTStreamInputEnded
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
@@ -270,7 +273,7 @@ func (s *nvidiaSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.inputEnded {
-		return io.ErrClosedPipe
+		return errNvidiaSTTStreamInputEnded
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
@@ -286,10 +289,10 @@ func (s *nvidiaSTTStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return errNvidiaSTTStreamInputEnded
 	}
 	if s.inputEnded {
-		return io.ErrClosedPipe
+		return errNvidiaSTTStreamInputEnded
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
