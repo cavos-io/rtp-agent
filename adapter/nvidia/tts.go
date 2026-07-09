@@ -170,7 +170,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(text) == "" {
+	if text == "" {
 		return nil
 	}
 	if s.flushed {

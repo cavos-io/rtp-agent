@@ -977,6 +977,40 @@ func TestNvidiaTTSStreamIgnoresSecondSegmentLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if !concrete.hasText {
+		t.Fatal("hasText = false, want whitespace counted as reference text input")
+	}
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text = %q, want preserved whitespace %q", got, want)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText(late) error = %v", err)
+	}
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after second segment = %q, want preserved first whitespace segment %q", got, want)
+	}
+}
+
 func TestNvidiaTTSReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
