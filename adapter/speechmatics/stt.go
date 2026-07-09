@@ -2396,6 +2396,7 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
 	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
+	partials = speechmaticsPrefixRawFinalContextToPartials(partials, flushedFinals, state)
 	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
 		return events
 	}
@@ -2404,6 +2405,63 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	}
 	events = append(events, partials...)
 	return events
+}
+
+func speechmaticsPrefixRawFinalContextToPartials(partials, finals []*stt.SpeechEvent, state *speechmaticsStreamState) []*stt.SpeechEvent {
+	if len(partials) == 0 || len(finals) == 0 {
+		return partials
+	}
+	prefixed := make([]*stt.SpeechEvent, 0, len(partials))
+	for _, partial := range partials {
+		prefixed = append(prefixed, speechmaticsPrefixRawFinalContextToPartial(partial, finals, state))
+	}
+	return prefixed
+}
+
+func speechmaticsPrefixRawFinalContextToPartial(partial *stt.SpeechEvent, finals []*stt.SpeechEvent, state *speechmaticsStreamState) *stt.SpeechEvent {
+	if partial == nil || partial.Type != stt.SpeechEventInterimTranscript || len(partial.Alternatives) != 1 {
+		return partial
+	}
+	prefixed := speechmaticsCloneTranscriptEvent(partial)
+	for i := len(finals) - 1; i >= 0; i-- {
+		final := finals[i]
+		if !speechmaticsCanPrefixTranscriptEvent(final, prefixed) {
+			continue
+		}
+		merged := speechmaticsCloneTranscriptEvent(final)
+		merged.Type = stt.SpeechEventInterimTranscript
+		speechmaticsMergeTranscriptEvent(merged, prefixed, speechmaticsRawWordDelimiter(state))
+		return merged
+	}
+	return partial
+}
+
+func speechmaticsCanPrefixTranscriptEvent(prefix, event *stt.SpeechEvent) bool {
+	if prefix == nil || event == nil || prefix.Type != stt.SpeechEventFinalTranscript || event.Type != stt.SpeechEventInterimTranscript {
+		return false
+	}
+	if len(prefix.Alternatives) != 1 || len(event.Alternatives) != 1 {
+		return false
+	}
+	prefixAlt := prefix.Alternatives[0]
+	eventAlt := event.Alternatives[0]
+	return prefixAlt.SpeakerID == eventAlt.SpeakerID && prefixAlt.Language == eventAlt.Language
+}
+
+func speechmaticsCloneTranscriptEvent(event *stt.SpeechEvent) *stt.SpeechEvent {
+	if event == nil {
+		return nil
+	}
+	clone := *event
+	if event.Alternatives != nil {
+		clone.Alternatives = append([]stt.SpeechData(nil), event.Alternatives...)
+		for i := range clone.Alternatives {
+			if clone.Alternatives[i].Words != nil {
+				clone.Alternatives[i].Words = append([]stt.TimedString(nil), clone.Alternatives[i].Words...)
+			}
+		}
+	}
+	return &clone
 }
 
 func speechmaticsDropDuplicateTranscriptPartials(partials, finals []*stt.SpeechEvent) []*stt.SpeechEvent {

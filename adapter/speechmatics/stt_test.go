@@ -1084,8 +1084,11 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "done" {
 		t.Fatalf("first event = %#v, want buffered final transcript", events[0])
 	}
-	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "next" {
-		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "done next" {
+		t.Fatalf("second event = %#v, want reference interim transcript with buffered final context", events[1])
+	}
+	if got := speechmaticsTimedWordTexts(events[1].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"done", "next"}) {
+		t.Fatalf("second event words = %#v, want buffered final word before following partial word", got)
 	}
 }
 
@@ -1159,9 +1162,20 @@ func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *test
 	if got, want := events[0].Alternatives[0].Confidence, 0.8; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("merged confidence = %.3f, want reference fragment mean %.3f", got, want)
 	}
-	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "again" {
-		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "hello world there again" {
+		t.Fatalf("second event = %#v, want reference interim transcript with buffered final context", events[1])
 	}
+	if got := speechmaticsTimedWordTexts(events[1].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"hello", "world", "there", "again"}) {
+		t.Fatalf("second event words = %#v, want merged final words before following partial word", got)
+	}
+}
+
+func speechmaticsTimedWordTexts(words []stt.TimedString) []string {
+	texts := make([]string, 0, len(words))
+	for _, word := range words {
+		texts = append(texts, word.Text)
+	}
+	return texts
 }
 
 func TestSpeechmaticsEventsRawFinalIgnoresReferenceMalformedMetadataWithResults(t *testing.T) {
