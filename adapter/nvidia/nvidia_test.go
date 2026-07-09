@@ -1056,6 +1056,82 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamNextWaitsForInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Next() before input returned (%v, %v), want wait for input like reference", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err != io.EOF {
+			t.Fatalf("Next() after Close = (%v, %v), want nil EOF", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
+func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			t.Errorf("Next() audio = %v, want nil", audio)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Next() before cancel returned %v, want wait for cancellation", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Next() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after cancellation")
+	}
+}
+
 func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
