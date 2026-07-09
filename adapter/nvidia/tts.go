@@ -111,10 +111,12 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	ctx       context.Context
-	done      bool
-	closed    bool
-	exception error
+	ctx        context.Context
+	done       bool
+	closed     bool
+	inputEnded bool
+	hasText    bool
+	exception  error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -159,7 +161,7 @@ func (s *nvidiaTTSChunkedStream) Exception() error {
 }
 
 func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
@@ -172,11 +174,12 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	s.hasText = true
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Flush() error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
@@ -189,6 +192,27 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *nvidiaTTSSynthesizeStream) EndInput() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return err
+		}
+	}
+	s.inputEnded = true
+	if !s.hasText {
+		s.done = true
+	}
+	return nil
+}
+
 func (s *nvidiaTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.done = true
@@ -197,6 +221,10 @@ func (s *nvidiaTTSSynthesizeStream) Close() error {
 
 func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		s.done = true
+		return nil, io.EOF
+	}
+	if s.inputEnded && !s.hasText {
 		s.done = true
 		return nil, io.EOF
 	}
