@@ -2728,6 +2728,51 @@ func TestNvidiaTTSStreamDoesNotSplitInitialLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamStartsInitialBeforeCapitalLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please choose option A. Next step"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !concrete.flushed {
+		t.Fatal("flushed = false after initial before capitalized sentence, want NVIDIA blingfire sentence boundary")
+	}
+	if got, want := concrete.text, "Please choose option A."; got != want {
+		t.Fatalf("text = %q, want first sentence %q", got, want)
+	}
+	if got, want := concrete.pendingText, "Next step"; got != want {
+		t.Fatalf("pendingText = %q, want tail %q", got, want)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after initial-capital boundary = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after initial-capital boundary")
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitInitialWithoutSpaceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
