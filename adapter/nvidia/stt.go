@@ -37,17 +37,13 @@ type NvidiaSTTOption func(*NvidiaSTT)
 
 func WithNvidiaSTTServer(server string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if server != "" {
-			s.server = server
-		}
+		s.server = server
 	}
 }
 
 func WithNvidiaSTTFunctionID(functionID string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if functionID != "" {
-			s.functionID = functionID
-		}
+		s.functionID = functionID
 	}
 }
 

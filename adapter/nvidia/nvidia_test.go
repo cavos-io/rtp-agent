@@ -655,6 +655,22 @@ func TestNvidiaSTTAllowsEmptyLanguageLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTAllowsEmptyRoutingOptionsLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "",
+		WithNvidiaSTTServer(""),
+		WithNvidiaSTTFunctionID(""),
+	)
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	if got, want := provider.server, ""; got != want {
+		t.Fatalf("server = %q, want explicit empty server", got)
+	}
+	if got, want := provider.functionID, ""; got != want {
+		t.Fatalf("functionID = %q, want explicit empty function id", got)
+	}
+}
+
 func TestNvidiaSTTAllowsZeroSampleRateLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(0))
 	if err != nil {
