@@ -1818,6 +1818,10 @@ func (s *speechmaticsSTTStream) readLoop() {
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			if json.Valid(message) {
+				if speechmaticsSpeakersResultMessage(message) {
+					s.recordSpeakerResult(nil)
+					continue
+				}
 				if speechmaticsDataMessage(message) {
 					_ = s.closeTransportOnce()
 					s.prepareDrainPendingRawFinals()
@@ -1838,6 +1842,18 @@ func (s *speechmaticsSTTStream) readLoop() {
 			return
 		}
 	}
+}
+
+func speechmaticsSpeakersResultMessage(data []byte) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	var message string
+	if err := json.Unmarshal(raw["message"], &message); err != nil {
+		return false
+	}
+	return message == "SpeakersResult"
 }
 
 func speechmaticsDataMessage(data []byte) bool {
