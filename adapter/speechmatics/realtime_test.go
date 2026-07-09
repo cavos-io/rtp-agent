@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,6 +147,28 @@ func TestSpeechmaticsRealtimeSessionConnectsAndRelaysWebsocketEvents(t *testing.
 		t.Fatalf("update websocket message = %#v, want instructions update", second)
 	}
 	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+}
+
+func TestSpeechmaticsRealtimeSessionInitialSendFailureReturnsConnectionError(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key",
+		WithRealtimeBaseURL("http://flow.example/v1"),
+		WithRealtimeWebsocketDialer(newSpeechmaticsRealtimeWriteFailAfterDialer(t, errors.New("write refused"))),
+		WithRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	_, err = rtModel.Session()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to initialize Speechmatics realtime session") ||
+		!strings.Contains(connectionErr.Error(), "write refused") {
+		t.Fatalf("APIConnectionError = %q, want initial send context", connectionErr.Error())
+	}
 }
 
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
@@ -853,6 +877,118 @@ func newSpeechmaticsRealtimeTestWebsocketDialer(t *testing.T, handler func(*webs
 		return dialer.Dial(endpoint, header)
 	}
 }
+
+func newSpeechmaticsRealtimeWriteFailAfterDialer(t *testing.T, writeErr error) SpeechmaticsRealtimeWebsocketDialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		failConn := &speechmaticsRealtimeFailWriteConn{Conn: clientConn, err: writeErr}
+		listener := newSpeechmaticsSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade error = %v", err)
+					return
+				}
+				defer conn.Close()
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}),
+		}
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return failConn, nil
+			},
+		}
+		conn, response, err := dialer.Dial(endpoint, headers)
+		if err != nil {
+			return nil, response, err
+		}
+		failConn.fail.Store(true)
+		return conn, response, nil
+	}
+}
+
+type speechmaticsRealtimeFailWriteConn struct {
+	net.Conn
+	fail atomic.Bool
+	err  error
+}
+
+func (c *speechmaticsRealtimeFailWriteConn) Write(p []byte) (int, error) {
+	if c.fail.Load() {
+		if c.err != nil {
+			return 0, c.err
+		}
+		return 0, errors.New("write failed")
+	}
+	return c.Conn.Write(p)
+}
+
+type speechmaticsSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newSpeechmaticsSingleConnListener(conn net.Conn) *speechmaticsSingleConnListener {
+	return &speechmaticsSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *speechmaticsSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *speechmaticsSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *speechmaticsSingleConnListener) Addr() net.Addr {
+	return speechmaticsDummyAddr("pipe")
+}
+
+type speechmaticsDummyAddr string
+
+func (a speechmaticsDummyAddr) Network() string { return string(a) }
+func (a speechmaticsDummyAddr) String() string  { return string(a) }
 
 func nextSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession) map[string]any {
 	t.Helper()

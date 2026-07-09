@@ -474,6 +474,10 @@ func (s *speechmaticsRealtimeSession) connectRealtimeWebsocket(initialCommand ma
 		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to Speechmatics realtime: %v", err))
 	}
+	if err := conn.WriteJSON(initialCommand); err != nil {
+		_ = conn.Close()
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize Speechmatics realtime session: %v", err))
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.ctx = ctx
@@ -482,10 +486,6 @@ func (s *speechmaticsRealtimeSession) connectRealtimeWebsocket(initialCommand ma
 	s.mu.Unlock()
 	go s.websocketWriteLoop(conn)
 	go s.websocketReadLoop(conn)
-	if err := s.enqueueCommand(initialCommand); err != nil {
-		_ = s.Close()
-		return err
-	}
 	return nil
 }
 
