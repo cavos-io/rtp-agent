@@ -1878,6 +1878,48 @@ func TestNvidiaRealtimeInstructionUpdatesCoalescePendingReconnectLikeReference(t
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdatesCoalesceBufferedReconnectLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	deadline := time.After(200 * time.Millisecond)
+	for len(concrete.events.out) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for buffered session_reconnected event")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("first event after buffered instruction updates = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for coalesced session_reconnected event")
+	}
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("second event after buffered instruction updates = %+v, want none", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateAfterReconnectEventRestartsAgainLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()

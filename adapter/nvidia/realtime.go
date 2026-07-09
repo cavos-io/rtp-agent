@@ -83,6 +83,7 @@ type nvidiaRealtimeSession struct {
 	retryDelay         time.Duration
 	retryTimer         *time.Timer
 	restartPending     bool
+	restartEventQueued bool
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -314,14 +315,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		transportNotify:    make(chan struct{}),
 		retryDelay:         defaultNvidiaRealtimeInitialRetryDelay,
 	}
-	session.events = newNvidiaRealtimeEventStream(func(ev llm.RealtimeEvent) {
-		if ev.Type != llm.RealtimeEventTypeSessionReconnected {
-			return
-		}
-		session.mu.Lock()
-		defer session.mu.Unlock()
-		session.restartPending = false
-	})
+	session.events = newNvidiaRealtimeEventStream(nil)
 	if m.preconnect {
 		session.startRealtimeTransportLocked()
 	}
@@ -479,7 +473,15 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	if s.restartPending {
-		s.textPrompt = instructions
+		if s.restartEventQueued && len(s.events.in) == 0 && len(s.events.out) == 0 {
+			s.restartPending = false
+			s.restartEventQueued = false
+		} else {
+			s.textPrompt = instructions
+			return nil
+		}
+	}
+	if s.textPrompt == instructions {
 		return nil
 	}
 	wasStarted := s.transportStarted
@@ -495,19 +497,14 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	} else if s.preconnect {
 		if wasRetrying {
 			s.restartPending = false
+			s.restartEventQueued = false
 		}
 		s.startRealtimeTransportLocked()
 		if !wasRetrying {
-			s.events.send(llm.RealtimeEvent{
-				Type:      llm.RealtimeEventTypeSessionReconnected,
-				Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-			})
+			s.sendSessionReconnectedLocked()
 		}
 	} else {
-		s.events.send(llm.RealtimeEvent{
-			Type:      llm.RealtimeEventTypeSessionReconnected,
-			Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-		})
+		s.sendSessionReconnectedLocked()
 	}
 	return nil
 }
@@ -558,6 +555,7 @@ func (s *nvidiaRealtimeSession) Close() error {
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
 	s.restartPending = false
+	s.restartEventQueued = false
 	s.closed = true
 	s.events.close()
 	return nil
@@ -806,6 +804,11 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 	if s.closed {
 		return
 	}
+	s.sendSessionReconnectedLocked()
+}
+
+func (s *nvidiaRealtimeSession) sendSessionReconnectedLocked() {
+	s.restartEventQueued = true
 	s.events.send(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
