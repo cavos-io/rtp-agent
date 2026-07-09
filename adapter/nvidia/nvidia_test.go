@@ -836,6 +836,14 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
+	blank := stream.eventsFromResponse(nvidiaSTTResponse{
+		Results: []nvidiaSTTResult{{
+			IsFinal: true,
+			Alternative: nvidiaSTTAlternative{
+				Transcript: "   ",
+			},
+		}},
+	})
 	first := stream.eventsFromResponse(nvidiaSTTResponse{
 		Results: []nvidiaSTTResult{{
 			IsFinal: false,
@@ -862,6 +870,9 @@ func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testi
 		}},
 	})
 
+	if len(blank) != 0 {
+		t.Fatalf("blank response event count = %d, want 0", len(blank))
+	}
 	if got, want := first[1].RequestID, "nvidia-response-1"; got != want {
 		t.Fatalf("first fallback RequestID = %q, want %q", got, want)
 	}

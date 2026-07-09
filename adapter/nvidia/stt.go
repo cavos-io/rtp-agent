@@ -314,6 +314,9 @@ func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.S
 	events := make([]stt.SpeechEvent, 0, len(response.Results)+2)
 	requestID := response.RequestID
 	for _, result := range response.Results {
+		if strings.TrimSpace(result.Alternative.Transcript) == "" {
+			continue
+		}
 		if result.RequestID == "" {
 			if requestID == "" {
 				s.requestSeq++
