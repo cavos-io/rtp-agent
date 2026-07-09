@@ -132,6 +132,23 @@ func TestNvidiaRealtimeAllowsEmptyTextPromptLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeAllowsEmptyVoiceLikeReference(t *testing.T) {
+	model := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("ws://personaplex.example:8998"),
+		WithNvidiaRealtimeVoice(""),
+	)
+
+	if got, want := model.voice, ""; got != want {
+		t.Fatalf("voice = %q, want explicit empty voice", got)
+	}
+	if got, want := model.Label(), "personaplex-"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := model.websocketURL(), "ws://personaplex.example:8998/api/chat?voice_prompt=.pt&text_prompt=You%20are%20a%20helpful%20assistant."; got != want {
+		t.Fatalf("websocketURL() = %q, want %q", got, want)
+	}
+}
+
 func TestNvidiaRealtimeStripsOnlyFirstURLSchemeLikeReference(t *testing.T) {
 	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL("wss://http://personaplex.local:8998"))
 

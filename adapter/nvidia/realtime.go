@@ -42,9 +42,7 @@ func WithNvidiaRealtimeBaseURL(baseURL string) NvidiaRealtimeOption {
 
 func WithNvidiaRealtimeVoice(voice string) NvidiaRealtimeOption {
 	return func(m *NvidiaRealtimeModel) {
-		if voice != "" {
-			m.voice = voice
-		}
+		m.voice = voice
 	}
 }
 
