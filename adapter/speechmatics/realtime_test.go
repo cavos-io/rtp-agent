@@ -406,6 +406,67 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeModel("flow-pro"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow-pro")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_metrics"}}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{"type": "response.output_item.added", "item_id": "msg_metrics"}); !ok {
+		t.Fatal("response.output_item.added ignored")
+	}
+	message := assertSpeechmaticsRealtimeMessage(t, created.Generation.MessageCh)
+	if ok := session.handleServerEvent(map[string]any{"type": "response.output_text.delta", "item_id": "msg_metrics", "delta": "hello"}); !ok {
+		t.Fatal("response.output_text.delta ignored")
+	}
+	if got := assertSpeechmaticsRealtimeText(t, message.TextCh); got != "hello" {
+		t.Fatalf("text delta = %q, want hello", got)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_metrics",
+			"status": "cancelled",
+			"usage": map[string]any{
+				"input_tokens":  3,
+				"output_tokens": 2,
+				"total_tokens":  5,
+			},
+		},
+	}); !ok {
+		t.Fatal("response.done ignored")
+	}
+	assertSpeechmaticsRealtimeClosedText(t, message.TextCh)
+	metricsEvent := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	metrics := metricsEvent.Metrics
+	if metrics == nil {
+		t.Fatal("metrics = nil")
+	}
+	if metrics.RequestID != "resp_metrics" || !metrics.Cancelled {
+		t.Fatalf("metrics id/cancelled = %q/%v, want resp_metrics/true", metrics.RequestID, metrics.Cancelled)
+	}
+	if metrics.Label != "speechmatics.RealtimeModel" || metrics.Metadata == nil || metrics.Metadata.ModelName != "flow-pro" || metrics.Metadata.ModelProvider != "Speechmatics" {
+		t.Fatalf("metrics model metadata = %#v/%#v, want Speechmatics flow-pro", metrics.Label, metrics.Metadata)
+	}
+	if metrics.InputTokens != 3 || metrics.OutputTokens != 2 || metrics.TotalTokens != 5 {
+		t.Fatalf("metrics tokens = %d/%d/%d, want 3/2/5", metrics.InputTokens, metrics.OutputTokens, metrics.TotalTokens)
+	}
+	if metrics.TTFT < 0 || metrics.Duration < 0 || metrics.TokensPerSecond < 0 {
+		t.Fatalf("metrics timing = ttft %f duration %f tps %f, want non-negative", metrics.TTFT, metrics.Duration, metrics.TokensPerSecond)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {

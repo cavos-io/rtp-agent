@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -232,6 +234,8 @@ type speechmaticsRealtimeGeneration struct {
 	messageCh  chan llm.MessageGeneration
 	functionCh chan *llm.FunctionCall
 	messages   map[string]*speechmaticsRealtimeMessage
+	createdAt  time.Time
+	firstToken time.Time
 	done       bool
 }
 
@@ -471,10 +475,7 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 	case "response.output_item.done":
 		return s.handleResponseOutputItemDone(event)
 	case "response.done":
-		s.mu.Lock()
-		s.closeCurrentGenerationLocked()
-		s.mu.Unlock()
-		return true
+		return s.handleResponseDone(event)
 	}
 	return false
 }
@@ -500,6 +501,7 @@ func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any
 		messageCh:  make(chan llm.MessageGeneration, 1),
 		functionCh: make(chan *llm.FunctionCall, 1),
 		messages:   make(map[string]*speechmaticsRealtimeMessage),
+		createdAt:  time.Now(),
 	}
 	s.generation = generation
 	s.mu.Unlock()
@@ -562,6 +564,7 @@ func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]a
 	if message == nil {
 		return false
 	}
+	s.recordFirstToken(itemID)
 	select {
 	case message.textCh <- delta:
 	default:
@@ -586,6 +589,7 @@ func (s *speechmaticsRealtimeSession) handleResponseAudioDelta(event map[string]
 	if message == nil {
 		return false
 	}
+	s.recordFirstToken(itemID)
 	select {
 	case message.audioCh <- &model.AudioFrame{
 		Data:              append([]byte(nil), audio...),
@@ -624,6 +628,21 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[str
 	return message != nil
 }
 
+func (s *speechmaticsRealtimeSession) handleResponseDone(event map[string]any) bool {
+	response, _ := event["response"].(map[string]any)
+	s.mu.Lock()
+	metrics := s.responseDoneMetricsLocked(response)
+	s.closeCurrentGenerationLocked()
+	s.mu.Unlock()
+	if metrics == nil {
+		return true
+	}
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type:    llm.RealtimeEventTypeMetricsCollected,
+		Metrics: metrics,
+	})
+}
+
 func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string]any) bool {
 	call := &llm.FunctionCall{
 		ID:        speechmaticsRealtimeString(item, "id"),
@@ -646,6 +665,71 @@ func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string
 	default:
 	}
 	return true
+}
+
+func (s *speechmaticsRealtimeSession) recordFirstToken(itemID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.generation == nil || s.generation.done || s.generation.messages[itemID] == nil {
+		return
+	}
+	if s.generation.firstToken.IsZero() {
+		s.generation.firstToken = time.Now()
+	}
+}
+
+func (s *speechmaticsRealtimeSession) responseDoneMetricsLocked(response map[string]any) *telemetry.RealtimeModelMetrics {
+	if s.generation == nil {
+		return nil
+	}
+	generation := s.generation
+	now := time.Now()
+	createdAt := generation.createdAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	requestID := generation.responseID
+	status := ""
+	var usage map[string]any
+	if response != nil {
+		if id := speechmaticsRealtimeString(response, "id"); id != "" {
+			requestID = id
+		}
+		status = speechmaticsRealtimeString(response, "status")
+		usage, _ = response["usage"].(map[string]any)
+	}
+	duration := now.Sub(createdAt).Seconds()
+	if duration < 0 {
+		duration = 0
+	}
+	ttft := -1.0
+	if !generation.firstToken.IsZero() {
+		ttft = generation.firstToken.Sub(createdAt).Seconds()
+		if ttft < 0 {
+			ttft = 0
+		}
+	}
+	outputTokens := speechmaticsRealtimeInt(usage, "output_tokens")
+	tokensPerSecond := 0.0
+	if duration > 0 {
+		tokensPerSecond = float64(outputTokens) / duration
+	}
+	return &telemetry.RealtimeModelMetrics{
+		Timestamp:       createdAt,
+		RequestID:       requestID,
+		Label:           "speechmatics.RealtimeModel",
+		Duration:        duration,
+		TTFT:            ttft,
+		Cancelled:       status == "cancelled",
+		InputTokens:     speechmaticsRealtimeInt(usage, "input_tokens"),
+		OutputTokens:    outputTokens,
+		TotalTokens:     speechmaticsRealtimeInt(usage, "total_tokens"),
+		TokensPerSecond: tokensPerSecond,
+		Metadata: &telemetry.Metadata{
+			ModelName:     s.model,
+			ModelProvider: "Speechmatics",
+		},
+	}
 }
 
 func (s *speechmaticsRealtimeSession) realtimeMessageLocked(itemID string) *speechmaticsRealtimeMessage {
