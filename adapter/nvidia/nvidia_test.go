@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -14,6 +15,16 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/hraban/opus"
 )
+
+func concatNvidiaRealtimeOutboundAudioData(frames []*model.AudioFrame) []byte {
+	var data []byte
+	for _, frame := range frames {
+		if frame != nil {
+			data = append(data, frame.Data...)
+		}
+	}
+	return data
+}
 
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nvidia" {
@@ -293,6 +304,49 @@ func TestNvidiaRealtimePushAudioPreservesResampleRemainderLikeReference(t *testi
 	}
 	if got, want := total, uint32(3); got != want {
 		t.Fatalf("total resampled samples = %d, want %d from stateful 16 kHz -> 24 kHz resampler", got, want)
+	}
+}
+
+func TestNvidiaRealtimePushAudioPreservesResamplePhaseLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	wholeSession, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("whole Session() error = %v", err)
+	}
+	whole, ok := wholeSession.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("whole session type = %T, want *nvidiaRealtimeSession", wholeSession)
+	}
+	splitSession, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("split Session() error = %v", err)
+	}
+	split, ok := splitSession.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("split session type = %T, want *nvidiaRealtimeSession", splitSession)
+	}
+
+	if err := wholeSession.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{10, 20}),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}); err != nil {
+		t.Fatalf("whole PushAudio() error = %v", err)
+	}
+	for i, sample := range []int16{10, 20} {
+		if err := splitSession.PushAudio(&model.AudioFrame{
+			Data:              int16SliceToLittleEndianBytes([]int16{sample}),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("split PushAudio(%d) error = %v", i, err)
+		}
+	}
+
+	if got, want := concatNvidiaRealtimeOutboundAudioData(split.outboundAudio), concatNvidiaRealtimeOutboundAudioData(whole.outboundAudio); !bytes.Equal(got, want) {
+		t.Fatalf("split resampled PCM = %v, want whole-frame PCM %v from stateful resampler phase", littleEndianBytesToInt16Slice(got), littleEndianBytesToInt16Slice(want))
 	}
 }
 
