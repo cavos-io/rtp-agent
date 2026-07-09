@@ -586,6 +586,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 			},
 		}
 	}
+	s.currentGeneration = nil
 }
 
 func (s *nvidiaRealtimeSession) resetSilenceTimerLocked() {

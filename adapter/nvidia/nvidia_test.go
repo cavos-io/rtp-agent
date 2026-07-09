@@ -411,6 +411,36 @@ func TestNvidiaRealtimeTextOnlyMetricsUseReferenceTTFT(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeFinalizeClearsCurrentGenerationLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	concrete.handleTextToken("hello")
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got, want := <-msg.TextCh, "hello"; got != want {
+		t.Fatalf("text delta = %q, want %q", got, want)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	<-session.EventCh()
+	if concrete.currentGeneration != nil {
+		t.Fatalf("currentGeneration after finalize = %+v, want nil like reference", concrete.currentGeneration)
+	}
+}
+
 func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()
