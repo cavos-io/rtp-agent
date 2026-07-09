@@ -168,6 +168,7 @@ type nvidiaSTTStream struct {
 	closed          bool
 	inputEnded      bool
 	speaking        bool
+	inputSampleRate uint32
 	startTimeOffset float64
 	startTime       float64
 }
@@ -199,10 +200,27 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
+	if err := s.checkInputSampleRate(frame); err != nil {
+		return err
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
 	return fmt.Errorf("nvidia riva stt streaming is not implemented")
+}
+
+func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
+	if frame == nil || frame.SampleRate == 0 {
+		return nil
+	}
+	if s.inputSampleRate == 0 {
+		s.inputSampleRate = frame.SampleRate
+		return nil
+	}
+	if s.inputSampleRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	return nil
 }
 
 func (s *nvidiaSTTStream) Flush() error {
