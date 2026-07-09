@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -613,6 +614,42 @@ func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeSessionPreconnectsConfiguredProviderLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		connected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before preconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for configured PersonaPlex session preconnect")
+	}
+}
+
 func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
@@ -653,6 +690,67 @@ func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for dial failure error event")
+	}
+}
+
+func TestNvidiaRealtimeDialFailureRetriesLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want initial dial error event", ev)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before dial failure event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial dial failure event")
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before reconnect: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for retry reconnect after recoverable dial failure")
 	}
 }
 
@@ -737,6 +835,86 @@ func TestNvidiaRealtimeProviderWriteFailureEmitsRecoverableErrorLikeReference(t 
 	}
 }
 
+func TestNvidiaRealtimeProviderWriteFailureRetriesLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete := session.(*nvidiaRealtimeSession)
+	concrete.baseURL, concrete.useSSL = normalizeNvidiaRealtimeBaseURL(server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	concrete.mu.Lock()
+	concrete.transportStarted = true
+	concrete.transportCtx = ctx
+	concrete.transportCancel = cancel
+	concrete.outboundMessages = [][]byte{{nvidiaRealtimeMsgAudio, 1, 2, 3}}
+	concrete.mu.Unlock()
+
+	closedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer closedServer.Close()
+	clientConn, _, err := websocket.DefaultDialer.Dial(strings.Replace(closedServer.URL, "http://", "ws://", 1), nil)
+	if err != nil {
+		t.Fatalf("Dial(closed server) error = %v", err)
+	}
+	_ = clientConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		concrete.sendRealtimeTransport(ctx, clientConn)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendRealtimeTransport blocked on closed websocket")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for write failure error event")
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before write-failure retry: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for retry reconnect after provider write failure")
+	}
+}
+
 func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverErr := make(chan error, 1)
@@ -795,18 +973,30 @@ func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(
 
 func TestNvidiaRealtimeHandshakeNormalCloseClearsPendingAudioLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
 	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			serverErr <- err
 			return
 		}
 		defer conn.Close()
-		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+		if attempt == 1 {
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
+			}
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
 			serverErr <- err
 			return
 		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
@@ -828,33 +1018,82 @@ func TestNvidiaRealtimeHandshakeNormalCloseClearsPendingAudioLikeReference(t *te
 		t.Fatalf("PushAudio() error = %v", err)
 	}
 
-	deadline := time.After(time.Second)
-	for {
-		concrete.mu.Lock()
-		started := concrete.transportStarted
-		pendingMessages := len(concrete.outboundMessages)
-		pendingAudio := len(concrete.inputAudioBuffer)
-		encoder := concrete.opusEncoder
-		concrete.mu.Unlock()
-		if !started {
-			if pendingMessages != 0 {
-				t.Fatalf("outboundMessages after pre-handshake normal close = %d, want cleared", pendingMessages)
-			}
-			if pendingAudio != 0 {
-				t.Fatalf("inputAudioBuffer after pre-handshake normal close = %d, want cleared", pendingAudio)
-			}
-			if encoder != nil {
-				t.Fatal("opusEncoder after pre-handshake normal close != nil, want reset")
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before normal-close cleanup: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pre-handshake normal close cleanup")
+	}
+
+	concrete.mu.Lock()
+	pendingMessages := len(concrete.outboundMessages)
+	pendingAudio := len(concrete.inputAudioBuffer)
+	encoder := concrete.opusEncoder
+	concrete.mu.Unlock()
+	if pendingMessages != 0 {
+		t.Fatalf("outboundMessages after pre-handshake normal close = %d, want cleared", pendingMessages)
+	}
+	if pendingAudio != 0 {
+		t.Fatalf("inputAudioBuffer after pre-handshake normal close = %d, want cleared", pendingAudio)
+	}
+	if encoder != nil {
+		t.Fatal("opusEncoder after pre-handshake normal close != nil, want reset")
+	}
+}
+
+func TestNvidiaRealtimeHandshakeNormalCloseReconnectsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if attempt == 1 {
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
 			}
 			return
 		}
-		select {
-		case err := <-serverErr:
-			t.Fatalf("websocket server error before normal-close cleanup: %v", err)
-		case <-deadline:
-			t.Fatal("timed out waiting for pre-handshake normal close cleanup")
-		case <-time.After(10 * time.Millisecond):
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
 		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect after pre-handshake normal close")
 	}
 }
 
@@ -935,6 +1174,65 @@ func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *te
 	}
 	if _, ok := <-msg.TextCh; ok {
 		t.Fatal("TextCh open after provider normal close, want closed")
+	}
+}
+
+func TestNvidiaRealtimeProviderNormalCloseReconnectsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
+			}
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect after provider normal close")
 	}
 }
 
@@ -1038,6 +1336,79 @@ func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t 
 	}
 	if concrete.opusEncoder != nil {
 		t.Fatal("opusEncoder after abnormal close != nil, want fresh encoder on reconnect")
+	}
+}
+
+func TestNvidiaRealtimeAbnormalCloseRetriesLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "boom"), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
+			}
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	for {
+		select {
+		case ev := <-session.EventCh():
+			if ev.Type == llm.RealtimeEventTypeError {
+				goto waitReconnect
+			}
+		case err := <-serverErr:
+			t.Fatalf("websocket server error before abnormal-close error event: %v", err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for abnormal-close error event")
+		}
+	}
+
+waitReconnect:
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before abnormal-close retry: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for retry reconnect after abnormal provider close")
 	}
 }
 
@@ -1470,6 +1841,156 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			connected <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instruction-triggered provider reconnect")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("event after instruction reconnect = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session_reconnected after provider reconnect")
+	}
+}
+
+func TestNvidiaRealtimeInstructionUpdateDuringRetryReconnectsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	requestPaths := make(chan string, 4)
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths <- r.URL.RawQuery
+		if attempts.Add(1) == 1 {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry update: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial retryable dial error")
+	}
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry reconnect: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnect after instruction update during retry")
+	}
+
+	var sawNewPrompt bool
+	for {
+		select {
+		case query := <-requestPaths:
+			if strings.Contains(query, "text_prompt=new%20prompt") {
+				sawNewPrompt = true
+			}
+		default:
+			if !sawNewPrompt {
+				t.Fatal("reconnect did not use updated text_prompt")
+			}
+			return
+		}
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
@@ -1521,6 +2042,11 @@ func TestNvidiaRealtimeCloseClearsPendingAudioLikeReference(t *testing.T) {
 	if !ok {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	concrete.transportStarted = true
+	concrete.transportCtx = ctx
+	concrete.transportCancel = cancel
 
 	full := makeNvidiaRealtimePCMInputFrame()
 	if err := session.PushAudio(&model.AudioFrame{
@@ -2041,6 +2567,39 @@ func TestNvidiaTTSStreamNextWaitsForFlushLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamStartsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after completed sentence = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after completed sentence before Flush")
+	}
+}
+
 func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
@@ -2118,7 +2677,7 @@ func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamIgnoresSecondSegmentLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2139,10 +2698,19 @@ func TestNvidiaTTSStreamIgnoresSecondSegmentLikeReference(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 	if err := stream.PushText("second"); err != nil {
-		t.Fatalf("PushText(second) error = %v, want nil ignored second segment", err)
+		t.Fatalf("PushText(second) error = %v, want nil accepted second segment", err)
 	}
-	if got, want := concrete.text, "first"; got != want {
-		t.Fatalf("stream text = %q, want only first segment %q", got, want)
+	if got, want := concrete.text, "firstsecond"; got != want {
+		t.Fatalf("stream text = %q, want both flushed segments %q", got, want)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+	if err := stream.PushText("third"); err != nil {
+		t.Fatalf("PushText(third) error = %v, want nil accepted third segment", err)
+	}
+	if got, want := concrete.text, "firstsecondthird"; got != want {
+		t.Fatalf("stream text after third segment = %q, want all flushed segments %q", got, want)
 	}
 }
 
@@ -2175,12 +2743,21 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText("late"); err != nil {
 		t.Fatalf("PushText(late) error = %v", err)
 	}
-	if got, want := concrete.text, "   "; got != want {
-		t.Fatalf("text after second segment = %q, want preserved first whitespace segment %q", got, want)
+	if got, want := concrete.text, "   late"; got != want {
+		t.Fatalf("text after second segment = %q, want preserved whitespace plus late text %q", got, want)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+	if err := stream.PushText(" tail"); err != nil {
+		t.Fatalf("PushText(tail) error = %v", err)
+	}
+	if got, want := concrete.text, "   late tail"; got != want {
+		t.Fatalf("text after third segment = %q, want all text after whitespace flush %q", got, want)
 	}
 }
 
-func TestNvidiaTTSStreamIgnoredSecondSegmentDoesNotTriggerTransportLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamWhitespaceFlushStillAcceptsLaterTextLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2213,19 +2790,11 @@ func TestNvidiaTTSStreamIgnoredSecondSegmentDoesNotTriggerTransportLikeReference
 	}()
 	select {
 	case err := <-done:
-		t.Fatalf("Next() after ignored second segment returned %v, want wait like reference", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	select {
-	case err := <-done:
-		if err != io.EOF {
-			t.Fatalf("Next() after Close error = %v, want EOF", err)
+		if err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after later flushed text returned %v, want unsupported transport error", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not unblock after Close")
+		t.Fatal("Next() after later flushed text did not start transport")
 	}
 }
 
