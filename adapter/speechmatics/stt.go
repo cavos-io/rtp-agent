@@ -1,6 +1,7 @@
 package speechmatics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1284,9 +1285,8 @@ func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment text")
 }
@@ -1311,9 +1311,8 @@ func speechmaticsUnmarshalReferenceSegmentSpeakerID(data []byte) (string, error)
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment speaker id")
 }
@@ -1338,9 +1337,8 @@ func speechmaticsUnmarshalReferenceSegmentLanguage(data []byte) (string, error) 
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported segment language")
 }
@@ -1357,19 +1355,43 @@ func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
 	return "[" + strings.Join(parts, ", ") + "]", nil
 }
 
-func speechmaticsReferenceObjectText(object map[string]json.RawMessage) (string, error) {
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
+func speechmaticsReferenceObjectTextRaw(data []byte) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		text, err := speechmaticsReferenceTextValue(object[key])
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return "", fmt.Errorf("not an object")
+	}
+	parts := make([]string, 0)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return "", fmt.Errorf("object key must be a string")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return "", err
+		}
+		text, err := speechmaticsReferenceTextValue(value)
 		if err != nil {
 			return "", err
 		}
 		parts = append(parts, speechmaticsReferenceStringText(key)+": "+text)
+	}
+	token, err = decoder.Token()
+	if err != nil {
+		return "", err
+	}
+	delim, ok = token.(json.Delim)
+	if !ok || delim != '}' {
+		return "", fmt.Errorf("object is not closed")
 	}
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
@@ -1397,9 +1419,8 @@ func speechmaticsReferenceTextValue(data []byte) (string, error) {
 	if err := json.Unmarshal(data, &list); err == nil {
 		return speechmaticsReferenceListText(list)
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err == nil {
-		return speechmaticsReferenceObjectText(object)
+	if text, err := speechmaticsReferenceObjectTextRaw(data); err == nil {
+		return text, nil
 	}
 	return "", fmt.Errorf("unsupported list text value")
 }
