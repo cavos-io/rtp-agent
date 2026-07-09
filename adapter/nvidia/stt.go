@@ -121,6 +121,9 @@ func (s *NvidiaSTT) InputSampleRate() uint32 {
 	if s == nil {
 		return defaultNvidiaSTTSampleRate
 	}
+	if s.sampleRate < 0 {
+		return 0
+	}
 	return uint32(s.sampleRate)
 }
 func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
@@ -162,6 +165,7 @@ type nvidiaSTTStream struct {
 	language        string
 	closed          bool
 	inputEnded      bool
+	flushed         bool
 	speaking        bool
 	inputSampleRate uint32
 	startTimeOffset float64
@@ -205,6 +209,9 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if err := s.checkInputSampleRate(frame); err != nil {
 		return err
 	}
+	if s.flushed {
+		return nil
+	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -237,7 +244,7 @@ func (s *nvidiaSTTStream) Flush() error {
 			return err
 		}
 	}
-	s.inputEnded = true
+	s.flushed = true
 	return nil
 }
 
@@ -267,6 +274,9 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, io.EOF
 	}
 	if s.inputEnded {
+		return nil, io.EOF
+	}
+	if s.flushed {
 		return nil, io.EOF
 	}
 	if s.ctx != nil {

@@ -27,6 +27,8 @@ const (
 	defaultNvidiaRealtimeSampleRate         = 24000
 	defaultNvidiaRealtimeNumChannels        = 1
 	defaultNvidiaRealtimeInputChunkSamples  = 1920
+	nvidiaRealtimeEventBuffer               = 1024
+	nvidiaRealtimeGenerationStreamBuffer    = 1024
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
 	nvidiaRealtimeMsgHandshake              = 0x00
 	nvidiaRealtimeMsgAudio                  = 0x01
@@ -213,7 +215,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             make(chan llm.RealtimeEvent, 16),
+		events:             make(chan llm.RealtimeEvent, nvidiaRealtimeEventBuffer),
 	}, nil
 }
 
@@ -302,6 +304,7 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	s.textPrompt = instructions
+	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	return nil
 }
@@ -350,6 +353,7 @@ func (s *nvidiaRealtimeSession) Close() error {
 		return nil
 	}
 	s.finalizeGenerationLocked(true)
+	s.resetRealtimeTransportLocked()
 	s.closed = true
 	close(s.events)
 	return nil
@@ -392,6 +396,13 @@ func (s *nvidiaRealtimeSession) websocketURL() string {
 	return buildNvidiaRealtimeWebsocketURL(s.useSSL, s.baseURL, s.voice, s.textPrompt, s.seed)
 }
 
+func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
+	s.outboundMessages = nil
+	s.inputAudioBuffer = nil
+	s.opusEncoder = nil
+	s.opusDecoder = nil
+}
+
 func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -431,7 +442,6 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 		return
 	}
 	generation := s.ensureGenerationLocked()
-	generation.markFirstToken()
 	generation.outputText += text
 	generation.textCh <- text
 }
@@ -511,9 +521,9 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 1),
-		textCh:       make(chan string, 16),
-		timedTextCh:  make(chan llm.RealtimeTimedText, 16),
-		audioCh:      make(chan *model.AudioFrame, 16),
+		textCh:       make(chan string, nvidiaRealtimeGenerationStreamBuffer),
+		timedTextCh:  make(chan llm.RealtimeTimedText, nvidiaRealtimeGenerationStreamBuffer),
+		audioCh:      make(chan *model.AudioFrame, nvidiaRealtimeGenerationStreamBuffer),
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
@@ -578,6 +588,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 			},
 		}
 	}
+	s.currentGeneration = nil
 }
 
 func (s *nvidiaRealtimeSession) resetSilenceTimerLocked() {

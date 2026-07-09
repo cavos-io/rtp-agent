@@ -158,7 +158,7 @@ func (s *nvidiaTTSChunkedStream) Exception() error {
 
 func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputEnded {
 		return nil
@@ -170,7 +170,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(text) == "" {
+	if text == "" {
 		return nil
 	}
 	if s.flushed {
@@ -183,7 +183,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 
 func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputEnded {
 		return nil
@@ -203,7 +203,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 
 func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputEnded {
 		return nil
@@ -237,6 +237,10 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	if s.inputEnded && !s.hasText {
+		s.done = true
+		return nil, io.EOF
+	}
+	if s.inputEnded && strings.TrimSpace(s.text) == "" {
 		s.done = true
 		return nil, io.EOF
 	}
