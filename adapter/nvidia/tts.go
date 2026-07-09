@@ -33,25 +33,19 @@ type NvidiaTTSOption func(*NvidiaTTS)
 
 func WithNvidiaTTSServer(server string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if server != "" {
-			t.server = server
-		}
+		t.server = server
 	}
 }
 
 func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if functionID != "" {
-			t.functionID = functionID
-		}
+		t.functionID = functionID
 	}
 }
 
 func WithNvidiaTTSLanguageCode(languageCode string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if languageCode != "" {
-			t.languageCode = languageCode
-		}
+		t.languageCode = languageCode
 	}
 }
 
@@ -111,10 +105,14 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	ctx       context.Context
-	done      bool
-	closed    bool
-	exception error
+	ctx        context.Context
+	done       bool
+	closed     bool
+	inputEnded bool
+	hasText    bool
+	flushed    bool
+	text       string
+	exception  error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -162,6 +160,9 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true
@@ -172,6 +173,11 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	if s.flushed {
+		return nil
+	}
+	s.hasText = true
+	s.text += text
 	return nil
 }
 
@@ -179,12 +185,42 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true
 			s.exception = err
 			return err
 		}
+	}
+	if s.hasText {
+		s.flushed = true
+	}
+	return nil
+}
+
+func (s *nvidiaTTSSynthesizeStream) EndInput() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
+			return err
+		}
+	}
+	if !s.flushed {
+		s.flushed = s.hasText
+	}
+	s.inputEnded = true
+	if !s.hasText {
+		s.done = true
 	}
 	return nil
 }
@@ -197,6 +233,10 @@ func (s *nvidiaTTSSynthesizeStream) Close() error {
 
 func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		s.done = true
+		return nil, io.EOF
+	}
+	if s.inputEnded && !s.hasText {
 		s.done = true
 		return nil, io.EOF
 	}

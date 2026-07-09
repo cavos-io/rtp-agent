@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -36,33 +37,25 @@ type NvidiaSTTOption func(*NvidiaSTT)
 
 func WithNvidiaSTTServer(server string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if server != "" {
-			s.server = server
-		}
+		s.server = server
 	}
 }
 
 func WithNvidiaSTTFunctionID(functionID string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if functionID != "" {
-			s.functionID = functionID
-		}
+		s.functionID = functionID
 	}
 }
 
 func WithNvidiaSTTLanguage(language string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 
 func WithNvidiaSTTSampleRate(sampleRate int) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
@@ -86,9 +79,7 @@ func WithNvidiaSTTDiarization(enabled bool) NvidiaSTTOption {
 
 func WithNvidiaSTTMaxSpeakerCount(count int) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if count >= 0 {
-			s.maxSpeakerCount = count
-		}
+		s.maxSpeakerCount = count
 	}
 }
 
@@ -127,7 +118,7 @@ func (s *NvidiaSTT) Provider() string {
 	return "nvidia"
 }
 func (s *NvidiaSTT) InputSampleRate() uint32 {
-	if s == nil || s.sampleRate <= 0 {
+	if s == nil {
 		return defaultNvidiaSTTSampleRate
 	}
 	return uint32(s.sampleRate)
@@ -150,14 +141,18 @@ func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ stri
 }
 
 func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	streamLanguage := s.language
 	if language != "" {
 		streamLanguage = language
 	}
 	return &nvidiaSTTStream{
-		stt:      s,
-		ctx:      ctx,
-		language: streamLanguage,
+		stt:       s,
+		ctx:       ctx,
+		language:  streamLanguage,
+		startTime: float64(time.Now().UnixNano()) / float64(time.Second),
 	}, nil
 }
 
@@ -166,9 +161,12 @@ type nvidiaSTTStream struct {
 	ctx             context.Context
 	language        string
 	closed          bool
+	inputEnded      bool
 	speaking        bool
+	inputSampleRate uint32
 	startTimeOffset float64
 	startTime       float64
+	requestSeq      int
 }
 
 type nvidiaSTTWord struct {
@@ -185,18 +183,27 @@ type nvidiaSTTAlternative struct {
 }
 
 type nvidiaSTTResult struct {
+	RequestID   string
 	IsFinal     bool
 	Alternative nvidiaSTTAlternative
 }
 
+type nvidiaSTTResponse struct {
+	RequestID string
+	Results   []nvidiaSTTResult
+}
+
 func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if err := s.checkInputSampleRate(frame); err != nil {
+		return err
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -204,8 +211,25 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	return fmt.Errorf("nvidia riva stt streaming is not implemented")
 }
 
+func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
+	if frame == nil {
+		return nil
+	}
+	if s.inputSampleRate == 0 {
+		if frame.SampleRate == 0 {
+			return nil
+		}
+		s.inputSampleRate = frame.SampleRate
+		return nil
+	}
+	if s.inputSampleRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	return nil
+}
+
 func (s *nvidiaSTTStream) Flush() error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
@@ -213,6 +237,23 @@ func (s *nvidiaSTTStream) Flush() error {
 			return err
 		}
 	}
+	s.inputEnded = true
+	return nil
+}
+
+func (s *nvidiaSTTStream) EndInput() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	s.inputEnded = true
 	return nil
 }
 
@@ -223,6 +264,9 @@ func (s *nvidiaSTTStream) Close() error {
 
 func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.closed {
+		return nil, io.EOF
+	}
+	if s.inputEnded {
 		return nil, io.EOF
 	}
 	if s.ctx != nil {
@@ -253,10 +297,30 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 	}
 	events = append(events, stt.SpeechEvent{
 		Type:         eventType,
+		RequestID:    result.RequestID,
 		Alternatives: []stt.SpeechData{s.speechDataFromAlternative(result.Alternative, result.IsFinal)},
 	})
 	if result.IsFinal && s.speaking {
 		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+	}
+	return events
+}
+
+func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.SpeechEvent {
+	events := make([]stt.SpeechEvent, 0, len(response.Results)+2)
+	requestID := response.RequestID
+	for _, result := range response.Results {
+		if strings.TrimSpace(result.Alternative.Transcript) == "" {
+			continue
+		}
+		if result.RequestID == "" {
+			if requestID == "" {
+				s.requestSeq++
+				requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
+			}
+			result.RequestID = requestID
+		}
+		events = append(events, s.eventsFromResult(result)...)
 	}
 	return events
 }
