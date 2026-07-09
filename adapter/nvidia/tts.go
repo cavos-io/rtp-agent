@@ -21,6 +21,7 @@ const (
 	defaultNvidiaTTSSampleRate = 16000
 	nvidiaAPIKeyEnv            = "NVIDIA_API_KEY"
 	nvidiaTTSMissingAPIKey     = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	nvidiaTTSWhitespaceCutset  = " \t\r\n\f\v"
 )
 
 var nvidiaTTSNewlineWhitespace = regexp.MustCompile(`\s*\n+\s*`)
@@ -202,13 +203,19 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	text = nvidiaTTSNewlineWhitespace.ReplaceAllString(text, " ")
+	text, collapsePreviousWhitespace := nvidiaTTSNormalizeInputText(text)
 	if s.flushed && s.pendingText != "" {
+		if collapsePreviousWhitespace {
+			s.pendingText = strings.TrimRight(s.pendingText, nvidiaTTSWhitespaceCutset)
+		}
 		s.pendingText += text
 		s.notifyLocked()
 		return nil
 	}
 	s.hasText = true
+	if collapsePreviousWhitespace {
+		s.text = strings.TrimRight(s.text, nvidiaTTSWhitespaceCutset)
+	}
 	s.text += text
 	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
 		s.text = prefix
@@ -342,6 +349,24 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.exception
+}
+
+func nvidiaTTSNormalizeInputText(text string) (string, bool) {
+	return nvidiaTTSNewlineWhitespace.ReplaceAllString(text, " "), nvidiaTTSStartsWithNewlineGroup(text)
+}
+
+func nvidiaTTSStartsWithNewlineGroup(text string) bool {
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '\n':
+			return true
+		case ' ', '\t', '\r', '\f', '\v':
+			continue
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {

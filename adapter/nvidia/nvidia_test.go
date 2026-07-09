@@ -2675,6 +2675,34 @@ func TestNvidiaTTSStreamCollapsesNewlineWhitespaceLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamCollapsesSplitNewlineWhitespaceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long "); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.PushText("\n enough. Next"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if got, want := concrete.text, "This sentence is long enough."; got != want {
+		t.Fatalf("released text = %q, want collapsed split newline whitespace %q", got, want)
+	}
+	if got, want := concrete.pendingText, "Next"; got != want {
+		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamNormalizesCRLFSentenceLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
