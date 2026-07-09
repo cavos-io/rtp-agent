@@ -131,6 +131,8 @@ type nvidiaTTSSynthesizeStream struct {
 	flushed      bool
 	text         string
 	pendingText  string
+	readyText    []string
+	queuedLen    int
 	exception    error
 }
 
@@ -215,11 +217,15 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	s.hasText = true
 	if collapsePreviousWhitespace {
 		s.text = strings.TrimRight(s.text, nvidiaTTSWhitespaceCutset)
+		if s.queuedLen > len(s.text) {
+			s.queuedLen = len(s.text)
+		}
 	}
 	s.text += text
 	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
 		s.text = prefix
 		s.pendingText = tail
+		s.queueReadyTextLocked(prefix)
 		s.flushed = true
 	}
 	s.notifyLocked()
@@ -244,6 +250,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 		}
 	}
 	if s.hasText {
+		s.queuePendingInputLocked()
 		s.flushed = true
 		s.notifyLocked()
 	}
@@ -268,6 +275,7 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 		}
 	}
 	if s.hasText {
+		s.queuePendingInputLocked()
 		s.flushed = true
 	}
 	s.inputEnded = true
@@ -313,7 +321,7 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				return nil, err
 			}
 		}
-		if s.flushed && s.hasText && strings.TrimSpace(s.text) != "" {
+		if s.flushed && s.hasText && s.nextReadyTextLocked() != "" {
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
@@ -337,6 +345,34 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (s *nvidiaTTSSynthesizeStream) queuePendingInputLocked() {
+	if s.pendingText != "" {
+		s.queueReadyTextLocked(s.pendingText)
+		s.pendingText = ""
+		return
+	}
+	if s.queuedLen > len(s.text) {
+		s.queuedLen = len(s.text)
+	}
+	s.queueReadyTextLocked(s.text[s.queuedLen:])
+}
+
+func (s *nvidiaTTSSynthesizeStream) queueReadyTextLocked(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	s.readyText = append(s.readyText, text)
+	s.queuedLen = len(s.text)
+}
+
+func (s *nvidiaTTSSynthesizeStream) nextReadyTextLocked() string {
+	if len(s.readyText) > 0 {
+		return s.readyText[0]
+	}
+	return strings.TrimSpace(s.text)
 }
 
 func (s *nvidiaTTSSynthesizeStream) Done() bool {

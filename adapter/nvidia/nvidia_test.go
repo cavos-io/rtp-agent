@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2870,6 +2871,34 @@ func TestNvidiaTTSStreamKeepsSentenceTailPendingLikeReference(t *testing.T) {
 	}
 	if got, want := concrete.pendingText, "Next"; got != want {
 		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamFlushQueuesPendingSentenceTailLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got, want := concrete.readyText, []string{"This sentence is long enough.", "Next"}; !slices.Equal(got, want) {
+		t.Fatalf("readyText after Flush = %q, want completed sentence then pending tail %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText after Flush = %q, want empty after tail queued", got)
 	}
 }
 
