@@ -23,6 +23,7 @@ const (
 
 type NvidiaSTT struct {
 	apiKey          string
+	apiKeyExplicit  bool
 	model           string
 	functionID      string
 	server          string
@@ -35,6 +36,13 @@ type NvidiaSTT struct {
 }
 
 type NvidiaSTTOption func(*NvidiaSTT)
+
+func WithNvidiaSTTAPIKey(apiKey string) NvidiaSTTOption {
+	return func(s *NvidiaSTT) {
+		s.apiKey = apiKey
+		s.apiKeyExplicit = true
+	}
+}
 
 func WithNvidiaSTTServer(server string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
@@ -113,7 +121,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 	for _, opt := range opts {
 		opt(provider)
 	}
-	if provider.useSSL && provider.apiKey == "" {
+	if provider.useSSL && provider.apiKey == "" && !provider.apiKeyExplicit {
 		return nil, fmt.Errorf("nvidia api key is required while using SSL")
 	}
 	return provider, nil
