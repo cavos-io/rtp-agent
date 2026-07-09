@@ -3989,6 +3989,42 @@ func TestNvidiaTTSStreamStartsTemporalStartersAfterSuffixLikeReference(t *testin
 	}
 }
 
+func TestNvidiaTTSStreamStartsCommandStarterAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		_, _ = stream.Next()
+		done <- struct{}{}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Go follows now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if !concrete.flushed {
+		t.Fatal("flushed = false after command starter, want completed sentence boundary")
+	}
+	if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+		t.Fatalf("text = %q, want first sentence %q", got, want)
+	}
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after suffix command starter boundary")
+	}
+}
+
 func TestNvidiaTTSStreamStartsStarterAfterRepeatedSpacesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
