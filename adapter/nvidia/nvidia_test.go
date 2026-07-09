@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -14,6 +15,16 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/hraban/opus"
 )
+
+func concatNvidiaRealtimeOutboundAudioData(frames []*model.AudioFrame) []byte {
+	var data []byte
+	for _, frame := range frames {
+		if frame != nil {
+			data = append(data, frame.Data...)
+		}
+	}
+	return data
+}
 
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nvidia" {
@@ -137,6 +148,9 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := concrete.textPrompt, "new prompt"; got != want {
 		t.Fatalf("session textPrompt = %q, want %q", got, want)
 	}
+	if ev := <-session.EventCh(); ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+		t.Fatalf("instruction update event = %+v, want session_reconnected", ev)
+	}
 	if got, want := concrete.voice, "VARF1"; got != want {
 		t.Fatalf("session voice = %q, want reference snapshot %q", got, want)
 	}
@@ -170,7 +184,7 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if got, want := len(concrete.outboundAudio), 0; got != want {
 		t.Fatalf("outboundAudio after empty PushAudio = %d, want %d", got, want)
 	}
-	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio(non-empty) error = %v", err)
 	}
@@ -193,8 +207,12 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if err := session.Truncate(llm.RealtimeTruncateOptions{MessageID: "msg", Modalities: []string{"audio"}, AudioEndMillis: 12}); err != nil {
 		t.Fatalf("Truncate() error = %v", err)
 	}
-	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil || !strings.Contains(err.Error(), "generate_reply is not yet supported") {
+	generateReplyErr := "generate_reply is not yet supported by the PersonaPlex realtime model."
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil || err.Error() != generateReplyErr {
 		t.Fatalf("GenerateReply() error = %v, want reference unsupported generation error", err)
+	}
+	if err := session.Say("hello"); err == nil || err.Error() != "RealtimeSession does not implement say(). use a TTS model instead" {
+		t.Fatalf("Say() error = %v, want reference unsupported say error", err)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -224,11 +242,15 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
 
+	stereo := make([]int16, 0, 960*2)
+	for i := 0; i < 960; i++ {
+		stereo = append(stereo, int16(i), int16(-i))
+	}
 	frame := &model.AudioFrame{
-		Data:              int16SliceToLittleEndianBytes([]int16{1000, -1000, 500, -500}),
+		Data:              int16SliceToLittleEndianBytes(stereo),
 		SampleRate:        16000,
 		NumChannels:       2,
-		SamplesPerChannel: 2,
+		SamplesPerChannel: 960,
 		ParticipantID:     "caller-1",
 	}
 	if err := session.PushAudio(frame); err != nil {
@@ -243,8 +265,8 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	if got.SampleRate != 24000 || got.NumChannels != 1 {
 		t.Fatalf("outbound audio format = %d Hz/%d ch, want 24000 Hz/1 ch", got.SampleRate, got.NumChannels)
 	}
-	if got.SamplesPerChannel != 3 {
-		t.Fatalf("outbound SamplesPerChannel = %d, want 3 from 16 kHz to 24 kHz resample", got.SamplesPerChannel)
+	if got.SamplesPerChannel == 0 {
+		t.Fatal("outbound SamplesPerChannel = 0, want resampled output after reference buffering threshold")
 	}
 	if got.ParticipantID != "caller-1" {
 		t.Fatalf("outbound ParticipantID = %q, want caller-1", got.ParticipantID)
@@ -254,6 +276,136 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	}
 	if got.Data[0] == 99 {
 		t.Fatal("outbound audio aliases source frame, want immutable copy")
+	}
+}
+
+func TestNvidiaRealtimePushAudioPreservesResampleRemainderLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	samples := make([]int16, 960)
+	for i := range samples {
+		samples[i] = int16(100 + i)
+	}
+	for i := 0; i < 3; i++ {
+		chunk := samples[i*320 : (i+1)*320]
+		frame := &model.AudioFrame{
+			Data:              int16SliceToLittleEndianBytes(chunk),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(chunk)),
+		}
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio(%d) error = %v", i, err)
+		}
+		if i < 2 && len(concrete.outboundAudio) != 0 {
+			t.Fatalf("outboundAudio after partial chunk %d = %d, want buffered input until reference resampler emits", i, len(concrete.outboundAudio))
+		}
+	}
+
+	var total uint32
+	for _, frame := range concrete.outboundAudio {
+		total += frame.SamplesPerChannel
+	}
+	if total == 0 {
+		t.Fatal("total resampled samples = 0, want output after accumulated 16 kHz input reaches reference buffering threshold")
+	}
+}
+
+func TestNvidiaRealtimePushAudioPreservesResamplePhaseLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	wholeSession, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("whole Session() error = %v", err)
+	}
+	whole, ok := wholeSession.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("whole session type = %T, want *nvidiaRealtimeSession", wholeSession)
+	}
+	splitSession, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("split Session() error = %v", err)
+	}
+	split, ok := splitSession.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("split session type = %T, want *nvidiaRealtimeSession", splitSession)
+	}
+
+	samples := make([]int16, 960)
+	for i := range samples {
+		samples[i] = int16((i%64 - 32) * 32)
+	}
+	if err := wholeSession.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(samples),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(samples)),
+	}); err != nil {
+		t.Fatalf("whole PushAudio() error = %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		chunk := samples[i*480 : (i+1)*480]
+		if err := splitSession.PushAudio(&model.AudioFrame{
+			Data:              int16SliceToLittleEndianBytes(chunk),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(chunk)),
+		}); err != nil {
+			t.Fatalf("split PushAudio(%d) error = %v", i, err)
+		}
+	}
+
+	if len(whole.outboundAudio) == 0 || len(split.outboundAudio) == 0 {
+		t.Fatalf("resampled output missing: whole=%d split=%d", len(whole.outboundAudio), len(split.outboundAudio))
+	}
+	if got, want := concatNvidiaRealtimeOutboundAudioData(split.outboundAudio), concatNvidiaRealtimeOutboundAudioData(whole.outboundAudio); !bytes.Equal(got, want) {
+		t.Fatalf("split resampled PCM = %v, want whole-frame PCM %v from stateful resampler phase", littleEndianBytesToInt16Slice(got), littleEndianBytesToInt16Slice(want))
+	}
+}
+
+func TestNvidiaRealtimePushAudioBuffersSmallResampledFramesLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sampleRate uint32
+		samples    int
+	}{
+		{name: "sixteen-kilohertz", sampleRate: 16000, samples: 160},
+		{name: "forty-eight-kilohertz", sampleRate: 48000, samples: 960},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			realtimeModel := NewNvidiaRealtimeModel()
+			session, err := realtimeModel.Session()
+			if err != nil {
+				t.Fatalf("Session() error = %v", err)
+			}
+			concrete, ok := session.(*nvidiaRealtimeSession)
+			if !ok {
+				t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+			}
+
+			samples := make([]int16, tc.samples)
+			for i := range samples {
+				samples[i] = int16(i)
+			}
+			if err := session.PushAudio(&model.AudioFrame{
+				Data:              int16SliceToLittleEndianBytes(samples),
+				SampleRate:        tc.sampleRate,
+				NumChannels:       1,
+				SamplesPerChannel: uint32(len(samples)),
+			}); err != nil {
+				t.Fatalf("PushAudio(small resampled frame) error = %v", err)
+			}
+			if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+				t.Fatalf("small resampled frame queued audio=%d messages=%d buffered=%d, want pending resampler input only", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+			}
+		})
 	}
 }
 
@@ -279,6 +431,56 @@ func TestNvidiaRealtimePushAudioSkipsMalformedFramesLikeReference(t *testing.T) 
 	}
 	if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
 		t.Fatalf("malformed frame queued audio=%d messages=%d buffered=%d, want all empty", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+	}
+}
+
+func TestNvidiaRealtimePushAudioSkipsZeroRateFramesLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{7}),
+		SampleRate:        0,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(zero-rate) error = %v, want nil skipped frame", err)
+	}
+	if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+		t.Fatalf("zero-rate frame queued audio=%d messages=%d buffered=%d, want all empty", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+	}
+}
+
+func TestNvidiaRealtimePushAudioSkipsOddBytePCMFramesLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{7},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(odd-byte PCM) error = %v, want nil skipped frame", err)
+	}
+	if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+		t.Fatalf("odd-byte frame queued audio=%d messages=%d buffered=%d, want all empty", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
 	}
 }
 
@@ -728,6 +930,34 @@ func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *tes
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got, want := concrete.textPrompt, "new prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want %q", got, want)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("event after instruction update = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for session_reconnected after instruction update")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
@@ -993,7 +1223,8 @@ func TestNvidiaTTSRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 
 	_, err := NewNvidiaTTS("", "")
 
-	if err == nil || !strings.Contains(err.Error(), "nvidia api key") {
+	wantErr := "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	if err == nil || err.Error() != wantErr {
 		t.Fatalf("NewNvidiaTTS error = %v, want missing key error", err)
 	}
 }
@@ -1111,6 +1342,9 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
 		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
 	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+		t.Fatalf("Next() after synthesis error = (%v, %v), want repeated reference task exception", audio, err)
+	}
 }
 
 func TestNvidiaTTSSynthesizeEmptyTextEndsWithoutTransport(t *testing.T) {
@@ -1181,6 +1415,9 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	if doneStream.Done() {
 		t.Fatal("Done() = true before stream output")
 	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() before output error = %v", err)
+	}
 	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
 		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported stream error", audio, err)
 	}
@@ -1247,6 +1484,48 @@ func TestNvidiaTTSStreamNextWaitsForInputLikeReference(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
+func TestNvidiaTTSStreamNextWaitsForFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after unflushed text returned (%v, %v), want wait for flush like reference", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Flush")
 	}
 }
 
@@ -1389,6 +1668,55 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamIgnoredSecondSegmentDoesNotTriggerTransportLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText(late) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			t.Errorf("Next() audio = %v, want nil before close", audio)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Next() after ignored second segment returned %v, want wait like reference", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != io.EOF {
+			t.Fatalf("Next() after Close error = %v, want EOF", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
 func TestNvidiaTTSStreamWhitespaceOnlyEndInputDrainsLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
@@ -1513,7 +1841,8 @@ func TestNvidiaSTTRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 
 	_, err := NewNvidiaSTT("", "")
 
-	if err == nil || !strings.Contains(err.Error(), "nvidia api key") {
+	wantErr := "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	if err == nil || err.Error() != wantErr {
 		t.Fatalf("NewNvidiaSTT error = %v, want missing key error", err)
 	}
 }
@@ -1817,7 +2146,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	blank := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -1837,6 +2166,7 @@ func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testi
 		}},
 	})
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
+		RequestID: "nvidia-response-explicit",
 		Results: []nvidiaSTTResult{{
 			RequestID: "explicit-result",
 			IsFinal:   true,
@@ -1860,8 +2190,8 @@ func TestNvidiaSTTResponseEventsSynthesizeMissingRequestIDLikeReference(t *testi
 	if got, want := first[1].RequestID, "nvidia-response-1"; got != want {
 		t.Fatalf("first fallback RequestID = %q, want %q", got, want)
 	}
-	if got, want := second[0].RequestID, "explicit-result"; got != want {
-		t.Fatalf("explicit result RequestID = %q, want %q", got, want)
+	if got, want := second[0].RequestID, "nvidia-response-explicit"; got != want {
+		t.Fatalf("result RequestID = %q, want response-level id %q", got, want)
 	}
 	if got, want := third[0].RequestID, "nvidia-response-2"; got != want {
 		t.Fatalf("third fallback RequestID = %q, want %q", got, want)
@@ -2120,6 +2450,32 @@ func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTEndInputFlushesBeforeCloseLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if !concrete.flushed {
+		t.Fatal("EndInput() left flushed=false, want implicit flush boundary before input close")
+	}
+}
+
 func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
@@ -2248,7 +2604,8 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
 	}
-	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || !strings.Contains(err.Error(), "riva stt recognition is not implemented") {
+	recognizeErr := "Not implemented"
+	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || err.Error() != recognizeErr {
 		t.Fatalf("Recognize() error = %v, want explicit unsupported recognition error", err)
 	}
 

@@ -14,11 +14,13 @@ import (
 )
 
 const (
-	defaultNvidiaSTTServer     = "grpc.nvcf.nvidia.com:443"
-	defaultNvidiaSTTModel      = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
-	defaultNvidiaSTTFunctionID = "1598d209-5e27-4d3c-8079-4751568b1081"
-	defaultNvidiaSTTLanguage   = "en-US"
-	defaultNvidiaSTTSampleRate = 16000
+	defaultNvidiaSTTServer        = "grpc.nvcf.nvidia.com:443"
+	defaultNvidiaSTTModel         = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
+	defaultNvidiaSTTFunctionID    = "1598d209-5e27-4d3c-8079-4751568b1081"
+	defaultNvidiaSTTLanguage      = "en-US"
+	defaultNvidiaSTTSampleRate    = 16000
+	nvidiaSTTRecognizeUnsupported = "Not implemented"
+	nvidiaSTTMissingAPIKey        = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
 
 type NvidiaSTT struct {
@@ -122,7 +124,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		opt(provider)
 	}
 	if provider.useSSL && provider.apiKey == "" && !provider.apiKeyExplicit {
-		return nil, fmt.Errorf("nvidia api key is required while using SSL")
+		return nil, fmt.Errorf("%s", nvidiaSTTMissingAPIKey)
 	}
 	return provider, nil
 }
@@ -155,7 +157,7 @@ func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ stri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("nvidia riva stt recognition is not implemented")
+	return nil, fmt.Errorf("%s", nvidiaSTTRecognizeUnsupported)
 }
 
 func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -294,6 +296,7 @@ func (s *nvidiaSTTStream) EndInput() error {
 			return err
 		}
 	}
+	s.flushed = true
 	s.inputEnded = true
 	s.notifyLocked()
 	return nil
@@ -382,13 +385,11 @@ func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.S
 		if strings.TrimSpace(result.Alternative.Transcript) == "" {
 			continue
 		}
-		if result.RequestID == "" {
-			if requestID == "" {
-				s.requestSeq++
-				requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
-			}
-			result.RequestID = requestID
+		if requestID == "" {
+			s.requestSeq++
+			requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
 		}
+		result.RequestID = requestID
 		events = append(events, s.eventsFromResult(result)...)
 	}
 	return events

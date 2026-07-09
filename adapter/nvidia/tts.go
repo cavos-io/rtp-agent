@@ -18,6 +18,7 @@ const (
 	defaultNvidiaTTSLanguage   = "en-US"
 	defaultNvidiaTTSSampleRate = 16000
 	nvidiaAPIKeyEnv            = "NVIDIA_API_KEY"
+	nvidiaTTSMissingAPIKey     = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
 
 type NvidiaTTS struct {
@@ -83,7 +84,7 @@ func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*Nvidia
 		opt(provider)
 	}
 	if provider.useSSL && provider.apiKey == "" {
-		return nil, fmt.Errorf("nvidia api key is required while using SSL")
+		return nil, fmt.Errorf("%s", nvidiaTTSMissingAPIKey)
 	}
 	return provider, nil
 }
@@ -136,6 +137,9 @@ type nvidiaTTSChunkedStream struct {
 
 func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.done {
+		if s.exception != nil {
+			return nil, s.exception
+		}
 		return nil, io.EOF
 	}
 	if s.ctx != nil {
@@ -243,8 +247,8 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 			return err
 		}
 	}
-	if !s.flushed {
-		s.flushed = s.hasText
+	if s.hasText {
+		s.flushed = true
 	}
 	s.inputEnded = true
 	if !s.hasText {
@@ -289,7 +293,7 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				return nil, err
 			}
 		}
-		if s.hasText && strings.TrimSpace(s.text) != "" {
+		if s.flushed && s.hasText && strings.TrimSpace(s.text) != "" {
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
