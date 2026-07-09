@@ -298,6 +298,22 @@ func TestNvidiaTTSAllowsEmptyLanguageCodeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAllowsEmptyRoutingOptionsLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "",
+		WithNvidiaTTSServer(""),
+		WithNvidiaTTSFunctionID(""),
+	)
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	if got, want := provider.server, ""; got != want {
+		t.Fatalf("server = %q, want explicit empty server", got)
+	}
+	if got, want := provider.functionID, ""; got != want {
+		t.Fatalf("functionID = %q, want explicit empty function id", got)
+	}
+}
+
 func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

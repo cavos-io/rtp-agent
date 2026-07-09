@@ -33,17 +33,13 @@ type NvidiaTTSOption func(*NvidiaTTS)
 
 func WithNvidiaTTSServer(server string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if server != "" {
-			t.server = server
-		}
+		t.server = server
 	}
 }
 
 func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
-		if functionID != "" {
-			t.functionID = functionID
-		}
+		t.functionID = functionID
 	}
 }
 
