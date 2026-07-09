@@ -3686,6 +3686,7 @@ func (s *speechmaticsSTTStream) handleVADStartOfSpeech() {
 	s.pendingLocalEndpointingEOU = false
 	s.localEndpointingEOUSeq++
 	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
 	s.mu.Unlock()
 }
 
@@ -3864,6 +3865,7 @@ func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	s.pendingLocalEndpointingEOU = false
 	s.localEndpointingEOUSeq++
 	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
 	s.mu.Unlock()
 }
 
@@ -3873,6 +3875,8 @@ func speechmaticsClearLatestEndpointingAnnotation(state *speechmaticsStreamState
 	}
 	state.latestSegmentAnnotationSet = false
 	state.latestSegmentAnnotation = nil
+	state.latestSegmentEndTimeSet = false
+	state.latestSegmentEndTime = 0
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
