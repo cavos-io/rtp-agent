@@ -89,7 +89,10 @@ func NewNvidiaRealtimeModel(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
 func normalizeNvidiaRealtimeBaseURL(baseURL string) (string, bool) {
 	useSSL := strings.HasPrefix(baseURL, "wss://") || strings.HasPrefix(baseURL, "https://")
 	for _, prefix := range []string{"ws://", "wss://", "http://", "https://"} {
-		baseURL = strings.TrimPrefix(baseURL, prefix)
+		if strings.HasPrefix(baseURL, prefix) {
+			baseURL = strings.TrimPrefix(baseURL, prefix)
+			break
+		}
 	}
 	return baseURL, useSSL
 }

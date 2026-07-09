@@ -118,6 +118,17 @@ func TestNvidiaRealtimeAllowsZeroSilenceThresholdLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeStripsOnlyFirstURLSchemeLikeReference(t *testing.T) {
+	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL("wss://http://personaplex.local:8998"))
+
+	if got, want := model.baseURL, "http://personaplex.local:8998"; got != want {
+		t.Fatalf("baseURL = %q, want one reference scheme stripped to %q", got, want)
+	}
+	if !model.useSSL {
+		t.Fatal("useSSL = false, want true from first wss scheme")
+	}
+}
+
 func TestNvidiaTTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
