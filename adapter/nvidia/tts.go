@@ -100,7 +100,7 @@ func (t *NvidiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("nvidia riva tts synthesis is not implemented")
+	return &nvidiaTTSChunkedStream{ctx: ctx, text: text}, nil
 }
 
 func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -113,6 +113,33 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type nvidiaTTSSynthesizeStream struct {
 	ctx    context.Context
 	closed bool
+}
+
+type nvidiaTTSChunkedStream struct {
+	ctx    context.Context
+	text   string
+	closed bool
+}
+
+func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(s.text) == "" {
+		s.closed = true
+		return nil, io.EOF
+	}
+	return nil, fmt.Errorf("nvidia riva tts synthesis is not implemented")
+}
+
+func (s *nvidiaTTSChunkedStream) Close() error {
+	s.closed = true
+	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {

@@ -140,8 +140,30 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
 	}
 
-	if _, err := provider.Synthesize(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
-		t.Fatalf("Synthesize() error = %v, want explicit unsupported synthesis error", err)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v, want chunked stream before native transport", err)
+	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported synthesis error", audio, err)
+	}
+}
+
+func TestNvidiaTTSSynthesizeEmptyTextEndsWithoutTransport(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if audio, err := stream.Next(); err != io.EOF || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil EOF for empty input", audio, err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
