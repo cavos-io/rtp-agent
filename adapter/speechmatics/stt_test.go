@@ -5117,6 +5117,32 @@ func TestSpeechmaticsSegmentEventsRecordReferenceActiveSegmentAnnotations(t *tes
 	}
 }
 
+func TestSpeechmaticsSegmentEventsIgnoreReferenceInvalidAnnotationShape(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"annotation shape",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":true,
+			"annotation":{"slow_speaker":true},
+			"metadata":{"start_time":0.1,"end_time":0.3}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	state := &speechmaticsStreamState{}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript despite invalid annotation shape", events)
+	}
+	if len(state.latestSegmentAnnotation) != 0 {
+		t.Fatalf("latest segment annotation = %#v, want ignored invalid reference annotation", state.latestSegmentAnnotation)
+	}
+}
+
 func TestSpeechmaticsRawTranscriptRecordsReferenceFinalEOSAnnotationForLocalVAD(t *testing.T) {
 	state := &speechmaticsStreamState{}
 	resp := smResponse{Message: "AddTranscript"}

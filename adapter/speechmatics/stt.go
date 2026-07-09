@@ -1529,6 +1529,13 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 				}
 			}
 		}
+		if annotation, ok := segment["annotation"]; ok && string(annotation) != "null" {
+			var values []string
+			if err := json.Unmarshal(annotation, &values); err != nil {
+				segment["annotation"] = []byte("[]")
+				changed = true
+			}
+		}
 		isActive, ok := segment["is_active"]
 		if !ok || string(isActive) == "null" {
 			continue
