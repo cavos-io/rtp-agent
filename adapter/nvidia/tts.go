@@ -438,10 +438,13 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedSuffix(text, dot, text[next:]) {
 		return true
 	}
-	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
+	if nvidiaTTSFirstPhDDot(text, dot) {
 		return true
 	}
-	if nvidiaTTSProtectedPhD(text, dot) {
+	if nvidiaTTSFinalPhDDot(text, dot) {
+		return !nvidiaTTSTailStartsSentence(text[next:])
+	}
+	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedDecimal(text, dot, next) {
@@ -527,10 +530,11 @@ func nvidiaTTSASCIIAlpha(b byte) bool {
 	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }
 
-func nvidiaTTSProtectedPhD(text string, dot int) bool {
-	if dot >= 2 && text[dot-2:dot+1] == "Ph." {
-		return dot+2 < len(text) && text[dot+1:dot+3] == "D."
-	}
+func nvidiaTTSFirstPhDDot(text string, dot int) bool {
+	return dot >= 2 && text[dot-2:dot+1] == "Ph." && dot+2 < len(text) && text[dot+1:dot+3] == "D."
+}
+
+func nvidiaTTSFinalPhDDot(text string, dot int) bool {
 	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
 }
 
