@@ -5085,6 +5085,25 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPe
 	}
 }
 
+func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceSmartTurnPenalty(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation: []string{
+				"smart_turn_true",
+				"ends_with_final",
+				"ends_with_eos",
+			},
+		},
+	}
+
+	if got, want := stream.localEndpointingDelay(), 80*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference smart-turn true final EOS delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsFilterReferenceWrappedSystemSpeakerLabels(t *testing.T) {
 	if !speechmaticsSystemSpeakerID("__assistant__") {
 		t.Fatal("lowercase wrapped speaker was not classified as reference system speaker")

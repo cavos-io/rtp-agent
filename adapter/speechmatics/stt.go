@@ -81,10 +81,12 @@ const (
 	speechmaticsAnnotationHasDisfluency           = "has_disfluency"
 	speechmaticsAnnotationVerySlowSpeaker         = "very_slow_speaker"
 	speechmaticsAnnotationSlowSpeaker             = "slow_speaker"
+	speechmaticsAnnotationSmartTurnTrue           = "smart_turn_true"
 	speechmaticsAdaptiveEndsWithDisfluencyPenalty = 2.5
 	speechmaticsAdaptiveHasDisfluencyPenalty      = 1.1
 	speechmaticsAdaptiveVerySlowSpeakerPenalty    = 3.0
 	speechmaticsAdaptiveSlowSpeakerPenalty        = 2.0
+	speechmaticsAdaptiveSmartTurnTruePenalty      = 0.2
 )
 
 var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
@@ -112,6 +114,7 @@ func speechmaticsLocalEndpointingDelayWithAnnotations(s *SpeechmaticsSTT, annota
 		if s.eouSilenceTrigger != nil {
 			delay = *s.eouSilenceTrigger
 		}
+		delay *= speechmaticsAdaptiveAnnotationPenalty(annotations)
 		if s.eouMaxDelay != nil && *s.eouMaxDelay < delay {
 			delay = *s.eouMaxDelay
 		}
@@ -144,6 +147,9 @@ func speechmaticsAdaptiveAnnotationPenalty(annotations []string) float64 {
 	if speechmaticsStringInSlice(speechmaticsAnnotationEndsWithFinal, annotations) &&
 		speechmaticsStringInSlice(speechmaticsAnnotationEndsWithEOS, annotations) {
 		penalty *= speechmaticsAdaptiveFinalEOSPenalty
+	}
+	if speechmaticsStringInSlice(speechmaticsAnnotationSmartTurnTrue, annotations) {
+		penalty *= speechmaticsAdaptiveSmartTurnTruePenalty
 	}
 	return penalty
 }
