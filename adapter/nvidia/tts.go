@@ -339,20 +339,28 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	if len(trimmed) < 21 {
 		return "", "", false
 	}
-	for i := 0; i < len(trimmed)-1; i++ {
-		switch trimmed[i] {
+	for i, r := range trimmed {
+		next := i + len(string(r))
+		if next >= len(trimmed) {
+			break
+		}
+		switch r {
 		case '.', '!', '?':
-			if trimmed[i] == '.' && nvidiaTTSProtectedAbbreviation(trimmed[:i]) {
+			if r == '.' && nvidiaTTSProtectedAbbreviation(trimmed[:i]) {
 				continue
 			}
-			if trimmed[i] == '.' && nvidiaTTSProtectedInitial(trimmed[:i]) {
+			if r == '.' && nvidiaTTSProtectedInitial(trimmed[:i]) {
 				continue
 			}
-			if trimmed[i+1] != ' ' && trimmed[i+1] != '\n' && trimmed[i+1] != '\t' {
+			if trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
 				continue
 			}
-			if len(strings.TrimSpace(trimmed[:i+1])) >= 20 && strings.TrimSpace(trimmed[i+1:]) != "" {
-				return strings.TrimSpace(trimmed[:i+1]), strings.TrimSpace(trimmed[i+1:]), true
+			if len(strings.TrimSpace(trimmed[:next])) >= 20 && strings.TrimSpace(trimmed[next:]) != "" {
+				return strings.TrimSpace(trimmed[:next]), strings.TrimSpace(trimmed[next:]), true
+			}
+		case '。', '！', '？':
+			if len(strings.TrimSpace(trimmed[:next])) >= 20 && strings.TrimSpace(trimmed[next:]) != "" {
+				return strings.TrimSpace(trimmed[:next]), strings.TrimSpace(trimmed[next:]), true
 			}
 		}
 	}
