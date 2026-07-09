@@ -55,9 +55,7 @@ func WithNvidiaSTTLanguage(language string) NvidiaSTTOption {
 
 func WithNvidiaSTTSampleRate(sampleRate int) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if sampleRate >= 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
