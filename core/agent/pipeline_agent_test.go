@@ -4761,6 +4761,41 @@ func TestPipelineAgentGeneratedReplyTTSErrorSkipsAssistantCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGeneratedReplyRealLLMStreamErrorSkipsPartialCommit(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	cause := errors.New("real generated reply llm stream failure")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "partial answer"}},
+			},
+			err: cause,
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive generated reply LLM stream error")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for failed generated reply LLM stream", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items for failed generated reply LLM stream", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentSynthesizeSpeechStopsTranscriptForwarderAfterTTSStartupError(t *testing.T) {
 	cause := errors.New("tts stream startup failed")
 	chatCtx := llm.NewChatContext()
