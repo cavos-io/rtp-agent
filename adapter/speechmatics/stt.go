@@ -1262,6 +1262,17 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 	return false, fmt.Errorf("unsupported truthy bool")
 }
 
+func speechmaticsUnmarshalReferenceBoolNumber(data []byte) (float64, bool) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return 1, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
 func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
 	if string(data) == "null" {
 		return "None", nil
@@ -1487,6 +1498,36 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 			}
 			segment["language"] = encoded
 			changed = true
+		}
+		if metadataRaw, ok := segment["metadata"]; ok && string(metadataRaw) != "null" {
+			var metadata map[string]json.RawMessage
+			if err := json.Unmarshal(metadataRaw, &metadata); err == nil {
+				metadataChanged := false
+				for _, field := range []string{"start_time", "end_time"} {
+					rawTiming, ok := metadata[field]
+					if !ok || string(rawTiming) == "null" {
+						continue
+					}
+					value, converted := speechmaticsUnmarshalReferenceBoolNumber(rawTiming)
+					if !converted {
+						continue
+					}
+					encoded, err := json.Marshal(value)
+					if err != nil {
+						return nil, err
+					}
+					metadata[field] = encoded
+					metadataChanged = true
+					changed = true
+				}
+				if metadataChanged {
+					encodedMetadata, err := json.Marshal(metadata)
+					if err != nil {
+						return nil, err
+					}
+					segment["metadata"] = encodedMetadata
+				}
+			}
 		}
 		isActive, ok := segment["is_active"]
 		if !ok || string(isActive) == "null" {
