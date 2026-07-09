@@ -277,6 +277,29 @@ func TestRunResultWatchSpeechHandleRecordsAddedItems(t *testing.T) {
 	}
 }
 
+func TestRunResultWatchSpeechHandleRecordsToolItems(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	call := &llm.FunctionCall{ID: "item_1/fnc_0", CallID: "call_1", Name: "lookup", Arguments: "{}"}
+	output := &llm.FunctionCallOutput{CallID: "call_1", Name: "lookup", Output: "ok"}
+
+	result.WatchSpeechHandle(speech)
+	speech.AddChatItems(call, output)
+
+	events := result.Events()
+	if len(events) != 2 {
+		t.Fatalf("Events length = %d, want 2", len(events))
+	}
+	callEvent, ok := events[0].(*FunctionCallEvent)
+	if !ok || callEvent.Item != call {
+		t.Fatalf("first event = %#v, want function call event", events[0])
+	}
+	outputEvent, ok := events[1].(*FunctionCallOutputEvent)
+	if !ok || outputEvent.Item != output {
+		t.Fatalf("second event = %#v, want function call output event", events[1])
+	}
+}
+
 func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	first := NewSpeechHandle(true, DefaultInputDetails())
