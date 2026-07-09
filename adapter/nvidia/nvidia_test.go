@@ -536,6 +536,52 @@ func TestNvidiaRealtimeTextDeltasDoNotBlockPastBufferLikeReference(t *testing.T)
 	}
 }
 
+func TestNvidiaRealtimeAudioFramesDoNotBlockPastBufferLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+
+	pcm := makeNvidiaRealtimePCMFrame()
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        defaultNvidiaRealtimeSampleRate,
+		NumChannels:       defaultNvidiaRealtimeNumChannels,
+		SamplesPerChannel: uint32(len(pcm) / defaultNvidiaRealtimeNumChannels),
+	}
+	const extra = 128
+	total := nvidiaRealtimeGenerationStreamBuffer + extra
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < total; i++ {
+			concrete.handleAudioFrame(frame)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		ev := <-session.EventCh()
+		msg := <-ev.Generation.MessageCh
+		for i := 0; i < total; i++ {
+			<-msg.AudioCh
+		}
+		<-done
+		t.Fatal("handleAudioFrame blocked after fixed stream buffer filled, want reference unbounded stream behavior")
+	}
+}
+
 func TestNvidiaRealtimeTurnEventsDoNotBlockBeforeConsumerLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()

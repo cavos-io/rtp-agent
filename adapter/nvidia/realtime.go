@@ -74,7 +74,7 @@ type nvidiaRealtimeGeneration struct {
 	functionCh   chan *llm.FunctionCall
 	textStream   *nvidiaRealtimeUnboundedStream[string]
 	timedTextCh  chan llm.RealtimeTimedText
-	audioCh      chan *model.AudioFrame
+	audioStream  *nvidiaRealtimeUnboundedStream[*model.AudioFrame]
 	modalitiesCh chan []string
 	outputText   string
 	createdAt    time.Time
@@ -545,12 +545,12 @@ func (s *nvidiaRealtimeSession) handleAudioPayload(payload []byte) {
 	data := int16SliceToLittleEndianBytes(pcm[:n])
 	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
-	generation.audioCh <- &model.AudioFrame{
+	generation.audioStream.send(&model.AudioFrame{
 		Data:              data,
 		SampleRate:        defaultNvidiaRealtimeSampleRate,
 		NumChannels:       defaultNvidiaRealtimeNumChannels,
 		SamplesPerChannel: uint32(n / defaultNvidiaRealtimeNumChannels),
-	}
+	})
 	s.resetSilenceTimerLocked()
 }
 
@@ -562,7 +562,7 @@ func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
 	}
 	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
-	generation.audioCh <- frame
+	generation.audioStream.send(frame)
 	s.resetSilenceTimerLocked()
 }
 
@@ -578,7 +578,7 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		functionCh:   make(chan *llm.FunctionCall, 1),
 		textStream:   newNvidiaRealtimeUnboundedStream[string](),
 		timedTextCh:  make(chan llm.RealtimeTimedText, nvidiaRealtimeGenerationStreamBuffer),
-		audioCh:      make(chan *model.AudioFrame, nvidiaRealtimeGenerationStreamBuffer),
+		audioStream:  newNvidiaRealtimeUnboundedStream[*model.AudioFrame](),
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
@@ -587,7 +587,7 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		MessageID:    responseID,
 		TextCh:       generation.textStream.channel(),
 		TimedTextCh:  generation.timedTextCh,
-		AudioCh:      generation.audioCh,
+		AudioCh:      generation.audioStream.channel(),
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.currentGeneration = generation
@@ -611,7 +611,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 	generation.done = true
 	generation.textStream.close()
 	close(generation.timedTextCh)
-	close(generation.audioCh)
+	generation.audioStream.close()
 	close(generation.functionCh)
 	close(generation.messageCh)
 	close(generation.modalitiesCh)
