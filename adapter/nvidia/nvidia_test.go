@@ -31,6 +31,12 @@ func concatNvidiaRealtimeOutboundAudioData(frames []*model.AudioFrame) []byte {
 	return data
 }
 
+func newNvidiaRealtimeModelWithoutPreconnect(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
+	model := NewNvidiaRealtimeModel(opts...)
+	model.preconnect = false
+	return model
+}
+
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nvidia" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.nvidia", PluginTitle)
@@ -71,6 +77,9 @@ func TestNvidiaRealtimeDefaultsMatchReference(t *testing.T) {
 	}
 	if got, want := model.silenceThresholdMS, 500; got != want {
 		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
+	}
+	if !model.preconnect {
+		t.Fatal("preconnect = false, want default session connection started like reference")
 	}
 	if model.useSSL {
 		t.Fatal("useSSL = true, want false for reference localhost default")
@@ -237,7 +246,7 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 }
 
 func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel()
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect()
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -856,7 +865,7 @@ func TestNvidiaRealtimeProviderWriteFailureRetriesLikeReference(t *testing.T) {
 	}))
 	defer server.Close()
 
-	realtimeModel := NewNvidiaRealtimeModel()
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect()
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1728,7 +1737,7 @@ func TestNvidiaRealtimeTurnEventsDoNotBlockPastBufferLikeReference(t *testing.T)
 }
 
 func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1779,7 +1788,7 @@ func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
 }
 
 func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1815,7 +1824,7 @@ func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *tes
 }
 
 func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1843,7 +1852,7 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T
 }
 
 func TestNvidiaRealtimeInstructionUpdatesCoalescePendingReconnectLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1879,7 +1888,7 @@ func TestNvidiaRealtimeInstructionUpdatesCoalescePendingReconnectLikeReference(t
 }
 
 func TestNvidiaRealtimeInstructionUpdatesCoalesceBufferedReconnectLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -1921,7 +1930,7 @@ func TestNvidiaRealtimeInstructionUpdatesCoalesceBufferedReconnectLikeReference(
 }
 
 func TestNvidiaRealtimeInstructionUpdateAfterReconnectEventRestartsAgainLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -2283,7 +2292,7 @@ func TestNvidiaRealtimeInstructionUpdateAfterRetryReconnectRestartsAgainLikeRefe
 }
 
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -2381,7 +2390,7 @@ func TestNvidiaRealtimeCloseClearsPendingAudioLikeReference(t *testing.T) {
 }
 
 func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)

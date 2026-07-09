@@ -224,7 +224,7 @@ func NewNvidiaRealtimeModel(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
 		textPrompt:         defaultNvidiaRealtimeTextPrompt,
 		silenceThresholdMS: defaultNvidiaRealtimeSilenceThresholdMS,
 		useSSL:             useSSL,
-		preconnect:         os.Getenv(nvidiaPersonaplexURLEnv) != "",
+		preconnect:         true,
 	}
 	for _, opt := range opts {
 		opt(model)
