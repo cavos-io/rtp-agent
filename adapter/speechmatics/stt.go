@@ -1056,6 +1056,8 @@ type speechmaticsStreamState struct {
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
+	latestSegmentEndTimeSet    bool
+	latestSegmentEndTime       float64
 }
 
 type smAlternative struct {
@@ -2627,6 +2629,8 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	annotations = speechmaticsAppendRawSpeechRateAnnotation(annotations, fragments)
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
+	state.latestSegmentEndTimeSet = true
+	state.latestSegmentEndTime = fragments[len(fragments)-1].endTime - speechmaticsStartTimeOffset(state)
 }
 
 func speechmaticsAppendRawDisfluencyAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
@@ -2795,14 +2799,14 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			(speakerPresent && segment.SpeakerID != "" && speechmaticsConfiguredSpeakerFiltered(speakerID, state)) {
 			continue
 		}
-		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
-		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active)
 		formatSpeakerID := speakerID
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
 		startTime := segment.Metadata.StartTime + startTimeOffset
 		endTime := segment.Metadata.EndTime + startTimeOffset
+		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
+		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active, segment.Metadata.EndTime)
 		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state), startTime, endTime, segment.Annotation, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -2905,12 +2909,14 @@ func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.Spe
 		left.Language == right.Language
 }
 
-func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool) {
+func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool, endTime float64) {
 	if state == nil || !active {
 		return
 	}
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
+	state.latestSegmentEndTimeSet = true
+	state.latestSegmentEndTime = endTime
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
@@ -3734,12 +3740,33 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	}
 	s.mu.Unlock()
 	if annotationsSet {
-		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations)
+		return s.subtractReferenceTTFBFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations))
 	}
 	if hasTranscript {
-		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped})
+		return s.subtractReferenceTTFBFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped}))
 	}
 	return speechmaticsLocalEndpointingDelay(s.owner)
+}
+
+func (s *speechmaticsSTTStream) subtractReferenceTTFBFromEndpointingDelay(delay time.Duration) time.Duration {
+	if s == nil || delay <= speechmaticsMinEndOfTurnDelay {
+		return delay
+	}
+	s.mu.Lock()
+	state := s.state
+	var lag float64
+	if state != nil && state.latestSegmentEndTimeSet && state.audioSecondsSent > state.latestSegmentEndTime {
+		lag = state.audioSecondsSent - state.latestSegmentEndTime
+	}
+	s.mu.Unlock()
+	if lag <= 0 {
+		return delay
+	}
+	delay -= time.Duration(lag * float64(time.Second))
+	if delay < speechmaticsMinEndOfTurnDelay {
+		return speechmaticsMinEndOfTurnDelay
+	}
+	return delay
 }
 
 func (s *speechmaticsSTTStream) sendScheduledLocalEndpointingForceEndOfUtterance(seq uint64) {
