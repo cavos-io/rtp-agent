@@ -1397,28 +1397,54 @@ func TestSpeechmaticsTTSChunkedStreamReadCancelDropsReturnedAudio(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamReadErrorDropsBufferedAudio(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:       &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}},
+		ctx:          context.Background(),
+		sampleRate:   24000,
+		retryAttempt: llm.DefaultAPIConnectOptions().MaxRetry,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil when provider read error cancels buffered PCM", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamSurfacesReadErrorAfterAudio(t *testing.T) {
-	body := &speechmaticsDataThenErrorBody{data: []byte{0x01, 0x02}}
+	body := &speechmaticsDataThenErrorBody{data: make([]byte, 2400)}
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     body,
-		sampleRate: 24000,
+		sampleRate: 6000,
 	}
 
 	audio, err := stream.Next()
 	if err != nil {
 		t.Fatalf("first Next error = %v, want audio before provider read error", err)
 	}
-	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
-		t.Fatalf("first Next = %+v, want provider audio bytes", audio)
+	if audio == nil || audio.Frame == nil || audio.Frame.SamplesPerChannel != 60 {
+		t.Fatalf("first Next = %+v, want emitted progressive audio before provider read error", audio)
 	}
 	if got, want := body.closeCount, 1; got != want {
 		t.Fatalf("response body close count after terminal read = %d, want %d", got, want)
 	}
 
-	_, err = stream.Next()
+	for i := 0; i < 10; i++ {
+		audio, err = stream.Next()
+		if err != nil {
+			break
+		}
+		if audio == nil || audio.Frame == nil {
+			t.Fatalf("Next[%d] = %+v, want progressive audio or terminal read error", i+2, audio)
+		}
+	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("terminal Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

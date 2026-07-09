@@ -961,6 +961,9 @@ func speechmaticsKnownSpeakerConfig(speakers []SpeechmaticsSpeakerIdentifier) []
 	config := make([]map[string]interface{}, 0, len(speakers))
 	for _, speaker := range speakers {
 		identifiers := cloneSpeechmaticsStringSlice(speaker.SpeakerIdentifiers)
+		if identifiers == nil {
+			identifiers = []string{}
+		}
 		entry := map[string]interface{}{
 			"label":               speaker.Label,
 			"speaker_identifiers": identifiers,
@@ -1048,6 +1051,7 @@ type speechmaticsStreamState struct {
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
 	latestRawPartialEvents     []*stt.SpeechEvent
+	latestRawPartialContext    []*stt.SpeechEvent
 	splitRawFinalEOSSentences  bool
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
@@ -2251,6 +2255,7 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 func speechmaticsClearLatestRawPartialEvents(state *speechmaticsStreamState) {
 	if state != nil {
 		state.latestRawPartialEvents = nil
+		state.latestRawPartialContext = nil
 	}
 }
 
@@ -2316,12 +2321,21 @@ func speechmaticsMergeTranscriptEvent(left, right *stt.SpeechEvent, delimiter st
 		leftAlt.Text += delimiter + rightAlt.Text
 	}
 	leftAlt.EndTime = rightAlt.EndTime
+	leftCount := speechmaticsTranscriptConfidenceWeight(*leftAlt)
+	rightCount := speechmaticsTranscriptConfidenceWeight(rightAlt)
 	leftAlt.Words = append(leftAlt.Words, rightAlt.Words...)
 	if leftAlt.Confidence == 0 {
 		leftAlt.Confidence = rightAlt.Confidence
 	} else if rightAlt.Confidence != 0 {
-		leftAlt.Confidence = (leftAlt.Confidence + rightAlt.Confidence) / 2
+		leftAlt.Confidence = (leftAlt.Confidence*float64(leftCount) + rightAlt.Confidence*float64(rightCount)) / float64(leftCount+rightCount)
 	}
+}
+
+func speechmaticsTranscriptConfidenceWeight(data stt.SpeechData) int {
+	if len(data.Words) > 0 {
+		return len(data.Words)
+	}
+	return 1
 }
 
 type speechmaticsRawTranscriptFragment struct {
@@ -2376,17 +2390,28 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	var events []*stt.SpeechEvent
 	var flushedFinals []*stt.SpeechEvent
+	var partialContext []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
 		flushedFinals = append(flushedFinals, speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)...)
-		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
-		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+		state.latestRawPartialContext = speechmaticsCloneTranscriptEvents(flushedFinals)
+	}
+	if state != nil {
+		partialContext = state.latestRawPartialContext
 	}
 	if state != nil && !state.includePartials {
+		partials := speechmaticsRawFinalContextAsPartials(partialContext)
+		if speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
+			return events
+		}
+		if len(partials) > 0 {
+			state.latestRawPartialEvents = partials
+		}
+		events = append(events, partials...)
 		return events
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
-	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
+	partials = speechmaticsPrefixRawFinalContextToPartials(partials, partialContext, state)
 	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
 		return events
 	}
@@ -2397,30 +2422,85 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	return events
 }
 
-func speechmaticsDropDuplicateTranscriptPartials(partials, finals []*stt.SpeechEvent) []*stt.SpeechEvent {
+func speechmaticsRawFinalContextAsPartials(finals []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(finals) == 0 {
+		return nil
+	}
+	partials := make([]*stt.SpeechEvent, 0, len(finals))
+	for _, final := range finals {
+		if final == nil || final.Type != stt.SpeechEventFinalTranscript {
+			continue
+		}
+		partial := speechmaticsCloneTranscriptEvent(final)
+		partial.Type = stt.SpeechEventInterimTranscript
+		partials = append(partials, partial)
+	}
+	return partials
+}
+
+func speechmaticsPrefixRawFinalContextToPartials(partials, finals []*stt.SpeechEvent, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	if len(partials) == 0 || len(finals) == 0 {
 		return partials
 	}
-	kept := partials[:0]
+	prefixed := make([]*stt.SpeechEvent, 0, len(partials))
 	for _, partial := range partials {
-		if speechmaticsTranscriptDuplicatesAny(partial, finals) {
-			continue
-		}
-		kept = append(kept, partial)
+		prefixed = append(prefixed, speechmaticsPrefixRawFinalContextToPartial(partial, finals, state))
 	}
-	return kept
+	return prefixed
 }
 
-func speechmaticsTranscriptDuplicatesAny(event *stt.SpeechEvent, candidates []*stt.SpeechEvent) bool {
-	if event == nil {
+func speechmaticsPrefixRawFinalContextToPartial(partial *stt.SpeechEvent, finals []*stt.SpeechEvent, state *speechmaticsStreamState) *stt.SpeechEvent {
+	if partial == nil || partial.Type != stt.SpeechEventInterimTranscript || len(partial.Alternatives) != 1 {
+		return partial
+	}
+	prefixed := speechmaticsCloneTranscriptEvent(partial)
+	final := finals[len(finals)-1]
+	if !speechmaticsCanPrefixTranscriptEvent(final, prefixed) {
+		return partial
+	}
+	merged := speechmaticsCloneTranscriptEvent(final)
+	merged.Type = stt.SpeechEventInterimTranscript
+	speechmaticsMergeTranscriptEvent(merged, prefixed, speechmaticsRawWordDelimiter(state))
+	return merged
+}
+
+func speechmaticsCloneTranscriptEvents(events []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	clones := make([]*stt.SpeechEvent, 0, len(events))
+	for _, event := range events {
+		clones = append(clones, speechmaticsCloneTranscriptEvent(event))
+	}
+	return clones
+}
+
+func speechmaticsCanPrefixTranscriptEvent(prefix, event *stt.SpeechEvent) bool {
+	if prefix == nil || event == nil || prefix.Type != stt.SpeechEventFinalTranscript || event.Type != stt.SpeechEventInterimTranscript {
 		return false
 	}
-	for _, candidate := range candidates {
-		if speechmaticsTranscriptEventsSameTextTimingAndIdentity(event, candidate) {
-			return true
+	if len(prefix.Alternatives) != 1 || len(event.Alternatives) != 1 {
+		return false
+	}
+	prefixAlt := prefix.Alternatives[0]
+	eventAlt := event.Alternatives[0]
+	return prefixAlt.SpeakerID == eventAlt.SpeakerID && prefixAlt.Language == eventAlt.Language
+}
+
+func speechmaticsCloneTranscriptEvent(event *stt.SpeechEvent) *stt.SpeechEvent {
+	if event == nil {
+		return nil
+	}
+	clone := *event
+	if event.Alternatives != nil {
+		clone.Alternatives = append([]stt.SpeechData(nil), event.Alternatives...)
+		for i := range clone.Alternatives {
+			if clone.Alternatives[i].Words != nil {
+				clone.Alternatives[i].Words = append([]stt.TimedString(nil), clone.Alternatives[i].Words...)
+			}
 		}
 	}
-	return false
+	return &clone
 }
 
 func speechmaticsRawTranscriptEvents(resp smResponse, state *speechmaticsStreamState, eventType stt.SpeechEventType) []*stt.SpeechEvent {
@@ -2655,7 +2735,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	if fragments[0].formatSpeakerID != "" || speakerID == "" {
 		formatSpeakerID = fragments[0].formatSpeakerID
 	}
-	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, active, state)
+	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, fragments[0].language, fragments[0].startTime, fragments[len(fragments)-1].endTime, nil, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -2721,7 +2801,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
-		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, active, state)
+		startTime := segment.Metadata.StartTime + startTimeOffset
+		endTime := segment.Metadata.EndTime + startTimeOffset
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state), startTime, endTime, segment.Annotation, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -2729,8 +2811,8 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 					Text:      text,
 					Language:  speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state),
 					SpeakerID: speakerID,
-					StartTime: segment.Metadata.StartTime + startTimeOffset,
-					EndTime:   segment.Metadata.EndTime + startTimeOffset,
+					StartTime: startTime,
+					EndTime:   endTime,
 				},
 			},
 		})
@@ -2936,7 +3018,7 @@ func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
 	return "UU"
 }
 
-func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state *speechmaticsStreamState) string {
+func speechmaticsFormattedSegmentText(text, speakerID, language string, startTime, endTime float64, annotation []string, active bool, state *speechmaticsStreamState) string {
 	format := ""
 	if state != nil {
 		if active {
@@ -2948,8 +3030,50 @@ func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state
 	if format == "" {
 		format = "{text}"
 	}
-	format = strings.ReplaceAll(format, "{speaker_id}", speakerID)
-	return strings.ReplaceAll(format, "{text}", text)
+	ts := ""
+	if state != nil && state.startTime > 0 {
+		ts = speechmaticsReferenceTimestamp(state.startTime + startTime)
+	}
+	replacer := strings.NewReplacer(
+		"{speaker_id}", speakerID,
+		"{text}", text,
+		"{content}", text,
+		"{lang}", language,
+		"{start_time}", speechmaticsReferenceFloatText(startTime),
+		"{end_time}", speechmaticsReferenceFloatText(endTime),
+		"{annotation}", speechmaticsReferenceStringListText(annotation),
+		"{ts}", ts,
+	)
+	return replacer.Replace(format)
+}
+
+func speechmaticsReferenceFloatText(value float64) string {
+	text := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	return text
+}
+
+func speechmaticsReferenceStringListText(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, "'"+strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`)+"'")
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func speechmaticsReferenceTimestamp(seconds float64) string {
+	sec, frac := math.Modf(seconds)
+	msec := int64(math.Round(frac * 1000))
+	if msec >= 1000 {
+		sec++
+		msec -= 1000
+	}
+	return time.Unix(int64(sec), msec*int64(time.Millisecond)).UTC().Format("2006-01-02T15:04:05.000+00:00")
 }
 
 func speechmaticsStartTimeOffset(state *speechmaticsStreamState) float64 {
@@ -2990,14 +3114,19 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	s.pushedSampleRate = frame.SampleRate
+	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	vadStream := s.vadStream
 	bufferVAD := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVAD {
-		s.pendingVADFrames = append(s.pendingVADFrames, frame)
+		s.pendingVADFrames = append(s.pendingVADFrames, normalizedFrame)
 	}
 	s.mu.Unlock()
 	if vadStream != nil && !bufferVAD {
-		if err := vadStream.PushFrame(frame); err != nil {
+		if err := vadStream.PushFrame(normalizedFrame); err != nil {
 			s.enqueueError(err)
 			_ = s.Close()
 			return err
@@ -3015,12 +3144,8 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
-	if len(frame.Data) == 0 {
+	if len(normalizedFrame.Data) == 0 {
 		return nil
-	}
-	normalizedFrame, err := s.inputAudio.normalize(frame, s.targetSampleRate())
-	if err != nil {
-		return err
 	}
 	return s.writeAudioFrameLocked(normalizedFrame)
 }
@@ -3056,7 +3181,32 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
+	tail := s.inputAudio.flush()
+	vadStream := s.vadStream
+	bufferVADTail := tail != nil && vadStream != nil && s.startupGateActiveLocked()
+	if bufferVADTail {
+		s.pendingVADFrames = append(s.pendingVADFrames, tail)
+	}
+	s.mu.Unlock()
+
+	if tail != nil && vadStream != nil && !bufferVADTail {
+		if err := vadStream.PushFrame(tail); err != nil {
+			s.enqueueError(err)
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
 			s.mu.Unlock()
@@ -3077,7 +3227,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 			s.recordSentAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
 	}
-	vadStream := s.vadStream
+	vadStream = s.vadStream
 	bufferVADEndInput := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVADEndInput {
 		s.pendingVADEndInput = true
@@ -3736,6 +3886,31 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 
 func (s *speechmaticsSTTStream) Flush() error {
 	s.mu.Lock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	tail := s.inputAudio.flush()
+	vadStream := s.vadStream
+	bufferVADTail := tail != nil && vadStream != nil && s.startupGateActiveLocked()
+	if bufferVADTail {
+		s.pendingVADFrames = append(s.pendingVADFrames, tail)
+	}
+	s.mu.Unlock()
+
+	if tail != nil && vadStream != nil && !bufferVADTail {
+		if err := vadStream.PushFrame(tail); err != nil {
+			s.enqueueError(err)
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
@@ -3743,7 +3918,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
+	if tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
 			return err
