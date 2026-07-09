@@ -1249,6 +1249,9 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
+		if value, ok := speechmaticsParseReferenceBoolString(text); ok {
+			return value, nil
+		}
 		return text != "", nil
 	}
 	var list []json.RawMessage
@@ -1260,6 +1263,17 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 		return len(object) > 0, nil
 	}
 	return false, fmt.Errorf("unsupported truthy bool")
+}
+
+func speechmaticsParseReferenceBoolString(text string) (bool, bool) {
+	switch strings.ToLower(text) {
+	case "yes", "on", "y", "true", "t", "1":
+		return true, true
+	case "no", "off", "n", "false", "f", "0":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func speechmaticsUnmarshalReferenceSegmentTiming(data []byte) (float64, bool) {

@@ -2117,6 +2117,34 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNumericInactiveAsPassive(t *test
 	}
 }
 
+func TestSpeechmaticsSegmentEventsTreatReferenceStringFalseActiveAsPassive(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat:  "@{speaker_id}: {text}",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"string false active",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":"false",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: string false active" {
+		t.Fatalf("text = %q, want reference passive format for string false is_active", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsAcceptReferenceBoolTiming(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
