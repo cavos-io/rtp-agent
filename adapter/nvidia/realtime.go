@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -34,6 +35,7 @@ type NvidiaRealtimeModel struct {
 }
 
 type nvidiaRealtimeSession struct {
+	mu                 sync.Mutex
 	baseURL            string
 	voice              string
 	textPrompt         string
@@ -47,6 +49,7 @@ type nvidiaRealtimeSession struct {
 	events             chan llm.RealtimeEvent
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
+	silenceTimer       *time.Timer
 	closed             bool
 }
 
@@ -214,6 +217,8 @@ func cloneNvidiaRealtimeSeed(seed *int) *int {
 }
 
 func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
@@ -222,6 +227,8 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *nvidiaRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || chatCtx == nil {
 		return nil
 	}
@@ -250,15 +257,19 @@ func (s *nvidiaRealtimeSession) Truncate(_ llm.RealtimeTruncateOptions) error {
 }
 
 func (s *nvidiaRealtimeSession) Interrupt() error {
-	s.finalizeGeneration(true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finalizeGenerationLocked(true)
 	return nil
 }
 
 func (s *nvidiaRealtimeSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
-	s.finalizeGeneration(true)
+	s.finalizeGenerationLocked(true)
 	s.closed = true
 	close(s.events)
 	return nil
@@ -289,25 +300,30 @@ func (s *nvidiaRealtimeSession) websocketURL() string {
 }
 
 func (s *nvidiaRealtimeSession) handleTextToken(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || text == "" || isNvidiaRealtimeSpecialToken(text) {
 		return
 	}
-	generation := s.ensureGeneration()
+	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
 	generation.outputText += text
 	generation.textCh <- text
 }
 
 func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || frame == nil || len(frame.Data) == 0 {
 		return
 	}
-	generation := s.ensureGeneration()
+	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
 	generation.audioCh <- frame
+	s.resetSilenceTimerLocked()
 }
 
-func (s *nvidiaRealtimeSession) ensureGeneration() *nvidiaRealtimeGeneration {
+func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGeneration {
 	if s.currentGeneration != nil && !s.currentGeneration.done {
 		return s.currentGeneration
 	}
@@ -343,11 +359,12 @@ func (s *nvidiaRealtimeSession) ensureGeneration() *nvidiaRealtimeGeneration {
 	return generation
 }
 
-func (s *nvidiaRealtimeSession) finalizeGeneration(interrupted bool) {
+func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 	generation := s.currentGeneration
 	if generation == nil || generation.done {
 		return
 	}
+	s.cancelSilenceTimerLocked()
 	generation.done = true
 	close(generation.textCh)
 	close(generation.timedTextCh)
@@ -383,6 +400,30 @@ func (s *nvidiaRealtimeSession) finalizeGeneration(interrupted bool) {
 			},
 		}
 	}
+}
+
+func (s *nvidiaRealtimeSession) resetSilenceTimerLocked() {
+	s.cancelSilenceTimerLocked()
+	threshold := time.Duration(s.silenceThresholdMS) * time.Millisecond
+	if threshold < 0 {
+		threshold = 0
+	}
+	s.silenceTimer = time.AfterFunc(threshold, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed || s.currentGeneration == nil || s.currentGeneration.done {
+			return
+		}
+		s.finalizeGenerationLocked(false)
+	})
+}
+
+func (s *nvidiaRealtimeSession) cancelSilenceTimerLocked() {
+	if s.silenceTimer == nil {
+		return
+	}
+	s.silenceTimer.Stop()
+	s.silenceTimer = nil
 }
 
 func isNvidiaRealtimeSpecialToken(text string) bool {

@@ -261,6 +261,49 @@ func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	concrete.handleAudioFrame(frame)
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got := <-msg.AudioCh; got != frame {
+		t.Fatalf("audio frame = %p, want original frame %p", got, frame)
+	}
+
+	var metricsEvent llm.RealtimeEvent
+	select {
+	case metricsEvent = <-session.EventCh():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for silence metrics event")
+	}
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=false", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after silence finalization, want closed")
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after silence finalization, want closed")
+	}
+}
+
 func TestNvidiaRealtimeAllowsZeroSilenceThresholdLikeReference(t *testing.T) {
 	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(0))
 
