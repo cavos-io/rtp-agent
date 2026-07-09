@@ -609,6 +609,38 @@ func TestNvidiaRealtimeTurnEventsDoNotBlockBeforeConsumerLikeReference(t *testin
 	}
 }
 
+func TestNvidiaRealtimeTurnEventsDoNotBlockPastBufferLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	turns := nvidiaRealtimeEventBuffer/2 + 128
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < turns; i++ {
+			concrete.handleTextToken("x")
+			_ = session.Interrupt()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		for i := 0; i < turns*2; i++ {
+			<-session.EventCh()
+		}
+		<-done
+		t.Fatal("generation event emission blocked after fixed event buffer filled, want reference callback-style event behavior")
+	}
+}
+
 func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()

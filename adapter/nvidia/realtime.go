@@ -58,7 +58,7 @@ type nvidiaRealtimeSession struct {
 	chatCtx            *llm.ChatContext
 	outboundAudio      []*model.AudioFrame
 	outboundMessages   [][]byte
-	events             chan llm.RealtimeEvent
+	events             *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent]
 	opusEncoder        *opus.Encoder
 	opusDecoder        *opus.Decoder
 	inputAudioBuffer   []byte
@@ -89,9 +89,17 @@ type nvidiaRealtimeUnboundedStream[T any] struct {
 }
 
 func newNvidiaRealtimeUnboundedStream[T any]() *nvidiaRealtimeUnboundedStream[T] {
+	return newNvidiaRealtimeUnboundedStreamWithBuffer[T](nvidiaRealtimeGenerationStreamBuffer)
+}
+
+func newNvidiaRealtimeEventStream() *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
+	return newNvidiaRealtimeUnboundedStreamWithBuffer[llm.RealtimeEvent](nvidiaRealtimeEventBuffer)
+}
+
+func newNvidiaRealtimeUnboundedStreamWithBuffer[T any](buffer int) *nvidiaRealtimeUnboundedStream[T] {
 	stream := &nvidiaRealtimeUnboundedStream[T]{
-		in:  make(chan T, nvidiaRealtimeGenerationStreamBuffer),
-		out: make(chan T, nvidiaRealtimeGenerationStreamBuffer),
+		in:  make(chan T, buffer),
+		out: make(chan T, buffer),
 	}
 	go stream.run()
 	return stream
@@ -270,7 +278,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             make(chan llm.RealtimeEvent, nvidiaRealtimeEventBuffer),
+		events:             newNvidiaRealtimeEventStream(),
 	}, nil
 }
 
@@ -410,12 +418,12 @@ func (s *nvidiaRealtimeSession) Close() error {
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
 	s.closed = true
-	close(s.events)
+	s.events.close()
 	return nil
 }
 
 func (s *nvidiaRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
-	return s.events
+	return s.events.channel()
 }
 
 func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
@@ -591,14 +599,14 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.currentGeneration = generation
-	s.events <- llm.RealtimeEvent{
+	s.events.send(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:  generation.messageCh,
 			FunctionCh: generation.functionCh,
 			ResponseID: responseID,
 		},
-	}
+	})
 	return generation
 }
 
@@ -627,7 +635,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 		if generation.firstTokenAt != nil {
 			ttft = generation.firstTokenAt.Sub(generation.createdAt).Seconds()
 		}
-		s.events <- llm.RealtimeEvent{
+		s.events.send(llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeMetricsCollected,
 			Metrics: &telemetry.RealtimeModelMetrics{
 				Label:     s.label,
@@ -641,7 +649,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 					ModelProvider: s.provider,
 				},
 			},
-		}
+		})
 	}
 	s.currentGeneration = nil
 }
