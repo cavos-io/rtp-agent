@@ -416,7 +416,6 @@ func nvidiaTTSProtectedDecimal(text string, dot int, next int) bool {
 }
 
 func nvidiaTTSProtectedWebsite(tail string) bool {
-	tail = strings.ToLower(tail)
 	for _, suffix := range []string{"com", "net", "org", "io", "gov", "edu", "me"} {
 		if strings.HasPrefix(tail, suffix) {
 			return true
