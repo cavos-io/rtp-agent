@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -341,7 +342,7 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 
 func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	trimmed := strings.TrimSpace(text)
-	if len(trimmed) < 21 {
+	if utf8.RuneCountInString(trimmed) < 21 {
 		return "", "", false
 	}
 	for i, r := range trimmed {
@@ -355,17 +356,21 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 				continue
 			}
 			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
-			if len(strings.TrimSpace(trimmed[:boundaryEnd])) >= 20 && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
 				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
 		case '。', '！', '？':
 			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
-			if len(strings.TrimSpace(trimmed[:boundaryEnd])) >= 20 && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
 				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
 		}
 	}
 	return "", "", false
+}
+
+func nvidiaTTSSentenceLongEnough(text string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(text)) >= 20
 }
 
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {

@@ -2723,7 +2723,7 @@ func TestNvidiaTTSStreamStartsCJKSentenceBeforeFlushLikeReference(t *testing.T) 
 		done <- result{audio: audio, err: err}
 	}()
 
-	if err := stream.PushText("这是一个足够长的中文句子。next"); err != nil {
+	if err := stream.PushText("这是一个足够长的中文句子用于测试语音边界处理。next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	select {
@@ -2733,6 +2733,31 @@ func TestNvidiaTTSStreamStartsCJKSentenceBeforeFlushLikeReference(t *testing.T) 
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Next() did not start after CJK sentence before Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotStartShortCJKSentenceBeforeFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("这是一个中文短句。next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after short CJK sentence, want wait for more context like reference")
+	}
+	if got, want := concrete.text, "这是一个中文短句。next"; got != want {
+		t.Fatalf("text = %q, want unsplit short CJK text %q", got, want)
 	}
 }
 
