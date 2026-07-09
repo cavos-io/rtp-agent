@@ -138,9 +138,12 @@ func TestNvidiaRealtimeWebsocketURLMatchesReference(t *testing.T) {
 	)
 
 	got := model.websocketURL()
-	want := "wss://personaplex.example:9443/api/chat?seed=7&text_prompt=Speak%20tersely%20%26%20listen.&voice_prompt=VARF1.pt"
+	want := "wss://personaplex.example:9443/api/chat?voice_prompt=VARF1.pt&text_prompt=Speak%20tersely%20%26%20listen.&seed=7"
 	if got != want {
 		t.Fatalf("websocketURL() = %q, want %q", got, want)
+	}
+	if voicePos, textPos := strings.Index(got, "voice_prompt="), strings.Index(got, "text_prompt="); voicePos < 0 || textPos < 0 || voicePos > textPos {
+		t.Fatalf("websocketURL() query order = %q, want voice_prompt before text_prompt like reference", got)
 	}
 }
 

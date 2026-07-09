@@ -115,13 +115,14 @@ func (m *NvidiaRealtimeModel) websocketURL() string {
 	if m.useSSL {
 		scheme = "wss"
 	}
-	values := url.Values{}
-	if m.seed != nil {
-		values.Set("seed", fmt.Sprintf("%d", *m.seed))
+	parts := []string{
+		"voice_prompt=" + url.QueryEscape(m.voice+".pt"),
+		"text_prompt=" + url.QueryEscape(m.textPrompt),
 	}
-	values.Set("text_prompt", m.textPrompt)
-	values.Set("voice_prompt", m.voice+".pt")
-	query := strings.ReplaceAll(values.Encode(), "+", "%20")
+	if m.seed != nil {
+		parts = append(parts, "seed="+url.QueryEscape(fmt.Sprintf("%d", *m.seed)))
+	}
+	query := strings.ReplaceAll(strings.Join(parts, "&"), "+", "%20")
 	return fmt.Sprintf("%s://%s/api/chat?%s", scheme, m.baseURL, query)
 }
 
