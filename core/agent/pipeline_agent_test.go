@@ -277,6 +277,46 @@ func TestPipelineAgentPrecomputeReplyAppendsInstructionsLikeReference(t *testing
 	}
 }
 
+func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "precomputed direct reply"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.OnSpeechPreemptive(context.Background(), speech)
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat calls after preemptive generation = %d, want 1", len(l.chatContexts))
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat calls after scheduling = %d, want reused precomputed generation", len(l.chatContexts))
+	}
+	if got := speech.takePrecomputedLLMGeneration(); got != nil {
+		t.Fatalf("precomputed LLM generation was not consumed: %#v", got)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want one assistant commit from precomputed generation", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "precomputed direct reply" {
+		t.Fatalf("committed item = %#v, want precomputed assistant reply", chatCtx.Items[0])
+	}
+	if len(speech.ChatItems()) != 1 || speech.ChatItems()[0].GetID() != msg.GetID() {
+		t.Fatalf("speech.ChatItems = %#v, want committed precomputed assistant item", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
