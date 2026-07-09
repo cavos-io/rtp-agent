@@ -5584,6 +5584,57 @@ func TestPipelineAgentInterruptedTextOnlyReplySkipsAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInterruptedTextOnlyReplyCommitsForwardedText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	textCh := make(chan string)
+	functionCh := make(chan *llm.FunctionToolCall)
+	close(functionCh)
+	doneCh := make(chan struct{})
+	close(doneCh)
+	speech.setPrecomputedLLMGeneration(&LLMGenerationData{
+		TextCh:        textCh,
+		FunctionCh:    functionCh,
+		Done:          doneCh,
+		GeneratedText: "visible text",
+		ID:            "item_text_only_partial",
+	})
+
+	replyDone := make(chan struct{})
+	go func() {
+		defer close(replyDone)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+	textCh <- "visible text"
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	close(textCh)
+
+	select {
+	case <-replyDone:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not return after interrupted text-only reply")
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want committed text that was forwarded before interruption", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	if got := msg.TextContent(); got != "visible text" || !msg.Interrupted {
+		t.Fatalf("assistant message text/interrupted = %q/%v, want interrupted visible text", got, msg.Interrupted)
+	}
+	if len(speech.ChatItems()) != 1 {
+		t.Fatalf("speech.ChatItems length = %d, want committed assistant message", len(speech.ChatItems()))
+	}
+}
+
 func TestPipelineAgentReplyFlushesPlaybackAfterTTSEOFBeforeWaiting(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

@@ -695,7 +695,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	speech.setPrecomputedLLMGeneration(genData)
 	if va.tts != nil && session.Options.PreemptiveGenerationPreemptiveTTS && genData.TextEventCh != nil {
 		go func() {
-			_ = drainLLMText(precomputeCtx, genData.TextCh, nil)
+			_, _ = drainLLMText(precomputeCtx, genData.TextCh, nil)
 		}()
 		segments := va.startSegmentedTTSGeneration(precomputeCtx, session, genData.TextEventCh)
 		speech.setPrecomputedTTSSegments(segments)
@@ -933,8 +933,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var ttsGen *TTSGenerationData
+		var textOnlyForwarded string
 		if va.tts == nil {
-			err = drainLLMGenerationText(ctx, genData, opts.SpeechHandle)
+			textOnlyForwarded, err = drainLLMGenerationText(ctx, genData, opts.SpeechHandle)
 		} else {
 			if opts.SpeechHandle != nil && toolSteps == 0 {
 				ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
@@ -951,7 +952,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					_ = drainLLMText(ctx, genData.TextCh, nil)
+					_, _ = drainLLMText(ctx, genData.TextCh, nil)
 				}()
 				ttsGen, err = va.synthesizeSegmentedSpeech(ctx, session, genData.TextEventCh, opts.SpeechHandle)
 				<-done
@@ -997,7 +998,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		forwardedText := genData.GeneratedText
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
-				forwardedText = ""
+				forwardedText = textOnlyForwarded
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
@@ -1174,57 +1175,63 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 }
 
-func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) error {
+func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) (string, error) {
 	if genData == nil {
-		return nil
+		return "", nil
 	}
 	if genData.TextEventCh != nil {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_ = drainLLMText(ctx, genData.TextCh, nil)
+			_, _ = drainLLMText(ctx, genData.TextCh, nil)
 		}()
-		err := drainLLMTextEvents(ctx, genData.TextEventCh, speech)
+		forwardedText, err := drainLLMTextEvents(ctx, genData.TextEventCh, speech)
 		<-done
-		return err
+		return forwardedText, err
 	}
 	return drainLLMText(ctx, genData.TextCh, speech)
 }
 
-func drainLLMTextEvents(ctx context.Context, textCh <-chan LLMTextEvent, speech *SpeechHandle) error {
+func drainLLMTextEvents(ctx context.Context, textCh <-chan LLMTextEvent, speech *SpeechHandle) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var forwardedText strings.Builder
 	for {
 		if speech != nil && speech.IsInterrupted() {
-			return nil
+			return forwardedText.String(), nil
 		}
 		select {
-		case _, ok := <-textCh:
+		case event, ok := <-textCh:
 			if !ok {
-				return nil
+				return forwardedText.String(), nil
+			}
+			if !event.Flush {
+				forwardedText.WriteString(event.Text)
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return forwardedText.String(), ctx.Err()
 		}
 	}
 }
 
-func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) error {
+func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var forwardedText strings.Builder
 	for {
 		if speech != nil && speech.IsInterrupted() {
-			return nil
+			return forwardedText.String(), nil
 		}
 		select {
-		case _, ok := <-textCh:
+		case text, ok := <-textCh:
 			if !ok {
-				return nil
+				return forwardedText.String(), nil
 			}
+			forwardedText.WriteString(text)
 		case <-ctx.Done():
-			return ctx.Err()
+			return forwardedText.String(), ctx.Err()
 		}
 	}
 }
