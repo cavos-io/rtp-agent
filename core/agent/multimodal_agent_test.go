@@ -2247,6 +2247,52 @@ func TestMultimodalAgentRealtimeMessageWaitsForPlayoutBeforeCommit(t *testing.T)
 	}
 }
 
+func TestMultimodalAgentFullPlaybackUsesGeneratedTextDespiteEmptySynchronizedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          100 * time.Millisecond,
+			SynchronizedTranscript:    "",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model:   &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AudioOutput: true}},
+		session: session,
+		chatCtx: chatCtx,
+		ctx:     context.Background(),
+		PublishAudio: func(context.Context, *model.AudioFrame) error {
+			return nil
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "fully played realtime text"
+	close(textCh)
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
+	close(audioCh)
+	modalitiesCh := make(chan []string, 1)
+	modalitiesCh <- []string{"audio"}
+	close(modalitiesCh)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	ma.consumeRealtimeMessage(context.Background(), speech, llm.MessageGeneration{
+		MessageID:    "msg_realtime_full_empty_sync",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want one assistant message", chatCtx.Items)
+	}
+	msg := chatCtx.Items[0].(*llm.ChatMessage)
+	if msg.TextContent() != "fully played realtime text" || msg.Interrupted {
+		t.Fatalf("assistant text/interrupted = %q/%v, want full generated text/false", msg.TextContent(), msg.Interrupted)
+	}
+}
+
 func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -3330,6 +3376,38 @@ func TestMultimodalAgentCancelToolReplyEventSkipsExplicitReply(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeToolReplyInterruptsBeforeGenerate(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{},
+		session:   session,
+		chatCtx:   llm.NewChatContext(),
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.ToolChoice != "auto" {
+			t.Fatalf("GenerateReply ToolChoice = %#v, want auto", opts.ToolChoice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateReply was not requested for realtime tool reply")
+	}
+	if strings.Join(rtSession.calls, ",") != "interrupt,generate" {
+		t.Fatalf("realtime session calls = %#v, want interrupt before generate", rtSession.calls)
+	}
+}
+
 func TestMultimodalAgentToolReplyGenerateErrorIsRecoverable(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
@@ -3956,6 +4034,7 @@ type fakeRealtimeSession struct {
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
 	audioCh               chan *model.AudioFrame
+	calls                 []string
 	videoFrames           int
 	instructionUpdates    int
 	chatContextUpdates    int
@@ -4011,6 +4090,7 @@ func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) 
 }
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	f.calls = append(f.calls, "generate")
 	if f.updated != nil {
 		f.generatedWithChatCtx = f.updated.Copy()
 	}
@@ -4039,6 +4119,7 @@ func (f *fakeRealtimeSession) Truncate(options llm.RealtimeTruncateOptions) erro
 }
 
 func (f *fakeRealtimeSession) Interrupt() error {
+	f.calls = append(f.calls, "interrupt")
 	f.interrupted++
 	return nil
 }

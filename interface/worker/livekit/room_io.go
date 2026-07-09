@@ -710,7 +710,11 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 }
 
 func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
-	if rio == nil || (ev.Transcript == "" && !ev.IsFinal) {
+	if rio == nil {
+		return
+	}
+	if ev.Transcript == "" && !ev.IsFinal {
+		rio.setPlaybackTranscript("", false)
 		return
 	}
 	segmentID, streamText, legacyText, ok := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
@@ -2237,7 +2241,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		}
 	}
 	hasSynchronizedTranscript := synchronizedTranscript != ""
-	if !hasSynchronizedTranscript && (!interrupted || playbackPosition >= fullPlaybackPosition) && rio.playbackTranscriptSet {
+	if !hasSynchronizedTranscript && rio.playbackTranscriptSet && (!interrupted || playbackPosition >= fullPlaybackPosition || rio.playbackTranscript == "") {
 		synchronizedTranscript = rio.playbackTranscript
 		hasSynchronizedTranscript = true
 	}

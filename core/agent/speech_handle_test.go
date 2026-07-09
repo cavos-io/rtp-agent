@@ -456,6 +456,31 @@ func TestSpeechHandleAuthorizationCanBeClearedAndReauthorized(t *testing.T) {
 	}
 }
 
+func TestSpeechHandleClearAuthorizationKeepsGenerationPending(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.AuthorizeGeneration()
+	speech.ClearAuthorization()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := speech.WaitForAuthorization(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForAuthorization err = %v, want DeadlineExceeded after clear", err)
+	}
+
+	doneCtx, doneCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer doneCancel()
+	if err := speech.WaitForGeneration(doneCtx, -1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForGeneration err = %v, want pending generation", err)
+	}
+
+	if err := speech.MarkGenerationDone(); err != nil {
+		t.Fatalf("MarkGenerationDone error = %v", err)
+	}
+	if err := speech.WaitForGeneration(context.Background(), -1); err != nil {
+		t.Fatalf("WaitForGeneration after mark done error = %v", err)
+	}
+}
+
 func TestSpeechHandleWaitForGenerationRequiresActiveGeneration(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 
@@ -529,6 +554,22 @@ func TestSpeechHandleMarkDoneCompletesActiveGeneration(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("MarkDone did not complete active generation")
+	}
+}
+
+func TestSpeechHandleMarkDoneCompletesLatestGenerationStep(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.AuthorizeGeneration()
+	speech.IncrementStep()
+	speech.AuthorizeGeneration()
+
+	speech.MarkDone()
+
+	if err := speech.WaitForGeneration(context.Background(), -1); err != nil {
+		t.Fatalf("WaitForGeneration latest step error = %v", err)
+	}
+	if !speech.IsDone() {
+		t.Fatal("speech was not marked done")
 	}
 }
 

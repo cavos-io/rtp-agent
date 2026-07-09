@@ -60,6 +60,12 @@ type AgentSessionOptions struct {
 	UserAwayTimeout                          float64
 	UserAwayTimeoutSet                       bool
 	DisableUserAwayTimeout                   bool
+	UserSpeechStallTimeout                   float64
+	UserSpeechStallTimeoutSet                bool
+	DisableUserSpeechStallTimeout            bool
+	AgentSpeakingStallTimeout                float64
+	AgentSpeakingStallTimeoutSet             bool
+	DisableAgentSpeakingStallTimeout         bool
 	UserTurnLimitMaxWords                    int
 	UserTurnLimitMaxDuration                 float64
 	FalseInterruptionTimeout                 float64
@@ -289,12 +295,19 @@ type AgentSession struct {
 	idleDone       chan struct{}
 	userAwayTimer  *time.Timer
 	userAwayGate   func() bool
-	aecWarmupTimer *time.Timer
-	aecWarmupDone  bool
-	userdata       any
-	userdataSet    bool
-	jobContext     any
-	jobContextSet  bool
+	// agentSpeakingStallTimer force-unsticks a reply that pins the agent in
+	// AgentStateSpeaking. It is armed when the agent enters the speaking state,
+	// reset on every forwarded agent-audio frame (progress), and stopped when
+	// the agent leaves speaking. If it fires the current speech is interrupted,
+	// so a stalled TTS/playout stream cannot hold the lifecycle in "speaking"
+	// (and keep end-of-silence timers cancelled) forever.
+	agentSpeakingStallTimer *time.Timer
+	aecWarmupTimer          *time.Timer
+	aecWarmupDone           bool
+	userdata                any
+	userdataSet             bool
+	jobContext              any
+	jobContextSet           bool
 	// UserTranscriptFilter, when non-nil, is applied before user transcript
 	// events are recorded or broadcast to RoomIO subscribers.
 	UserTranscriptFilter    func(string) string
@@ -1106,6 +1119,12 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {
 		opts.UserAwayTimeout = 15.0
+	}
+	if !opts.DisableUserSpeechStallTimeout && !opts.UserSpeechStallTimeoutSet && opts.UserSpeechStallTimeout == 0 {
+		opts.UserSpeechStallTimeout = 3.0
+	}
+	if !opts.DisableAgentSpeakingStallTimeout && !opts.AgentSpeakingStallTimeoutSet && opts.AgentSpeakingStallTimeout == 0 {
+		opts.AgentSpeakingStallTimeout = 10.0
 	}
 	if !opts.FalseInterruptionTimeoutSet && opts.FalseInterruptionTimeout == 0 {
 		opts.FalseInterruptionTimeout = 2.0
@@ -2107,6 +2126,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	}
 	s.closing = true
 	s.cancelUserAwayTimerLocked()
+	s.stopAgentSpeakingStallTimerLocked()
 	s.clearAECWarmupLocked()
 	closeEventListeners := s.closeEventListenersLocked()
 	closePrimary, closePrimarySubscribed, closeSubscribers := s.closeSubscribersLocked()
@@ -2456,6 +2476,7 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		if activity != nil {
 			activity.armBackchannelBoundary(nowTime)
 		}
+		s.armAgentSpeakingStallTimerLocked()
 	} else if oldState == AgentStateSpeaking {
 		if endpointing != nil {
 			endpointing.OnEndOfAgentSpeech(now)
@@ -2464,6 +2485,7 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 			activity.onAgentSpeechEnded(nowTime)
 			flushHeldSTTActivity = activity
 		}
+		s.stopAgentSpeakingStallTimerLocked()
 	}
 	s.mu.Unlock()
 
@@ -2588,6 +2610,64 @@ func (s *AgentSession) markUserAwayIfStillIdle() {
 	s.mu.Unlock()
 	if shouldMarkAway {
 		s.UpdateUserState(UserStateAway)
+	}
+}
+
+// armAgentSpeakingStallTimerLocked (re)arms the agent-speaking stall watchdog.
+// It must be called with s.mu held.
+func (s *AgentSession) armAgentSpeakingStallTimerLocked() {
+	if s.agentSpeakingStallTimer != nil {
+		s.agentSpeakingStallTimer.Stop()
+		s.agentSpeakingStallTimer = nil
+	}
+	if s.Options.DisableAgentSpeakingStallTimeout || s.Options.AgentSpeakingStallTimeout <= 0 {
+		return
+	}
+	timeout := time.Duration(s.Options.AgentSpeakingStallTimeout * float64(time.Second))
+	s.agentSpeakingStallTimer = time.AfterFunc(timeout, s.onAgentSpeakingStall)
+}
+
+func (s *AgentSession) stopAgentSpeakingStallTimerLocked() {
+	if s.agentSpeakingStallTimer != nil {
+		s.agentSpeakingStallTimer.Stop()
+		s.agentSpeakingStallTimer = nil
+	}
+}
+
+// notifyAgentSpeakingProgress pushes the stall deadline out while the agent is
+// actively producing audio. Output is paced to roughly real-time, so during
+// legitimate speech this is called continuously and the watchdog never fires;
+// it only expires when audio stops advancing while the state is still speaking.
+func (s *AgentSession) notifyAgentSpeakingProgress() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.agentSpeakingStallTimer != nil && s.agentState == AgentStateSpeaking &&
+		!s.Options.DisableAgentSpeakingStallTimeout && s.Options.AgentSpeakingStallTimeout > 0 {
+		s.agentSpeakingStallTimer.Reset(time.Duration(s.Options.AgentSpeakingStallTimeout * float64(time.Second)))
+	}
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) onAgentSpeakingStall() {
+	s.mu.Lock()
+	if s.agentState != AgentStateSpeaking {
+		s.mu.Unlock()
+		return
+	}
+	if s.agentSpeakingStallTimer != nil {
+		s.agentSpeakingStallTimer.Stop()
+		s.agentSpeakingStallTimer = nil
+	}
+	timeout := s.Options.AgentSpeakingStallTimeout
+	s.mu.Unlock()
+
+	logger.Logger.Warnw("agent speaking stalled; interrupting stuck reply to recover", nil,
+		"timeout_seconds", timeout)
+
+	if err := s.Interrupt(true); err != nil {
+		logger.Logger.Warnw("failed to interrupt stalled agent speech", err)
 	}
 }
 
@@ -3107,6 +3187,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.llmErrorCount = 0
 	s.ttsErrorCount = 0
 	s.cancelUserAwayTimerLocked()
+	s.stopAgentSpeakingStallTimerLocked()
 	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)

@@ -277,6 +277,46 @@ func TestPipelineAgentPrecomputeReplyAppendsInstructionsLikeReference(t *testing
 	}
 }
 
+func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "precomputed direct reply"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.OnSpeechPreemptive(context.Background(), speech)
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat calls after preemptive generation = %d, want 1", len(l.chatContexts))
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat calls after scheduling = %d, want reused precomputed generation", len(l.chatContexts))
+	}
+	if got := speech.takePrecomputedLLMGeneration(); got != nil {
+		t.Fatalf("precomputed LLM generation was not consumed: %#v", got)
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want one assistant commit from precomputed generation", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "precomputed direct reply" {
+		t.Fatalf("committed item = %#v, want precomputed assistant reply", chatCtx.Items[0])
+	}
+	if len(speech.ChatItems()) != 1 || speech.ChatItems()[0].GetID() != msg.GetID() {
+		t.Fatalf("speech.ChatItems = %#v, want committed precomputed assistant item", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -530,6 +570,73 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	}
 	if len(l.calls) != 3 {
 		t.Fatalf("LLM Chat calls = %d, want progress reply and final return reply", len(l.calls))
+	}
+}
+
+func TestPipelineAgentToolFinalReplyAfterNewerTurnUsesMaybeCoveredInstructions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "progress acknowledged"}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: ""}},
+				},
+			},
+		},
+	}
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	waitForLLMCalls(t, l, 2, "progress reply")
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "newer user turn"}}})
+	close(tool.release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final tool return")
+	}
+	if len(l.chatContexts) < 3 {
+		t.Fatalf("LLM chat contexts = %d, want final tool reply context", len(l.chatContexts))
+	}
+	finalCtx := l.chatContexts[len(l.chatContexts)-1]
+	instructions := instructionMessageFromContext(t, finalCtx).TextContent()
+	if !strings.Contains(instructions, "You may have already mentioned them") {
+		t.Fatalf("final tool reply instructions = %q, want maybe-covered stale-result prompt", instructions)
 	}
 }
 
@@ -3125,6 +3232,80 @@ func TestPipelineAgentVADLoopEndsActiveSpeechWhenStreamCloses(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentVADLoopSynthesizesEndOfSpeechOnStall(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+	pipeline.vadStallTimeout = 20 * time.Millisecond
+
+	// The stream reports start-of-speech then blocks in Next(), mimicking an
+	// input that stalls mid-speech (e.g. SIP silence suppression stops sending
+	// RTP). No end-of-speech event is ever produced by the VAD itself.
+	stream := &blockingVADStream{
+		events:  []*vad.VADEvent{{Type: vad.VADEventStartOfSpeech, Timestamp: 1.25}},
+		release: make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		pipeline.vadLoop(stream)
+		close(done)
+	}()
+
+	waitForUserState(t, session, UserStateSpeaking)
+	// The watchdog, not the VAD stream, must move the user out of speaking.
+	waitForUserState(t, session, UserStateListening)
+
+	close(stream.release)
+	<-done
+
+	if endpointing.endCount != 1 {
+		t.Fatalf("endpointing end calls = %d, want 1 from stall watchdog", endpointing.endCount)
+	}
+}
+
+func waitForUserState(t *testing.T, session *AgentSession, want UserState) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if session.UserState() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("UserState() = %q, want %q", session.UserState(), want)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+}
+
+type blockingVADStream struct {
+	events  []*vad.VADEvent
+	index   int
+	release chan struct{}
+}
+
+func (b *blockingVADStream) PushFrame(*model.AudioFrame) error { return nil }
+
+func (b *blockingVADStream) Flush() error { return nil }
+
+func (b *blockingVADStream) EndInput() error { return nil }
+
+func (b *blockingVADStream) Close() error { return nil }
+
+func (b *blockingVADStream) Next() (*vad.VADEvent, error) {
+	if b.index < len(b.events) {
+		ev := b.events[b.index]
+		b.index++
+		return ev, nil
+	}
+	<-b.release
+	return nil, io.EOF
+}
+
 func TestPipelineAgentVADLoopForwardsInferenceEventsToActivity(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -4192,6 +4373,60 @@ func TestPipelineAgentCancelToolReplyEventSkipsFollowupGeneration(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentInterruptedWhileToolRunningSuppressesToolReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+				Type:      "function",
+				Name:      "lookup",
+				CallID:    "call_lookup",
+				Arguments: `{}`,
+			}}}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "stale tool reply"}}}},
+		},
+	}
+	tool := &blockingGenerationTool{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	select {
+	case <-tool.started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	close(tool.release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after interrupted tool release")
+	}
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want no stale tool reply after interruption", len(l.calls))
+	}
+	for _, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && strings.Contains(msg.TextContent(), "stale tool reply") {
+			t.Fatalf("chat item = %#v, want no stale tool reply committed", msg)
+		}
+	}
+}
+
 func TestPipelineAgentCancelToolUpdateReplyKeepsFinalReturnReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -4761,6 +4996,41 @@ func TestPipelineAgentGeneratedReplyTTSErrorSkipsAssistantCommit(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGeneratedReplyRealLLMStreamErrorSkipsPartialCommit(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	cause := errors.New("real generated reply llm stream failure")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "partial answer"}},
+			},
+			err: cause,
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive generated reply LLM stream error")
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant commit for failed generated reply LLM stream", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed chat items for failed generated reply LLM stream", speech.ChatItems())
+	}
+}
+
 func TestPipelineAgentSynthesizeSpeechStopsTranscriptForwarderAfterTTSStartupError(t *testing.T) {
 	cause := errors.New("tts stream startup failed")
 	chatCtx := llm.NewChatContext()
@@ -5274,6 +5544,37 @@ func TestPipelineAgentInterruptedReplyUsesSynchronizedTranscriptWhenGeneratedTex
 	}
 }
 
+func TestPipelineAgentFullPlaybackUsesGeneratedTextDespiteEmptySynchronizedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          100 * time.Millisecond,
+			SynchronizedTranscript:    "",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "fully played text"},
+		}}},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want one assistant message", chatCtx.Items)
+	}
+	msg := chatCtx.Items[0].(*llm.ChatMessage)
+	if msg.TextContent() != "fully played text" || msg.Interrupted {
+		t.Fatalf("assistant text/interrupted = %q/%v, want full generated text/false", msg.TextContent(), msg.Interrupted)
+	}
+}
+
 func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -5399,6 +5700,46 @@ func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
 	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
 	if !ok || msg.TextContent() != "first segmentsecond segment" {
 		t.Fatalf("assistant message = %#v, want full generated text", chatCtx.Items[0])
+	}
+}
+
+func TestPipelineAgentReplyIgnoresAdjacentLLMFlushSentinelsForTTS(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "one"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "two"}},
+			},
+		},
+	}
+	firstTTS := &fakePipelineTTSStream{}
+	secondTTS := &fakePipelineTTSStream{}
+	unusedTTS := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{streams: []*fakePipelineTTSStream{firstTTS, secondTTS, unusedTTS}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: NewSpeechHandle(true, DefaultInputDetails())})
+
+	if firstTTS.text.String() != "one" {
+		t.Fatalf("first TTS text = %q, want one", firstTTS.text.String())
+	}
+	if secondTTS.text.String() != "two" {
+		t.Fatalf("second TTS text = %q, want two", secondTTS.text.String())
+	}
+	if unusedTTS.text.String() != "" {
+		t.Fatalf("unused TTS text = %q, want empty for adjacent flush", unusedTTS.text.String())
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "onetwo" {
+		t.Fatalf("assistant message = %#v, want full generated text without flush markers", chatCtx.Items[0])
 	}
 }
 
@@ -5581,6 +5922,57 @@ func TestPipelineAgentInterruptedTextOnlyReplySkipsAssistantText(t *testing.T) {
 	}
 	if len(speech.ChatItems()) != 0 {
 		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentInterruptedTextOnlyReplyCommitsForwardedText(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, nil, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	textCh := make(chan string)
+	functionCh := make(chan *llm.FunctionToolCall)
+	close(functionCh)
+	doneCh := make(chan struct{})
+	close(doneCh)
+	speech.setPrecomputedLLMGeneration(&LLMGenerationData{
+		TextCh:        textCh,
+		FunctionCh:    functionCh,
+		Done:          doneCh,
+		GeneratedText: "visible text",
+		ID:            "item_text_only_partial",
+	})
+
+	replyDone := make(chan struct{})
+	go func() {
+		defer close(replyDone)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+	textCh <- "visible text"
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	close(textCh)
+
+	select {
+	case <-replyDone:
+	case <-time.After(time.Second):
+		t.Fatal("generateReplyWithOptions did not return after interrupted text-only reply")
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want committed text that was forwarded before interruption", chatCtx.Items)
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	if got := msg.TextContent(); got != "visible text" || !msg.Interrupted {
+		t.Fatalf("assistant message text/interrupted = %q/%v, want interrupted visible text", got, msg.Interrupted)
+	}
+	if len(speech.ChatItems()) != 1 {
+		t.Fatalf("speech.ChatItems length = %d, want committed assistant message", len(speech.ChatItems()))
 	}
 }
 

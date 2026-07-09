@@ -6963,6 +6963,69 @@ func TestAgentSessionClaimUserTurnReleaseDerivesStateFromActivity(t *testing.T) 
 	}
 }
 
+func TestAgentSessionAgentSpeakingStallInterruptsStuckReply(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AgentSpeakingStallTimeout: 0.02})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.activity = activity
+
+	// Entering speaking arms the watchdog. With no notifyAgentSpeakingProgress
+	// calls (a stalled reply), it must interrupt the current speech to recover.
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentSessionAgentSpeakingStallReleasedByProgress(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AgentSpeakingStallTimeout: 0.05})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.activity = activity
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	// Continuously report progress for longer than the stall timeout; the
+	// watchdog must not fire while audio keeps advancing.
+	for i := 0; i < 10; i++ {
+		session.notifyAgentSpeakingProgress()
+		time.Sleep(15 * time.Millisecond)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted despite ongoing speaking progress")
+	}
+
+	// Once the agent stops speaking the watchdog is disarmed and stays quiet.
+	session.UpdateAgentState(AgentStateListening)
+	time.Sleep(80 * time.Millisecond)
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted after agent left speaking state")
+	}
+	current.MarkDone()
+}
+
+func TestAgentSessionCanDisableAgentSpeakingStallTimeout(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		AgentSpeakingStallTimeout:        0.02,
+		DisableAgentSpeakingStallTimeout: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.activity = activity
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	time.Sleep(80 * time.Millisecond)
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted with stall watchdog disabled")
+	}
+	current.MarkDone()
+}
+
 func TestAgentSessionCanDisableUserAwayTimeout(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

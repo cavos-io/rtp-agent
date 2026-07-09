@@ -1815,6 +1815,36 @@ func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *test
 	}
 }
 
+func TestRoomIOInterruptedPlaybackCarriesEmptySynchronizedTranscriptWhenKnown(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4800*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4800,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    false,
+	})
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if !ev.HasSynchronizedTranscript || ev.SynchronizedTranscript != "" {
+		t.Fatalf("synchronized transcript = %q/%v, want explicit empty transcript", ev.SynchronizedTranscript, ev.HasSynchronizedTranscript)
+	}
+}
+
 func TestRoomIOPlaybackStartedKeepsEarlySynchronizedTranscript(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
@@ -2852,6 +2882,26 @@ func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T)
 	nextID := next.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
 	if nextID == "" || nextID == firstID {
 		t.Fatalf("next segment id = %q, want non-empty id different from %q", nextID, firstID)
+	}
+}
+
+func TestRoomIOEmptyFinalAgentTranscriptionDoesNotPublishWhenNoSegmentActive(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published empty final without active segment: %#v", got)
+	default:
 	}
 }
 

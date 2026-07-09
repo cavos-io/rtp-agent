@@ -41,6 +41,8 @@ type PipelineAgent struct {
 	session          *AgentSession
 	vadStream        vad.VADStream
 	vadSpeechStarted bool
+	vadStallTimeout  time.Duration
+	vadStallTimer    *time.Timer
 	sttStream        stt.RecognizeStream
 	lastSTTFrame     *model.AudioFrame
 
@@ -60,6 +62,9 @@ type pipelineReplyOptions struct {
 	UserMessage        *llm.ChatMessage
 	SpeechHandle       *SpeechHandle
 }
+
+const toolReplyAtTailInstructions = "New results arrived from background tool calls (call_ids: %s).\nSummarize the results naturally. Do NOT repeat information you have already told the user."
+const toolReplyMaybeCoveredInstructions = "New results arrived from background tool calls (call_ids: %s).\nYou may have already mentioned them in your most recent replies.\nIf you already told the user everything in these results, reply with an empty response (no text at all).\nOtherwise, summarize only what you have not said yet, with a natural transition.\nNever repeat information you have already told the user."
 
 func NewPipelineAgent(
 	vad vad.VAD,
@@ -88,6 +93,11 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	va.mu.Lock()
 	va.session = s
 	va.rootCtx = ctx
+	if s != nil && !s.Options.DisableUserSpeechStallTimeout && s.Options.UserSpeechStallTimeout > 0 {
+		va.vadStallTimeout = time.Duration(s.Options.UserSpeechStallTimeout * float64(time.Second))
+	} else {
+		va.vadStallTimeout = 0
+	}
 	va.resetGenerationCtxLocked()
 	va.mu.Unlock()
 
@@ -392,6 +402,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User started speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = true
+			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnStartOfSpeech(ev)
@@ -406,6 +417,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User stopped speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = false
+			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
 			va.finalizeActiveSTTStream()
 			if va.session != nil && va.session.activity != nil {
@@ -414,6 +426,13 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.UpdateUserState(UserStateListening)
 			}
 		} else if ev.Type == vad.VADEventInferenceDone {
+			// Frames are still flowing, so push the stall deadline out. If the
+			// input stalls mid-speech (e.g. SIP silence suppression stops sending
+			// RTP), inference stops too and the timer fires to synthesize an end
+			// of speech.
+			va.mu.Lock()
+			va.resetVADStallTimerLocked()
+			va.mu.Unlock()
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnVADInferenceDone(ev)
 			}
@@ -451,11 +470,56 @@ func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
 	va.mu.Lock()
 	started := va.vadSpeechStarted
 	va.vadSpeechStarted = false
+	va.resetVADStallTimerLocked()
 	session := va.session
 	va.mu.Unlock()
 	if !started {
 		return
 	}
+	if session != nil && session.activity != nil {
+		session.activity.OnEndOfSpeech(nil)
+		return
+	}
+	if session != nil {
+		session.UpdateUserState(UserStateListening)
+	}
+}
+
+// resetVADStallTimerLocked (re)arms the speech-stall watchdog while the user is
+// in the VAD speaking state and stops it otherwise. It must be called with
+// va.mu held. The VAD only emits an end-of-speech event once it has processed
+// MinSilenceDuration of trailing silence, and that only happens while audio
+// frames keep arriving. If the input stalls mid-speech the session would stay
+// pinned to UserStateSpeaking forever, so this timer synthesizes an end of
+// speech when no VAD activity has advanced for vadStallTimeout.
+func (va *PipelineAgent) resetVADStallTimerLocked() {
+	if va.vadStallTimer != nil {
+		va.vadStallTimer.Stop()
+		va.vadStallTimer = nil
+	}
+	if va.vadStallTimeout <= 0 || !va.vadSpeechStarted {
+		return
+	}
+	va.vadStallTimer = time.AfterFunc(va.vadStallTimeout, va.onVADStall)
+}
+
+func (va *PipelineAgent) onVADStall() {
+	va.mu.Lock()
+	if !va.vadSpeechStarted {
+		va.mu.Unlock()
+		return
+	}
+	va.vadSpeechStarted = false
+	if va.vadStallTimer != nil {
+		va.vadStallTimer.Stop()
+		va.vadStallTimer = nil
+	}
+	timeout := va.vadStallTimeout
+	session := va.session
+	va.mu.Unlock()
+
+	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
+
 	if session != nil && session.activity != nil {
 		session.activity.OnEndOfSpeech(nil)
 		return
@@ -695,7 +759,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	speech.setPrecomputedLLMGeneration(genData)
 	if va.tts != nil && session.Options.PreemptiveGenerationPreemptiveTTS && genData.TextEventCh != nil {
 		go func() {
-			_ = drainLLMText(precomputeCtx, genData.TextCh, nil)
+			_, _ = drainLLMText(precomputeCtx, genData.TextCh, nil)
 		}()
 		segments := va.startSegmentedTTSGeneration(precomputeCtx, session, genData.TextEventCh)
 		speech.setPrecomputedTTSSegments(segments)
@@ -856,6 +920,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	toolSteps := 0
 	var pendingToolOutCh <-chan ToolExecutionOutput
 	var pendingToolUpdateReplyDone chan struct{}
+	var pendingToolReplyTailItem llm.ChatItem
+	var toolReplyInstructions string
 	closePendingToolUpdateReplyDone := func() {
 		if pendingToolUpdateReplyDone != nil {
 			close(pendingToolUpdateReplyDone)
@@ -890,6 +956,15 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				inferenceCtx = replyCtx.Copy()
 			}
 			applyAgentInstructionsModality(inferenceCtx, inputModality)
+		}
+		if toolReplyInstructions != "" {
+			if inferenceCtx == replyCtx {
+				inferenceCtx = replyCtx.Copy()
+			}
+			if err := updateAgentInstructionsMessage(inferenceCtx, llm.NewInstructions(toolReplyInstructions), true); err != nil {
+				logger.Logger.Warnw("failed to set reply instructions", err)
+			}
+			toolReplyInstructions = ""
 		}
 
 		var chatOptions []llm.ChatOption
@@ -933,8 +1008,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var ttsGen *TTSGenerationData
+		var textOnlyForwarded string
 		if va.tts == nil {
-			err = drainLLMGenerationText(ctx, genData, opts.SpeechHandle)
+			textOnlyForwarded, err = drainLLMGenerationText(ctx, genData, opts.SpeechHandle)
 		} else {
 			if opts.SpeechHandle != nil && toolSteps == 0 {
 				ttsGen = opts.SpeechHandle.takePrecomputedTTSGeneration()
@@ -951,7 +1027,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					_ = drainLLMText(ctx, genData.TextCh, nil)
+					_, _ = drainLLMText(ctx, genData.TextCh, nil)
 				}()
 				ttsGen, err = va.synthesizeSegmentedSpeech(ctx, session, genData.TextEventCh, opts.SpeechHandle)
 				<-done
@@ -997,7 +1073,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		forwardedText := genData.GeneratedText
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
-				forwardedText = ""
+				forwardedText = textOnlyForwarded
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
@@ -1062,6 +1138,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		var functionCalls []*llm.FunctionCall
 		var functionCallOutputs []*llm.FunctionCallOutput
 		var releasedByUpdate bool
+		var deferredToolReply bool
+		deferredToolReplyAtTail := true
 		for toolOut := range toolOutCh {
 			executedTools = true
 			if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
@@ -1074,9 +1152,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 		}
 		if releasedByUpdate {
+			pendingToolReplyTailItem = lastChatItem(va.chatCtx)
 			pendingToolOutCh = toolOutCh
 		}
 		if !executedTools && pendingToolOutCh != nil {
+			deferredToolReply = true
+			deferredToolReplyAtTail = chatItemIsTail(va.chatCtx, pendingToolReplyTailItem)
 			for toolOut := range pendingToolOutCh {
 				executedTools = true
 				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
@@ -1090,6 +1171,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if !releasedByUpdate {
 				pendingToolOutCh = nil
+				pendingToolReplyTailItem = nil
 			}
 		}
 
@@ -1109,6 +1191,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 					logger.Logger.Warnw("failed to refresh reply instructions", err)
 				}
 			}
+		}
+		if deferredToolReply && replyRequired {
+			toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, deferredToolReplyAtTail)
+		}
+		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
+			closePendingToolUpdateReplyDone()
+			session.UpdateAgentState(AgentStateListening)
+			break
 		}
 
 		// If no tool calls, we're done
@@ -1140,6 +1230,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				if !pendingReleasedByUpdate && !replyRequired {
 					pendingToolOutCh = nil
+					pendingToolReplyTailItem = nil
+				}
+				if pendingReleasedByUpdate {
+					pendingToolReplyTailItem = lastChatItem(va.chatCtx)
 				}
 				if executedTools {
 					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
@@ -1158,6 +1252,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 						}
 					}
 				}
+				if replyRequired {
+					toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, chatItemIsTail(va.chatCtx, pendingToolReplyTailItem))
+				}
 			}
 			if !executedTools || !replyRequired {
 				closePendingToolUpdateReplyDone()
@@ -1174,57 +1271,97 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 }
 
-func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) error {
-	if genData == nil {
+func pipelineToolReplyInstructions(outputs []*llm.FunctionCallOutput, atTail bool) string {
+	callIDs := make([]string, 0, len(outputs))
+	for _, out := range outputs {
+		if out != nil && out.CallID != "" {
+			callIDs = append(callIDs, out.CallID)
+		}
+	}
+	if atTail {
+		return fmt.Sprintf(toolReplyAtTailInstructions, formatPythonStringList(callIDs))
+	}
+	return fmt.Sprintf(toolReplyMaybeCoveredInstructions, formatPythonStringList(callIDs))
+}
+
+func lastChatItem(chatCtx *llm.ChatContext) llm.ChatItem {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
 		return nil
+	}
+	return chatCtx.Items[len(chatCtx.Items)-1]
+}
+
+func chatItemIsTail(chatCtx *llm.ChatContext, item llm.ChatItem) bool {
+	if item == nil {
+		return true
+	}
+	tail := lastChatItem(chatCtx)
+	if tail == nil {
+		return false
+	}
+	if tail == item {
+		return true
+	}
+	return tail.GetID() != "" && tail.GetID() == item.GetID()
+}
+
+func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) (string, error) {
+	if genData == nil {
+		return "", nil
 	}
 	if genData.TextEventCh != nil {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_ = drainLLMText(ctx, genData.TextCh, nil)
+			_, _ = drainLLMText(ctx, genData.TextCh, nil)
 		}()
-		err := drainLLMTextEvents(ctx, genData.TextEventCh, speech)
+		forwardedText, err := drainLLMTextEvents(ctx, genData.TextEventCh, speech)
 		<-done
-		return err
+		return forwardedText, err
 	}
 	return drainLLMText(ctx, genData.TextCh, speech)
 }
 
-func drainLLMTextEvents(ctx context.Context, textCh <-chan LLMTextEvent, speech *SpeechHandle) error {
+func drainLLMTextEvents(ctx context.Context, textCh <-chan LLMTextEvent, speech *SpeechHandle) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var forwardedText strings.Builder
 	for {
 		if speech != nil && speech.IsInterrupted() {
-			return nil
+			return forwardedText.String(), nil
 		}
 		select {
-		case _, ok := <-textCh:
+		case event, ok := <-textCh:
 			if !ok {
-				return nil
+				return forwardedText.String(), nil
+			}
+			if !event.Flush {
+				forwardedText.WriteString(event.Text)
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return forwardedText.String(), ctx.Err()
 		}
 	}
 }
 
-func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) error {
+func drainLLMText(ctx context.Context, textCh <-chan string, speech *SpeechHandle) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var forwardedText strings.Builder
 	for {
 		if speech != nil && speech.IsInterrupted() {
-			return nil
+			return forwardedText.String(), nil
 		}
 		select {
-		case _, ok := <-textCh:
+		case text, ok := <-textCh:
 			if !ok {
-				return nil
+				return forwardedText.String(), nil
 			}
+			forwardedText.WriteString(text)
 		case <-ctx.Done():
-			return ctx.Err()
+			return forwardedText.String(), ctx.Err()
 		}
 	}
 }
@@ -1825,6 +1962,9 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			session.UpdateAgentState(AgentStateSpeaking)
 			startedSpeaking = true
 		}
+		// Push the speaking-stall watchdog deadline out: audio is still
+		// advancing, so the agent is legitimately speaking rather than stuck.
+		session.notifyAgentSpeakingProgress()
 		if speech != nil && speech.IsInterrupted() {
 			transcriptSync.Close()
 			<-transcriptionDone
