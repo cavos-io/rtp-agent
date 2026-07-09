@@ -15800,6 +15800,51 @@ func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsRealtimeModel(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "speechmatics")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL", "flow-pro")
+	t.Setenv("RTP_AGENT_REALTIME_VOICE", "theo")
+	t.Setenv("RTP_AGENT_REALTIME_BASE_URL", "wss://flow.example/v1")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "system_prompt=stay concise,input_sample_rate=24000,output_sample_rate=48000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if got := llm.RealtimeModelName(app.RealtimeModel); got != "flow-pro" {
+		t.Fatalf("Realtime model = %q, want flow-pro", got)
+	}
+	if got := llm.RealtimeProvider(app.RealtimeModel); got != "Speechmatics" {
+		t.Fatalf("Realtime provider = %q, want Speechmatics", got)
+	}
+	model, ok := app.RealtimeModel.(*speechmatics.RealtimeModel)
+	if !ok {
+		t.Fatalf("RealtimeModel = %T, want *speechmatics.RealtimeModel", app.RealtimeModel)
+	}
+	if got := model.APIKey(); got != "test-speechmatics-key" {
+		t.Fatalf("Realtime API key = %q, want env key", got)
+	}
+	if got := model.BaseURL(); got != "wss://flow.example/v1" {
+		t.Fatalf("Realtime base URL = %q, want configured Flow URL", got)
+	}
+	if got := model.Voice(); got != "theo" {
+		t.Fatalf("Realtime voice = %q, want theo", got)
+	}
+	if got := model.InputSampleRate(); got != 24000 {
+		t.Fatalf("Realtime input sample rate = %d, want 24000", got)
+	}
+	if got := model.OutputSampleRate(); got != 48000 {
+		t.Fatalf("Realtime output sample rate = %d, want 48000", got)
+	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "aws")

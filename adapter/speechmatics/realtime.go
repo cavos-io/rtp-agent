@@ -104,6 +104,23 @@ func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 func (m *RealtimeModel) Label() string    { return "speechmatics.RealtimeModel" }
 func (m *RealtimeModel) Model() string    { return m.model }
 func (m *RealtimeModel) Provider() string { return "Speechmatics" }
+func (m *RealtimeModel) APIKey() string   { return m.apiKey }
+func (m *RealtimeModel) BaseURL() string  { return m.baseURL }
+func (m *RealtimeModel) Voice() string    { return m.voice }
+
+func (m *RealtimeModel) InputSampleRate() int {
+	if m == nil {
+		return 0
+	}
+	return m.inputSampleRate
+}
+
+func (m *RealtimeModel) OutputSampleRate() int {
+	if m == nil {
+		return 0
+	}
+	return m.outputSampleRate
+}
 
 func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
