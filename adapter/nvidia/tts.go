@@ -422,7 +422,7 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedWebsite(text[next:]) {
 		return true
 	}
-	return nvidiaTTSProtectedMultipleDots(text, dot, next)
+	return nvidiaTTSProtectedMultipleDots(text, dot, next, text[next:])
 }
 
 func nvidiaTTSProtectedDecimal(text string, dot int, next int) bool {
@@ -438,8 +438,14 @@ func nvidiaTTSProtectedWebsite(tail string) bool {
 	return false
 }
 
-func nvidiaTTSProtectedMultipleDots(text string, dot int, next int) bool {
-	return (dot > 0 && text[dot-1] == '.') || (next < len(text) && text[next] == '.')
+func nvidiaTTSProtectedMultipleDots(text string, dot int, next int, tail string) bool {
+	if next < len(text) && text[next] == '.' {
+		return true
+	}
+	if dot > 0 && text[dot-1] == '.' {
+		return !nvidiaTTSASCIITailStartsCapital(tail)
+	}
+	return false
 }
 
 func nvidiaTTSProtectedAbbreviation(prefix string) bool {
