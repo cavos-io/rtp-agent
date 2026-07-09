@@ -248,7 +248,7 @@ func (s *nvidiaSTTStream) EndInput() error {
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		return nil
+		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {

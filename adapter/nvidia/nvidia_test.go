@@ -758,6 +758,9 @@ func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	if err := ending.EndInput(); err != nil {
 		t.Fatalf("EndInput() error = %v", err)
 	}
+	if err := ending.EndInput(); err != io.ErrClosedPipe {
+		t.Fatalf("second EndInput() error = %v, want %v", err, io.ErrClosedPipe)
+	}
 	if err := stream.PushFrame(&model.AudioFrame{}); err != io.ErrClosedPipe {
 		t.Fatalf("PushFrame() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
 	}
