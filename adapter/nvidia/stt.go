@@ -53,9 +53,7 @@ func WithNvidiaSTTFunctionID(functionID string) NvidiaSTTOption {
 
 func WithNvidiaSTTLanguage(language string) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 

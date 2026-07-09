@@ -624,6 +624,27 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTAllowsEmptyLanguageLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTLanguage(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	if got, want := provider.language, ""; got != want {
+		t.Fatalf("language = %q, want explicit empty language", got)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+	if got, want := concrete.language, ""; got != want {
+		t.Fatalf("stream language = %q, want explicit empty provider language", got)
+	}
+}
+
 func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	stream := &nvidiaSTTStream{
 		language:        "en-US",
