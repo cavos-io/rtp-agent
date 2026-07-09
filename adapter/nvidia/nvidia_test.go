@@ -1223,6 +1223,79 @@ func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t 
 	}
 }
 
+func TestNvidiaRealtimeAbnormalCloseRetriesLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	reconnected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "boom"), time.Now().Add(time.Second)); err != nil {
+				serverErr <- err
+				return
+			}
+			return
+		}
+		reconnected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	for {
+		select {
+		case ev := <-session.EventCh():
+			if ev.Type == llm.RealtimeEventTypeError {
+				goto waitReconnect
+			}
+		case err := <-serverErr:
+			t.Fatalf("websocket server error before abnormal-close error event: %v", err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for abnormal-close error event")
+		}
+	}
+
+waitReconnect:
+	select {
+	case <-reconnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before abnormal-close retry: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for retry reconnect after abnormal provider close")
+	}
+}
+
 func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
