@@ -352,6 +352,9 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if r == '.' && nvidiaTTSProtectedInitial(trimmed[:i]) {
 				continue
 			}
+			if r == '.' && nvidiaTTSProtectedSuffix(trimmed[:i], trimmed[next:]) {
+				continue
+			}
 			if trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
 				continue
 			}
@@ -390,4 +393,26 @@ func nvidiaTTSProtectedInitial(prefix string) bool {
 		return false
 	}
 	return (token[0] >= 'A' && token[0] <= 'Z') || (token[0] >= 'a' && token[0] <= 'z')
+}
+
+func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[len(fields)-1] {
+	case "Inc", "Ltd", "Jr", "Sr", "Co":
+	default:
+		return false
+	}
+	tailFields := strings.Fields(tail)
+	if len(tailFields) == 0 {
+		return true
+	}
+	switch tailFields[0] {
+	case "Mr", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Wherever":
+		return false
+	default:
+		return true
+	}
 }
