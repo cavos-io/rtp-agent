@@ -394,7 +394,7 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedInitial(text, dot, text[next:]) {
 		return true
 	}
-	if nvidiaTTSProtectedSuffix(text[:dot], text[next:]) {
+	if nvidiaTTSProtectedSuffix(text, dot, text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
@@ -498,17 +498,15 @@ func nvidiaTTSProtectedInitial(text string, dot int, tail string) bool {
 	return strings.HasPrefix(tail, " ") && (prev == '\t' || prev == '\n' || prev == '\r' || prev == '\f' || prev == '\v')
 }
 
-func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
-	fields := strings.Fields(prefix)
-	if len(fields) == 0 {
-		return false
+func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
+	for _, suffix := range []string{"Inc", "Ltd", "Jr", "Sr", "Co"} {
+		start := dot - len(suffix)
+		if start <= 0 || text[start-1] != ' ' || text[start:dot] != suffix {
+			continue
+		}
+		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	switch fields[len(fields)-1] {
-	case "Inc", "Ltd", "Jr", "Sr", "Co":
-	default:
-		return false
-	}
-	return !nvidiaTTSTailStartsSentence(tail)
+	return false
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
