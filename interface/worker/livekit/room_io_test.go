@@ -2855,6 +2855,26 @@ func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T)
 	}
 }
 
+func TestRoomIOEmptyFinalAgentTranscriptionDoesNotPublishWhenNoSegmentActive(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published empty final without active segment: %#v", got)
+	default:
+	}
+}
+
 func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{
