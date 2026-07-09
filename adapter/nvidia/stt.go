@@ -426,16 +426,22 @@ func (s *nvidiaSTTStream) speechDataFromAlternative(alternative nvidiaSTTAlterna
 
 func majoritySpeakerTag(words []nvidiaSTTWord) (int, bool) {
 	counts := make(map[int]int)
-	bestTag := 0
 	bestCount := 0
 	for _, word := range words {
 		counts[word.SpeakerTag]++
 		if counts[word.SpeakerTag] > bestCount {
-			bestTag = word.SpeakerTag
 			bestCount = counts[word.SpeakerTag]
 		}
 	}
-	return bestTag, bestCount > 0
+	if bestCount == 0 {
+		return 0, false
+	}
+	for _, word := range words {
+		if counts[word.SpeakerTag] == bestCount {
+			return word.SpeakerTag, true
+		}
+	}
+	return 0, false
 }
 
 func (s *nvidiaSTTStream) StartTimeOffset() float64 {

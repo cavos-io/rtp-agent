@@ -1627,6 +1627,27 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTFinalDiarizationTieKeepsFirstSpeakerLikeReference(t *testing.T) {
+	stream := &nvidiaSTTStream{
+		language: "en-US",
+		stt:      &NvidiaSTT{diarization: true},
+	}
+
+	data := stream.speechDataFromAlternative(nvidiaSTTAlternative{
+		Transcript: "one two three four",
+		Words: []nvidiaSTTWord{
+			{Word: "one", SpeakerTag: 1},
+			{Word: "two", SpeakerTag: 2},
+			{Word: "three", SpeakerTag: 2},
+			{Word: "four", SpeakerTag: 1},
+		},
+	}, true)
+
+	if got, want := data.SpeakerID, "S1"; got != want {
+		t.Fatalf("SpeakerID = %q, want first speaker among tied majority counts %q", got, want)
+	}
+}
+
 func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
