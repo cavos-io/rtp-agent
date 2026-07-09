@@ -3191,6 +3191,51 @@ func TestNvidiaTTSStreamStartsBracketedSentenceBeforeFlushLikeReference(t *testi
 	}
 }
 
+func TestNvidiaTTSStreamStartsStackedClosingSentenceBeforeFlushLikeReference(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "quoted parenthesis", text: "Please read (\"Long enough sentence.\") Next starts now"},
+		{name: "quoted bracket", text: "Please read [\"Long enough sentence.\"] Next starts now"},
+		{name: "curly quote parenthesis", text: "Please read “Long enough sentence.”) Next starts now"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tt.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after stacked closing punctuation, want completed sentence boundary")
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after stacked closing sentence before Flush")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsEllipsisBeforeCapitalLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

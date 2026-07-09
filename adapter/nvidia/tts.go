@@ -413,19 +413,23 @@ func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string, quoted bool) bool {
 }
 
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
-	if next >= len(text) {
-		return next, false
+	quoted := false
+	for next < len(text) {
+		if strings.HasPrefix(text[next:], "”") {
+			next += len("”")
+			continue
+		}
+		switch text[next] {
+		case '"':
+			quoted = true
+			next++
+		case '\'', ')', ']', '}', ',', ':', ';':
+			next++
+		default:
+			return next, quoted
+		}
 	}
-	if text[next] == '"' {
-		return next + 1, true
-	}
-	if strings.HasPrefix(text[next:], "”") {
-		return next + len("”"), false
-	}
-	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' || text[next] == ',' || text[next] == ':' || text[next] == ';' {
-		return next + 1, false
-	}
-	return next, false
+	return next, quoted
 }
 
 func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
