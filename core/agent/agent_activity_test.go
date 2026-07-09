@@ -6601,6 +6601,76 @@ func TestAgentActivityMatchingFinalTranscriptKeepsPreflightGeneration(t *testing
 	}
 }
 
+func TestAgentActivityChangedFinalTranscriptReplacesPreflightGeneration(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	countingLLM := &preemptiveCountingLLM{
+		calls: make(chan struct{}, 3),
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "preflight reply"},
+		}}},
+	}
+	agent.LLM = countingLLM
+	agent.TTS = &fakePipelineTTS{stream: &fakePipelineTTSStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, agent.LLM, agent.TTS, agent.ChatCtx)
+	pipeline.session = session
+	session.Assistant = pipeline
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	speechEvents := session.SpeechCreatedEvents()
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type: stt.SpeechEventPreflightTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text:       "first guess",
+			Confidence: 0.8,
+		}},
+	})
+
+	var first *SpeechHandle
+	select {
+	case ev := <-speechEvents:
+		first = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive preflight generation")
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for preflight generation")
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "corrected final",
+			Confidence: 0.9,
+		}},
+	})
+
+	if !first.IsInterrupted() {
+		t.Fatal("stale preflight generation was not interrupted after final transcript changed")
+	}
+	select {
+	case ev := <-speechEvents:
+		if ev.SpeechHandle == nil {
+			t.Fatal("replacement SpeechCreatedEvent has nil handle")
+		}
+		if ev.SpeechHandle == first {
+			t.Fatal("replacement reused stale preflight handle")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive replacement generation")
+	}
+	select {
+	case <-countingLLM.calls:
+	case <-time.After(time.Second):
+		t.Fatal("LLM was not started for replacement generation")
+	}
+}
+
 func TestAgentActivityPreemptiveGenerationCancelsStaleBeforeRetryGuard(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
