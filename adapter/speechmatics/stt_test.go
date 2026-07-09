@@ -2370,6 +2370,37 @@ func TestSpeechmaticsSegmentEventsEmitDeliveredReferencePartialsWhenDisabled(t *
 	}
 }
 
+func TestSpeechmaticsSegmentEventsSkipReferenceEmptyText(t *testing.T) {
+	for _, message := range []string{"AddPartialSegment", "AddSegment"} {
+		t.Run(message, func(t *testing.T) {
+			state := &speechmaticsStreamState{}
+			var resp smResponse
+			if err := json.Unmarshal([]byte(fmt.Sprintf(`{
+				"message":%q,
+				"segments":[{
+					"text":"",
+					"language":"en",
+					"speaker_id":"agent",
+					"annotation":["ends_with_final"],
+					"metadata":{"start_time":0.1,"end_time":0.4}
+				}]
+			}`, message)), &resp); err != nil {
+				t.Fatalf("unmarshal empty-text segment: %v", err)
+			}
+
+			if events := speechmaticsEvents(resp, state); len(events) != 0 {
+				t.Fatalf("events = %#v, want reference empty-text segment skipped", events)
+			}
+			if state.turnHasTranscript {
+				t.Fatal("turnHasTranscript = true, want empty-text segment skipped as transcript evidence")
+			}
+			if state.latestSegmentAnnotationSet {
+				t.Fatalf("latest annotation = %#v, want empty-text segment skipped before endpointing annotation", state.latestSegmentAnnotation)
+			}
+		})
+	}
+}
+
 func TestSpeechmaticsSegmentEventsRecordReferencePartialAnnotationsWhenOutputDisabled(t *testing.T) {
 	state := &speechmaticsStreamState{includePartials: false}
 	var partial smResponse
