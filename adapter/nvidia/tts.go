@@ -111,8 +111,10 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	ctx    context.Context
-	closed bool
+	ctx       context.Context
+	done      bool
+	closed    bool
+	exception error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -162,6 +164,8 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
 			return err
 		}
 	}
@@ -177,6 +181,8 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
 			return err
 		}
 	}
@@ -185,17 +191,32 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 
 func (s *nvidiaTTSSynthesizeStream) Close() error {
 	s.closed = true
+	s.done = true
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		s.done = true
 		return nil, io.EOF
 	}
 	if s.ctx != nil {
 		if err := s.ctx.Err(); err != nil {
+			s.done = true
+			s.exception = err
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("nvidia riva tts streaming is not implemented")
+	err := fmt.Errorf("nvidia riva tts streaming is not implemented")
+	s.done = true
+	s.exception = err
+	return nil, err
+}
+
+func (s *nvidiaTTSSynthesizeStream) Done() bool {
+	return s.done
+}
+
+func (s *nvidiaTTSSynthesizeStream) Exception() error {
+	return s.exception
 }

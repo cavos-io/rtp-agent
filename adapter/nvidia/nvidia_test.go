@@ -223,8 +223,25 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	if err := stream.PushText(" again"); err != nil {
 		t.Fatalf("PushText(second) error = %v, want nil before native transport", err)
 	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before stream output")
+	}
 	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
 		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported stream error", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after stream output error")
+	}
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("Exception() after stream output error = %v, want unsupported stream error", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
