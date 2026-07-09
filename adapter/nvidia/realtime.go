@@ -50,9 +50,7 @@ func WithNvidiaRealtimeVoice(voice string) NvidiaRealtimeOption {
 
 func WithNvidiaRealtimeTextPrompt(prompt string) NvidiaRealtimeOption {
 	return func(m *NvidiaRealtimeModel) {
-		if prompt != "" {
-			m.textPrompt = prompt
-		}
+		m.textPrompt = prompt
 	}
 }
 

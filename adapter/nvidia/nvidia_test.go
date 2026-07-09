@@ -118,6 +118,20 @@ func TestNvidiaRealtimeAllowsZeroSilenceThresholdLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeAllowsEmptyTextPromptLikeReference(t *testing.T) {
+	model := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("ws://personaplex.example:8998"),
+		WithNvidiaRealtimeTextPrompt(""),
+	)
+
+	if got, want := model.textPrompt, ""; got != want {
+		t.Fatalf("textPrompt = %q, want explicit empty prompt", got)
+	}
+	if got, want := model.websocketURL(), "ws://personaplex.example:8998/api/chat?voice_prompt=NATF2.pt&text_prompt="; got != want {
+		t.Fatalf("websocketURL() = %q, want %q", got, want)
+	}
+}
+
 func TestNvidiaRealtimeStripsOnlyFirstURLSchemeLikeReference(t *testing.T) {
 	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL("wss://http://personaplex.local:8998"))
 
