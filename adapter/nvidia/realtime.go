@@ -806,6 +806,9 @@ func (s *nvidiaRealtimeSession) finishRealtimeTransportReceive(ctx context.Conte
 		})
 	}
 	s.resetRealtimeTransportLocked()
+	if normalClose {
+		s.startRealtimeTransportLocked()
+	}
 }
 
 func (s *nvidiaRealtimeSession) failRealtimeTransport(ctx context.Context, err error) {
