@@ -1,11 +1,14 @@
 package speechmatics
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -37,7 +41,17 @@ type RealtimeModel struct {
 	systemPrompt     string
 	inputSampleRate  int
 	outputSampleRate int
+	dialWebsocket    SpeechmaticsRealtimeWebsocketDialer
+	connect          llm.APIConnectOptions
+	disableWebsocket bool
 	closed           bool
+}
+
+type SpeechmaticsRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
+
+type speechmaticsRealtimeDialResult struct {
+	conn *websocket.Conn
+	err  error
 }
 
 type RealtimeOption func(*RealtimeModel)
@@ -61,6 +75,8 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, er
 		systemPrompt:     defaultSpeechmaticsRealtimeSystemPrompt,
 		inputSampleRate:  defaultSpeechmaticsRealtimeInputSampleRate,
 		outputSampleRate: defaultSpeechmaticsRealtimeOutputSampleRate,
+		dialWebsocket:    defaultSpeechmaticsRealtimeWebsocketDialer,
+		connect:          llm.DefaultAPIConnectOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -106,12 +122,58 @@ func WithRealtimeOutputSampleRate(sampleRate int) RealtimeOption {
 	}
 }
 
+func WithRealtimeWebsocketDialer(dialer SpeechmaticsRealtimeWebsocketDialer) RealtimeOption {
+	return func(m *RealtimeModel) {
+		if dialer != nil {
+			m.dialWebsocket = dialer
+			m.disableWebsocket = false
+		}
+	}
+}
+
+func WithRealtimeConnectOptions(options llm.APIConnectOptions) RealtimeOption {
+	return func(m *RealtimeModel) {
+		m.connect = options
+	}
+}
+
+func WithRealtimeWebsocketDisabled() RealtimeOption {
+	return func(m *RealtimeModel) {
+		m.disableWebsocket = true
+	}
+}
+
 func (m *RealtimeModel) Label() string    { return "speechmatics.RealtimeModel" }
 func (m *RealtimeModel) Model() string    { return m.model }
 func (m *RealtimeModel) Provider() string { return "Speechmatics" }
 func (m *RealtimeModel) APIKey() string   { return m.apiKey }
 func (m *RealtimeModel) BaseURL() string  { return m.baseURL }
 func (m *RealtimeModel) Voice() string    { return m.voice }
+
+func defaultSpeechmaticsRealtimeWebsocketDialer(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.Dial(endpoint, headers)
+}
+
+func buildSpeechmaticsRealtimeHeaders(apiKey string) http.Header {
+	header := http.Header{}
+	header.Add("User-Agent", "LiveKit Agents")
+	header.Add("Authorization", "Bearer "+apiKey)
+	return header
+}
+
+func buildSpeechmaticsRealtimeWebsocketURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	return u.String()
+}
 
 func (m *RealtimeModel) InputSampleRate() int {
 	if m == nil {
@@ -161,6 +223,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		instructions:     m.systemPrompt,
 		inputSampleRate:  m.inputSampleRate,
 		outputSampleRate: m.outputSampleRate,
+		dialWebsocket:    m.dialWebsocket,
+		connect:          m.connect,
+		disableWebsocket: m.disableWebsocket,
 	}
 	if m.sessions == nil {
 		m.sessions = make(map[*speechmaticsRealtimeSession]struct{})
@@ -168,14 +233,22 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	m.sessions[session] = struct{}{}
 	m.mu.Unlock()
 
-	session.enqueueCommand(map[string]any{
+	initialCommand := map[string]any{
 		"type":               "session.create",
 		"model":              session.model,
 		"voice":              session.voice,
 		"instructions":       session.instructions,
 		"input_sample_rate":  session.inputSampleRate,
 		"output_sample_rate": session.outputSampleRate,
-	})
+	}
+	if !session.disableWebsocket {
+		if err := session.connectRealtimeWebsocket(initialCommand); err != nil {
+			m.unregisterRealtimeSession(session)
+			return nil, err
+		}
+		return session, nil
+	}
+	session.enqueueCommand(initialCommand)
 	return session, nil
 }
 
@@ -224,6 +297,12 @@ type speechmaticsRealtimeSession struct {
 	instructions     string
 	inputSampleRate  int
 	outputSampleRate int
+	dialWebsocket    SpeechmaticsRealtimeWebsocketDialer
+	connect          llm.APIConnectOptions
+	disableWebsocket bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	conn             *websocket.Conn
 	closed           bool
 	drainingCommands bool
 	closeOnce        sync.Once
@@ -362,8 +441,17 @@ func (s *speechmaticsRealtimeSession) Close() error {
 		s.closed = true
 		s.pendingCommands = nil
 		s.closeCurrentGenerationLocked()
+		cancel := s.cancel
+		conn := s.conn
 		close(s.closedCh)
 		s.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if conn != nil {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+			_ = conn.Close()
+		}
 		close(s.eventCh)
 		if s.owner != nil {
 			s.owner.unregisterRealtimeSession(s)
@@ -373,6 +461,132 @@ func (s *speechmaticsRealtimeSession) Close() error {
 }
 
 func (s *speechmaticsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *speechmaticsRealtimeSession) connectRealtimeWebsocket(initialCommand map[string]any) error {
+	if s.dialWebsocket == nil {
+		s.dialWebsocket = defaultSpeechmaticsRealtimeWebsocketDialer
+	}
+	conn, err := s.dialRealtimeWebsocket(context.Background(), buildSpeechmaticsRealtimeWebsocketURL(s.baseURL), buildSpeechmaticsRealtimeHeaders(s.apiKey))
+	if err != nil {
+		var timeoutErr *llm.APITimeoutError
+		if errors.As(err, &timeoutErr) {
+			return timeoutErr
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to Speechmatics realtime: %v", err))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.ctx = ctx
+	s.cancel = cancel
+	s.conn = conn
+	s.mu.Unlock()
+	go s.websocketWriteLoop(conn)
+	go s.websocketReadLoop(conn)
+	if err := s.enqueueCommand(initialCommand); err != nil {
+		_ = s.Close()
+		return err
+	}
+	return nil
+}
+
+func (s *speechmaticsRealtimeSession) dialRealtimeWebsocket(ctx context.Context, endpoint string, header http.Header) (*websocket.Conn, error) {
+	var err error
+	for attempt := 0; attempt <= s.connect.MaxRetry; attempt++ {
+		var conn *websocket.Conn
+		conn, err = s.dialRealtimeWebsocketAttempt(ctx, endpoint, header)
+		if err == nil {
+			return conn, nil
+		}
+		if attempt == s.connect.MaxRetry {
+			return nil, err
+		}
+		interval := s.connect.IntervalForRetry(attempt)
+		if interval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, err
+}
+
+func (s *speechmaticsRealtimeSession) dialRealtimeWebsocketAttempt(ctx context.Context, endpoint string, header http.Header) (*websocket.Conn, error) {
+	attemptCtx := ctx
+	cancel := func() {}
+	if s.connect.Timeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, s.connect.Timeout)
+	} else if ctx != nil {
+		attemptCtx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+	resultCh := make(chan speechmaticsRealtimeDialResult, 1)
+	go func() {
+		conn, _, err := s.dialWebsocket(endpoint, header)
+		select {
+		case resultCh <- speechmaticsRealtimeDialResult{conn: conn, err: err}:
+		case <-attemptCtx.Done():
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}
+	}()
+	select {
+	case result := <-resultCh:
+		return result.conn, result.err
+	case <-attemptCtx.Done():
+		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError("Speechmatics realtime connection timed out")
+		}
+		return nil, attemptCtx.Err()
+	}
+}
+
+func (s *speechmaticsRealtimeSession) websocketWriteLoop(conn *websocket.Conn) {
+	for {
+		select {
+		case <-s.closedCh:
+			return
+		case command := <-s.commandCh:
+			if command == nil {
+				continue
+			}
+			if err := conn.WriteJSON(command); err != nil {
+				s.emitRealtimeEvent(llm.RealtimeEvent{
+					Type:  llm.RealtimeEventTypeError,
+					Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime send failed: %v", err)),
+				})
+				_ = s.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *speechmaticsRealtimeSession) websocketReadLoop(conn *websocket.Conn) {
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			if s.isClosed() || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return
+			}
+			s.emitRealtimeEvent(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime receive failed: %v", err)),
+			})
+			_ = s.Close()
+			return
+		}
+		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+			continue
+		}
+		s.handleServerJSON(data)
+	}
+}
 
 func (s *speechmaticsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
