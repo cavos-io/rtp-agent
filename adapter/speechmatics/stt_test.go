@@ -3041,6 +3041,62 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTMalformedStartOfTurnStillEmitsReferenceStart(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		messages := []map[string]interface{}{
+			{"message": "StartOfTurn", "results": map[string]interface{}{"unexpected": "shape"}},
+			{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{
+					{
+						"text":       "hello",
+						"language":   "en",
+						"speaker_id": "S1",
+						"metadata": map[string]interface{}{
+							"start_time": 0.0,
+							"end_time":   0.2,
+						},
+					},
+				},
+			},
+			{"message": "EndOfTranscript"},
+		}
+		for _, message := range messages {
+			if err := conn.WriteJSON(message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start_of_speech from malformed StartOfTurn", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("Next event = %#v, want start_of_speech", event)
+	}
+}
+
 func TestSpeechmaticsSTTMalformedSpeakersResultDoesNotAbortReferenceStream(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

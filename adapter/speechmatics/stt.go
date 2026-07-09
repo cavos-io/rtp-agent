@@ -1896,17 +1896,18 @@ func (s *speechmaticsSTTStream) readLoop() {
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			if json.Valid(message) {
-				if speechmaticsMessageName(message) == "RecognitionStarted" {
-					if !s.handleResponse(smResponse{Message: "RecognitionStarted"}) {
+				messageName := speechmaticsMessageName(message)
+				if speechmaticsControlMessage(messageName) {
+					if !s.handleResponse(smResponse{Message: messageName}) {
 						return
 					}
 					continue
 				}
-				if speechmaticsSpeakersResultMessage(message) {
+				if messageName == "SpeakersResult" {
 					s.recordSpeakerResult(nil)
 					continue
 				}
-				if speechmaticsDataMessage(message) {
+				if speechmaticsDataMessageName(messageName) {
 					_ = s.closeTransportOnce()
 					s.prepareDrainPendingRawFinals()
 					s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid Speechmatics message: %v", err)))
@@ -1928,8 +1929,13 @@ func (s *speechmaticsSTTStream) readLoop() {
 	}
 }
 
-func speechmaticsSpeakersResultMessage(data []byte) bool {
-	return speechmaticsMessageName(data) == "SpeakersResult"
+func speechmaticsControlMessage(message string) bool {
+	switch message {
+	case "RecognitionStarted", "StartOfTurn", "EndOfTurn", "EndOfUtterance", "EndOfTranscript":
+		return true
+	default:
+		return false
+	}
 }
 
 func speechmaticsMessageName(data []byte) string {
@@ -1944,8 +1950,8 @@ func speechmaticsMessageName(data []byte) string {
 	return message
 }
 
-func speechmaticsDataMessage(data []byte) bool {
-	switch speechmaticsMessageName(data) {
+func speechmaticsDataMessageName(message string) bool {
+	switch message {
 	case "AddPartialSegment", "AddSegment", "AddPartialTranscript", "AddTranscript", "SpeakersResult":
 		return true
 	default:
