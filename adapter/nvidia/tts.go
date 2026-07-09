@@ -422,7 +422,7 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 	if strings.HasPrefix(text[next:], "”") {
 		return next + len("”"), false
 	}
-	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' {
+	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' || text[next] == ',' {
 		return next + 1, false
 	}
 	return next, false
@@ -580,6 +580,7 @@ func nvidiaTTSASCIIWhitespace(b byte) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
+	tail = strings.TrimPrefix(tail, ",")
 	if tail == "" || !nvidiaTTSASCIIWhitespace(tail[0]) {
 		return false
 	}
