@@ -203,11 +203,11 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
-	if s.flushed {
-		return nil
-	}
 	if err := s.checkInputSampleRate(frame); err != nil {
 		return err
+	}
+	if s.flushed {
+		return nil
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil

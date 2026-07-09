@@ -1641,6 +1641,28 @@ func TestNvidiaSTTFlushStopsWorkerLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTFlushStillRejectsMismatchedSampleRateLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("PushFrame(first) error = %v, want explicit unsupported streaming error", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1})
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("PushFrame(mismatched after Flush) error = %v, want reference consistency error", err)
+	}
+}
+
 func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
