@@ -7482,6 +7482,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	case providerUltravox:
 		return ultravox.NewRealtimeModel(cfg.UltravoxAPIKey, ultravoxRealtimeOptionsFromConfig(cfg)...)
+	case providerSpeechmatics:
+		return speechmatics.NewRealtimeModel(cfg.SpeechmaticsAPIKey, speechmaticsRealtimeOptionsFromConfig(cfg)...)
 	case providerAWS:
 		opts := awsRealtimeOptionsFromConfig(cfg)
 		if cfg.RealtimeVoice != "" {
@@ -7497,6 +7499,29 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
+}
+
+func speechmaticsRealtimeOptionsFromConfig(cfg AppConfig) []speechmatics.RealtimeOption {
+	opts := []speechmatics.RealtimeOption{}
+	if cfg.RealtimeModel != "" {
+		opts = append(opts, speechmatics.WithRealtimeModel(cfg.RealtimeModel))
+	}
+	if cfg.RealtimeVoice != "" {
+		opts = append(opts, speechmatics.WithRealtimeVoice(cfg.RealtimeVoice))
+	}
+	if cfg.RealtimeBaseURL != "" {
+		opts = append(opts, speechmatics.WithRealtimeBaseURL(cfg.RealtimeBaseURL))
+	}
+	if systemPrompt := modelOptionString(cfg.RealtimeModelOptions, "system_prompt"); systemPrompt != "" {
+		opts = append(opts, speechmatics.WithRealtimeSystemPrompt(systemPrompt))
+	}
+	if sampleRate := modelOptionInt(cfg.RealtimeModelOptions, "input_sample_rate"); sampleRate > 0 {
+		opts = append(opts, speechmatics.WithRealtimeInputSampleRate(sampleRate))
+	}
+	if sampleRate := modelOptionInt(cfg.RealtimeModelOptions, "output_sample_rate"); sampleRate > 0 {
+		opts = append(opts, speechmatics.WithRealtimeOutputSampleRate(sampleRate))
+	}
+	return opts
 }
 
 func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.AWSRealtimeOption {
