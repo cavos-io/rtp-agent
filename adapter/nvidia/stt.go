@@ -237,7 +237,6 @@ func (s *nvidiaSTTStream) Flush() error {
 			return err
 		}
 	}
-	s.inputEnded = true
 	return nil
 }
 
