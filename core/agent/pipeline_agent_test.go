@@ -5402,6 +5402,46 @@ func TestPipelineAgentReplySplitsTTSOnLLMFlush(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentReplyIgnoresAdjacentLLMFlushSentinelsForTTS(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "one"}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Flush: true}},
+				{Delta: &llm.ChoiceDelta{Content: "two"}},
+			},
+		},
+	}
+	firstTTS := &fakePipelineTTSStream{}
+	secondTTS := &fakePipelineTTSStream{}
+	unusedTTS := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{streams: []*fakePipelineTTSStream{firstTTS, secondTTS, unusedTTS}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: NewSpeechHandle(true, DefaultInputDetails())})
+
+	if firstTTS.text.String() != "one" {
+		t.Fatalf("first TTS text = %q, want one", firstTTS.text.String())
+	}
+	if secondTTS.text.String() != "two" {
+		t.Fatalf("second TTS text = %q, want two", secondTTS.text.String())
+	}
+	if unusedTTS.text.String() != "" {
+		t.Fatalf("unused TTS text = %q, want empty for adjacent flush", unusedTTS.text.String())
+	}
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want committed assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.TextContent() != "onetwo" {
+		t.Fatalf("assistant message = %#v, want full generated text without flush markers", chatCtx.Items[0])
+	}
+}
+
 func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
