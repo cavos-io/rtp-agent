@@ -18,6 +18,7 @@ const (
 	defaultNvidiaTTSLanguage   = "en-US"
 	defaultNvidiaTTSSampleRate = 16000
 	nvidiaAPIKeyEnv            = "NVIDIA_API_KEY"
+	nvidiaTTSMissingAPIKey     = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
 
 type NvidiaTTS struct {
@@ -83,7 +84,7 @@ func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*Nvidia
 		opt(provider)
 	}
 	if provider.useSSL && provider.apiKey == "" {
-		return nil, fmt.Errorf("nvidia api key is required while using SSL")
+		return nil, fmt.Errorf("%s", nvidiaTTSMissingAPIKey)
 	}
 	return provider, nil
 }

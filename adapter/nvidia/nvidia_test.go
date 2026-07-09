@@ -1114,7 +1114,8 @@ func TestNvidiaTTSRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 
 	_, err := NewNvidiaTTS("", "")
 
-	if err == nil || !strings.Contains(err.Error(), "nvidia api key") {
+	wantErr := "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	if err == nil || err.Error() != wantErr {
 		t.Fatalf("NewNvidiaTTS error = %v, want missing key error", err)
 	}
 }
