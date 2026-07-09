@@ -369,6 +369,62 @@ func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t
 	assertSpeechmaticsRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	for _, event := range []map[string]any{
+		{"type": "conversation.item.input_audio_transcription.delta", "item_id": "msg_user_1", "content_index": 0, "delta": "hel"},
+		{"type": "conversation.item.input_audio_transcription.delta", "item_id": "msg_user_1", "content_index": 0, "delta": "lo"},
+	} {
+		if ok := session.handleServerEvent(event); !ok {
+			t.Fatalf("input transcript delta ignored: %#v", event)
+		}
+	}
+	first := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if first.InputTranscription == nil || first.InputTranscription.Transcript != "hel" || first.InputTranscription.IsFinal {
+		t.Fatalf("first partial = %#v, want hel final=false", first.InputTranscription)
+	}
+	second := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if second.InputTranscription == nil || second.InputTranscription.Transcript != "hello" || second.InputTranscription.IsFinal {
+		t.Fatalf("second partial = %#v, want accumulated hello final=false", second.InputTranscription)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.completed",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"transcript":    "hello world",
+	}); !ok {
+		t.Fatal("input transcript completed ignored")
+	}
+	final := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "hello world" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final transcript = %#v, want final hello world", final.InputTranscription)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"delta":         "new",
+	}); !ok {
+		t.Fatal("post-final input transcript delta ignored")
+	}
+	afterFinal := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if afterFinal.InputTranscription == nil || afterFinal.InputTranscription.Transcript != "new" || afterFinal.InputTranscription.IsFinal {
+		t.Fatalf("post-final partial = %#v, want reset accumulator with new final=false", afterFinal.InputTranscription)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {

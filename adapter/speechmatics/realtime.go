@@ -228,6 +228,7 @@ type speechmaticsRealtimeSession struct {
 	drainingCommands bool
 	closeOnce        sync.Once
 	generation       *speechmaticsRealtimeGeneration
+	inputTranscripts map[string]map[int]string
 }
 
 type speechmaticsRealtimeGeneration struct {
@@ -443,30 +444,9 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 			},
 		})
 	case "conversation.item.input_audio_transcription.delta":
-		itemID := speechmaticsRealtimeString(event, "item_id")
-		delta := speechmaticsRealtimeString(event, "delta")
-		if delta == "" {
-			return false
-		}
-		return s.emitRealtimeEvent(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
-			InputTranscription: &llm.InputTranscriptionCompleted{
-				ItemID:       itemID,
-				ContentIndex: speechmaticsRealtimeInt(event, "content_index"),
-				Transcript:   delta,
-				IsFinal:      false,
-			},
-		})
+		return s.handleInputTranscriptDelta(event)
 	case "conversation.item.input_audio_transcription.completed":
-		return s.emitRealtimeEvent(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
-			InputTranscription: &llm.InputTranscriptionCompleted{
-				ItemID:       speechmaticsRealtimeString(event, "item_id"),
-				ContentIndex: speechmaticsRealtimeInt(event, "content_index"),
-				Transcript:   speechmaticsRealtimeString(event, "transcript"),
-				IsFinal:      true,
-			},
-		})
+		return s.handleInputTranscriptCompleted(event)
 	case "response.created":
 		return s.handleResponseCreated(event)
 	case "response.output_item.added":
@@ -481,6 +461,67 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseDone(event)
 	}
 	return false
+}
+
+func (s *speechmaticsRealtimeSession) handleInputTranscriptDelta(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	delta := speechmaticsRealtimeString(event, "delta")
+	if itemID == "" || delta == "" {
+		return false
+	}
+	contentIndex := speechmaticsRealtimeInt(event, "content_index")
+	s.mu.Lock()
+	if s.inputTranscripts == nil {
+		s.inputTranscripts = make(map[string]map[int]string)
+	}
+	byIndex := s.inputTranscripts[itemID]
+	if byIndex == nil {
+		byIndex = make(map[int]string)
+		s.inputTranscripts[itemID] = byIndex
+	}
+	accumulated := byIndex[contentIndex] + delta
+	byIndex[contentIndex] = accumulated
+	s.mu.Unlock()
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       itemID,
+			ContentIndex: contentIndex,
+			Transcript:   accumulated,
+			IsFinal:      false,
+		},
+	})
+}
+
+func (s *speechmaticsRealtimeSession) handleInputTranscriptCompleted(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	contentIndex := speechmaticsRealtimeInt(event, "content_index")
+	s.clearInputTranscriptAccumulator(itemID, contentIndex)
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       itemID,
+			ContentIndex: contentIndex,
+			Transcript:   speechmaticsRealtimeString(event, "transcript"),
+			IsFinal:      true,
+		},
+	})
+}
+
+func (s *speechmaticsRealtimeSession) clearInputTranscriptAccumulator(itemID string, contentIndex int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputTranscripts == nil {
+		return
+	}
+	byIndex := s.inputTranscripts[itemID]
+	if byIndex == nil {
+		return
+	}
+	delete(byIndex, contentIndex)
+	if len(byIndex) == 0 {
+		delete(s.inputTranscripts, itemID)
+	}
 }
 
 func (s *speechmaticsRealtimeSession) handleProviderError(event map[string]any) bool {
