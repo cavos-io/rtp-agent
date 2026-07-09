@@ -5,9 +5,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -38,6 +40,9 @@ type nvidiaRealtimeSession struct {
 	seed               *int
 	silenceThresholdMS int
 	useSSL             bool
+	label              string
+	modelName          string
+	provider           string
 	chatCtx            *llm.ChatContext
 	events             chan llm.RealtimeEvent
 	currentGeneration  *nvidiaRealtimeGeneration
@@ -54,6 +59,8 @@ type nvidiaRealtimeGeneration struct {
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
 	outputText   string
+	createdAt    time.Time
+	firstTokenAt *time.Time
 	done         bool
 }
 
@@ -186,6 +193,9 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		seed:               cloneNvidiaRealtimeSeed(m.seed),
 		silenceThresholdMS: m.silenceThresholdMS,
 		useSSL:             m.useSSL,
+		label:              m.Label(),
+		modelName:          m.Model(),
+		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
 		events:             make(chan llm.RealtimeEvent, 16),
 	}, nil
@@ -283,6 +293,7 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 		return
 	}
 	generation := s.ensureGeneration()
+	generation.markFirstToken()
 	generation.outputText += text
 	generation.textCh <- text
 }
@@ -292,6 +303,7 @@ func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
 		return
 	}
 	generation := s.ensureGeneration()
+	generation.markFirstToken()
 	generation.audioCh <- frame
 }
 
@@ -309,6 +321,7 @@ func (s *nvidiaRealtimeSession) ensureGeneration() *nvidiaRealtimeGeneration {
 		timedTextCh:  make(chan llm.RealtimeTimedText, 16),
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
+		createdAt:    time.Now(),
 	}
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
@@ -349,9 +362,37 @@ func (s *nvidiaRealtimeSession) finalizeGeneration(interrupted bool) {
 			Text: generation.outputText,
 		})
 	}
-	_ = interrupted
+	if generation.firstTokenAt != nil || generation.outputText != "" {
+		ttft := -1.0
+		if generation.firstTokenAt != nil {
+			ttft = generation.firstTokenAt.Sub(generation.createdAt).Seconds()
+		}
+		s.events <- llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeMetricsCollected,
+			Metrics: &telemetry.RealtimeModelMetrics{
+				Label:     s.label,
+				RequestID: generation.responseID,
+				Timestamp: generation.createdAt,
+				Duration:  time.Since(generation.createdAt).Seconds(),
+				TTFT:      ttft,
+				Cancelled: interrupted,
+				Metadata: &telemetry.Metadata{
+					ModelName:     s.modelName,
+					ModelProvider: s.provider,
+				},
+			},
+		}
+	}
 }
 
 func isNvidiaRealtimeSpecialToken(text string) bool {
 	return len(text) == 1 && (text[0] == 0 || text[0] == 3)
+}
+
+func (g *nvidiaRealtimeGeneration) markFirstToken() {
+	if g.firstTokenAt != nil {
+		return
+	}
+	now := time.Now()
+	g.firstTokenAt = &now
 }

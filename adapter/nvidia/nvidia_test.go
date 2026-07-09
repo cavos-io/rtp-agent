@@ -237,6 +237,16 @@ func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt() error = %v", err)
 	}
+	metricsEvent := <-session.EventCh()
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || !metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=true", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if metricsEvent.Metrics.Metadata == nil || metricsEvent.Metrics.Metadata.ModelName != "personaplex-7b" || metricsEvent.Metrics.Metadata.ModelProvider != "nvidia" {
+		t.Fatalf("metrics metadata = %+v, want personaplex-7b/nvidia", metricsEvent.Metrics.Metadata)
+	}
 	if _, ok := <-msg.TextCh; ok {
 		t.Fatal("TextCh open after interrupt, want closed")
 	}
