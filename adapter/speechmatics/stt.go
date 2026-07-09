@@ -1608,6 +1608,80 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 	return json.Marshal(top)
 }
 
+func speechmaticsNormalizeFalseyRawResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil {
+		return data, nil
+	}
+	if message != "AddTranscript" && message != "AddPartialTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	changed := false
+	for i, resultData := range results {
+		keep, ok := speechmaticsRawResultHasReferenceContent(resultData)
+		if !ok || keep {
+			continue
+		}
+		results[i] = []byte(`{"alternatives":[{}]}`)
+		changed = true
+	}
+	if !changed {
+		return data, nil
+	}
+	resultsData, err := json.Marshal(results)
+	if err != nil {
+		return nil, err
+	}
+	top["results"] = resultsData
+	return json.Marshal(top)
+}
+
+func speechmaticsRawResultHasReferenceContent(data []byte) (bool, bool) {
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		return false, false
+	}
+	if result == nil {
+		return false, false
+	}
+	alternativesData, ok := result["alternatives"]
+	if !ok {
+		return false, true
+	}
+	var alternatives []json.RawMessage
+	if err := json.Unmarshal(alternativesData, &alternatives); err != nil || len(alternatives) == 0 {
+		return false, false
+	}
+	var alternative map[string]json.RawMessage
+	if err := json.Unmarshal(alternatives[0], &alternative); err != nil {
+		return false, false
+	}
+	if alternative == nil {
+		return false, false
+	}
+	contentData, ok := alternative["content"]
+	if !ok {
+		return false, true
+	}
+	content, err := speechmaticsUnmarshalReferenceContent(contentData)
+	if err != nil {
+		return true, true
+	}
+	return content != "", true
+}
+
 type smResponse struct {
 	Message  string `json:"message"`
 	Metadata struct {
@@ -1643,6 +1717,10 @@ type smResponse struct {
 func (r *smResponse) UnmarshalJSON(data []byte) error {
 	var err error
 	data, err = speechmaticsNormalizeSegments(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizeFalseyRawResults(data)
 	if err != nil {
 		return err
 	}

@@ -857,6 +857,39 @@ func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContent(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContentBeforeMalformedTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":null,
+			"start_time":null,
+			"end_time":null,
+			"is_eos":null,
+			"alternatives":[{"content":"","confidence":null,"tags":null,"speaker":"agent","language":null}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"kept","confidence":0.8,"speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "kept" {
+		t.Fatalf("text = %q, want malformed empty raw content skipped", alt.Text)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "kept" {
+		t.Fatalf("words = %#v, want only valid content word", alt.Words)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptSkipsReferenceZeroContent(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
