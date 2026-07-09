@@ -32,9 +32,14 @@ type NvidiaRealtimeModel struct {
 }
 
 type nvidiaRealtimeSession struct {
-	textPrompt string
-	events     chan llm.RealtimeEvent
-	closed     bool
+	baseURL            string
+	voice              string
+	textPrompt         string
+	seed               *int
+	silenceThresholdMS int
+	useSSL             bool
+	events             chan llm.RealtimeEvent
+	closed             bool
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -115,19 +120,23 @@ func (m *NvidiaRealtimeModel) Provider() string {
 }
 
 func (m *NvidiaRealtimeModel) websocketURL() string {
+	return buildNvidiaRealtimeWebsocketURL(m.useSSL, m.baseURL, m.voice, m.textPrompt, m.seed)
+}
+
+func buildNvidiaRealtimeWebsocketURL(useSSL bool, baseURL string, voice string, textPrompt string, seed *int) string {
 	scheme := "ws"
-	if m.useSSL {
+	if useSSL {
 		scheme = "wss"
 	}
 	parts := []string{
-		"voice_prompt=" + url.QueryEscape(m.voice+".pt"),
-		"text_prompt=" + url.QueryEscape(m.textPrompt),
+		"voice_prompt=" + url.QueryEscape(voice+".pt"),
+		"text_prompt=" + url.QueryEscape(textPrompt),
 	}
-	if m.seed != nil {
-		parts = append(parts, "seed="+url.QueryEscape(fmt.Sprintf("%d", *m.seed)))
+	if seed != nil {
+		parts = append(parts, "seed="+url.QueryEscape(fmt.Sprintf("%d", *seed)))
 	}
 	query := strings.ReplaceAll(strings.Join(parts, "&"), "+", "%20")
-	return fmt.Sprintf("%s://%s/api/chat?%s", scheme, m.baseURL, query)
+	return fmt.Sprintf("%s://%s/api/chat?%s", scheme, baseURL, query)
 }
 
 func (m *NvidiaRealtimeModel) InputSampleRate() int {
@@ -156,13 +165,26 @@ func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 
 func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 	return &nvidiaRealtimeSession{
-		textPrompt: m.textPrompt,
-		events:     make(chan llm.RealtimeEvent),
+		baseURL:            m.baseURL,
+		voice:              m.voice,
+		textPrompt:         m.textPrompt,
+		seed:               cloneNvidiaRealtimeSeed(m.seed),
+		silenceThresholdMS: m.silenceThresholdMS,
+		useSSL:             m.useSSL,
+		events:             make(chan llm.RealtimeEvent),
 	}, nil
 }
 
 func (m *NvidiaRealtimeModel) Close() error {
 	return nil
+}
+
+func cloneNvidiaRealtimeSeed(seed *int) *int {
+	if seed == nil {
+		return nil
+	}
+	seedValue := *seed
+	return &seedValue
 }
 
 func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
@@ -228,4 +250,8 @@ func (s *nvidiaRealtimeSession) CommitAudio() error {
 
 func (s *nvidiaRealtimeSession) ClearAudio() error {
 	return nil
+}
+
+func (s *nvidiaRealtimeSession) websocketURL() string {
+	return buildNvidiaRealtimeWebsocketURL(s.useSSL, s.baseURL, s.voice, s.textPrompt, s.seed)
 }

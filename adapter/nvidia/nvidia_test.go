@@ -111,7 +111,13 @@ func TestNvidiaRealtimeOptionsMatchReference(t *testing.T) {
 }
 
 func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("https://personaplex.example:9443"),
+		WithNvidiaRealtimeVoice("VARF1"),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+		WithNvidiaRealtimeSeed(7),
+		WithNvidiaRealtimeSilenceThresholdMS(250),
+	)
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
@@ -129,6 +135,21 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	}
 	if got, want := concrete.textPrompt, "new prompt"; got != want {
 		t.Fatalf("session textPrompt = %q, want %q", got, want)
+	}
+	if got, want := concrete.voice, "VARF1"; got != want {
+		t.Fatalf("session voice = %q, want reference snapshot %q", got, want)
+	}
+	if got, want := concrete.silenceThresholdMS, 250; got != want {
+		t.Fatalf("session silenceThresholdMS = %d, want reference snapshot %d", got, want)
+	}
+	if concrete.seed == nil || *concrete.seed != 7 {
+		t.Fatalf("session seed = %v, want reference snapshot 7", concrete.seed)
+	}
+	if got, want := concrete.websocketURL(), "wss://personaplex.example:9443/api/chat?voice_prompt=VARF1.pt&text_prompt=new%20prompt&seed=7"; got != want {
+		t.Fatalf("session websocketURL() = %q, want %q", got, want)
+	}
+	if got, want := realtimeModel.websocketURL(), "wss://personaplex.example:9443/api/chat?voice_prompt=VARF1.pt&text_prompt=old%20prompt&seed=7"; got != want {
+		t.Fatalf("model websocketURL() after session update = %q, want unchanged reference URL %q", got, want)
 	}
 	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
