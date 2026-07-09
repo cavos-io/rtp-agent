@@ -5349,6 +5349,37 @@ func TestPipelineAgentInterruptedReplyUsesSynchronizedTranscriptWhenGeneratedTex
 	}
 }
 
+func TestPipelineAgentFullPlaybackUsesGeneratedTextDespiteEmptySynchronizedTranscript(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          100 * time.Millisecond,
+			SynchronizedTranscript:    "",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{Content: "fully played text"},
+		}}},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items = %#v, want one assistant message", chatCtx.Items)
+	}
+	msg := chatCtx.Items[0].(*llm.ChatMessage)
+	if msg.TextContent() != "fully played text" || msg.Interrupted {
+		t.Fatalf("assistant text/interrupted = %q/%v, want full generated text/false", msg.TextContent(), msg.Interrupted)
+	}
+}
+
 func TestPipelineAgentReplyWaitsForPlayoutBeforeCommit(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
