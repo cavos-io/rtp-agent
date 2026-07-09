@@ -1178,6 +1178,9 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
 		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
 	}
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+		t.Fatalf("Next() after synthesis error = (%v, %v), want repeated reference task exception", audio, err)
+	}
 }
 
 func TestNvidiaTTSSynthesizeEmptyTextEndsWithoutTransport(t *testing.T) {

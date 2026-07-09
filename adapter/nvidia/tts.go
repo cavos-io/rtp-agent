@@ -136,6 +136,9 @@ type nvidiaTTSChunkedStream struct {
 
 func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.done {
+		if s.exception != nil {
+			return nil, s.exception
+		}
 		return nil, io.EOF
 	}
 	if s.ctx != nil {
