@@ -392,7 +392,7 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 		return next + 1, true
 	}
 	if strings.HasPrefix(text[next:], "”") {
-		return next + len("”"), true
+		return next + len("”"), false
 	}
 	if text[next] == '\'' || text[next] == ')' {
 		return next + 1, false

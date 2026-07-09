@@ -3140,6 +3140,59 @@ func TestNvidiaTTSStreamDoesNotSplitLowercaseSentenceTailLikeReference(t *testin
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitCurlyQuotedLowercaseTailLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("He said this sentence is ready.” next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after curly quoted lowercase tail, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "He said this sentence is ready.” next"; got != want {
+		t.Fatalf("text = %q, want unsplit curly quoted lowercase tail %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after curly quoted lowercase tail returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitProtectedPeriodsLikeReference(t *testing.T) {
 	tests := []struct {
 		name string
