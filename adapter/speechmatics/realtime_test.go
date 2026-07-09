@@ -1,6 +1,7 @@
 package speechmatics
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -134,6 +135,59 @@ func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsRealtimeGenerateReplyPreservesPerResponseTools(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	toolChoice := map[string]any{
+		"type": "function",
+		"name": "lookup_weather",
+	}
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Tools: []llm.Tool{speechmaticsRealtimeTestTool{
+			name:        "lookup_weather",
+			description: "look up weather",
+			parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+			},
+		}},
+		ToolChoice: toolChoice,
+	})
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	command := nextSpeechmaticsRealtimeCommand(t, session)
+	if command["type"] != "response.create" {
+		t.Fatalf("command type = %#v, want response.create", command["type"])
+	}
+	tools, ok := command["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one formatted function tool", command["tools"])
+	}
+	tool := tools[0]
+	if tool["type"] != "function" || tool["name"] != "lookup_weather" || tool["description"] != "look up weather" {
+		t.Fatalf("tool = %#v, want function lookup_weather", tool)
+	}
+	parameters, ok := tool["parameters"].(map[string]any)
+	if !ok || parameters["type"] != "object" {
+		t.Fatalf("parameters = %#v, want object schema", tool["parameters"])
+	}
+	gotToolChoice, ok := command["tool_choice"].(map[string]any)
+	if !ok || gotToolChoice["type"] != "function" || gotToolChoice["name"] != "lookup_weather" {
+		t.Fatalf("tool_choice = %#v, want original map", command["tool_choice"])
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionCloseIsIdempotent(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -208,28 +262,51 @@ func TestSpeechmaticsRealtimeSessionIgnoresLateClientEventsAfterClose(t *testing
 
 func assertSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession, wantType, key string, want any) {
 	t.Helper()
+	command := nextSpeechmaticsRealtimeCommand(t, session)
+	if command["type"] != wantType {
+		t.Fatalf("command type = %#v, want %q in %#v", command["type"], wantType, command)
+	}
+	if key == "" {
+		return
+	}
+	got := command[key]
+	if key == "audio" {
+		gotBytes, _ := got.([]byte)
+		wantBytes, _ := want.([]byte)
+		if string(gotBytes) != string(wantBytes) {
+			t.Fatalf("command[%q] = %v, want %v", key, gotBytes, wantBytes)
+		}
+		return
+	}
+	if got != want {
+		t.Fatalf("command[%q] = %#v, want %#v", key, got, want)
+	}
+}
+
+func nextSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession) map[string]any {
+	t.Helper()
 	rtSession := session.(*speechmaticsRealtimeSession)
 	select {
 	case command := <-rtSession.commandCh:
-		if command["type"] != wantType {
-			t.Fatalf("command type = %#v, want %q in %#v", command["type"], wantType, command)
-		}
-		if key == "" {
-			return
-		}
-		got := command[key]
-		if key == "audio" {
-			gotBytes, _ := got.([]byte)
-			wantBytes, _ := want.([]byte)
-			if string(gotBytes) != string(wantBytes) {
-				t.Fatalf("command[%q] = %v, want %v", key, gotBytes, wantBytes)
-			}
-			return
-		}
-		if got != want {
-			t.Fatalf("command[%q] = %#v, want %#v", key, got, want)
-		}
+		return command
 	default:
-		t.Fatalf("missing realtime command %q", wantType)
+		t.Fatal("missing realtime command")
 	}
+	return nil
+}
+
+type speechmaticsRealtimeTestTool struct {
+	name        string
+	description string
+	parameters  map[string]any
+}
+
+func (t speechmaticsRealtimeTestTool) ID() string          { return t.name }
+func (t speechmaticsRealtimeTestTool) Name() string        { return t.name }
+func (t speechmaticsRealtimeTestTool) Description() string { return t.description }
+func (t speechmaticsRealtimeTestTool) Parameters() map[string]any {
+	return t.parameters
+}
+func (t speechmaticsRealtimeTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
 }

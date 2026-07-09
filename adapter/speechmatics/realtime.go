@@ -249,15 +249,9 @@ func (s *speechmaticsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext
 }
 
 func (s *speechmaticsRealtimeSession) UpdateTools(tools []llm.Tool) error {
-	payload := make([]map[string]any, 0, len(tools))
-	for _, tool := range tools {
-		if tool == nil {
-			return errors.New("speechmatics realtime update tools received nil tool")
-		}
-		payload = append(payload, map[string]any{
-			"name":        tool.Name(),
-			"description": tool.Description(),
-		})
+	payload, err := speechmaticsRealtimeTools(tools)
+	if err != nil {
+		return err
 	}
 	return s.enqueueCommand(map[string]any{
 		"type":  "session.update",
@@ -289,9 +283,13 @@ func (s *speechmaticsRealtimeSession) GenerateReply(options llm.RealtimeGenerate
 		command["instructions"] = options.Instructions
 	}
 	if len(options.Tools) > 0 {
-		command["tools"] = len(options.Tools)
+		tools, err := speechmaticsRealtimeTools(options.Tools)
+		if err != nil {
+			return err
+		}
+		command["tools"] = tools
 	}
-	if options.ToolChoice != "" {
+	if options.ToolChoice != nil {
 		command["tool_choice"] = options.ToolChoice
 	}
 	return s.enqueueCommand(command)
@@ -375,6 +373,25 @@ func (s *speechmaticsRealtimeSession) isClosed() bool {
 
 func speechmaticsRealtimeUnsupported(operation string) error {
 	return errors.New(operation + " is not supported by the Speechmatics realtime model")
+}
+
+func speechmaticsRealtimeTools(tools []llm.Tool) ([]map[string]any, error) {
+	payload := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			return nil, errors.New("speechmatics realtime tools received nil tool")
+		}
+		if _, ok := tool.(llm.ProviderTool); ok {
+			continue
+		}
+		payload = append(payload, map[string]any{
+			"type":        "function",
+			"name":        tool.Name(),
+			"description": tool.Description(),
+			"parameters":  llm.ToolParameters(tool),
+		})
+	}
+	return payload, nil
 }
 
 var _ llm.RealtimeModel = (*RealtimeModel)(nil)
