@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
 )
 
@@ -526,6 +529,515 @@ func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("Decode(outbound opus) samples = 0, want speech packet")
+	}
+}
+
+func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	received := make(chan []byte, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		connected <- struct{}{}
+
+		readDone := make(chan struct{})
+		go func() {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				serverErr <- err
+				close(readDone)
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				serverErr <- errors.New("received non-binary websocket message")
+				close(readDone)
+				return
+			}
+			received <- payload
+			close(readDone)
+		}()
+		select {
+		case <-readDone:
+			serverErr <- errors.New("received audio before handshake")
+			return
+		case <-time.After(75 * time.Millisecond):
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		<-readDone
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before connect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for PersonaPlex websocket connection")
+	}
+
+	select {
+	case payload := <-received:
+		if len(payload) <= 1 || payload[0] != nvidiaRealtimeMsgAudio {
+			t.Fatalf("websocket payload = %x, want audio message with 0x01 prefix", payload)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio after handshake")
+	}
+}
+
+func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "Connection failed:") {
+			t.Fatalf("error = %v, want Connection failed wrapper", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dial failure error event")
+	}
+}
+
+func TestNvidiaRealtimeProviderWriteFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	accepted := make(chan struct{}, 1)
+	release := make(chan struct{})
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		accepted <- struct{}{}
+		<-release
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	defer close(release)
+
+	clientConn, _, err := websocket.DefaultDialer.Dial(strings.Replace(server.URL, "http://", "ws://", 1), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	select {
+	case <-accepted:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket accept")
+	}
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("client Close() error = %v", err)
+	}
+
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete := session.(*nvidiaRealtimeSession)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	concrete.mu.Lock()
+	concrete.transportStarted = true
+	concrete.transportCtx = ctx
+	concrete.transportCancel = cancel
+	concrete.outboundMessages = [][]byte{{nvidiaRealtimeMsgAudio, 1, 2, 3}}
+	concrete.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		concrete.sendRealtimeTransport(ctx, clientConn)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendRealtimeTransport blocked on closed websocket")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "Connection failed:") {
+			t.Fatalf("error = %v, want Connection failed wrapper", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for write failure error event")
+	}
+}
+
+func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "boom"), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "PersonaPlex connection closed unexpectedly") {
+			t.Fatalf("error = %v, want PersonaPlex connection closed unexpectedly", modelErr)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before realtime error event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pre-handshake close error event")
+	}
+}
+
+func TestNvidiaRealtimeHandshakeNormalCloseClearsPendingAudioLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete := session.(*nvidiaRealtimeSession)
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		concrete.mu.Lock()
+		started := concrete.transportStarted
+		pendingMessages := len(concrete.outboundMessages)
+		pendingAudio := len(concrete.inputAudioBuffer)
+		encoder := concrete.opusEncoder
+		concrete.mu.Unlock()
+		if !started {
+			if pendingMessages != 0 {
+				t.Fatalf("outboundMessages after pre-handshake normal close = %d, want cleared", pendingMessages)
+			}
+			if pendingAudio != 0 {
+				t.Fatalf("inputAudioBuffer after pre-handshake normal close = %d, want cleared", pendingAudio)
+			}
+			if encoder != nil {
+				t.Fatal("opusEncoder after pre-handshake normal close != nil, want reset")
+			}
+			return
+		}
+		select {
+		case err := <-serverErr:
+			t.Fatalf("websocket server error before normal-close cleanup: %v", err)
+		case <-deadline:
+			t.Fatal("timed out waiting for pre-handshake normal close cleanup")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgText, 'o', 'k'}); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	var ev llm.RealtimeEvent
+	select {
+	case ev = <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before generation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got := <-msg.TextCh; got != "ok" {
+		t.Fatalf("text delta = %q, want provider text", got)
+	}
+
+	select {
+	case metricsEvent := <-session.EventCh():
+		if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+			t.Fatalf("event after provider close = %+v, want metrics_collected", metricsEvent)
+		}
+		if metricsEvent.Metrics.Cancelled {
+			t.Fatalf("metrics.Cancelled = true, want false for normal provider close")
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before metrics: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal-close metrics")
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after provider normal close, want closed")
+	}
+}
+
+func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgText, 'b', 'a', 'd'}); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "boom"), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	var ev llm.RealtimeEvent
+	select {
+	case ev = <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before generation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got := <-msg.TextCh; got != "bad" {
+		t.Fatalf("text delta = %q, want provider text", got)
+	}
+
+	select {
+	case metricsEvent := <-session.EventCh():
+		if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+			t.Fatalf("event after provider close = %+v, want metrics_collected", metricsEvent)
+		}
+		if !metricsEvent.Metrics.Cancelled {
+			t.Fatalf("metrics.Cancelled = false, want true for abnormal provider close")
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before metrics: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for abnormal-close metrics")
+	}
+	select {
+	case errorEvent := <-session.EventCh():
+		if errorEvent.Type != llm.RealtimeEventTypeError || errorEvent.Error == nil {
+			t.Fatalf("event after abnormal close metrics = %+v, want error event", errorEvent)
+		}
+		if !strings.Contains(errorEvent.Error.Error(), "PersonaPlex connection closed unexpectedly") {
+			t.Fatalf("error event = %v, want PersonaPlex connection closed unexpectedly", errorEvent.Error)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before error event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for abnormal-close error event")
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after provider abnormal close, want closed")
+	}
+	if got := len(concrete.outboundMessages); got != 0 {
+		t.Fatalf("outboundMessages after abnormal close = %d, want cleared stale transport audio", got)
+	}
+	if concrete.opusEncoder != nil {
+		t.Fatal("opusEncoder after abnormal close != nil, want fresh encoder on reconnect")
 	}
 }
 
@@ -2132,11 +2644,11 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 			t.Fatalf("event[%d].Type = %q, want %q", i, events[i].Type, want)
 		}
 	}
-	if got, want := events[1].RequestID, "nvidia-response"; got != want {
-		t.Fatalf("interim RequestID = %q, want %q", got, want)
+	if got := events[1].RequestID; !strings.HasPrefix(got, "nvidia-") {
+		t.Fatalf("interim RequestID = %q, want synthetic nvidia- prefix", got)
 	}
-	if got, want := events[2].RequestID, "nvidia-response"; got != want {
-		t.Fatalf("final RequestID = %q, want %q", got, want)
+	if got, want := events[2].RequestID, events[1].RequestID; got != want {
+		t.Fatalf("final RequestID = %q, want same response id %q", got, want)
 	}
 	if got, want := events[1].Alternatives[0].Text, "first"; got != want {
 		t.Fatalf("interim text = %q, want %q", got, want)
@@ -2146,7 +2658,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	blank := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -2166,7 +2678,7 @@ func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) 
 		}},
 	})
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
-		RequestID: "nvidia-response-explicit",
+		RequestID: "provider-response-id",
 		Results: []nvidiaSTTResult{{
 			RequestID: "explicit-result",
 			IsFinal:   true,
@@ -2187,14 +2699,29 @@ func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) 
 	if len(blank) != 0 {
 		t.Fatalf("blank response event count = %d, want 0", len(blank))
 	}
-	if got, want := first[1].RequestID, "nvidia-response-1"; got != want {
-		t.Fatalf("first fallback RequestID = %q, want %q", got, want)
+	firstID := first[1].RequestID
+	if !strings.HasPrefix(firstID, "nvidia-") {
+		t.Fatalf("first RequestID = %q, want synthetic nvidia- prefix like reference", firstID)
 	}
-	if got, want := second[0].RequestID, "nvidia-response-explicit"; got != want {
-		t.Fatalf("result RequestID = %q, want response-level id %q", got, want)
+	secondID := second[0].RequestID
+	if !strings.HasPrefix(secondID, "nvidia-") {
+		t.Fatalf("second RequestID = %q, want synthetic nvidia- prefix like reference", secondID)
 	}
-	if got, want := third[0].RequestID, "nvidia-response-2"; got != want {
-		t.Fatalf("third fallback RequestID = %q, want %q", got, want)
+	if secondID == "explicit-result" {
+		t.Fatalf("second RequestID = %q, want ignored provider result id like reference", secondID)
+	}
+	if secondID == "provider-response-id" {
+		t.Fatalf("second RequestID = %q, want ignored provider response id like reference", secondID)
+	}
+	if secondID == firstID {
+		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
+	}
+	thirdID := third[0].RequestID
+	if !strings.HasPrefix(thirdID, "nvidia-") {
+		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
+	}
+	if thirdID == firstID || thirdID == secondID {
+		t.Fatalf("third RequestID = %q, want new synthetic id per response", thirdID)
 	}
 }
 
