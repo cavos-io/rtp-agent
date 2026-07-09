@@ -4232,6 +4232,60 @@ func TestPipelineAgentCancelToolReplyEventSkipsFollowupGeneration(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentInterruptedWhileToolRunningSuppressesToolReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+				Type:      "function",
+				Name:      "lookup",
+				CallID:    "call_lookup",
+				Arguments: `{}`,
+			}}}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "stale tool reply"}}}},
+		},
+	}
+	tool := &blockingGenerationTool{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+	}()
+
+	select {
+	case <-tool.started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	close(tool.release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after interrupted tool release")
+	}
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want no stale tool reply after interruption", len(l.calls))
+	}
+	for _, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && strings.Contains(msg.TextContent(), "stale tool reply") {
+			t.Fatalf("chat item = %#v, want no stale tool reply committed", msg)
+		}
+	}
+}
+
 func TestPipelineAgentCancelToolUpdateReplyKeepsFinalReturnReply(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

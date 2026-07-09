@@ -1111,6 +1111,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 			}
 		}
+		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
+			closePendingToolUpdateReplyDone()
+			session.UpdateAgentState(AgentStateListening)
+			break
+		}
 
 		// If no tool calls, we're done
 		if !executedTools {
