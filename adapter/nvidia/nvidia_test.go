@@ -2625,6 +2625,34 @@ func TestNvidiaTTSStreamKeepsSentenceTailPendingLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamAppendsTextToPendingTailLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+		t.Fatalf("PushText(initial) error = %v", err)
+	}
+	if err := stream.PushText(" piece"); err != nil {
+		t.Fatalf("PushText(tail) error = %v", err)
+	}
+	if got, want := concrete.text, "This sentence is long enough."; got != want {
+		t.Fatalf("released text = %q, want completed sentence only %q", got, want)
+	}
+	if got, want := concrete.pendingText, "next piece"; got != want {
+		t.Fatalf("pending text = %q, want tail plus later delta %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitAbbreviationLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

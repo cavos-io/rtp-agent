@@ -198,6 +198,11 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.flushed && s.pendingText != "" {
+		s.pendingText += text
+		s.notifyLocked()
+		return nil
+	}
 	s.hasText = true
 	s.text += text
 	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
