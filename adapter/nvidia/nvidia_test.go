@@ -4250,6 +4250,60 @@ func TestNvidiaTTSStreamStartsQuestionStartersAfterSuffixLikeReference(t *testin
 	}
 }
 
+func TestNvidiaTTSStreamStartsPrepositionStartersAfterSuffixLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "About", text: "Please contact Foo Inc. About follows now"},
+		{name: "Over", text: "Please contact Foo Inc. Over follows now"},
+		{name: "Under", text: "Please contact Foo Inc. Under follows now"},
+		{name: "Through", text: "Please contact Foo Inc. Through follows now"},
+		{name: "From", text: "Please contact Foo Inc. From follows now"},
+		{name: "By", text: "Please contact Foo Inc. By follows now"},
+		{name: "With", text: "Please contact Foo Inc. With follows now"},
+		{name: "Without", text: "Please contact Foo Inc. Without follows now"},
+		{name: "During", text: "Please contact Foo Inc. During follows now"},
+		{name: "Until", text: "Please contact Foo Inc. Until follows now"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = stream.Next()
+				done <- struct{}{}
+			}()
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if !concrete.flushed {
+				t.Fatal("flushed = false after preposition starter, want completed sentence boundary")
+			}
+			if got, want := concrete.text, "Please contact Foo Inc."; got != want {
+				t.Fatalf("text = %q, want first sentence %q", got, want)
+			}
+			select {
+			case <-done:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("Next() did not start after suffix preposition starter boundary")
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamStartsStarterAfterRepeatedSpacesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
