@@ -648,6 +648,14 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	if provider.useSSL {
 		t.Fatal("useSSL = true, want false")
 	}
+
+	provider, err = NewNvidiaSTT("secret", "", WithNvidiaSTTMaxSpeakerCount(-1))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT(negative max speaker count) error = %v", err)
+	}
+	if got, want := provider.maxSpeakerCount, -1; got != want {
+		t.Fatalf("maxSpeakerCount negative override = %d, want reference value %d", got, want)
+	}
 }
 
 func TestNvidiaSTTAllowsEmptyLanguageLikeReference(t *testing.T) {

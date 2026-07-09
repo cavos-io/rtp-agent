@@ -81,9 +81,7 @@ func WithNvidiaSTTDiarization(enabled bool) NvidiaSTTOption {
 
 func WithNvidiaSTTMaxSpeakerCount(count int) NvidiaSTTOption {
 	return func(s *NvidiaSTT) {
-		if count >= 0 {
-			s.maxSpeakerCount = count
-		}
+		s.maxSpeakerCount = count
 	}
 }
 
