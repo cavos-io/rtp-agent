@@ -2984,7 +2984,7 @@ func TestNvidiaTTSStreamDoesNotSplitProtectedPeriodsLikeReference(t *testing.T) 
 	}
 }
 
-func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitUppercaseWebsiteLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2993,7 +2993,10 @@ func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
 	type result struct {
 		audio *tts.SynthesizedAudio
 		err   error
@@ -3007,13 +3010,16 @@ func TestNvidiaTTSStreamStartsUppercaseWebsiteBoundaryLikeReference(t *testing.T
 	if err := stream.PushText("Please visit longdomain.COM tomorrow"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after uppercase website suffix, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "Please visit longdomain.COM tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit uppercase website text %q", got, want)
+	}
 	select {
 	case got := <-done:
-		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after uppercase website suffix = (%v, %v), want unsupported stream error", got.audio, got.err)
-		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after uppercase website suffix boundary")
+		t.Fatalf("Next() after uppercase website suffix returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
