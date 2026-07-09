@@ -482,7 +482,7 @@ func nvidiaTTSProtectedAbbreviation(prefix string) bool {
 		return false
 	}
 	switch fields[len(fields)-1] {
-	case "Mr", "St", "Mrs", "Ms", "Dr":
+	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt":
 		return true
 	default:
 		return false
