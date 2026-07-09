@@ -9959,6 +9959,13 @@ func TestSpeechmaticsSTTKnownSpeakerConfigIgnoresReferenceResultSpeakerID(t *tes
 	if len(identifiers) != 0 {
 		t.Fatalf("speaker_identifiers = %#v, want empty when only result speaker_id is set", identifiers)
 	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal known speaker config: %v", err)
+	}
+	if strings.Contains(string(encoded), `"speaker_identifiers":null`) {
+		t.Fatalf("known speaker config JSON = %s, want empty list for reference speaker_identifiers", encoded)
+	}
 	if _, ok := config[0]["speaker_id"]; ok {
 		t.Fatalf("speaker_id = %#v, want omitted from reference known-speaker config", config[0]["speaker_id"])
 	}
