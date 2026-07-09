@@ -82,6 +82,7 @@ type nvidiaRealtimeSession struct {
 	transportSent      int
 	retryDelay         time.Duration
 	retryTimer         *time.Timer
+	restartPending     bool
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -461,10 +462,15 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	if s.textPrompt == instructions {
 		return nil
 	}
+	if s.restartPending {
+		s.textPrompt = instructions
+		return nil
+	}
 	wasStarted := s.transportStarted
 	transportDone := s.transportDone
 	wasRetrying := s.retryTimer != nil
 	s.textPrompt = instructions
+	s.restartPending = true
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
@@ -532,6 +538,7 @@ func (s *nvidiaRealtimeSession) Close() error {
 	}
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
+	s.restartPending = false
 	s.closed = true
 	s.events.close()
 	return nil
@@ -727,6 +734,7 @@ func (s *nvidiaRealtimeSession) startRealtimeTransportLocked() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.transportStarted = true
+	s.restartPending = false
 	s.transportCtx = ctx
 	s.transportCancel = cancel
 	s.transportDone = done

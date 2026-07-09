@@ -1841,6 +1841,42 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdatesCoalescePendingReconnectLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+	if got, want := concrete.textPrompt, "newer prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want latest prompt %q", got, want)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("first event after instruction updates = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for coalesced session_reconnected event")
+	}
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("second event after instruction updates = %+v, want none while restart pending", ev)
+	default:
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	connected := make(chan struct{}, 1)
