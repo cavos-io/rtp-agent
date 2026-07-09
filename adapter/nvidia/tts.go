@@ -549,7 +549,8 @@ func nvidiaTTSASCIITailStartsCapital(tail string) bool {
 		return false
 	}
 	trimmed := strings.TrimSpace(tail)
-	trimmed = strings.TrimLeft(trimmed, "\"'‘“")
+	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
+	trimmed = strings.TrimLeft(trimmed, "-— ")
 	return trimmed != "" && trimmed[0] >= 'A' && trimmed[0] <= 'Z'
 }
 
@@ -593,7 +594,8 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 		return false
 	}
 	trimmed := strings.TrimLeft(tail, nvidiaTTSWhitespaceCutset)
-	trimmed = strings.TrimLeft(trimmed, "\"'‘“")
+	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
+	trimmed = strings.TrimLeft(trimmed, "-— ")
 	if trimmed == "" {
 		return false
 	}
