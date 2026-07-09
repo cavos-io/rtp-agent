@@ -386,7 +386,7 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedSuffix(text[:dot], text[next:]) {
 		return true
 	}
-	if nvidiaTTSProtectedAcronym(text, dot) {
+	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedPhD(text, dot) {
@@ -432,12 +432,12 @@ func nvidiaTTSProtectedAbbreviation(prefix string) bool {
 	}
 }
 
-func nvidiaTTSProtectedAcronym(text string, dot int) bool {
+func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
 	if dot < 1 || text[dot-1] < 'A' || text[dot-1] > 'Z' {
 		return false
 	}
 	if dot >= 2 && text[dot-2] == '.' && dot >= 3 && text[dot-3] >= 'A' && text[dot-3] <= 'Z' {
-		return true
+		return !nvidiaTTSTailStartsSentence(tail)
 	}
 	next := dot + 1
 	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
@@ -472,14 +472,18 @@ func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
 	default:
 		return false
 	}
+	return !nvidiaTTSTailStartsSentence(tail)
+}
+
+func nvidiaTTSTailStartsSentence(tail string) bool {
 	tailFields := strings.Fields(tail)
 	if len(tailFields) == 0 {
-		return true
+		return false
 	}
 	switch tailFields[0] {
 	case "Mr", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Wherever":
-		return false
-	default:
 		return true
+	default:
+		return false
 	}
 }
