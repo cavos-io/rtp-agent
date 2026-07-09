@@ -166,6 +166,7 @@ type nvidiaSTTStream struct {
 	ctx             context.Context
 	language        string
 	closed          bool
+	inputEnded      bool
 	speaking        bool
 	startTimeOffset float64
 	startTime       float64
@@ -190,7 +191,7 @@ type nvidiaSTTResult struct {
 }
 
 func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
@@ -205,7 +206,7 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *nvidiaSTTStream) Flush() error {
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil {
@@ -216,6 +217,22 @@ func (s *nvidiaSTTStream) Flush() error {
 	return nil
 }
 
+func (s *nvidiaSTTStream) EndInput() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if s.ctx != nil {
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	s.inputEnded = true
+	return nil
+}
+
 func (s *nvidiaSTTStream) Close() error {
 	s.closed = true
 	return nil
@@ -223,6 +240,9 @@ func (s *nvidiaSTTStream) Close() error {
 
 func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.closed {
+		return nil, io.EOF
+	}
+	if s.inputEnded {
 		return nil, io.EOF
 	}
 	if s.ctx != nil {

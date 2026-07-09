@@ -640,6 +640,34 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{}); err != io.ErrClosedPipe {
+		t.Fatalf("PushFrame() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); err != io.ErrClosedPipe {
+		t.Fatalf("Flush() after EndInput error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if event, err := stream.Next(); err != io.EOF || event != nil {
+		t.Fatalf("Next() after empty EndInput = (%v, %v), want nil EOF", event, err)
+	}
+}
+
 func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
