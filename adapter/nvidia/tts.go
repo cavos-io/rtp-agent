@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -21,6 +22,8 @@ const (
 	nvidiaAPIKeyEnv            = "NVIDIA_API_KEY"
 	nvidiaTTSMissingAPIKey     = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
+
+var nvidiaTTSNewlineWhitespace = regexp.MustCompile(`\s*\n+\s*`)
 
 type NvidiaTTS struct {
 	apiKey       string
@@ -199,8 +202,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	text = strings.ReplaceAll(text, "\r\n", " ")
-	text = strings.ReplaceAll(text, "\n", " ")
+	text = nvidiaTTSNewlineWhitespace.ReplaceAllString(text, " ")
 	if s.flushed && s.pendingText != "" {
 		s.pendingText += text
 		s.notifyLocked()
