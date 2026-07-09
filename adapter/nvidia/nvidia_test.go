@@ -539,6 +539,58 @@ func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testi
 	}
 }
 
+func TestNvidiaRealtimeCloseClearsPendingAudioLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	full := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(full),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(full)),
+	}); err != nil {
+		t.Fatalf("PushAudio(full) error = %v", err)
+	}
+	partial := makeNvidiaRealtimePCMInputFrame()[:960]
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(partial),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(partial)),
+	}); err != nil {
+		t.Fatalf("PushAudio(partial) error = %v", err)
+	}
+	concrete.handleBinaryMessage(append([]byte{nvidiaRealtimeMsgAudio}, encodeNvidiaRealtimeOpusPacket(t, makeNvidiaRealtimePCMFrame())...))
+	<-session.EventCh()
+
+	if len(concrete.outboundMessages) == 0 || len(concrete.inputAudioBuffer) == 0 || concrete.opusEncoder == nil || concrete.opusDecoder == nil {
+		t.Fatalf("pre-close state = messages %d buffer %d encoder %v decoder %v, want pending transport state", len(concrete.outboundMessages), len(concrete.inputAudioBuffer), concrete.opusEncoder != nil, concrete.opusDecoder != nil)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := len(concrete.outboundMessages); got != 0 {
+		t.Fatalf("outboundMessages after Close = %d, want cleared", got)
+	}
+	if got := len(concrete.inputAudioBuffer); got != 0 {
+		t.Fatalf("inputAudioBuffer after Close = %d, want cleared", got)
+	}
+	if concrete.opusEncoder != nil {
+		t.Fatal("opusEncoder after Close != nil, want reset")
+	}
+	if concrete.opusDecoder != nil {
+		t.Fatal("opusDecoder after Close != nil, want reset")
+	}
+}
+
 func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()

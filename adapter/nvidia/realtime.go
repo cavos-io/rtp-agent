@@ -351,6 +351,7 @@ func (s *nvidiaRealtimeSession) Close() error {
 		return nil
 	}
 	s.finalizeGenerationLocked(true)
+	s.resetRealtimeTransportLocked()
 	s.closed = true
 	close(s.events)
 	return nil
