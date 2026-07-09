@@ -82,6 +82,8 @@ type nvidiaRealtimeSession struct {
 	transportSent      int
 	retryDelay         time.Duration
 	retryTimer         *time.Timer
+	restartPending     bool
+	restartEventQueued bool
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -103,23 +105,29 @@ type nvidiaRealtimeGeneration struct {
 }
 
 type nvidiaRealtimeUnboundedStream[T any] struct {
-	in   chan T
-	out  chan T
-	once sync.Once
+	in        chan T
+	out       chan T
+	once      sync.Once
+	onDeliver func(T)
 }
 
 func newNvidiaRealtimeUnboundedStream[T any]() *nvidiaRealtimeUnboundedStream[T] {
 	return newNvidiaRealtimeUnboundedStreamWithBuffer[T](nvidiaRealtimeGenerationStreamBuffer)
 }
 
-func newNvidiaRealtimeEventStream() *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
-	return newNvidiaRealtimeUnboundedStreamWithBuffer[llm.RealtimeEvent](nvidiaRealtimeEventBuffer)
+func newNvidiaRealtimeEventStream(onDeliver func(llm.RealtimeEvent)) *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
+	return newNvidiaRealtimeUnboundedStreamWithBufferCallback[llm.RealtimeEvent](nvidiaRealtimeEventBuffer, onDeliver)
 }
 
 func newNvidiaRealtimeUnboundedStreamWithBuffer[T any](buffer int) *nvidiaRealtimeUnboundedStream[T] {
+	return newNvidiaRealtimeUnboundedStreamWithBufferCallback[T](buffer, nil)
+}
+
+func newNvidiaRealtimeUnboundedStreamWithBufferCallback[T any](buffer int, onDeliver func(T)) *nvidiaRealtimeUnboundedStream[T] {
 	stream := &nvidiaRealtimeUnboundedStream[T]{
-		in:  make(chan T, buffer),
-		out: make(chan T, buffer),
+		in:        make(chan T, buffer),
+		out:       make(chan T, buffer),
+		onDeliver: onDeliver,
 	}
 	go stream.run()
 	return stream
@@ -143,6 +151,9 @@ func (s *nvidiaRealtimeUnboundedStream[T]) run() {
 			}
 			pending = append(pending, value)
 		case out <- next:
+			if s.onDeliver != nil {
+				s.onDeliver(next)
+			}
 			var zero T
 			pending[0] = zero
 			pending = pending[1:]
@@ -213,7 +224,7 @@ func NewNvidiaRealtimeModel(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
 		textPrompt:         defaultNvidiaRealtimeTextPrompt,
 		silenceThresholdMS: defaultNvidiaRealtimeSilenceThresholdMS,
 		useSSL:             useSSL,
-		preconnect:         os.Getenv(nvidiaPersonaplexURLEnv) != "",
+		preconnect:         true,
 	}
 	for _, opt := range opts {
 		opt(model)
@@ -301,10 +312,10 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             newNvidiaRealtimeEventStream(),
 		transportNotify:    make(chan struct{}),
 		retryDelay:         defaultNvidiaRealtimeInitialRetryDelay,
 	}
+	session.events = newNvidiaRealtimeEventStream(nil)
 	if m.preconnect {
 		session.startRealtimeTransportLocked()
 	}
@@ -411,13 +422,26 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 	channelCount := int(frame.NumChannels)
 	sampleBytes := channelCount * 2
 	for outIdx := 0; outIdx < int(outSamples); outIdx++ {
-		srcGlobal := (outputStart + uint64(outIdx)) * uint64(frame.SampleRate) / uint64(outputRate)
+		srcNumerator := (outputStart + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobal := srcNumerator / uint64(outputRate)
+		srcRemainder := srcNumerator % uint64(outputRate)
+		outOffsetBase := outIdx * sampleBytes
 		if srcGlobal < inputStart {
-			if len(previousSample) == sampleBytes {
-				copy(out[outIdx*sampleBytes:(outIdx+1)*sampleBytes], previousSample)
+			if len(previousSample) == sampleBytes && inputStart-srcGlobal == 1 {
+				for ch := 0; ch < channelCount; ch++ {
+					prevOffset := ch * 2
+					outOffset := outOffsetBase + prevOffset
+					sample := int16(binary.LittleEndian.Uint16(previousSample[prevOffset:]))
+					if srcRemainder != 0 && inputSamples > 0 {
+						nextSample := int16(binary.LittleEndian.Uint16(frame.Data[prevOffset:]))
+						sample = interpolateNvidiaRealtimeSample(sample, nextSample, srcRemainder, uint64(outputRate))
+					}
+					binary.LittleEndian.PutUint16(out[outOffset:], uint16(sample))
+				}
 				continue
 			}
 			srcGlobal = inputStart
+			srcRemainder = 0
 		}
 		srcIdx := int(srcGlobal - inputStart)
 		if srcIdx < 0 {
@@ -427,8 +451,14 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		}
 		for ch := 0; ch < channelCount; ch++ {
 			inOffset := (srcIdx*channelCount + ch) * 2
-			outOffset := (outIdx*channelCount + ch) * 2
-			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+			outOffset := outOffsetBase + ch*2
+			sample := int16(binary.LittleEndian.Uint16(frame.Data[inOffset:]))
+			if srcRemainder != 0 && srcIdx+1 < inputSamples {
+				nextOffset := ((srcIdx+1)*channelCount + ch) * 2
+				nextSample := int16(binary.LittleEndian.Uint16(frame.Data[nextOffset:]))
+				sample = interpolateNvidiaRealtimeSample(sample, nextSample, srcRemainder, uint64(outputRate))
+			}
+			binary.LittleEndian.PutUint16(out[outOffset:], uint16(sample))
 		}
 	}
 	return &model.AudioFrame{
@@ -438,6 +468,22 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		SamplesPerChannel: outSamples,
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+func interpolateNvidiaRealtimeSample(a int16, b int16, numerator uint64, denominator uint64) int16 {
+	if denominator == 0 || numerator == 0 {
+		return a
+	}
+	if numerator >= denominator {
+		return b
+	}
+	weighted := int64(a)*int64(denominator-numerator) + int64(b)*int64(numerator)
+	if weighted >= 0 {
+		weighted += int64(denominator / 2)
+	} else {
+		weighted -= int64(denominator / 2)
+	}
+	return int16(weighted / int64(denominator))
 }
 
 func lastNvidiaRealtimeInputSample(frame *model.AudioFrame) []byte {
@@ -461,28 +507,39 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	if s.textPrompt == instructions {
 		return nil
 	}
+	if s.restartPending {
+		if s.restartEventQueued && len(s.events.in) == 0 && len(s.events.out) == 0 {
+			s.restartPending = false
+			s.restartEventQueued = false
+		} else {
+			s.textPrompt = instructions
+			return nil
+		}
+	}
+	if s.textPrompt == instructions {
+		return nil
+	}
 	wasStarted := s.transportStarted
 	transportDone := s.transportDone
 	wasRetrying := s.retryTimer != nil
 	s.textPrompt = instructions
+	s.restartPending = true
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
 		go s.emitSessionReconnectedAfterTransportDone(transportDone)
 		s.startRealtimeTransportLocked()
 	} else if s.preconnect {
+		if wasRetrying {
+			s.restartPending = false
+			s.restartEventQueued = false
+		}
 		s.startRealtimeTransportLocked()
 		if !wasRetrying {
-			s.events.send(llm.RealtimeEvent{
-				Type:      llm.RealtimeEventTypeSessionReconnected,
-				Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-			})
+			s.sendSessionReconnectedLocked()
 		}
 	} else {
-		s.events.send(llm.RealtimeEvent{
-			Type:      llm.RealtimeEventTypeSessionReconnected,
-			Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-		})
+		s.sendSessionReconnectedLocked()
 	}
 	return nil
 }
@@ -532,6 +589,8 @@ func (s *nvidiaRealtimeSession) Close() error {
 	}
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
+	s.restartPending = false
+	s.restartEventQueued = false
 	s.closed = true
 	s.events.close()
 	return nil
@@ -745,11 +804,13 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context, done c
 		}
 		s.mu.Unlock()
 	}()
+	start := time.Now()
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.websocketURL(), nil)
 	if err != nil {
 		s.failRealtimeTransport(ctx, llm.NewAPIConnectionError(fmt.Sprintf("Connection failed: %v", err)))
 		return
 	}
+	s.emitConnectionAcquiredMetrics(ctx, time.Since(start).Seconds())
 	s.mu.Lock()
 	if s.transportCtx == ctx && !s.closed {
 		s.retryDelay = defaultNvidiaRealtimeInitialRetryDelay
@@ -773,6 +834,27 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context, done c
 	s.sendRealtimeTransport(ctx, conn)
 }
 
+func (s *nvidiaRealtimeSession) emitConnectionAcquiredMetrics(ctx context.Context, acquireTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transportCtx != ctx || s.closed {
+		return
+	}
+	s.events.send(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			Label:            s.label,
+			Timestamp:        time.Now(),
+			AcquireTime:      acquireTime,
+			ConnectionReused: false,
+			Metadata: &telemetry.Metadata{
+				ModelName:     s.modelName,
+				ModelProvider: s.provider,
+			},
+		},
+	})
+}
+
 func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-chan struct{}) {
 	<-done
 	s.mu.Lock()
@@ -780,6 +862,11 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 	if s.closed {
 		return
 	}
+	s.sendSessionReconnectedLocked()
+}
+
+func (s *nvidiaRealtimeSession) sendSessionReconnectedLocked() {
+	s.restartEventQueued = true
 	s.events.send(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},

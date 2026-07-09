@@ -131,6 +131,8 @@ type nvidiaTTSSynthesizeStream struct {
 	flushed      bool
 	text         string
 	pendingText  string
+	readyText    []string
+	queuedLen    int
 	exception    error
 }
 
@@ -209,19 +211,19 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 			s.pendingText = strings.TrimRight(s.pendingText, nvidiaTTSWhitespaceCutset)
 		}
 		s.pendingText += text
+		s.queueCompletedSentenceCandidatesLocked(s.pendingText)
 		s.notifyLocked()
 		return nil
 	}
 	s.hasText = true
 	if collapsePreviousWhitespace {
 		s.text = strings.TrimRight(s.text, nvidiaTTSWhitespaceCutset)
+		if s.queuedLen > len(s.text) {
+			s.queuedLen = len(s.text)
+		}
 	}
 	s.text += text
-	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
-		s.text = prefix
-		s.pendingText = tail
-		s.flushed = true
-	}
+	s.queueCompletedSentenceCandidatesLocked(s.text)
 	s.notifyLocked()
 	return nil
 }
@@ -244,6 +246,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 		}
 	}
 	if s.hasText {
+		s.queuePendingInputLocked()
 		s.flushed = true
 		s.notifyLocked()
 	}
@@ -268,6 +271,7 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 		}
 	}
 	if s.hasText {
+		s.queuePendingInputLocked()
 		s.flushed = true
 	}
 	s.inputEnded = true
@@ -313,7 +317,8 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				return nil, err
 			}
 		}
-		if s.flushed && s.hasText && strings.TrimSpace(s.text) != "" {
+		if s.flushed && s.hasText && s.nextReadyTextLocked() != "" {
+			s.popReadyTextLocked()
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
@@ -337,6 +342,57 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (s *nvidiaTTSSynthesizeStream) queuePendingInputLocked() {
+	if s.pendingText != "" {
+		s.queueReadyTextLocked(s.pendingText)
+		s.pendingText = ""
+		return
+	}
+	if s.queuedLen > len(s.text) {
+		s.queuedLen = len(s.text)
+	}
+	s.queueReadyTextLocked(s.text[s.queuedLen:])
+}
+
+func (s *nvidiaTTSSynthesizeStream) queueCompletedSentenceCandidatesLocked(text string) {
+	for {
+		prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(text)
+		if !ok {
+			return
+		}
+		s.text = prefix
+		s.pendingText = tail
+		s.queueReadyTextLocked(prefix)
+		s.flushed = true
+		text = tail
+	}
+}
+
+func (s *nvidiaTTSSynthesizeStream) queueReadyTextLocked(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	s.readyText = append(s.readyText, text)
+	s.queuedLen = len(s.text)
+}
+
+func (s *nvidiaTTSSynthesizeStream) nextReadyTextLocked() string {
+	if len(s.readyText) > 0 {
+		return s.readyText[0]
+	}
+	return strings.TrimSpace(s.text)
+}
+
+func (s *nvidiaTTSSynthesizeStream) popReadyTextLocked() {
+	if len(s.readyText) == 0 {
+		return
+	}
+	copy(s.readyText, s.readyText[1:])
+	s.readyText[len(s.readyText)-1] = ""
+	s.readyText = s.readyText[:len(s.readyText)-1]
 }
 
 func (s *nvidiaTTSSynthesizeStream) Done() bool {
@@ -415,8 +471,9 @@ func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string, quoted bool) bool {
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 	quoted := false
 	for next < len(text) {
-		if strings.HasPrefix(text[next:], "”") {
-			next += len("”")
+		if nvidiaTTSUnicodeCloserAt(text[next:]) {
+			_, size := utf8.DecodeRuneInString(text[next:])
+			next += size
 			continue
 		}
 		switch text[next] {
@@ -430,6 +487,15 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 		}
 	}
 	return next, quoted
+}
+
+func nvidiaTTSUnicodeCloserAt(text string) bool {
+	for _, closer := range []string{"”", "’", "»", "›", "」", "』", "》", "）", "】"} {
+		if strings.HasPrefix(text, closer) {
+			return true
+		}
+	}
+	return false
 }
 
 func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
