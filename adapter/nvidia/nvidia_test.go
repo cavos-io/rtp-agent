@@ -110,6 +110,14 @@ func TestNvidiaRealtimeOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeAllowsZeroSilenceThresholdLikeReference(t *testing.T) {
+	model := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(0))
+
+	if got, want := model.silenceThresholdMS, 0; got != want {
+		t.Fatalf("silenceThresholdMS = %d, want explicit reference override %d", got, want)
+	}
+}
+
 func TestNvidiaTTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {

@@ -63,9 +63,7 @@ func WithNvidiaRealtimeSeed(seed int) NvidiaRealtimeOption {
 
 func WithNvidiaRealtimeSilenceThresholdMS(threshold int) NvidiaRealtimeOption {
 	return func(m *NvidiaRealtimeModel) {
-		if threshold > 0 {
-			m.silenceThresholdMS = threshold
-		}
+		m.silenceThresholdMS = threshold
 	}
 }
 
