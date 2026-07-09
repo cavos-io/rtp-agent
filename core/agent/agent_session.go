@@ -295,12 +295,6 @@ type AgentSession struct {
 	idleDone       chan struct{}
 	userAwayTimer  *time.Timer
 	userAwayGate   func() bool
-	// agentSpeakingStallTimer force-unsticks a reply that pins the agent in
-	// AgentStateSpeaking. It is armed when the agent enters the speaking state,
-	// reset on every forwarded agent-audio frame (progress), and stopped when
-	// the agent leaves speaking. If it fires the current speech is interrupted,
-	// so a stalled TTS/playout stream cannot hold the lifecycle in "speaking"
-	// (and keep end-of-silence timers cancelled) forever.
 	agentSpeakingStallTimer *time.Timer
 	aecWarmupTimer          *time.Timer
 	aecWarmupDone           bool
@@ -2613,8 +2607,6 @@ func (s *AgentSession) markUserAwayIfStillIdle() {
 	}
 }
 
-// armAgentSpeakingStallTimerLocked (re)arms the agent-speaking stall watchdog.
-// It must be called with s.mu held.
 func (s *AgentSession) armAgentSpeakingStallTimerLocked() {
 	if s.agentSpeakingStallTimer != nil {
 		s.agentSpeakingStallTimer.Stop()
@@ -2634,10 +2626,6 @@ func (s *AgentSession) stopAgentSpeakingStallTimerLocked() {
 	}
 }
 
-// notifyAgentSpeakingProgress pushes the stall deadline out while the agent is
-// actively producing audio. Output is paced to roughly real-time, so during
-// legitimate speech this is called continuously and the watchdog never fires;
-// it only expires when audio stops advancing while the state is still speaking.
 func (s *AgentSession) notifyAgentSpeakingProgress() {
 	if s == nil {
 		return

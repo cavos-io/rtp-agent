@@ -1237,6 +1237,240 @@ func speechmaticsUnmarshalReferenceBool(data []byte) (bool, error) {
 	return value, nil
 }
 
+func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		return value, nil
+	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number != 0, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text != "", nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return len(list) > 0, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return len(object) > 0, nil
+	}
+	return false, fmt.Errorf("unsupported truthy bool")
+}
+
+func speechmaticsUnmarshalReferenceSegmentText(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "None", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return speechmaticsReferenceObjectText(object)
+	}
+	return "", fmt.Errorf("unsupported segment text")
+}
+
+func speechmaticsUnmarshalReferenceSegmentSpeakerID(data []byte) (string, error) {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return speechmaticsReferenceObjectText(object)
+	}
+	return "", fmt.Errorf("unsupported segment speaker id")
+}
+
+func speechmaticsUnmarshalReferenceSegmentLanguage(data []byte) (string, error) {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return text, nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	var list []json.RawMessage
+	if err := json.Unmarshal(data, &list); err == nil {
+		return speechmaticsReferenceListText(list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err == nil {
+		return speechmaticsReferenceObjectText(object)
+	}
+	return "", fmt.Errorf("unsupported segment language")
+}
+
+func speechmaticsReferenceListText(items []json.RawMessage) (string, error) {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		text, err := speechmaticsReferenceTextValue(item)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, text)
+	}
+	return "[" + strings.Join(parts, ", ") + "]", nil
+}
+
+func speechmaticsReferenceObjectText(object map[string]json.RawMessage) (string, error) {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		text, err := speechmaticsReferenceTextValue(object[key])
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "'"+key+"': "+text)
+	}
+	return "{" + strings.Join(parts, ", ") + "}", nil
+}
+
+func speechmaticsReferenceTextValue(data []byte) (string, error) {
+	if string(data) == "null" {
+		return "None", nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return "'" + text + "'", nil
+	}
+	var value bool
+	if err := json.Unmarshal(data, &value); err == nil {
+		if value {
+			return "True", nil
+		}
+		return "False", nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err == nil {
+		return number.String(), nil
+	}
+	return "", fmt.Errorf("unsupported list text value")
+}
+
+func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
+	var raw struct {
+		Segments []map[string]json.RawMessage `json:"segments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Segments) == 0 {
+		return data, err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, err
+	}
+	changed := false
+	for i, segment := range raw.Segments {
+		if text, ok := segment["text"]; ok {
+			value, err := speechmaticsUnmarshalReferenceSegmentText(text)
+			if err != nil {
+				return nil, fmt.Errorf("segments[%d].text: %w", i, err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			segment["text"] = encoded
+			changed = true
+		}
+		if speakerID, ok := segment["speaker_id"]; ok && string(speakerID) != "null" {
+			value, err := speechmaticsUnmarshalReferenceSegmentSpeakerID(speakerID)
+			if err != nil {
+				return nil, fmt.Errorf("segments[%d].speaker_id: %w", i, err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			segment["speaker_id"] = encoded
+			changed = true
+		}
+		if language, ok := segment["language"]; ok && string(language) != "null" {
+			value, err := speechmaticsUnmarshalReferenceSegmentLanguage(language)
+			if err != nil {
+				return nil, fmt.Errorf("segments[%d].language: %w", i, err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			segment["language"] = encoded
+			changed = true
+		}
+		isActive, ok := segment["is_active"]
+		if !ok || string(isActive) == "null" {
+			continue
+		}
+		value, err := speechmaticsUnmarshalReferenceTruthyBool(isActive)
+		if err != nil {
+			return nil, fmt.Errorf("segments[%d].is_active: %w", i, err)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		segment["is_active"] = encoded
+		changed = true
+	}
+	if !changed {
+		return data, nil
+	}
+	segments, err := json.Marshal(raw.Segments)
+	if err != nil {
+		return nil, err
+	}
+	top["segments"] = segments
+	return json.Marshal(top)
+}
+
 type smResponse struct {
 	Message  string `json:"message"`
 	Metadata struct {
@@ -1270,6 +1504,11 @@ type smResponse struct {
 }
 
 func (r *smResponse) UnmarshalJSON(data []byte) error {
+	var err error
+	data, err = speechmaticsNormalizeSegments(data)
+	if err != nil {
+		return err
+	}
 	type response smResponse
 	var decoded response
 	if err := json.Unmarshal(data, &decoded); err != nil {

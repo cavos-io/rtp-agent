@@ -1529,6 +1529,98 @@ func TestSpeechmaticsSegmentEventsFormatsReferenceNullText(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceBoolText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":false,
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "False" {
+		t.Fatalf("text = %q, want reference formatted bool text", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceNumericText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":1.5,
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "1.5" {
+		t.Fatalf("text = %q, want reference formatted numeric text", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceListText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":["hello","world"],
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "['hello', 'world']" {
+		t.Fatalf("text = %q, want reference formatted list text", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceObjectText(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":{"active":false,"kind":"noise"},
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "{'active': False, 'kind': 'noise'}" {
+		t.Fatalf("text = %q, want reference formatted object text", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsPreserveReferenceEmptyLanguage(t *testing.T) {
 	state := &speechmaticsStreamState{language: "de"}
 	var resp smResponse
@@ -1553,6 +1645,98 @@ func TestSpeechmaticsSegmentEventsPreserveReferenceEmptyLanguage(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsFormatsReferenceNumericLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"numeric language",
+			"language":123,
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "123" {
+		t.Fatalf("language = %q, want reference formatted numeric segment language", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceBoolLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"bool language",
+			"language":false,
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "False" {
+		t.Fatalf("language = %q, want reference formatted bool segment language", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceListLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"list language",
+			"language":["en","id"],
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "['en', 'id']" {
+		t.Fatalf("language = %q, want reference formatted list segment language", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceObjectLanguage(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"object language",
+			"language":{"active":false,"code":"en"},
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "{'active': False, 'code': 'en'}" {
+		t.Fatalf("language = %q, want reference formatted object segment language", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsPreserveReferenceEmptySpeakerID(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -1573,6 +1757,126 @@ func TestSpeechmaticsSegmentEventsPreserveReferenceEmptySpeakerID(t *testing.T) 
 	}
 	if got := events[0].Alternatives[0].SpeakerID; got != "" {
 		t.Fatalf("speaker id = %q, want explicit empty reference speaker id", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceNumericSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"numeric speaker",
+			"language":"en",
+			"speaker_id":123,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "123" {
+		t.Fatalf("speaker id = %q, want reference formatted numeric speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@123: numeric speaker" {
+		t.Fatalf("text = %q, want reference formatted numeric speaker id", alt.Text)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceBoolSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"bool speaker",
+			"language":"en",
+			"speaker_id":false,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "False" {
+		t.Fatalf("speaker id = %q, want reference formatted bool speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@False: bool speaker" {
+		t.Fatalf("text = %q, want reference formatted bool speaker id", alt.Text)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceListSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"list speaker",
+			"language":"en",
+			"speaker_id":["S1","S2"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "['S1', 'S2']" {
+		t.Fatalf("speaker id = %q, want reference formatted list speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@['S1', 'S2']: list speaker" {
+		t.Fatalf("text = %q, want reference formatted list speaker id", alt.Text)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsFormatsReferenceObjectSpeakerID(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "@{speaker_id}: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"object speaker",
+			"language":"en",
+			"speaker_id":{"active":false,"label":"S1"},
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.SpeakerID != "{'active': False, 'label': 'S1'}" {
+		t.Fatalf("speaker id = %q, want reference formatted object speaker id", alt.SpeakerID)
+	}
+	if alt.Text != "@{'active': False, 'label': 'S1'}: object speaker" {
+		t.Fatalf("text = %q, want reference formatted object speaker id", alt.Text)
 	}
 }
 
@@ -1713,6 +2017,34 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNullActiveAsPassive(t *testing.T
 	}
 	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: null active" {
 		t.Fatalf("text = %q, want reference passive format for explicit null is_active", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsTreatReferenceNumericInactiveAsPassive(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat:  "@{speaker_id}: {text}",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"numeric inactive",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":0,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: numeric inactive" {
+		t.Fatalf("text = %q, want reference passive format for numeric zero is_active", got)
 	}
 }
 

@@ -6971,8 +6971,6 @@ func TestAgentSessionAgentSpeakingStallInterruptsStuckReply(t *testing.T) {
 	activity.currentSpeech = current
 	session.activity = activity
 
-	// Entering speaking arms the watchdog. With no notifyAgentSpeakingProgress
-	// calls (a stalled reply), it must interrupt the current speech to recover.
 	session.UpdateAgentState(AgentStateSpeaking)
 
 	waitForInterrupted(t, current)
@@ -6988,8 +6986,6 @@ func TestAgentSessionAgentSpeakingStallReleasedByProgress(t *testing.T) {
 	session.activity = activity
 
 	session.UpdateAgentState(AgentStateSpeaking)
-	// Continuously report progress for longer than the stall timeout; the
-	// watchdog must not fire while audio keeps advancing.
 	for i := 0; i < 10; i++ {
 		session.notifyAgentSpeakingProgress()
 		time.Sleep(15 * time.Millisecond)
