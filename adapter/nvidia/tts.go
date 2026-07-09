@@ -552,6 +552,7 @@ func nvidiaTTSASCIITailStartsCapital(tail string) bool {
 	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
 	trimmed = strings.TrimLeft(trimmed, "-— ")
 	trimmed = strings.TrimLeft(trimmed, "#*• ")
+	trimmed = strings.TrimLeft(trimmed, `/\@&% `)
 	return trimmed != "" && trimmed[0] >= 'A' && trimmed[0] <= 'Z'
 }
 
@@ -598,6 +599,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 	trimmed = strings.TrimLeft(trimmed, "\"'‘“([{")
 	trimmed = strings.TrimLeft(trimmed, "-— ")
 	trimmed = strings.TrimLeft(trimmed, "#*• ")
+	trimmed = strings.TrimLeft(trimmed, `/\@&% `)
 	if trimmed == "" {
 		return false
 	}
