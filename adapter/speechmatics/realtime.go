@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -430,6 +431,8 @@ func (s *speechmaticsRealtimeSession) handleServerJSON(data []byte) bool {
 func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bool {
 	eventType, _ := event["type"].(string)
 	switch eventType {
+	case "error":
+		return s.handleProviderError(event)
 	case "input_audio_buffer.speech_started":
 		return s.emitRealtimeEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	case "input_audio_buffer.speech_stopped":
@@ -478,6 +481,17 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseDone(event)
 	}
 	return false
+}
+
+func (s *speechmaticsRealtimeSession) handleProviderError(event map[string]any) bool {
+	errorBody, _ := event["error"].(map[string]any)
+	if strings.HasPrefix(speechmaticsRealtimeString(errorBody, "message"), "Cancellation failed") {
+		return false
+	}
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: llm.NewAPIError("Speechmatics returned an error", errorBody, true),
+	})
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any) bool {

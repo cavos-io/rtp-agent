@@ -517,6 +517,51 @@ func TestSpeechmaticsRealtimeSessionResponseDoneFailedEmitsReferenceError(t *tes
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionProviderErrorEmitsReferenceError(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"message": "rate limited",
+			"code":    "too_many_requests",
+		},
+	}); !ok {
+		t.Fatal("provider error ignored")
+	}
+	errorEvent := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "Speechmatics returned an error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["code"] != "too_many_requests" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":  "error",
+		"error": map[string]any{"message": "Cancellation failed: response not found"},
+	}); ok {
+		t.Fatal("cancellation failure error handled, want ignored")
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionServerJSONDispatchesReferenceEvents(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {
