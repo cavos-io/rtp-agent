@@ -72,7 +72,7 @@ type nvidiaRealtimeGeneration struct {
 	responseID   string
 	messageCh    chan llm.MessageGeneration
 	functionCh   chan *llm.FunctionCall
-	textCh       chan string
+	textStream   *nvidiaRealtimeUnboundedStream[string]
 	timedTextCh  chan llm.RealtimeTimedText
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
@@ -80,6 +80,61 @@ type nvidiaRealtimeGeneration struct {
 	createdAt    time.Time
 	firstTokenAt *time.Time
 	done         bool
+}
+
+type nvidiaRealtimeUnboundedStream[T any] struct {
+	in   chan T
+	out  chan T
+	once sync.Once
+}
+
+func newNvidiaRealtimeUnboundedStream[T any]() *nvidiaRealtimeUnboundedStream[T] {
+	stream := &nvidiaRealtimeUnboundedStream[T]{
+		in:  make(chan T, nvidiaRealtimeGenerationStreamBuffer),
+		out: make(chan T, nvidiaRealtimeGenerationStreamBuffer),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) run() {
+	var pending []T
+	in := s.in
+	for in != nil || len(pending) > 0 {
+		var out chan T
+		var next T
+		if len(pending) > 0 {
+			out = s.out
+			next = pending[0]
+		}
+		select {
+		case value, ok := <-in:
+			if !ok {
+				in = nil
+				continue
+			}
+			pending = append(pending, value)
+		case out <- next:
+			var zero T
+			pending[0] = zero
+			pending = pending[1:]
+		}
+	}
+	close(s.out)
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) send(value T) {
+	s.in <- value
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) close() {
+	s.once.Do(func() {
+		close(s.in)
+	})
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) channel() <-chan T {
+	return s.out
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -443,7 +498,7 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 	}
 	generation := s.ensureGenerationLocked()
 	generation.outputText += text
-	generation.textCh <- text
+	generation.textStream.send(text)
 }
 
 func (s *nvidiaRealtimeSession) handleTextPayload(payload []byte) {
@@ -521,7 +576,7 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 1),
-		textCh:       make(chan string, nvidiaRealtimeGenerationStreamBuffer),
+		textStream:   newNvidiaRealtimeUnboundedStream[string](),
 		timedTextCh:  make(chan llm.RealtimeTimedText, nvidiaRealtimeGenerationStreamBuffer),
 		audioCh:      make(chan *model.AudioFrame, nvidiaRealtimeGenerationStreamBuffer),
 		modalitiesCh: make(chan []string, 1),
@@ -530,7 +585,7 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    responseID,
-		TextCh:       generation.textCh,
+		TextCh:       generation.textStream.channel(),
 		TimedTextCh:  generation.timedTextCh,
 		AudioCh:      generation.audioCh,
 		ModalitiesCh: generation.modalitiesCh,
@@ -554,7 +609,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 	}
 	s.cancelSilenceTimerLocked()
 	generation.done = true
-	close(generation.textCh)
+	generation.textStream.close()
 	close(generation.timedTextCh)
 	close(generation.audioCh)
 	close(generation.functionCh)
