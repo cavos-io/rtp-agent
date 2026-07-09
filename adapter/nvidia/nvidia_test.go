@@ -2132,11 +2132,11 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 			t.Fatalf("event[%d].Type = %q, want %q", i, events[i].Type, want)
 		}
 	}
-	if got, want := events[1].RequestID, "nvidia-response"; got != want {
-		t.Fatalf("interim RequestID = %q, want %q", got, want)
+	if got := events[1].RequestID; !strings.HasPrefix(got, "nvidia-") {
+		t.Fatalf("interim RequestID = %q, want synthetic nvidia- prefix", got)
 	}
-	if got, want := events[2].RequestID, "nvidia-response"; got != want {
-		t.Fatalf("final RequestID = %q, want %q", got, want)
+	if got, want := events[2].RequestID, events[1].RequestID; got != want {
+		t.Fatalf("final RequestID = %q, want same response id %q", got, want)
 	}
 	if got, want := events[1].Alternatives[0].Text, "first"; got != want {
 		t.Fatalf("interim text = %q, want %q", got, want)
@@ -2146,7 +2146,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	blank := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -2166,7 +2166,7 @@ func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) 
 		}},
 	})
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
-		RequestID: "nvidia-response-explicit",
+		RequestID: "provider-response-id",
 		Results: []nvidiaSTTResult{{
 			RequestID: "explicit-result",
 			IsFinal:   true,
@@ -2187,14 +2187,29 @@ func TestNvidiaSTTResponseEventsUseResponseRequestIDLikeReference(t *testing.T) 
 	if len(blank) != 0 {
 		t.Fatalf("blank response event count = %d, want 0", len(blank))
 	}
-	if got, want := first[1].RequestID, "nvidia-response-1"; got != want {
-		t.Fatalf("first fallback RequestID = %q, want %q", got, want)
+	firstID := first[1].RequestID
+	if !strings.HasPrefix(firstID, "nvidia-") {
+		t.Fatalf("first RequestID = %q, want synthetic nvidia- prefix like reference", firstID)
 	}
-	if got, want := second[0].RequestID, "nvidia-response-explicit"; got != want {
-		t.Fatalf("result RequestID = %q, want response-level id %q", got, want)
+	secondID := second[0].RequestID
+	if !strings.HasPrefix(secondID, "nvidia-") {
+		t.Fatalf("second RequestID = %q, want synthetic nvidia- prefix like reference", secondID)
 	}
-	if got, want := third[0].RequestID, "nvidia-response-2"; got != want {
-		t.Fatalf("third fallback RequestID = %q, want %q", got, want)
+	if secondID == "explicit-result" {
+		t.Fatalf("second RequestID = %q, want ignored provider result id like reference", secondID)
+	}
+	if secondID == "provider-response-id" {
+		t.Fatalf("second RequestID = %q, want ignored provider response id like reference", secondID)
+	}
+	if secondID == firstID {
+		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
+	}
+	thirdID := third[0].RequestID
+	if !strings.HasPrefix(thirdID, "nvidia-") {
+		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
+	}
+	if thirdID == firstID || thirdID == secondID {
+		t.Fatalf("third RequestID = %q, want new synthetic id per response", thirdID)
 	}
 }
 

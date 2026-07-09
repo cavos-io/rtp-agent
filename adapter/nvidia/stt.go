@@ -380,14 +380,14 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 
 func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.SpeechEvent {
 	events := make([]stt.SpeechEvent, 0, len(response.Results)+2)
-	requestID := response.RequestID
+	var requestID string
 	for _, result := range response.Results {
 		if strings.TrimSpace(result.Alternative.Transcript) == "" {
 			continue
 		}
 		if requestID == "" {
 			s.requestSeq++
-			requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
+			requestID = fmt.Sprintf("nvidia-%d", s.requestSeq)
 		}
 		result.RequestID = requestID
 		events = append(events, s.eventsFromResult(result)...)
