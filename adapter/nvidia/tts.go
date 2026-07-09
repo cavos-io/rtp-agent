@@ -580,7 +580,7 @@ func nvidiaTTSASCIIWhitespace(b byte) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
-	tail = strings.TrimLeft(tail, ",:;")
+	tail = strings.TrimLeft(tail, "\"',:;)]}”")
 	if tail == "" || !nvidiaTTSASCIIWhitespace(tail[0]) {
 		return false
 	}
