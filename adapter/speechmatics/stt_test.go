@@ -2141,6 +2141,30 @@ func TestSpeechmaticsSegmentEventsAcceptReferenceBoolTiming(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsAcceptReferenceStringTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"string timing",
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":"0.25","end_time":"0.75"}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, &speechmaticsStreamState{})
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.StartTime != 0.25 || alt.EndTime != 0.75 {
+		t.Fatalf("timing = (%v, %v), want reference string timing (0.25, 0.75)", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsFilterReferenceSpeakers(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -1262,13 +1262,20 @@ func speechmaticsUnmarshalReferenceTruthyBool(data []byte) (bool, error) {
 	return false, fmt.Errorf("unsupported truthy bool")
 }
 
-func speechmaticsUnmarshalReferenceBoolNumber(data []byte) (float64, bool) {
+func speechmaticsUnmarshalReferenceSegmentTiming(data []byte) (float64, bool) {
 	var value bool
 	if err := json.Unmarshal(data, &value); err == nil {
 		if value {
 			return 1, true
 		}
 		return 0, true
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		number, err := strconv.ParseFloat(text, 64)
+		if err == nil {
+			return number, true
+		}
 	}
 	return 0, false
 }
@@ -1508,7 +1515,7 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 					if !ok || string(rawTiming) == "null" {
 						continue
 					}
-					value, converted := speechmaticsUnmarshalReferenceBoolNumber(rawTiming)
+					value, converted := speechmaticsUnmarshalReferenceSegmentTiming(rawTiming)
 					if !converted {
 						continue
 					}
