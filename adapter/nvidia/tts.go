@@ -355,6 +355,9 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if r == '.' && nvidiaTTSProtectedSuffix(trimmed[:i], trimmed[next:]) {
 				continue
 			}
+			if r == '.' && nvidiaTTSProtectedAcronym(trimmed, i) {
+				continue
+			}
 			if trimmed[next] != ' ' && trimmed[next] != '\n' && trimmed[next] != '\t' {
 				continue
 			}
@@ -381,6 +384,17 @@ func nvidiaTTSProtectedAbbreviation(prefix string) bool {
 	default:
 		return false
 	}
+}
+
+func nvidiaTTSProtectedAcronym(text string, dot int) bool {
+	if dot < 1 || text[dot-1] < 'A' || text[dot-1] > 'Z' {
+		return false
+	}
+	if dot >= 2 && text[dot-2] == '.' && dot >= 3 && text[dot-3] >= 'A' && text[dot-3] <= 'Z' {
+		return true
+	}
+	next := dot + 1
+	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
 }
 
 func nvidiaTTSProtectedInitial(prefix string) bool {
