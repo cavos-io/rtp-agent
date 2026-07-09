@@ -187,6 +187,7 @@ type nvidiaSTTAlternative struct {
 }
 
 type nvidiaSTTResult struct {
+	RequestID   string
 	IsFinal     bool
 	Alternative nvidiaSTTAlternative
 }
@@ -291,6 +292,7 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 	}
 	events = append(events, stt.SpeechEvent{
 		Type:         eventType,
+		RequestID:    result.RequestID,
 		Alternatives: []stt.SpeechData{s.speechDataFromAlternative(result.Alternative, result.IsFinal)},
 	})
 	if result.IsFinal && s.speaking {

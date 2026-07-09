@@ -532,7 +532,8 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 
 	events := stream.eventsFromResult(nvidiaSTTResult{
-		IsFinal: false,
+		RequestID: "nvidia-response-1",
+		IsFinal:   false,
 		Alternative: nvidiaSTTAlternative{
 			Transcript: "hello",
 			Confidence: 0.7,
@@ -553,6 +554,9 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	if events[1].Type != stt.SpeechEventInterimTranscript {
 		t.Fatalf("event[1].Type = %q, want interim_transcript", events[1].Type)
 	}
+	if got, want := events[1].RequestID, "nvidia-response-1"; got != want {
+		t.Fatalf("interim RequestID = %q, want %q", got, want)
+	}
 	interim := events[1].Alternatives[0]
 	if interim.Text != "hello" || interim.Language != "en-US" || interim.Confidence != 0.7 {
 		t.Fatalf("interim speech data = %+v, want transcript/language/confidence from Riva alternative", interim)
@@ -568,7 +572,8 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 
 	events = stream.eventsFromResult(nvidiaSTTResult{
-		IsFinal: true,
+		RequestID: "nvidia-response-2",
+		IsFinal:   true,
 		Alternative: nvidiaSTTAlternative{
 			Transcript: "hello there",
 			Confidence: 0.9,
@@ -584,6 +589,9 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 	if events[0].Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event[0].Type = %q, want final_transcript", events[0].Type)
+	}
+	if got, want := events[0].RequestID, "nvidia-response-2"; got != want {
+		t.Fatalf("final RequestID = %q, want %q", got, want)
 	}
 	if events[1].Type != stt.SpeechEventEndOfSpeech {
 		t.Fatalf("event[1].Type = %q, want end_of_speech", events[1].Type)
