@@ -613,6 +613,86 @@ func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgText, 'o', 'k'}); err != nil {
+			serverErr <- err
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	var ev llm.RealtimeEvent
+	select {
+	case ev = <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before generation: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation_created")
+	}
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	if got := <-msg.TextCh; got != "ok" {
+		t.Fatalf("text delta = %q, want provider text", got)
+	}
+
+	select {
+	case metricsEvent := <-session.EventCh():
+		if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+			t.Fatalf("event after provider close = %+v, want metrics_collected", metricsEvent)
+		}
+		if metricsEvent.Metrics.Cancelled {
+			t.Fatalf("metrics.Cancelled = true, want false for normal provider close")
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before metrics: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal-close metrics")
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after provider normal close, want closed")
+	}
+}
+
 func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()

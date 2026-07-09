@@ -750,11 +750,26 @@ func (s *nvidiaRealtimeSession) receiveRealtimeTransport(ctx context.Context, co
 		}
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
+			s.finishRealtimeTransportReceive(ctx, websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived))
 			return
 		}
 		if msgType == websocket.BinaryMessage {
 			s.handleBinaryMessage(data)
 		}
+	}
+}
+
+func (s *nvidiaRealtimeSession) finishRealtimeTransportReceive(ctx context.Context, normalClose bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transportCtx != ctx {
+		return
+	}
+	if normalClose {
+		s.finalizeGenerationLocked(false)
+	}
+	if s.transportCancel != nil {
+		s.transportCancel()
 	}
 }
 
