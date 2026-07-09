@@ -260,6 +260,38 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimePushAudioPreservesResampleRemainderLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	for i := 0; i < 2; i++ {
+		frame := &model.AudioFrame{
+			Data:              int16SliceToLittleEndianBytes([]int16{int16(100 + i)}),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio(%d) error = %v", i, err)
+		}
+	}
+
+	var total uint32
+	for _, frame := range concrete.outboundAudio {
+		total += frame.SamplesPerChannel
+	}
+	if got, want := total, uint32(3); got != want {
+		t.Fatalf("total resampled samples = %d, want %d from stateful 16 kHz -> 24 kHz resampler", got, want)
+	}
+}
+
 func TestNvidiaRealtimePushAudioSkipsMalformedFramesLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
