@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
 )
 
@@ -68,6 +70,11 @@ type nvidiaRealtimeSession struct {
 	inputResampleOut   uint64
 	inputResampleLast  []byte
 	inputResampleFrame *model.AudioFrame
+	transportStarted   bool
+	transportCtx       context.Context
+	transportCancel    context.CancelFunc
+	transportNotify    chan struct{}
+	transportSent      int
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -285,6 +292,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
 		events:             newNvidiaRealtimeEventStream(),
+		transportNotify:    make(chan struct{}),
 	}, nil
 }
 
@@ -539,7 +547,9 @@ func (s *nvidiaRealtimeSession) websocketURL() string {
 }
 
 func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
+	s.stopRealtimeTransportLocked()
 	s.outboundMessages = nil
+	s.transportSent = 0
 	s.inputAudioBuffer = nil
 	s.inputResampleRate = 0
 	s.inputResampleIn = 0
@@ -548,6 +558,25 @@ func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
 	s.inputResampleFrame = nil
 	s.opusEncoder = nil
 	s.opusDecoder = nil
+}
+
+func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
+	if s.transportCancel != nil {
+		s.transportCancel()
+		s.transportCancel = nil
+	}
+	s.transportStarted = false
+	s.transportCtx = nil
+	s.notifyRealtimeTransportLocked()
+}
+
+func (s *nvidiaRealtimeSession) notifyRealtimeTransportLocked() {
+	if s.transportNotify == nil {
+		s.transportNotify = make(chan struct{})
+		return
+	}
+	close(s.transportNotify)
+	s.transportNotify = make(chan struct{})
 }
 
 func (s *nvidiaRealtimeSession) normalizeInputFrameLocked(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -640,10 +669,130 @@ func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.Audio
 			message[0] = nvidiaRealtimeMsgAudio
 			copy(message[1:], encoded[:n])
 			s.outboundMessages = append(s.outboundMessages, message)
+			s.notifyRealtimeTransportLocked()
 		}
 		s.inputAudioBuffer = s.inputAudioBuffer[chunkBytes:]
 	}
+	s.ensureRealtimeTransportLocked()
 	return nil
+}
+
+func (s *nvidiaRealtimeSession) ensureRealtimeTransportLocked() {
+	if s.closed || s.transportStarted || len(s.outboundMessages) == 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.transportStarted = true
+	s.transportCtx = ctx
+	s.transportCancel = cancel
+	go s.runRealtimeTransport(ctx)
+}
+
+func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context) {
+	defer func() {
+		s.mu.Lock()
+		if s.transportCtx == ctx {
+			s.transportStarted = false
+			s.transportCtx = nil
+			s.transportCancel = nil
+		}
+		s.mu.Unlock()
+	}()
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.websocketURL(), nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	connDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-connDone:
+		}
+	}()
+	defer close(connDone)
+
+	if !s.waitRealtimeHandshake(ctx, conn) {
+		return
+	}
+	go s.receiveRealtimeTransport(ctx, conn)
+	s.sendRealtimeTransport(ctx, conn)
+}
+
+func (s *nvidiaRealtimeSession) waitRealtimeHandshake(ctx context.Context, conn *websocket.Conn) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
+			return false
+		}
+		if msgType != websocket.BinaryMessage || len(data) == 0 {
+			continue
+		}
+		if data[0] == nvidiaRealtimeMsgHandshake {
+			return true
+		}
+		s.handleBinaryMessage(data)
+	}
+}
+
+func (s *nvidiaRealtimeSession) receiveRealtimeTransport(ctx context.Context, conn *websocket.Conn) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		if msgType == websocket.BinaryMessage {
+			s.handleBinaryMessage(data)
+		}
+	}
+}
+
+func (s *nvidiaRealtimeSession) sendRealtimeTransport(ctx context.Context, conn *websocket.Conn) {
+	for {
+		for {
+			msg := s.nextRealtimeTransportMessage()
+			if msg == nil {
+				break
+			}
+			if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+				return
+			}
+		}
+		ch := s.realtimeTransportNotifyCh()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+		}
+	}
+}
+
+func (s *nvidiaRealtimeSession) nextRealtimeTransportMessage() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transportSent >= len(s.outboundMessages) {
+		return nil
+	}
+	msg := append([]byte(nil), s.outboundMessages[s.transportSent]...)
+	s.transportSent++
+	return msg
+}
+
+func (s *nvidiaRealtimeSession) realtimeTransportNotifyCh() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transportNotify
 }
 
 func (s *nvidiaRealtimeSession) handleTextToken(text string) {

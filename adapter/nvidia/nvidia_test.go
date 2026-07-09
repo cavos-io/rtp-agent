@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
 )
 
@@ -526,6 +529,87 @@ func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("Decode(outbound opus) samples = 0, want speech packet")
+	}
+}
+
+func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	received := make(chan []byte, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		connected <- struct{}{}
+
+		readDone := make(chan struct{})
+		go func() {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				serverErr <- err
+				close(readDone)
+				return
+			}
+			if msgType != websocket.BinaryMessage {
+				serverErr <- errors.New("received non-binary websocket message")
+				close(readDone)
+				return
+			}
+			received <- payload
+			close(readDone)
+		}()
+		select {
+		case <-readDone:
+			serverErr <- errors.New("received audio before handshake")
+			return
+		case <-time.After(75 * time.Millisecond):
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		<-readDone
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before connect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for PersonaPlex websocket connection")
+	}
+
+	select {
+	case payload := <-received:
+		if len(payload) <= 1 || payload[0] != nvidiaRealtimeMsgAudio {
+			t.Fatalf("websocket payload = %x, want audio message with 0x01 prefix", payload)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio after handshake")
 	}
 }
 
