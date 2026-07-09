@@ -1847,6 +1847,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDNull = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			if segment == nil {
+				return fmt.Errorf("segments[%d] must be an object", i)
+			}
 			if text, ok := segment["text"]; ok && string(text) == "null" {
 				decoded.Segments[i].Text = "None"
 			}
