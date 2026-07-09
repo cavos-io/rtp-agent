@@ -105,8 +105,53 @@ func TestNvidiaRealtimeOptionsMatchReference(t *testing.T) {
 	if got, want := model.silenceThresholdMS, 750; got != want {
 		t.Fatalf("silenceThresholdMS = %d, want %d", got, want)
 	}
-	if _, err := model.Session(); err == nil || !strings.Contains(err.Error(), "personaplex realtime session is not implemented") {
-		t.Fatalf("Session() error = %v, want explicit unsupported realtime session error", err)
+	if session, err := model.Session(); err != nil || session == nil {
+		t.Fatalf("Session() = (%v, %v), want constructed realtime session", session, err)
+	}
+}
+
+func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got, want := realtimeModel.textPrompt, "new prompt"; got != want {
+		t.Fatalf("textPrompt = %q, want %q", got, want)
+	}
+	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio() error = %v", err)
+	}
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio() error = %v", err)
+	}
+	if err := session.Truncate(llm.RealtimeTruncateOptions{MessageID: "msg", Modalities: []string{"audio"}, AudioEndMillis: 12}); err != nil {
+		t.Fatalf("Truncate() error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil || !strings.Contains(err.Error(), "generate_reply is not yet supported") {
+		t.Fatalf("GenerateReply() error = %v, want reference unsupported generation error", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if _, ok := <-session.EventCh(); ok {
+		t.Fatal("EventCh() open after Close, want closed")
+	}
+	if err := session.PushAudio(&model.AudioFrame{SampleRate: 24000, NumChannels: 1}); err != nil {
+		t.Fatalf("PushAudio() after Close error = %v, want nil ignored input", err)
 	}
 }
 

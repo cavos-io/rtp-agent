@@ -6,7 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 const (
@@ -27,6 +29,12 @@ type NvidiaRealtimeModel struct {
 	seed               *int
 	silenceThresholdMS int
 	useSSL             bool
+}
+
+type nvidiaRealtimeSession struct {
+	model  *NvidiaRealtimeModel
+	events chan llm.RealtimeEvent
+	closed bool
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -147,9 +155,77 @@ func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
-	return nil, fmt.Errorf("nvidia personaplex realtime session is not implemented")
+	return &nvidiaRealtimeSession{
+		model:  m,
+		events: make(chan llm.RealtimeEvent),
+	}, nil
 }
 
 func (m *NvidiaRealtimeModel) Close() error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
+	if s.closed {
+		return nil
+	}
+	s.model.textPrompt = instructions
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) UpdateChatContext(_ *llm.ChatContext) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) UpdateTools(_ []llm.Tool) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) UpdateOptions(_ llm.RealtimeSessionOptions) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) GenerateReply(_ llm.RealtimeGenerateReplyOptions) error {
+	return fmt.Errorf("generate_reply is not yet supported by the PersonaPlex realtime model")
+}
+
+func (s *nvidiaRealtimeSession) Say(_ string) error {
+	return fmt.Errorf("say is not yet supported by the PersonaPlex realtime model")
+}
+
+func (s *nvidiaRealtimeSession) Truncate(_ llm.RealtimeTruncateOptions) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) Interrupt() error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	close(s.events)
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
+	return s.events
+}
+
+func (s *nvidiaRealtimeSession) PushAudio(_ *model.AudioFrame) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) PushVideo(_ *images.VideoFrame) error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) CommitAudio() error {
+	return nil
+}
+
+func (s *nvidiaRealtimeSession) ClearAudio() error {
 	return nil
 }
