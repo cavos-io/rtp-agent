@@ -20,6 +20,7 @@ const (
 	defaultNvidiaSTTLanguage      = "en-US"
 	defaultNvidiaSTTSampleRate    = 16000
 	nvidiaSTTRecognizeUnsupported = "Not implemented"
+	nvidiaSTTMissingAPIKey        = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
 )
 
 type NvidiaSTT struct {
@@ -123,7 +124,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		opt(provider)
 	}
 	if provider.useSSL && provider.apiKey == "" && !provider.apiKeyExplicit {
-		return nil, fmt.Errorf("nvidia api key is required while using SSL")
+		return nil, fmt.Errorf("%s", nvidiaSTTMissingAPIKey)
 	}
 	return provider, nil
 }
