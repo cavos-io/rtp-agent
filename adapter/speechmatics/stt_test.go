@@ -2370,7 +2370,7 @@ func TestSpeechmaticsSegmentEventsEmitDeliveredReferencePartialsWhenDisabled(t *
 	}
 }
 
-func TestSpeechmaticsSegmentEventsSkipReferenceEmptyText(t *testing.T) {
+func TestSpeechmaticsSegmentEventsEmitReferenceEmptyText(t *testing.T) {
 	for _, message := range []string{"AddPartialSegment", "AddSegment"} {
 		t.Run(message, func(t *testing.T) {
 			state := &speechmaticsStreamState{}
@@ -2388,14 +2388,25 @@ func TestSpeechmaticsSegmentEventsSkipReferenceEmptyText(t *testing.T) {
 				t.Fatalf("unmarshal empty-text segment: %v", err)
 			}
 
-			if events := speechmaticsEvents(resp, state); len(events) != 0 {
-				t.Fatalf("events = %#v, want reference empty-text segment skipped", events)
+			events := speechmaticsEvents(resp, state)
+			if len(events) != 1 {
+				t.Fatalf("events = %#v, want reference empty-text segment emitted", events)
 			}
-			if state.turnHasTranscript {
-				t.Fatal("turnHasTranscript = true, want empty-text segment skipped as transcript evidence")
+			wantType := stt.SpeechEventInterimTranscript
+			if message == "AddSegment" {
+				wantType = stt.SpeechEventFinalTranscript
 			}
-			if state.latestSegmentAnnotationSet {
-				t.Fatalf("latest annotation = %#v, want empty-text segment skipped before endpointing annotation", state.latestSegmentAnnotation)
+			if events[0].Type != wantType || len(events[0].Alternatives) != 1 || events[0].Alternatives[0].Text != "" {
+				t.Fatalf("event = %#v, want reference empty %s transcript", events[0], wantType)
+			}
+			if !state.turnHasTranscript {
+				t.Fatal("turnHasTranscript = false, want reference empty-text segment kept as transcript evidence")
+			}
+			if !state.latestSegmentAnnotationSet {
+				t.Fatal("latest annotation unset, want reference empty-text segment endpointing annotation retained")
+			}
+			if got, want := state.latestSegmentAnnotation, []string{"ends_with_final"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("latest annotation = %#v, want %#v", got, want)
 			}
 		})
 	}

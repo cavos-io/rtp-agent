@@ -2474,9 +2474,6 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for i, segment := range resp.Segments {
-		if segment.Text == "" {
-			continue
-		}
 		speakerPresent := speechmaticsSegmentSpeakerIDPresent(resp, i)
 		speakerID := speechmaticsSegmentSpeakerID(segment.SpeakerID, speakerPresent)
 		if speechmaticsSystemSpeakerID(speakerID) ||
