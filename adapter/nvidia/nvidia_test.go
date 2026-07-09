@@ -271,6 +271,42 @@ func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	concrete.handleTextToken("draft")
+	ev := <-session.EventCh()
+	msg := <-ev.Generation.MessageCh
+	if got, want := <-msg.TextCh, "draft"; got != want {
+		t.Fatalf("text delta = %q, want %q", got, want)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got, want := concrete.textPrompt, "new prompt"; got != want {
+		t.Fatalf("session textPrompt = %q, want %q", got, want)
+	}
+	metricsEvent := <-session.EventCh()
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if !metricsEvent.Metrics.Cancelled || metricsEvent.Metrics.RequestID != ev.Generation.ResponseID {
+		t.Fatalf("metrics = %+v, want cancelled active generation %q", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.TextCh; ok {
+		t.Fatal("TextCh open after instruction update, want closed")
+	}
+}
+
 func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()

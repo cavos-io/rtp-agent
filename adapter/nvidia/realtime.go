@@ -226,7 +226,11 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	if s.closed {
 		return nil
 	}
+	if s.textPrompt == instructions {
+		return nil
+	}
 	s.textPrompt = instructions
+	s.finalizeGenerationLocked(true)
 	return nil
 }
 
