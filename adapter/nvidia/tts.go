@@ -592,7 +592,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
+	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "Why", "When", "Where", "Also", "Then", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
 		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
 			switch trimmed[len(starter)] {
 			case ' ', '\t', '\n', '\r':
