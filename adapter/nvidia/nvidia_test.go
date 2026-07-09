@@ -1877,6 +1877,38 @@ func TestNvidiaRealtimeInstructionUpdatesCoalescePendingReconnectLikeReference(t
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateAfterReconnectEventRestartsAgainLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("first event after instruction update = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for first session_reconnected")
+	}
+
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("second event after instruction update = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for second session_reconnected")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdatesCoalesceActiveRestartLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	firstConnected := make(chan struct{}, 1)

@@ -104,23 +104,29 @@ type nvidiaRealtimeGeneration struct {
 }
 
 type nvidiaRealtimeUnboundedStream[T any] struct {
-	in   chan T
-	out  chan T
-	once sync.Once
+	in        chan T
+	out       chan T
+	once      sync.Once
+	onDeliver func(T)
 }
 
 func newNvidiaRealtimeUnboundedStream[T any]() *nvidiaRealtimeUnboundedStream[T] {
 	return newNvidiaRealtimeUnboundedStreamWithBuffer[T](nvidiaRealtimeGenerationStreamBuffer)
 }
 
-func newNvidiaRealtimeEventStream() *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
-	return newNvidiaRealtimeUnboundedStreamWithBuffer[llm.RealtimeEvent](nvidiaRealtimeEventBuffer)
+func newNvidiaRealtimeEventStream(onDeliver func(llm.RealtimeEvent)) *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
+	return newNvidiaRealtimeUnboundedStreamWithBufferCallback[llm.RealtimeEvent](nvidiaRealtimeEventBuffer, onDeliver)
 }
 
 func newNvidiaRealtimeUnboundedStreamWithBuffer[T any](buffer int) *nvidiaRealtimeUnboundedStream[T] {
+	return newNvidiaRealtimeUnboundedStreamWithBufferCallback[T](buffer, nil)
+}
+
+func newNvidiaRealtimeUnboundedStreamWithBufferCallback[T any](buffer int, onDeliver func(T)) *nvidiaRealtimeUnboundedStream[T] {
 	stream := &nvidiaRealtimeUnboundedStream[T]{
-		in:  make(chan T, buffer),
-		out: make(chan T, buffer),
+		in:        make(chan T, buffer),
+		out:       make(chan T, buffer),
+		onDeliver: onDeliver,
 	}
 	go stream.run()
 	return stream
@@ -144,6 +150,9 @@ func (s *nvidiaRealtimeUnboundedStream[T]) run() {
 			}
 			pending = append(pending, value)
 		case out <- next:
+			if s.onDeliver != nil {
+				s.onDeliver(next)
+			}
 			var zero T
 			pending[0] = zero
 			pending = pending[1:]
@@ -302,10 +311,17 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             newNvidiaRealtimeEventStream(),
 		transportNotify:    make(chan struct{}),
 		retryDelay:         defaultNvidiaRealtimeInitialRetryDelay,
 	}
+	session.events = newNvidiaRealtimeEventStream(func(ev llm.RealtimeEvent) {
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected {
+			return
+		}
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		session.restartPending = false
+	})
 	if m.preconnect {
 		session.startRealtimeTransportLocked()
 	}
@@ -787,7 +803,6 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 	if s.closed {
 		return
 	}
-	s.restartPending = false
 	s.events.send(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
