@@ -360,6 +360,20 @@ func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *t
 	}
 }
 
+func TestNvidiaSTTReturnsCallerCancellationBeforeUnsupportedRecognize(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	event, err := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}}, "")
+	if !errors.Is(err, context.Canceled) || event != nil {
+		t.Fatalf("Recognize() = (%v, %v), want nil context.Canceled", event, err)
+	}
+}
+
 func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {

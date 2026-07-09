@@ -141,7 +141,10 @@ func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *NvidiaSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*stt.SpeechEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("nvidia riva stt recognition is not implemented")
 }
 
