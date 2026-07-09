@@ -571,10 +571,10 @@ func nvidiaTTSASCIIWhitespace(b byte) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
-	if tail == "" || tail[0] != ' ' {
+	if tail == "" || !nvidiaTTSASCIIWhitespace(tail[0]) {
 		return false
 	}
-	trimmed := strings.TrimLeft(tail, " ")
+	trimmed := strings.TrimLeft(tail, nvidiaTTSWhitespaceCutset)
 	if trimmed == "" {
 		return false
 	}
