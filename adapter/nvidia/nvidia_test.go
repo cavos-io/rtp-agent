@@ -144,8 +144,25 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize() error = %v, want chunked stream before native transport", err)
 	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before synthesis output")
+	}
 	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
 		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported synthesis error", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after synthesis error")
+	}
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
+		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
 	}
 }
 
@@ -159,8 +176,25 @@ func TestNvidiaTTSSynthesizeEmptyTextEndsWithoutTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
+	doneStream, ok := stream.(tts.DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.DoneStream")
+	}
+	exceptionStream, ok := stream.(tts.ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement tts.ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before empty input EOF")
+	}
 	if audio, err := stream.Next(); err != io.EOF || audio != nil {
 		t.Fatalf("Next() = (%v, %v), want nil EOF for empty input", audio, err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after empty input EOF")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after empty input EOF = %v, want nil", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
