@@ -5677,6 +5677,23 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceForcedEOULatency(
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceSpeakEndLatency(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			audioSecondsSent:           1.00,
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		},
+	}
+	stream.recordVADEndLatency(&vad.VADEvent{Timestamp: 0.95})
+
+	if got, want := stream.localEndpointingDelay(), 20*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference speak-end-latency-subtracted delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceSmartTurnPenalty(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
 	stream := &speechmaticsSTTStream{
@@ -6289,7 +6306,7 @@ func TestSpeechmaticsSTTAdaptiveLocalVADWithoutTranscriptUsesReferenceMinimumDel
 	}
 	defer stream.Close()
 
-	stream.scheduleLocalEndpointingForceEndOfUtterance()
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
 
 	select {
 	case message := <-controlMessages:
@@ -6367,7 +6384,7 @@ func TestSpeechmaticsSTTAdaptiveProviderStartOfTurnCancelsReferenceDelayedEOU(t 
 	}
 	defer stream.Close()
 
-	stream.scheduleLocalEndpointingForceEndOfUtterance()
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
 	if ok := stream.handleResponse(smResponse{Message: "StartOfTurn"}); !ok {
 		t.Fatal("StartOfTurn stopped read loop")
 	}

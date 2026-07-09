@@ -1025,6 +1025,7 @@ type speechmaticsSTTStream struct {
 	forcedEOUPending           bool
 	forcedEOUStartedAt         time.Time
 	lastForcedEOULatency       time.Duration
+	lastSpeakEndLatency        time.Duration
 	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
@@ -3668,7 +3669,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		case corevad.VADEventStartOfSpeech:
 			s.handleVADStartOfSpeech()
 		case corevad.VADEventEndOfSpeech:
-			s.scheduleLocalEndpointingForceEndOfUtterance()
+			s.scheduleLocalEndpointingForceEndOfUtterance(event)
 		}
 	}
 }
@@ -3688,10 +3689,11 @@ func (s *speechmaticsSTTStream) handleVADStartOfSpeech() {
 	s.mu.Unlock()
 }
 
-func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
+func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance(event *corevad.VADEvent) {
 	if s == nil {
 		return
 	}
+	s.recordVADEndLatency(event)
 	delay := time.Duration(0)
 	if s.providerManagedEndpointing {
 		delay = s.localEndpointingForceEOUDelay()
@@ -3733,6 +3735,19 @@ func (s *speechmaticsSTTStream) localEndpointingForceEOUDelay() time.Duration {
 	return s.localEndpointingDelay()
 }
 
+func (s *speechmaticsSTTStream) recordVADEndLatency(event *corevad.VADEvent) {
+	if s == nil || event == nil || event.Timestamp <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil || s.state.audioSecondsSent <= event.Timestamp {
+		s.lastSpeakEndLatency = 0
+		return
+	}
+	s.lastSpeakEndLatency = time.Duration((s.state.audioSecondsSent - event.Timestamp) * float64(time.Second))
+}
+
 func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	if s == nil {
 		return 0
@@ -3761,6 +3776,7 @@ func (s *speechmaticsSTTStream) subtractReferenceLatenciesFromEndpointingDelay(d
 	s.mu.Lock()
 	state := s.state
 	forcedEOULatency := s.lastForcedEOULatency
+	speakEndLatency := s.lastSpeakEndLatency
 	var lag float64
 	if state != nil && state.latestSegmentEndTimeSet && state.audioSecondsSent > state.latestSegmentEndTime {
 		lag = state.audioSecondsSent - state.latestSegmentEndTime
@@ -3768,6 +3784,12 @@ func (s *speechmaticsSTTStream) subtractReferenceLatenciesFromEndpointingDelay(d
 	s.mu.Unlock()
 	if forcedEOULatency > 0 {
 		delay -= forcedEOULatency
+		if delay <= speechmaticsMinEndOfTurnDelay {
+			return speechmaticsMinEndOfTurnDelay
+		}
+	}
+	if speakEndLatency > 0 {
+		delay -= speakEndLatency
 		if delay <= speechmaticsMinEndOfTurnDelay {
 			return speechmaticsMinEndOfTurnDelay
 		}
