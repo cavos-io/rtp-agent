@@ -730,6 +730,9 @@ func (s *nvidiaRealtimeSession) waitRealtimeHandshake(ctx context.Context, conn 
 		}
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
+				s.failRealtimeTransport(ctx, llm.NewAPIConnectionError("PersonaPlex connection closed unexpectedly"))
+			}
 			return false
 		}
 		if msgType != websocket.BinaryMessage || len(data) == 0 {

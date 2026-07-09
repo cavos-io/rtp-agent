@@ -737,6 +737,62 @@ func TestNvidiaRealtimeProviderWriteFailureEmitsRecoverableErrorLikeReference(t 
 	}
 }
 
+func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "boom"), time.Now().Add(time.Second)); err != nil {
+			serverErr <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "PersonaPlex connection closed unexpectedly") {
+			t.Fatalf("error = %v, want PersonaPlex connection closed unexpectedly", modelErr)
+		}
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before realtime error event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pre-handshake close error event")
+	}
+}
+
 func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverErr := make(chan error, 1)
