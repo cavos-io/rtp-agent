@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -23,6 +24,9 @@ const (
 	defaultNvidiaRealtimeSampleRate         = 24000
 	defaultNvidiaRealtimeNumChannels        = 1
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
+	nvidiaRealtimeMsgHandshake              = 0x00
+	nvidiaRealtimeMsgAudio                  = 0x01
+	nvidiaRealtimeMsgText                   = 0x02
 )
 
 type NvidiaRealtimeModel struct {
@@ -311,6 +315,29 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 	generation.textCh <- text
 }
 
+func (s *nvidiaRealtimeSession) handleTextPayload(payload []byte) {
+	if len(payload) == 0 || isNvidiaRealtimeSpecialPayload(payload) || !utf8.Valid(payload) {
+		return
+	}
+	s.handleTextToken(string(payload))
+}
+
+func (s *nvidiaRealtimeSession) handleBinaryMessage(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	msgType := data[0]
+	payload := data[1:]
+	switch msgType {
+	case nvidiaRealtimeMsgHandshake:
+		return
+	case nvidiaRealtimeMsgText:
+		s.handleTextPayload(payload)
+	case nvidiaRealtimeMsgAudio:
+		return
+	}
+}
+
 func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -428,6 +455,10 @@ func (s *nvidiaRealtimeSession) cancelSilenceTimerLocked() {
 
 func isNvidiaRealtimeSpecialToken(text string) bool {
 	return len(text) == 1 && (text[0] == 0 || text[0] == 3)
+}
+
+func isNvidiaRealtimeSpecialPayload(payload []byte) bool {
+	return len(payload) == 1 && (payload[0] == 0 || payload[0] == 3)
 }
 
 func (g *nvidiaRealtimeGeneration) markFirstToken() {

@@ -206,7 +206,17 @@ func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
 
-	concrete.handleTextToken("hel")
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgHandshake})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 0})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 3})
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 0xff})
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("event after handshake/special/invalid payload = %+v, want none", ev)
+	default:
+	}
+
+	concrete.handleBinaryMessage([]byte{nvidiaRealtimeMsgText, 'h', 'e', 'l'})
 
 	ev := <-session.EventCh()
 	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
