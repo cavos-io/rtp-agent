@@ -391,7 +391,7 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedAbbreviation(text[:dot]) {
 		return true
 	}
-	if nvidiaTTSProtectedInitial(text, dot, text[next:]) {
+	if nvidiaTTSProtectedInitial(text, dot) {
 		return true
 	}
 	if nvidiaTTSProtectedSuffix(text, dot, text[next:]) {
@@ -487,15 +487,17 @@ func nvidiaTTSProtectedPhD(text string, dot int) bool {
 	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
 }
 
-func nvidiaTTSProtectedInitial(text string, dot int, tail string) bool {
+func nvidiaTTSProtectedInitial(text string, dot int) bool {
 	if dot < 2 || !nvidiaTTSASCIIAlpha(text[dot-1]) {
 		return false
 	}
 	prev := text[dot-2]
-	if prev == ' ' {
+	switch prev {
+	case ' ', '\t', '\n', '\r', '\f', '\v':
 		return true
+	default:
+		return false
 	}
-	return strings.HasPrefix(tail, " ") && (prev == '\t' || prev == '\n' || prev == '\r' || prev == '\f' || prev == '\v')
 }
 
 func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {

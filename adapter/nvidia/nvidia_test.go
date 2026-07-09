@@ -2778,7 +2778,7 @@ func TestNvidiaTTSStreamDoesNotSplitInitialWithoutSpaceLikeReference(t *testing.
 	}
 }
 
-func TestNvidiaTTSStreamSplitsTabInitialWithoutSpaceLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamDoesNotSplitTabInitialLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -2804,22 +2804,30 @@ func TestNvidiaTTSStreamSplitsTabInitialWithoutSpaceLikeReference(t *testing.T) 
 	if err := stream.PushText("Please choose option\tA.Next step"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
-	if !concrete.flushed {
-		t.Fatal("flushed = false after tab initial without space, want reference sentence boundary")
+	if concrete.flushed {
+		t.Fatal("flushed = true after tab initial without space, want NVIDIA blingfire tokenizer to keep sentence pending")
 	}
-	if got, want := concrete.text, "Please choose option\tA."; got != want {
-		t.Fatalf("text = %q, want first sentence %q", got, want)
+	if got, want := concrete.text, "Please choose option\tA.Next step"; got != want {
+		t.Fatalf("text = %q, want unsplit tab initial text %q", got, want)
 	}
-	if got, want := concrete.pendingText, "Next step"; got != want {
-		t.Fatalf("pendingText = %q, want tail %q", got, want)
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after tab initial returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
 	}
 	select {
 	case got := <-done:
 		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after tab initial boundary = (%v, %v), want unsupported stream error", got.audio, got.err)
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() did not start after tab initial boundary")
+		t.Fatal("Next() did not start after Flush")
 	}
 }
 
