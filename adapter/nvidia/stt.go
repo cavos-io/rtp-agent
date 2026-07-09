@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	defaultNvidiaSTTServer     = "grpc.nvcf.nvidia.com:443"
-	defaultNvidiaSTTModel      = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
-	defaultNvidiaSTTFunctionID = "1598d209-5e27-4d3c-8079-4751568b1081"
-	defaultNvidiaSTTLanguage   = "en-US"
-	defaultNvidiaSTTSampleRate = 16000
+	defaultNvidiaSTTServer        = "grpc.nvcf.nvidia.com:443"
+	defaultNvidiaSTTModel         = "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
+	defaultNvidiaSTTFunctionID    = "1598d209-5e27-4d3c-8079-4751568b1081"
+	defaultNvidiaSTTLanguage      = "en-US"
+	defaultNvidiaSTTSampleRate    = 16000
+	nvidiaSTTRecognizeUnsupported = "Not implemented"
 )
 
 type NvidiaSTT struct {
@@ -155,7 +156,7 @@ func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ stri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("nvidia riva stt recognition is not implemented")
+	return nil, fmt.Errorf("%s", nvidiaSTTRecognizeUnsupported)
 }
 
 func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

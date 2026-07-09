@@ -2390,7 +2390,8 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
 	}
-	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || !strings.Contains(err.Error(), "riva stt recognition is not implemented") {
+	recognizeErr := "Not implemented"
+	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || err.Error() != recognizeErr {
 		t.Fatalf("Recognize() error = %v, want explicit unsupported recognition error", err)
 	}
 
