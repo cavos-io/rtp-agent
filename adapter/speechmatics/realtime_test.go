@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -188,6 +189,40 @@ func TestSpeechmaticsRealtimeGenerateReplyPreservesPerResponseTools(t *testing.T
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionBuffersBurstAudioCommandsInOrder(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	for i := 0; i < 300; i++ {
+		frame := &model.AudioFrame{
+			Data:              []byte{byte(i % 251)},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio #%d error = %v, want buffered command", i, err)
+		}
+	}
+	for i := 0; i < 300; i++ {
+		command := nextSpeechmaticsRealtimeCommand(t, session)
+		if command["type"] != "input_audio_buffer.append" {
+			t.Fatalf("command #%d type = %#v, want input_audio_buffer.append", i, command["type"])
+		}
+		data, ok := command["audio"].([]byte)
+		if !ok || len(data) != 1 || data[0] != byte(i%251) {
+			t.Fatalf("command #%d audio = %#v, want ordered byte %d", i, command["audio"], byte(i%251))
+		}
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionCloseIsIdempotent(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -289,7 +324,7 @@ func nextSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession) 
 	select {
 	case command := <-rtSession.commandCh:
 		return command
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("missing realtime command")
 	}
 	return nil

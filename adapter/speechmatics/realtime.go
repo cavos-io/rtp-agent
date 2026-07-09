@@ -147,6 +147,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &speechmaticsRealtimeSession{
 		eventCh:          make(chan llm.RealtimeEvent, 16),
 		commandCh:        make(chan map[string]any, 256),
+		closedCh:         make(chan struct{}),
 		owner:            m,
 		apiKey:           m.apiKey,
 		baseURL:          m.baseURL,
@@ -208,6 +209,8 @@ type speechmaticsRealtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
 	commandCh        chan map[string]any
+	closedCh         chan struct{}
+	pendingCommands  []map[string]any
 	owner            *RealtimeModel
 	apiKey           string
 	baseURL          string
@@ -217,6 +220,7 @@ type speechmaticsRealtimeSession struct {
 	inputSampleRate  int
 	outputSampleRate int
 	closed           bool
+	drainingCommands bool
 	closeOnce        sync.Once
 }
 
@@ -331,7 +335,8 @@ func (s *speechmaticsRealtimeSession) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
-		close(s.commandCh)
+		s.pendingCommands = nil
+		close(s.closedCh)
 		s.mu.Unlock()
 		close(s.eventCh)
 		if s.owner != nil {
@@ -370,15 +375,56 @@ func (s *speechmaticsRealtimeSession) ClearAudio() error {
 
 func (s *speechmaticsRealtimeSession) enqueueCommand(command map[string]any) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
-	select {
-	case s.commandCh <- command:
-		return nil
-	default:
-		return errors.New("speechmatics realtime command queue is full")
+	if len(s.pendingCommands) == 0 {
+		select {
+		case s.commandCh <- command:
+			s.mu.Unlock()
+			return nil
+		default:
+		}
+	}
+	s.pendingCommands = append(s.pendingCommands, command)
+	if !s.drainingCommands {
+		s.drainingCommands = true
+		go s.drainCommandQueue()
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *speechmaticsRealtimeSession) drainCommandQueue() {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.drainingCommands = false
+			s.mu.Unlock()
+			return
+		}
+		if len(s.pendingCommands) == 0 {
+			s.drainingCommands = false
+			s.mu.Unlock()
+			return
+		}
+		command := s.pendingCommands[0]
+		s.mu.Unlock()
+
+		select {
+		case s.commandCh <- command:
+		case <-s.closedCh:
+			return
+		}
+
+		s.mu.Lock()
+		if len(s.pendingCommands) > 0 {
+			copy(s.pendingCommands, s.pendingCommands[1:])
+			s.pendingCommands[len(s.pendingCommands)-1] = nil
+			s.pendingCommands = s.pendingCommands[:len(s.pendingCommands)-1]
+		}
+		s.mu.Unlock()
 	}
 }
 
