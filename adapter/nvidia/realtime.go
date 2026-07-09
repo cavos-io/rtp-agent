@@ -439,7 +439,6 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 		return
 	}
 	generation := s.ensureGenerationLocked()
-	generation.markFirstToken()
 	generation.outputText += text
 	generation.textCh <- text
 }
