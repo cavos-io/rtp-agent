@@ -2073,6 +2073,7 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return true
 	}
 	if resp.Message == "EndOfUtterance" {
+		s.cancelLocalEndpointingForceEndOfUtterance()
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
 			if s.consumeCompletedFixedEOU() {
 				return true
@@ -3869,6 +3870,16 @@ func (s *speechmaticsSTTStream) closeLocalEndpointingTurn() {
 	}
 	s.mu.Lock()
 	s.localEndpointingTurnClosed = true
+	s.pendingLocalEndpointingEOU = false
+	s.localEndpointingEOUSeq++
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
 	s.pendingLocalEndpointingEOU = false
 	s.localEndpointingEOUSeq++
 	s.mu.Unlock()

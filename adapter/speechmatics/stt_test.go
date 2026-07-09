@@ -6437,6 +6437,41 @@ func TestSpeechmaticsSTTAdaptiveProviderEndOfTurnCancelsReferenceDelayedEOU(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveProviderEndOfUtteranceCancelsReferenceDelayedEOU(t *testing.T) {
+	originalDelay := speechmaticsLocalEndpointingDelay
+	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
+	t.Cleanup(func() { speechmaticsLocalEndpointingDelay = originalDelay })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	controlMessages := make(chan map[string]interface{}, 4)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		events:                     make(chan *stt.SpeechEvent, 4),
+		providerManagedEndpointing: true,
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+		state:     &speechmaticsStreamState{},
+	}
+	defer stream.Close()
+
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+	select {
+	case message := <-controlMessages:
+		t.Fatalf("control message after provider EndOfUtterance = %#v, want canceled delayed ForceEndOfUtterance", message)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveProviderStartOfTurnCancelsReferenceDelayedEOU(t *testing.T) {
 	originalDelay := speechmaticsLocalEndpointingDelay
 	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
