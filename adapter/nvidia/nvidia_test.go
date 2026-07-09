@@ -2587,7 +2587,7 @@ func TestNvidiaTTSStreamStartsCompletedSentenceBeforeFlushLikeReference(t *testi
 		done <- result{audio: audio, err: err}
 	}()
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	select {
@@ -2614,13 +2614,13 @@ func TestNvidiaTTSStreamKeepsSentenceTailPendingLikeReference(t *testing.T) {
 		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	if got, want := concrete.text, "This sentence is long enough."; got != want {
 		t.Fatalf("released text = %q, want completed sentence only %q", got, want)
 	}
-	if got, want := concrete.pendingText, "next"; got != want {
+	if got, want := concrete.pendingText, "Next"; got != want {
 		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
 	}
 }
@@ -2639,13 +2639,13 @@ func TestNvidiaTTSStreamNormalizesNewlineSentenceLikeReference(t *testing.T) {
 		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
-	if err := stream.PushText("This sentence is long\nenough. next"); err != nil {
+	if err := stream.PushText("This sentence is long\nenough. Next"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 	if got, want := concrete.text, "This sentence is long enough."; got != want {
 		t.Fatalf("released text = %q, want normalized completed sentence %q", got, want)
 	}
-	if got, want := concrete.pendingText, "next"; got != want {
+	if got, want := concrete.pendingText, "Next"; got != want {
 		t.Fatalf("pending text = %q, want unfinished tail %q", got, want)
 	}
 }
@@ -2664,7 +2664,7 @@ func TestNvidiaTTSStreamAppendsTextToPendingTailLikeReference(t *testing.T) {
 		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
 	}
 
-	if err := stream.PushText("This sentence is long enough. next"); err != nil {
+	if err := stream.PushText("This sentence is long enough. Next"); err != nil {
 		t.Fatalf("PushText(initial) error = %v", err)
 	}
 	if err := stream.PushText(" piece"); err != nil {
@@ -2673,7 +2673,7 @@ func TestNvidiaTTSStreamAppendsTextToPendingTailLikeReference(t *testing.T) {
 	if got, want := concrete.text, "This sentence is long enough."; got != want {
 		t.Fatalf("released text = %q, want completed sentence only %q", got, want)
 	}
-	if got, want := concrete.pendingText, "next piece"; got != want {
+	if got, want := concrete.pendingText, "Next piece"; got != want {
 		t.Fatalf("pending text = %q, want tail plus later delta %q", got, want)
 	}
 }
@@ -3006,6 +3006,59 @@ func TestNvidiaTTSStreamDoesNotSplitAdjacentSentenceLikeReference(t *testing.T) 
 	select {
 	case got := <-done:
 		t.Fatalf("Next() after adjacent sentence returned (%v, %v), want wait for Flush", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Flush = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Flush")
+	}
+}
+
+func TestNvidiaTTSStreamDoesNotSplitLowercaseSentenceTailLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("This sentence is ready. next"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after lowercase sentence tail, want NVIDIA blingfire tokenizer to keep sentence pending")
+	}
+	if got, want := concrete.text, "This sentence is ready. next"; got != want {
+		t.Fatalf("text = %q, want unsplit lowercase sentence tail %q", got, want)
+	}
+	if got := concrete.pendingText; got != "" {
+		t.Fatalf("pendingText = %q, want empty pending tail", got)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("Next() after lowercase sentence tail returned (%v, %v), want wait for Flush", got.audio, got.err)
 	case <-time.After(50 * time.Millisecond):
 	}
 	if err := stream.Flush(); err != nil {

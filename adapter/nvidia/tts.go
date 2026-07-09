@@ -356,8 +356,8 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if r == '.' && nvidiaTTSProtectedPeriod(trimmed, i, next) {
 				continue
 			}
-			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
-			if !nvidiaTTSASCIIBoundaryTailStartsSentence(trimmed[boundaryEnd:]) {
+			boundaryEnd, quoted := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if !nvidiaTTSASCIIBoundaryTailStartsSentence(trimmed[boundaryEnd:], quoted) {
 				continue
 			}
 			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) {
@@ -377,8 +377,11 @@ func nvidiaTTSSentenceLongEnough(text string) bool {
 	return utf8.RuneCountInString(strings.TrimSpace(text)) >= 20
 }
 
-func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string) bool {
-	return tail != "" && nvidiaTTSASCIIWhitespace(tail[0]) && strings.TrimSpace(tail) != ""
+func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string, quoted bool) bool {
+	if quoted {
+		return tail != "" && nvidiaTTSASCIIWhitespace(tail[0]) && strings.TrimSpace(tail) != ""
+	}
+	return nvidiaTTSASCIITailStartsCapital(tail)
 }
 
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
