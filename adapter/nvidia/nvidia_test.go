@@ -925,6 +925,19 @@ func TestNvidiaTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAllowsEmptyVoiceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "", WithNvidiaTTSVoice(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	if got := provider.voice; got != "" {
+		t.Fatalf("voice = %q, want explicit empty voice", got)
+	}
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() = %q, want explicit empty voice", got)
+	}
+}
+
 func TestNvidiaTTSAllowsEmptyLanguageCodeLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "", WithNvidiaTTSLanguageCode(""))
 	if err != nil {

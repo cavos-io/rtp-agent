@@ -44,6 +44,12 @@ func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
 	}
 }
 
+func WithNvidiaTTSVoice(voice string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		t.voice = voice
+	}
+}
+
 func WithNvidiaTTSLanguageCode(languageCode string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
 		t.languageCode = languageCode
