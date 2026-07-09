@@ -443,7 +443,7 @@ func (s *nvidiaRealtimeSession) GenerateReply(_ llm.RealtimeGenerateReplyOptions
 }
 
 func (s *nvidiaRealtimeSession) Say(_ string) error {
-	return fmt.Errorf("say is not yet supported by the PersonaPlex realtime model")
+	return fmt.Errorf("RealtimeSession does not implement say(). use a TTS model instead")
 }
 
 func (s *nvidiaRealtimeSession) Truncate(_ llm.RealtimeTruncateOptions) error {
