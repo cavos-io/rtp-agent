@@ -455,7 +455,7 @@ func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
 
 func nvidiaTTSProtectedPhD(text string, dot int) bool {
 	if dot >= 2 && text[dot-2:dot+1] == "Ph." {
-		return true
+		return dot+2 < len(text) && text[dot+1:dot+3] == "D."
 	}
 	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
 }
