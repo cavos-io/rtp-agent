@@ -3376,6 +3376,38 @@ func TestMultimodalAgentCancelToolReplyEventSkipsExplicitReply(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRealtimeToolReplyInterruptsBeforeGenerate(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{},
+		session:   session,
+		chatCtx:   llm.NewChatContext(),
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.ToolChoice != "auto" {
+			t.Fatalf("GenerateReply ToolChoice = %#v, want auto", opts.ToolChoice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GenerateReply was not requested for realtime tool reply")
+	}
+	if strings.Join(rtSession.calls, ",") != "interrupt,generate" {
+		t.Fatalf("realtime session calls = %#v, want interrupt before generate", rtSession.calls)
+	}
+}
+
 func TestMultimodalAgentToolReplyGenerateErrorIsRecoverable(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
@@ -4002,6 +4034,7 @@ type fakeRealtimeSession struct {
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
 	audioCh               chan *model.AudioFrame
+	calls                 []string
 	videoFrames           int
 	instructionUpdates    int
 	chatContextUpdates    int
@@ -4057,6 +4090,7 @@ func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) 
 }
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	f.calls = append(f.calls, "generate")
 	if f.updated != nil {
 		f.generatedWithChatCtx = f.updated.Copy()
 	}
@@ -4085,6 +4119,7 @@ func (f *fakeRealtimeSession) Truncate(options llm.RealtimeTruncateOptions) erro
 }
 
 func (f *fakeRealtimeSession) Interrupt() error {
+	f.calls = append(f.calls, "interrupt")
 	f.interrupted++
 	return nil
 }
