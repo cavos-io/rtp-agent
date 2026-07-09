@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/hraban/opus"
 )
 
 const (
@@ -52,6 +54,7 @@ type nvidiaRealtimeSession struct {
 	chatCtx            *llm.ChatContext
 	outboundAudio      []*model.AudioFrame
 	events             chan llm.RealtimeEvent
+	opusDecoder        *opus.Decoder
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -356,8 +359,38 @@ func (s *nvidiaRealtimeSession) handleBinaryMessage(data []byte) {
 	case nvidiaRealtimeMsgText:
 		s.handleTextPayload(payload)
 	case nvidiaRealtimeMsgAudio:
+		s.handleAudioPayload(payload)
+	}
+}
+
+func (s *nvidiaRealtimeSession) handleAudioPayload(payload []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || len(payload) == 0 {
 		return
 	}
+	if s.opusDecoder == nil {
+		decoder, err := opus.NewDecoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels)
+		if err != nil {
+			return
+		}
+		s.opusDecoder = decoder
+	}
+	pcm := make([]int16, 5760*defaultNvidiaRealtimeNumChannels)
+	n, err := s.opusDecoder.Decode(payload, pcm)
+	if err != nil || n == 0 {
+		return
+	}
+	data := int16SliceToLittleEndianBytes(pcm[:n])
+	generation := s.ensureGenerationLocked()
+	generation.markFirstToken()
+	generation.audioCh <- &model.AudioFrame{
+		Data:              data,
+		SampleRate:        defaultNvidiaRealtimeSampleRate,
+		NumChannels:       defaultNvidiaRealtimeNumChannels,
+		SamplesPerChannel: uint32(n / defaultNvidiaRealtimeNumChannels),
+	}
+	s.resetSilenceTimerLocked()
 }
 
 func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
@@ -481,6 +514,14 @@ func isNvidiaRealtimeSpecialToken(text string) bool {
 
 func isNvidiaRealtimeSpecialPayload(payload []byte) bool {
 	return len(payload) == 1 && (payload[0] == 0 || payload[0] == 3)
+}
+
+func int16SliceToLittleEndianBytes(samples []int16) []byte {
+	data := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(sample))
+	}
+	return data
 }
 
 func (g *nvidiaRealtimeGeneration) markFirstToken() {

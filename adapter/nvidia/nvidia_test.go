@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/hraban/opus"
 )
 
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
@@ -285,6 +286,57 @@ func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	}
 	if got, want := concrete.chatCtx.Items[0].GetID(), ev.Generation.ResponseID; got != want {
 		t.Fatalf("assistant item id = %q, want response id %q", got, want)
+	}
+}
+
+func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	packet := encodeNvidiaRealtimeOpusPacket(t, makeNvidiaRealtimePCMFrame())
+	message := append([]byte{nvidiaRealtimeMsgAudio}, packet...)
+	concrete.handleBinaryMessage(message)
+
+	ev := <-session.EventCh()
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated || ev.Generation == nil {
+		t.Fatalf("event = %+v, want generation_created", ev)
+	}
+	msg := <-ev.Generation.MessageCh
+	frame := <-msg.AudioCh
+	if frame == nil {
+		t.Fatal("audio frame = nil, want decoded PCM frame")
+	}
+	if frame.SampleRate != 24000 || frame.NumChannels != 1 {
+		t.Fatalf("audio format = %d Hz/%d ch, want 24000 Hz/1 ch", frame.SampleRate, frame.NumChannels)
+	}
+	if frame.SamplesPerChannel == 0 || len(frame.Data) == 0 {
+		t.Fatalf("audio payload = %d samples/%d bytes, want decoded PCM", frame.SamplesPerChannel, len(frame.Data))
+	}
+	if len(frame.Data) != int(frame.SamplesPerChannel)*2 {
+		t.Fatalf("audio bytes = %d, want samples_per_channel*2 (%d)", len(frame.Data), frame.SamplesPerChannel*2)
+	}
+
+	var metricsEvent llm.RealtimeEvent
+	select {
+	case metricsEvent = <-session.EventCh():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for silence metrics event")
+	}
+	if metricsEvent.Type != llm.RealtimeEventTypeMetricsCollected || metricsEvent.Metrics == nil {
+		t.Fatalf("metrics event = %+v, want metrics_collected", metricsEvent)
+	}
+	if metricsEvent.Metrics.RequestID != ev.Generation.ResponseID || metricsEvent.Metrics.Cancelled {
+		t.Fatalf("metrics = %+v, want response id %q and cancelled=false", metricsEvent.Metrics, ev.Generation.ResponseID)
+	}
+	if _, ok := <-msg.AudioCh; ok {
+		t.Fatal("AudioCh open after silence finalization, want closed")
 	}
 }
 
@@ -1388,4 +1440,29 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if event, err := stream.Next(); err != io.EOF || event != nil {
 		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", event, err)
 	}
+}
+
+func encodeNvidiaRealtimeOpusPacket(t *testing.T, pcm []int16) []byte {
+	t.Helper()
+	encoder, err := opus.NewEncoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels, opus.AppVoIP)
+	if err != nil {
+		t.Fatalf("NewEncoder() error = %v", err)
+	}
+	buf := make([]byte, 256)
+	n, err := encoder.Encode(pcm, buf)
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	if n == 0 {
+		t.Fatal("Encode() wrote zero bytes")
+	}
+	return append([]byte(nil), buf[:n]...)
+}
+
+func makeNvidiaRealtimePCMFrame() []int16 {
+	pcm := make([]int16, 480)
+	for i := range pcm {
+		pcm[i] = int16((i%32 - 16) * 128)
+	}
+	return pcm
 }
