@@ -857,6 +857,39 @@ func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContent(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptSkipsReferenceEmptyContentBeforeMalformedTiming(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":null,
+			"start_time":null,
+			"end_time":null,
+			"is_eos":null,
+			"alternatives":[{"content":"","confidence":null,"tags":null,"speaker":"agent","language":null}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"kept","confidence":0.8,"speaker":"agent","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw transcript: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, nil)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript event", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "kept" {
+		t.Fatalf("text = %q, want malformed empty raw content skipped", alt.Text)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].Text != "kept" {
+		t.Fatalf("words = %#v, want only valid content word", alt.Words)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptSkipsReferenceZeroContent(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{
@@ -1052,6 +1085,111 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	}
 	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "next" {
 		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	}
+}
+
+func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *testing.T) {
+	var firstFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.0,
+			"end_time":0.2,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &firstFinal); err != nil {
+		t.Fatalf("unmarshal first final: %v", err)
+	}
+	var secondFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.4,
+			"alternatives":[{"content":"world","confidence":0.8,"speaker":"S1","language":"en"}]
+		}]
+	}`), &secondFinal); err != nil {
+		t.Fatalf("unmarshal second final: %v", err)
+	}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"again","confidence":0.7,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial: %v", err)
+	}
+
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	if events := speechmaticsEvents(firstFinal, state); len(events) != 0 {
+		t.Fatalf("first final events before following partial = %#v, want buffered final", events)
+	}
+	if events := speechmaticsEvents(secondFinal, state); len(events) != 0 {
+		t.Fatalf("second final events before following partial = %#v, want buffered final", events)
+	}
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 2 {
+		t.Fatalf("events after following partial = %#v, want merged final then partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello world" {
+		t.Fatalf("first event = %#v, want merged final transcript", events[0])
+	}
+	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "again" {
+		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	}
+}
+
+func TestSpeechmaticsEventsRawFinalIgnoresReferenceMalformedMetadataWithResults(t *testing.T) {
+	var final smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"metadata":{"transcript":123,"start_time":"bad","end_time":null},
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"done","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &final); err != nil {
+		t.Fatalf("unmarshal raw final transcript = %v, want reference to ignore final metadata when results exist", err)
+	}
+
+	events := speechmaticsEvents(final, &speechmaticsStreamState{includePartials: true})
+	if len(events) != 1 || events[0].Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("events = %#v, want one final transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "done" {
+		t.Fatalf("text = %q, want done", got)
+	}
+}
+
+func TestSpeechmaticsEventsRawPartialIgnoresReferenceUnusedMetadataWithResults(t *testing.T) {
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"metadata":{"transcript":123,"start_time":"bad","end_time":true},
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"soon","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal raw partial transcript = %v, want reference to ignore unused partial metadata when results exist", err)
+	}
+
+	events := speechmaticsEvents(partial, &speechmaticsStreamState{includePartials: true})
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("events = %#v, want one interim transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "soon" {
+		t.Fatalf("text = %q, want soon", got)
 	}
 }
 
@@ -1295,6 +1433,55 @@ func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T
 	}
 	if events[1].Alternatives[0].StartTime != 0.4 || events[1].Alternatives[0].EndTime != 0.6 {
 		t.Fatalf("second timing = %v-%v, want second sentence timing", events[1].Alternatives[0].StartTime, events[1].Alternatives[0].EndTime)
+	}
+}
+
+func TestSpeechmaticsEventsRawTranscriptKeepsReferenceConversationalEOSInOneSegment(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"is_eos":false,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.3,
+			"end_time":0.3,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"is_eos":false,
+			"alternatives":[{"content":"next","confidence":0.8,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.6,
+			"end_time":0.6,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw eos transcript: %v", err)
+	}
+
+	state := &speechmaticsStreamState{splitRawFinalEOSSentences: false}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one final transcript for reference conversational emit_sentences=false", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "hello. next." {
+		t.Fatalf("text = %q, want combined same-speaker final transcript", alt.Text)
+	}
+	if alt.StartTime != 0.1 || alt.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want full combined sentence span", alt.StartTime, alt.EndTime)
 	}
 }
 
@@ -2959,6 +3146,121 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTMalformedStartOfTurnStillEmitsReferenceStart(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		messages := []map[string]interface{}{
+			{"message": "StartOfTurn", "results": map[string]interface{}{"unexpected": "shape"}},
+			{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{
+					{
+						"text":       "hello",
+						"language":   "en",
+						"speaker_id": "S1",
+						"metadata": map[string]interface{}{
+							"start_time": 0.0,
+							"end_time":   0.2,
+						},
+					},
+				},
+			},
+			{"message": "EndOfTranscript"},
+		}
+		for _, message := range messages {
+			if err := conn.WriteJSON(message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start_of_speech from malformed StartOfTurn", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("Next event = %#v, want start_of_speech", event)
+	}
+}
+
+func TestSpeechmaticsSTTMalformedSpeakersResultDoesNotAbortReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		messages := []map[string]interface{}{
+			{"message": "SpeakersResult", "speakers": map[string]interface{}{"unexpected": "shape"}},
+			{
+				"message": "AddSegment",
+				"segments": []map[string]interface{}{
+					{
+						"text":       "hello",
+						"language":   "en",
+						"speaker_id": "S1",
+						"metadata": map[string]interface{}{
+							"start_time": 0.0,
+							"end_time":   0.2,
+						},
+					},
+				},
+			},
+			{"message": "EndOfTranscript"},
+		}
+		for _, message := range messages {
+			if err := conn.WriteJSON(message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after malformed SpeakersResult", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "hello" {
+		t.Fatalf("transcript = %q, want hello", got)
+	}
+}
+
 func TestSpeechmaticsSTTInvalidJSONClosesReferenceStream(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4206,6 +4508,63 @@ func TestSpeechmaticsSTTNullSegmentMetadataClosesReferenceStream(t *testing.T) {
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event = %#v, want nil after null segment metadata", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "Invalid Speechmatics message") {
+		t.Fatalf("APIConnectionError message = %q, want malformed message reason", connectionErr.Message)
+	}
+}
+
+func TestSpeechmaticsSTTNullSegmentItemClosesReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]interface{}{
+			"message":  "AddSegment",
+			"segments": []interface{}{nil},
+		}); err != nil {
+			t.Errorf("write null-segment AddSegment: %v", err)
+			return
+		}
+		_ = conn.WriteJSON(map[string]interface{}{
+			"message": "AddSegment",
+			"segments": []map[string]interface{}{
+				{
+					"text":       "ignored",
+					"language":   "en",
+					"speaker_id": "S1",
+					"metadata": map[string]interface{}{
+						"start_time": 0.0,
+						"end_time":   0.2,
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after null segment item", event)
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
@@ -6324,6 +6683,87 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStarted(t *testing.T) 
 	}
 	if got := len(writes[0]); got != 3200 {
 		t.Fatalf("buffered chunk length = %d, want 3200", got)
+	}
+}
+
+func TestSpeechmaticsMalformedRecognitionStartedStillOpensReferenceAudioGate(t *testing.T) {
+	audioWrites := make(chan []byte, 1)
+	started := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				audioWrites <- append([]byte(nil), data...)
+				return
+			}
+			var control map[string]interface{}
+			if err := json.Unmarshal(data, &control); err != nil {
+				t.Errorf("unmarshal control: %v", err)
+				return
+			}
+			if control["message"] == "StartRecognition" {
+				started <- struct{}{}
+				if err := conn.WriteJSON(map[string]interface{}{
+					"message": "RecognitionStarted",
+					"language_pack_info": map[string]interface{}{
+						"word_delimiter": 7,
+					},
+				}); err != nil {
+					t.Errorf("write malformed RecognitionStarted: %v", err)
+				}
+			}
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL(wsURL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("StartRecognition not sent")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	select {
+	case data := <-audioWrites:
+		if got := len(data); got != 3200 {
+			t.Fatalf("binary audio length = %d, want 3200", got)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("buffered audio not sent after malformed RecognitionStarted")
 	}
 }
 

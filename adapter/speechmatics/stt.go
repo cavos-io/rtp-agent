@@ -483,16 +483,17 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			errCh:  make(chan error, 1),
 			done:   make(chan struct{}),
 			state: &speechmaticsStreamState{
-				language:             streamLanguage,
-				speakerActiveFormat:  s.speakerActiveFormat,
-				speakerPassiveFormat: s.speakerPassiveFormat,
-				focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
-				ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
-				focusMode:            s.focusMode,
-				includePartials:      speechmaticsIncludePartials(s),
-				bufferRawFinals:      true,
-				startTimeOffset:      startTimeOffset,
-				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
+				language:                  streamLanguage,
+				speakerActiveFormat:       s.speakerActiveFormat,
+				speakerPassiveFormat:      s.speakerPassiveFormat,
+				focusSpeakers:             cloneSpeechmaticsStringSlice(s.focusSpeakers),
+				ignoreSpeakers:            cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+				focusMode:                 s.focusMode,
+				includePartials:           speechmaticsIncludePartials(s),
+				bufferRawFinals:           true,
+				startTimeOffset:           startTimeOffset,
+				startTime:                 float64(streamStartTime.UnixNano()) / 1e9,
+				splitRawFinalEOSSentences: false,
 			},
 			owner:                     s,
 			waitForRecognitionStarted: true,
@@ -1047,6 +1048,7 @@ type speechmaticsStreamState struct {
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
 	latestRawPartialEvents     []*stt.SpeechEvent
+	splitRawFinalEOSSentences  bool
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
@@ -1606,6 +1608,155 @@ func speechmaticsNormalizeSegments(data []byte) ([]byte, error) {
 	return json.Marshal(top)
 }
 
+func speechmaticsNormalizeFalseyRawResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil {
+		return data, nil
+	}
+	if message != "AddTranscript" && message != "AddPartialTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	changed := false
+	for i, resultData := range results {
+		keep, ok := speechmaticsRawResultHasReferenceContent(resultData)
+		if !ok || keep {
+			continue
+		}
+		results[i] = []byte(`{"alternatives":[{}]}`)
+		changed = true
+	}
+	if !changed {
+		return data, nil
+	}
+	resultsData, err := json.Marshal(results)
+	if err != nil {
+		return nil, err
+	}
+	top["results"] = resultsData
+	return json.Marshal(top)
+}
+
+func speechmaticsNormalizeFinalRawMetadataWithResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil || message != "AddTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	metadata, ok := top["metadata"]
+	if !ok || string(metadata) == "null" {
+		return data, nil
+	}
+	var metadataObject map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &metadataObject); err != nil {
+		return data, nil
+	}
+	top["metadata"] = []byte(`{}`)
+	return json.Marshal(top)
+}
+
+func speechmaticsNormalizePartialRawMetadataWithResults(data []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return data, err
+	}
+	var message string
+	if err := json.Unmarshal(top["message"], &message); err != nil || message != "AddPartialTranscript" {
+		return data, nil
+	}
+	resultsData, ok := top["results"]
+	if !ok || string(resultsData) == "null" {
+		return data, nil
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(resultsData, &results); err != nil {
+		return data, nil
+	}
+	metadata, ok := top["metadata"]
+	if !ok || string(metadata) == "null" {
+		return data, nil
+	}
+	var metadataObject map[string]json.RawMessage
+	if err := json.Unmarshal(metadata, &metadataObject); err != nil {
+		return data, nil
+	}
+	normalized := map[string]json.RawMessage{}
+	if endTime, ok := metadataObject["end_time"]; ok {
+		var boolValue bool
+		if err := json.Unmarshal(endTime, &boolValue); err == nil {
+			if boolValue {
+				normalized["end_time"] = []byte(`1`)
+			} else {
+				normalized["end_time"] = []byte(`0`)
+			}
+		} else {
+			normalized["end_time"] = endTime
+		}
+	}
+	metadataData, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	top["metadata"] = metadataData
+	return json.Marshal(top)
+}
+
+func speechmaticsRawResultHasReferenceContent(data []byte) (bool, bool) {
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(data, &result); err != nil {
+		return false, false
+	}
+	if result == nil {
+		return false, false
+	}
+	alternativesData, ok := result["alternatives"]
+	if !ok {
+		return false, true
+	}
+	var alternatives []json.RawMessage
+	if err := json.Unmarshal(alternativesData, &alternatives); err != nil || len(alternatives) == 0 {
+		return false, false
+	}
+	var alternative map[string]json.RawMessage
+	if err := json.Unmarshal(alternatives[0], &alternative); err != nil {
+		return false, false
+	}
+	if alternative == nil {
+		return false, false
+	}
+	contentData, ok := alternative["content"]
+	if !ok {
+		return false, true
+	}
+	content, err := speechmaticsUnmarshalReferenceContent(contentData)
+	if err != nil {
+		return true, true
+	}
+	return content != "", true
+}
+
 type smResponse struct {
 	Message  string `json:"message"`
 	Metadata struct {
@@ -1641,6 +1792,18 @@ type smResponse struct {
 func (r *smResponse) UnmarshalJSON(data []byte) error {
 	var err error
 	data, err = speechmaticsNormalizeSegments(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizeFalseyRawResults(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizeFinalRawMetadataWithResults(data)
+	if err != nil {
+		return err
+	}
+	data, err = speechmaticsNormalizePartialRawMetadataWithResults(data)
 	if err != nil {
 		return err
 	}
@@ -1767,6 +1930,9 @@ func (r *smResponse) UnmarshalJSON(data []byte) error {
 		decoded.segmentSpeakerIDPresent = make([]bool, len(raw.Segments))
 		decoded.segmentSpeakerIDNull = make([]bool, len(raw.Segments))
 		for i, segment := range raw.Segments {
+			if segment == nil {
+				return fmt.Errorf("segments[%d] must be an object", i)
+			}
 			if text, ok := segment["text"]; ok && string(text) == "null" {
 				decoded.Segments[i].Text = "None"
 			}
@@ -1816,7 +1982,18 @@ func (s *speechmaticsSTTStream) readLoop() {
 		var resp smResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			if json.Valid(message) {
-				if speechmaticsDataMessage(message) {
+				messageName := speechmaticsMessageName(message)
+				if speechmaticsControlMessage(messageName) {
+					if !s.handleResponse(smResponse{Message: messageName}) {
+						return
+					}
+					continue
+				}
+				if messageName == "SpeakersResult" {
+					s.recordSpeakerResult(nil)
+					continue
+				}
+				if speechmaticsDataMessageName(messageName) {
 					_ = s.closeTransportOnce()
 					s.prepareDrainPendingRawFinals()
 					s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid Speechmatics message: %v", err)))
@@ -1838,15 +2015,28 @@ func (s *speechmaticsSTTStream) readLoop() {
 	}
 }
 
-func speechmaticsDataMessage(data []byte) bool {
+func speechmaticsControlMessage(message string) bool {
+	switch message {
+	case "RecognitionStarted", "StartOfTurn", "EndOfTurn", "EndOfUtterance", "EndOfTranscript":
+		return true
+	default:
+		return false
+	}
+}
+
+func speechmaticsMessageName(data []byte) string {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return false
+		return ""
 	}
 	var message string
 	if err := json.Unmarshal(raw["message"], &message); err != nil {
-		return false
+		return ""
 	}
+	return message
+}
+
+func speechmaticsDataMessageName(message string) bool {
 	switch message {
 	case "AddPartialSegment", "AddSegment", "AddPartialTranscript", "AddTranscript", "SpeakersResult":
 		return true
@@ -2083,10 +2273,55 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 	if state == nil || len(state.pendingRawFinals) == 0 {
 		return nil
 	}
-	events := state.pendingRawFinals
+	events := speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)
 	state.pendingRawFinals = nil
 	speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	return events
+}
+
+func speechmaticsMergePendingRawFinals(state *speechmaticsStreamState, events []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(events) < 2 || state == nil || state.speakerActiveFormat != "" || state.speakerPassiveFormat != "" {
+		return events
+	}
+	merged := make([]*stt.SpeechEvent, 0, len(events))
+	for _, event := range events {
+		if len(merged) == 0 || !speechmaticsCanMergeTranscriptEvents(merged[len(merged)-1], event) {
+			merged = append(merged, event)
+			continue
+		}
+		speechmaticsMergeTranscriptEvent(merged[len(merged)-1], event, speechmaticsRawWordDelimiter(state))
+	}
+	return merged
+}
+
+func speechmaticsCanMergeTranscriptEvents(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil || left.Type != stt.SpeechEventFinalTranscript || right.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	if len(left.Alternatives) != 1 || len(right.Alternatives) != 1 {
+		return false
+	}
+	leftAlt := left.Alternatives[0]
+	rightAlt := right.Alternatives[0]
+	return leftAlt.SpeakerID == rightAlt.SpeakerID && leftAlt.Language == rightAlt.Language
+}
+
+func speechmaticsMergeTranscriptEvent(left, right *stt.SpeechEvent, delimiter string) {
+	leftAlt := &left.Alternatives[0]
+	rightAlt := right.Alternatives[0]
+	switch {
+	case leftAlt.Text == "":
+		leftAlt.Text = rightAlt.Text
+	case rightAlt.Text != "":
+		leftAlt.Text += delimiter + rightAlt.Text
+	}
+	leftAlt.EndTime = rightAlt.EndTime
+	leftAlt.Words = append(leftAlt.Words, rightAlt.Words...)
+	if leftAlt.Confidence == 0 {
+		leftAlt.Confidence = rightAlt.Confidence
+	} else if rightAlt.Confidence != 0 {
+		leftAlt.Confidence = (leftAlt.Confidence + rightAlt.Confidence) / 2
+	}
 }
 
 type speechmaticsRawTranscriptFragment struct {
@@ -2142,7 +2377,7 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	var events []*stt.SpeechEvent
 	var flushedFinals []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
-		flushedFinals = append(flushedFinals, state.pendingRawFinals...)
+		flushedFinals = append(flushedFinals, speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)...)
 		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
@@ -2366,7 +2601,7 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	var events []*stt.SpeechEvent
 	groupStart := 0
 	for i := 1; i <= len(fragments); i++ {
-		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
+		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1], state) {
 			continue
 		}
 		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {
@@ -2377,8 +2612,8 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	return events
 }
 
-func speechmaticsSplitRawTranscriptAtEOS(eventType stt.SpeechEventType, fragment speechmaticsRawTranscriptFragment) bool {
-	return eventType == stt.SpeechEventFinalTranscript && fragment.isEOS
+func speechmaticsSplitRawTranscriptAtEOS(eventType stt.SpeechEventType, fragment speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) bool {
+	return (state == nil || state.splitRawFinalEOSSentences) && eventType == stt.SpeechEventFinalTranscript && fragment.isEOS
 }
 
 func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) *stt.SpeechEvent {
