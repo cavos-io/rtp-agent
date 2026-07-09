@@ -556,7 +556,7 @@ func nvidiaTTSASCIITailStartsCapital(tail string) bool {
 }
 
 func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
-	for _, suffix := range []string{"Inc", "Ltd", "Jr", "Sr", "Co"} {
+	for _, suffix := range []string{"Inc", "Ltd", "LLC", "Corp", "Jr", "Sr", "Co"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
