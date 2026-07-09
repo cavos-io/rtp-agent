@@ -1,6 +1,7 @@
 package speechmatics
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -222,6 +223,22 @@ type speechmaticsRealtimeSession struct {
 	closed           bool
 	drainingCommands bool
 	closeOnce        sync.Once
+	generation       *speechmaticsRealtimeGeneration
+}
+
+type speechmaticsRealtimeGeneration struct {
+	responseID string
+	messageCh  chan llm.MessageGeneration
+	functionCh chan *llm.FunctionCall
+	messages   map[string]*speechmaticsRealtimeMessage
+	done       bool
+}
+
+type speechmaticsRealtimeMessage struct {
+	textCh       chan string
+	audioCh      chan *model.AudioFrame
+	modalitiesCh chan []string
+	closed       bool
 }
 
 func (s *speechmaticsRealtimeSession) UpdateInstructions(instructions string) error {
@@ -336,6 +353,7 @@ func (s *speechmaticsRealtimeSession) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		s.pendingCommands = nil
+		s.closeCurrentGenerationLocked()
 		close(s.closedCh)
 		s.mu.Unlock()
 		close(s.eventCh)
@@ -394,6 +412,258 @@ func (s *speechmaticsRealtimeSession) enqueueCommand(command map[string]any) err
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bool {
+	eventType, _ := event["type"].(string)
+	switch eventType {
+	case "input_audio_buffer.speech_started":
+		return s.emitRealtimeEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	case "input_audio_buffer.speech_stopped":
+		return s.emitRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeSpeechStopped,
+			SpeechStopped: &llm.InputSpeechStoppedEvent{
+				UserTranscriptionEnabled: true,
+			},
+		})
+	case "conversation.item.input_audio_transcription.delta":
+		itemID := speechmaticsRealtimeString(event, "item_id")
+		delta := speechmaticsRealtimeString(event, "delta")
+		if delta == "" {
+			return false
+		}
+		return s.emitRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:       itemID,
+				ContentIndex: speechmaticsRealtimeInt(event, "content_index"),
+				Transcript:   delta,
+				IsFinal:      false,
+			},
+		})
+	case "conversation.item.input_audio_transcription.completed":
+		return s.emitRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:       speechmaticsRealtimeString(event, "item_id"),
+				ContentIndex: speechmaticsRealtimeInt(event, "content_index"),
+				Transcript:   speechmaticsRealtimeString(event, "transcript"),
+				IsFinal:      true,
+			},
+		})
+	case "response.created":
+		return s.handleResponseCreated(event)
+	case "response.output_item.added":
+		return s.handleResponseOutputItemAdded(event)
+	case "response.output_text.delta", "response.text.delta", "response.output_audio_transcript.delta", "response.audio_transcript.delta":
+		return s.handleResponseTextDelta(event)
+	case "response.output_audio.delta", "response.audio.delta":
+		return s.handleResponseAudioDelta(event)
+	case "response.output_item.done":
+		return s.handleResponseOutputItemDone(event)
+	case "response.done":
+		s.mu.Lock()
+		s.closeCurrentGenerationLocked()
+		s.mu.Unlock()
+		return true
+	}
+	return false
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any) bool {
+	responseID := speechmaticsRealtimeString(event, "response_id")
+	if responseID == "" {
+		if response, _ := event["response"].(map[string]any); response != nil {
+			responseID = speechmaticsRealtimeString(response, "id")
+		}
+	}
+	if responseID == "" {
+		responseID = "speechmatics-response"
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	s.closeCurrentGenerationLocked()
+	generation := &speechmaticsRealtimeGeneration{
+		responseID: responseID,
+		messageCh:  make(chan llm.MessageGeneration, 1),
+		functionCh: make(chan *llm.FunctionCall, 1),
+		messages:   make(map[string]*speechmaticsRealtimeMessage),
+	}
+	s.generation = generation
+	s.mu.Unlock()
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+			ResponseID: responseID,
+		},
+	})
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	if itemID == "" {
+		if item, _ := event["item"].(map[string]any); item != nil {
+			itemID = speechmaticsRealtimeString(item, "id")
+		}
+	}
+	if itemID == "" {
+		return false
+	}
+	s.mu.Lock()
+	generation := s.generation
+	if s.closed || generation == nil || generation.done {
+		s.mu.Unlock()
+		return false
+	}
+	message := &speechmaticsRealtimeMessage{
+		textCh:       make(chan string, 16),
+		audioCh:      make(chan *model.AudioFrame, 16),
+		modalitiesCh: make(chan []string, 1),
+	}
+	message.modalitiesCh <- []string{"audio", "text"}
+	close(message.modalitiesCh)
+	generation.messages[itemID] = message
+	s.mu.Unlock()
+	select {
+	case generation.messageCh <- llm.MessageGeneration{
+		MessageID:    itemID,
+		TextCh:       message.textCh,
+		AudioCh:      message.audioCh,
+		ModalitiesCh: message.modalitiesCh,
+	}:
+	default:
+	}
+	return true
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	delta := speechmaticsRealtimeString(event, "delta")
+	if itemID == "" || delta == "" {
+		return false
+	}
+	s.mu.Lock()
+	message := s.realtimeMessageLocked(itemID)
+	s.mu.Unlock()
+	if message == nil {
+		return false
+	}
+	select {
+	case message.textCh <- delta:
+	default:
+	}
+	return true
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseAudioDelta(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	encoded := speechmaticsRealtimeString(event, "delta")
+	if itemID == "" || encoded == "" {
+		return false
+	}
+	audio, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	message := s.realtimeMessageLocked(itemID)
+	sampleRate := s.outputSampleRate
+	s.mu.Unlock()
+	if message == nil {
+		return false
+	}
+	select {
+	case message.audioCh <- &model.AudioFrame{
+		Data:              append([]byte(nil), audio...),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(audio) / 2),
+	}:
+	default:
+	}
+	return true
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	if itemID == "" {
+		if item, _ := event["item"].(map[string]any); item != nil {
+			itemID = speechmaticsRealtimeString(item, "id")
+		}
+	}
+	if itemID == "" {
+		return false
+	}
+	s.mu.Lock()
+	message := s.realtimeMessageLocked(itemID)
+	if message != nil && !message.closed {
+		message.closed = true
+		close(message.textCh)
+		close(message.audioCh)
+	}
+	s.mu.Unlock()
+	return message != nil
+}
+
+func (s *speechmaticsRealtimeSession) realtimeMessageLocked(itemID string) *speechmaticsRealtimeMessage {
+	if s.closed || s.generation == nil || s.generation.done {
+		return nil
+	}
+	return s.generation.messages[itemID]
+}
+
+func (s *speechmaticsRealtimeSession) closeCurrentGenerationLocked() {
+	if s.generation == nil || s.generation.done {
+		return
+	}
+	generation := s.generation
+	generation.done = true
+	for _, message := range generation.messages {
+		if message != nil && !message.closed {
+			message.closed = true
+			close(message.textCh)
+			close(message.audioCh)
+		}
+	}
+	close(generation.messageCh)
+	close(generation.functionCh)
+	s.generation = nil
+}
+
+func (s *speechmaticsRealtimeSession) emitRealtimeEvent(event llm.RealtimeEvent) bool {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return false
+	}
+	select {
+	case s.eventCh <- event:
+		return true
+	default:
+		return false
+	}
+}
+
+func speechmaticsRealtimeString(event map[string]any, key string) string {
+	value, _ := event[key].(string)
+	return value
+}
+
+func speechmaticsRealtimeInt(event map[string]any, key string) int {
+	switch value := event[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func (s *speechmaticsRealtimeSession) drainCommandQueue() {
