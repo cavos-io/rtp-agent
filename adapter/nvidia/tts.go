@@ -415,8 +415,9 @@ func nvidiaTTSASCIIBoundaryTailStartsSentence(tail string, quoted bool) bool {
 func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 	quoted := false
 	for next < len(text) {
-		if strings.HasPrefix(text[next:], "”") {
-			next += len("”")
+		if strings.HasPrefix(text[next:], "”") || strings.HasPrefix(text[next:], "’") || strings.HasPrefix(text[next:], "»") {
+			_, size := utf8.DecodeRuneInString(text[next:])
+			next += size
 			continue
 		}
 		switch text[next] {
