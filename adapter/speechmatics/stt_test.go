@@ -5663,6 +5663,37 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartCancelsReferenceDelayedEOU(t *testi
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADWithoutTranscriptUsesReferenceMinimumDelay(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	controlMessages := make(chan map[string]interface{}, 1)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		providerManagedEndpointing: true,
+		state:                      &speechmaticsStreamState{},
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	defer stream.Close()
+
+	stream.scheduleLocalEndpointingForceEndOfUtterance()
+
+	select {
+	case message := <-controlMessages:
+		if got := message["message"]; got != "ForceEndOfUtterance" {
+			t.Fatalf("control message = %#v, want ForceEndOfUtterance", message)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("ForceEndOfUtterance not sent after reference minimum delay without transcript")
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveProviderEndOfTurnCancelsReferenceDelayedEOU(t *testing.T) {
 	originalDelay := speechmaticsLocalEndpointingDelay
 	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }

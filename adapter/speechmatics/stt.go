@@ -3288,7 +3288,7 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 	}
 	delay := time.Duration(0)
 	if s.providerManagedEndpointing {
-		delay = s.localEndpointingDelay()
+		delay = s.localEndpointingForceEOUDelay()
 	}
 	s.mu.Lock()
 	if s.closed || s.localEndpointingTurnClosed {
@@ -3312,6 +3312,19 @@ func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
 		}
 		s.sendScheduledLocalEndpointingForceEndOfUtterance(seq)
 	}()
+}
+
+func (s *speechmaticsSTTStream) localEndpointingForceEOUDelay() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	hasTranscript := s.state != nil && s.state.turnHasTranscript
+	s.mu.Unlock()
+	if !hasTranscript {
+		return speechmaticsMinEndOfTurnDelay
+	}
+	return s.localEndpointingDelay()
 }
 
 func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
