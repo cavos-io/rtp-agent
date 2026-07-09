@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -125,6 +126,7 @@ type nvidiaTTSSynthesizeStream struct {
 	hasText      bool
 	flushed      bool
 	text         string
+	pendingText  string
 	exception    error
 }
 
@@ -197,9 +199,16 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.flushed && s.pendingText != "" {
+		s.pendingText += text
+		s.notifyLocked()
+		return nil
+	}
 	s.hasText = true
 	s.text += text
-	if nvidiaTTSHasCompletedSentencePrefix(s.text) {
+	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
+		s.text = prefix
+		s.pendingText = tail
 		s.flushed = true
 	}
 	s.notifyLocked()
@@ -331,21 +340,173 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 	return s.exception
 }
 
-func nvidiaTTSHasCompletedSentencePrefix(text string) bool {
+func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	trimmed := strings.TrimSpace(text)
-	if len(trimmed) < 21 {
-		return false
+	if utf8.RuneCountInString(trimmed) < 21 {
+		return "", "", false
 	}
-	for i := 0; i < len(trimmed)-1; i++ {
-		switch trimmed[i] {
+	for i, r := range trimmed {
+		next := i + len(string(r))
+		if next >= len(trimmed) {
+			break
+		}
+		switch r {
 		case '.', '!', '?':
-			if trimmed[i+1] != ' ' && trimmed[i+1] != '\n' && trimmed[i+1] != '\t' {
+			if r == '.' && nvidiaTTSProtectedPeriod(trimmed, i, next) {
 				continue
 			}
-			if len(strings.TrimSpace(trimmed[:i+1])) >= 20 && strings.TrimSpace(trimmed[i+1:]) != "" {
-				return true
+			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
+			}
+		case '。', '！', '？':
+			boundaryEnd, _ := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
+				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
 		}
 	}
+	return "", "", false
+}
+
+func nvidiaTTSSentenceLongEnough(text string) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(text)) >= 20
+}
+
+func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
+	if next >= len(text) {
+		return next, false
+	}
+	if text[next] == '"' {
+		return next + 1, true
+	}
+	if strings.HasPrefix(text[next:], "”") {
+		return next + len("”"), true
+	}
+	return next, false
+}
+
+func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
+	if nvidiaTTSProtectedAbbreviation(text[:dot]) {
+		return true
+	}
+	if nvidiaTTSProtectedInitial(text[:dot]) {
+		return true
+	}
+	if nvidiaTTSProtectedSuffix(text[:dot], text[next:]) {
+		return true
+	}
+	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
+		return true
+	}
+	if nvidiaTTSProtectedPhD(text, dot) {
+		return true
+	}
+	if nvidiaTTSProtectedDecimal(text, dot, next) {
+		return true
+	}
+	if nvidiaTTSProtectedWebsite(text[next:]) {
+		return true
+	}
+	return nvidiaTTSProtectedMultipleDots(text, dot, next)
+}
+
+func nvidiaTTSProtectedDecimal(text string, dot int, next int) bool {
+	return dot > 0 && next < len(text) && text[dot-1] >= '0' && text[dot-1] <= '9' && text[next] >= '0' && text[next] <= '9'
+}
+
+func nvidiaTTSProtectedWebsite(tail string) bool {
+	for _, suffix := range []string{"com", "net", "org", "io", "gov", "edu", "me"} {
+		if strings.HasPrefix(tail, suffix) {
+			return true
+		}
+	}
 	return false
+}
+
+func nvidiaTTSProtectedMultipleDots(text string, dot int, next int) bool {
+	return (dot > 0 && text[dot-1] == '.') || (next < len(text) && text[next] == '.')
+}
+
+func nvidiaTTSProtectedAbbreviation(prefix string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[len(fields)-1] {
+	case "Mr", "St", "Mrs", "Ms", "Dr":
+		return true
+	default:
+		return false
+	}
+}
+
+func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
+	if dot < 1 || text[dot-1] < 'A' || text[dot-1] > 'Z' {
+		return false
+	}
+	if letters := nvidiaTTSAcronymLettersEndingAt(text, dot); letters >= 2 {
+		if letters > 3 {
+			return false
+		}
+		return !nvidiaTTSTailStartsSentence(tail)
+	}
+	next := dot + 1
+	return next+1 < len(text) && text[next] >= 'A' && text[next] <= 'Z' && text[next+1] == '.'
+}
+
+func nvidiaTTSAcronymLettersEndingAt(text string, dot int) int {
+	letters := 0
+	for i := dot; i >= 1; i -= 2 {
+		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
+			break
+		}
+		letters++
+	}
+	return letters
+}
+
+func nvidiaTTSProtectedPhD(text string, dot int) bool {
+	if dot >= 2 && text[dot-2:dot+1] == "Ph." {
+		return dot+2 < len(text) && text[dot+1:dot+3] == "D."
+	}
+	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
+}
+
+func nvidiaTTSProtectedInitial(prefix string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	token := fields[len(fields)-1]
+	if len(token) != 1 {
+		return false
+	}
+	return (token[0] >= 'A' && token[0] <= 'Z') || (token[0] >= 'a' && token[0] <= 'z')
+}
+
+func nvidiaTTSProtectedSuffix(prefix string, tail string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[len(fields)-1] {
+	case "Inc", "Ltd", "Jr", "Sr", "Co":
+	default:
+		return false
+	}
+	return !nvidiaTTSTailStartsSentence(tail)
+}
+
+func nvidiaTTSTailStartsSentence(tail string) bool {
+	tailFields := strings.Fields(tail)
+	if len(tailFields) == 0 {
+		return false
+	}
+	switch tailFields[0] {
+	case "Mr", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Wherever":
+		return true
+	default:
+		return false
+	}
 }
