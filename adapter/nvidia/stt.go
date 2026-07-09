@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -155,9 +156,10 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		streamLanguage = language
 	}
 	return &nvidiaSTTStream{
-		stt:      s,
-		ctx:      ctx,
-		language: streamLanguage,
+		stt:       s,
+		ctx:       ctx,
+		language:  streamLanguage,
+		startTime: float64(time.Now().UnixNano()) / float64(time.Second),
 	}, nil
 }
 

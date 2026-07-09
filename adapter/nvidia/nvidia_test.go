@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -627,6 +628,27 @@ func TestNvidiaSTTStreamExposesReferenceTimingOffset(t *testing.T) {
 	}
 	if got, want := timing.StartTime(), 10.5; got != want {
 		t.Fatalf("StartTime() = %v, want %v", got, want)
+	}
+}
+
+func TestNvidiaSTTStreamSeedsReferenceStartTime(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	before := float64(time.Now().Add(-time.Second).UnixNano()) / float64(time.Second)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement stt.StreamTiming")
+	}
+	after := float64(time.Now().Add(time.Second).UnixNano()) / float64(time.Second)
+
+	if got := timing.StartTime(); got < before || got > after {
+		t.Fatalf("StartTime() = %v, want stream creation wall-clock between %v and %v", got, before, after)
 	}
 }
 
