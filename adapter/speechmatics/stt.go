@@ -3178,7 +3178,32 @@ func (s *speechmaticsSTTStream) EndInput() error {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
+	tail := s.inputAudio.flush()
+	vadStream := s.vadStream
+	bufferVADTail := tail != nil && vadStream != nil && s.startupGateActiveLocked()
+	if bufferVADTail {
+		s.pendingVADFrames = append(s.pendingVADFrames, tail)
+	}
+	s.mu.Unlock()
+
+	if tail != nil && vadStream != nil && !bufferVADTail {
+		if err := vadStream.PushFrame(tail); err != nil {
+			s.enqueueError(err)
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
 			s.mu.Unlock()
@@ -3199,7 +3224,7 @@ func (s *speechmaticsSTTStream) EndInput() error {
 			s.recordSentAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
 	}
-	vadStream := s.vadStream
+	vadStream = s.vadStream
 	bufferVADEndInput := vadStream != nil && s.startupGateActiveLocked()
 	if bufferVADEndInput {
 		s.pendingVADEndInput = true
@@ -3858,6 +3883,31 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 
 func (s *speechmaticsSTTStream) Flush() error {
 	s.mu.Lock()
+	if s.inputEnded {
+		s.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	tail := s.inputAudio.flush()
+	vadStream := s.vadStream
+	bufferVADTail := tail != nil && vadStream != nil && s.startupGateActiveLocked()
+	if bufferVADTail {
+		s.pendingVADFrames = append(s.pendingVADFrames, tail)
+	}
+	s.mu.Unlock()
+
+	if tail != nil && vadStream != nil && !bufferVADTail {
+		if err := vadStream.PushFrame(tail); err != nil {
+			s.enqueueError(err)
+			_ = s.Close()
+			return err
+		}
+	}
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
@@ -3865,7 +3915,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
+	if tail != nil {
 		if err := s.writeAudioFrameLocked(tail); err != nil {
 			_ = s.closeLocked()
 			return err

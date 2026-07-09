@@ -7015,8 +7015,10 @@ func TestSpeechmaticsPushFrameWaitsForReferenceRecognitionStartedBeforeVAD(t *te
 	if keepReading := stream.handleResponse(smResponse{Message: "RecognitionStarted"}); !keepReading {
 		t.Fatal("RecognitionStarted stopped read loop")
 	}
-	if pushed := vadStream.pushedFrames(); len(pushed) != 1 || pushed[0] == frame || pushed[0].SampleRate != 16000 {
-		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want normalized buffered frame", pushed)
+	if pushed := vadStream.pushedFrames(); len(pushed) != 2 ||
+		pushed[0] == frame || pushed[0].SampleRate != 16000 || pushed[0].SamplesPerChannel != 533 ||
+		pushed[1].SampleRate != 16000 || pushed[1].SamplesPerChannel != 1 {
+		t.Fatalf("VAD pushed frames after RecognitionStarted = %#v, want normalized buffered frame plus resampler tail", pushed)
 	}
 	if !vadStream.isEnded() {
 		t.Fatal("VAD EndInput after RecognitionStarted = false, want drained end input after frames")
@@ -7128,6 +7130,47 @@ func TestSpeechmaticsSTTEndInputFlushesAndEndsReferenceInput(t *testing.T) {
 	}
 	if stream.isClosed() {
 		t.Fatal("EndInput marked stream closed, want read side open for final provider messages")
+	}
+}
+
+func TestSpeechmaticsSTTEndInputForwardsReferenceResamplerTailToVAD(t *testing.T) {
+	vadStream := newFakeSpeechmaticsVADStream()
+	stream := &speechmaticsSTTStream{
+		owner:     NewSpeechmaticsSTT("test-key"),
+		vadStream: vadStream,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(interface{}) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if pushed := vadStream.pushedFrames(); len(pushed) != 1 || pushed[0].SampleRate != 16000 || pushed[0].SamplesPerChannel != 533 {
+		t.Fatalf("VAD frames after PushFrame = %+v, want one normalized frame", pushed)
+	}
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	pushed := vadStream.pushedFrames()
+	if len(pushed) != 2 {
+		t.Fatalf("VAD frames after EndInput = %d, want normalized frame plus resampler tail", len(pushed))
+	}
+	tail := pushed[1]
+	if tail.SampleRate != 16000 || tail.NumChannels != 1 || tail.SamplesPerChannel != 1 {
+		t.Fatalf("VAD tail frame = %+v, want 1-sample 16 kHz resampler tail", tail)
+	}
+	if !vadStream.isEnded() {
+		t.Fatal("VAD EndInput = false, want ended after resampler tail")
 	}
 }
 
