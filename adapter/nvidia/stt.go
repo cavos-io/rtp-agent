@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -152,20 +153,24 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		streamLanguage = language
 	}
 	return &nvidiaSTTStream{
-		stt:       s,
-		ctx:       ctx,
-		language:  streamLanguage,
-		startTime: float64(time.Now().UnixNano()) / float64(time.Second),
+		stt:          s,
+		ctx:          ctx,
+		language:     streamLanguage,
+		stateChanged: make(chan struct{}),
+		startTime:    float64(time.Now().UnixNano()) / float64(time.Second),
 	}, nil
 }
 
 type nvidiaSTTStream struct {
+	mu              sync.Mutex
+	stateChanged    chan struct{}
 	stt             *NvidiaSTT
 	ctx             context.Context
 	language        string
 	closed          bool
 	inputEnded      bool
 	flushed         bool
+	streamErr       error
 	speaking        bool
 	inputSampleRate uint32
 	startTimeOffset float64
@@ -197,7 +202,14 @@ type nvidiaSTTResponse struct {
 	Results   []nvidiaSTTResult
 }
 
+func (s *nvidiaSTTStream) notifyLocked() {
+	close(s.stateChanged)
+	s.stateChanged = make(chan struct{})
+}
+
 func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
@@ -215,7 +227,10 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return fmt.Errorf("nvidia riva stt streaming is not implemented")
+	err := fmt.Errorf("nvidia riva stt streaming is not implemented")
+	s.streamErr = err
+	s.notifyLocked()
+	return err
 }
 
 func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
@@ -236,6 +251,8 @@ func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
 }
 
 func (s *nvidiaSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
@@ -245,10 +262,13 @@ func (s *nvidiaSTTStream) Flush() error {
 		}
 	}
 	s.flushed = true
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -261,32 +281,57 @@ func (s *nvidiaSTTStream) EndInput() error {
 		}
 	}
 	s.inputEnded = true
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaSTTStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed = true
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
-	if s.closed {
-		return nil, io.EOF
-	}
-	if s.inputEnded {
-		return nil, io.EOF
-	}
-	if s.flushed {
-		return nil, io.EOF
-	}
-	if s.ctx != nil {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.inputEnded {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.flushed {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.streamErr != nil {
+			err := s.streamErr
+			s.mu.Unlock()
+			return nil, err
+		}
+		if s.ctx != nil {
+			if err := s.ctx.Err(); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+		}
+		changed := s.stateChanged
+		ctx := s.ctx
+		s.mu.Unlock()
+		if ctx == nil {
+			<-changed
+			continue
+		}
 		select {
-		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
-		default:
+		case <-changed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
-	return nil, fmt.Errorf("nvidia riva stt streaming is not implemented")
 }
 
 func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechEvent {

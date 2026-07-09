@@ -1731,6 +1731,82 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTStreamNextWaitsForInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		event, err := stream.Next()
+		done <- result{event: event, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Next() before input returned (%v, %v), want wait for input like reference", got.event, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.event != nil || got.err != io.EOF {
+			t.Fatalf("Next() after Close = (%v, %v), want nil EOF", got.event, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
+func TestNvidiaSTTStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if event != nil {
+			t.Errorf("Next() event = %v, want nil", event)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Next() before cancel returned %v, want wait for cancellation", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Next() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after cancellation")
+	}
+}
+
 func TestNvidiaSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
