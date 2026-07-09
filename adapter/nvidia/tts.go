@@ -154,7 +154,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return fmt.Errorf("nvidia riva tts streaming is not implemented")
+	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Flush() error {

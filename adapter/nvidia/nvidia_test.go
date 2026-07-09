@@ -183,8 +183,11 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v, want nil", err)
 	}
-	if err := stream.PushText("hello"); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-		t.Fatalf("PushText(non-empty) error = %v, want explicit unsupported stream error", err)
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText(non-empty) error = %v, want nil before native transport", err)
+	}
+	if err := stream.PushText(" again"); err != nil {
+		t.Fatalf("PushText(second) error = %v, want nil before native transport", err)
 	}
 	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
 		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported stream error", audio, err)
