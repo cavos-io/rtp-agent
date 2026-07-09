@@ -774,9 +774,7 @@ func (s *nvidiaRealtimeSession) finishRealtimeTransportReceive(ctx context.Conte
 			Error: llm.NewRealtimeModelError(s.label, llm.NewAPIConnectionError("PersonaPlex connection closed unexpectedly"), true),
 		})
 	}
-	if s.transportCancel != nil {
-		s.transportCancel()
-	}
+	s.resetRealtimeTransportLocked()
 }
 
 func (s *nvidiaRealtimeSession) sendRealtimeTransport(ctx context.Context, conn *websocket.Conn) {

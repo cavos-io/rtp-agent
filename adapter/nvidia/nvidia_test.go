@@ -728,6 +728,10 @@ func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t 
 		t.Fatalf("Session() error = %v", err)
 	}
 	defer session.Close()
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
 
 	pcm := makeNvidiaRealtimePCMInputFrame()
 	if err := session.PushAudio(&model.AudioFrame{
@@ -783,6 +787,12 @@ func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t 
 	}
 	if _, ok := <-msg.TextCh; ok {
 		t.Fatal("TextCh open after provider abnormal close, want closed")
+	}
+	if got := len(concrete.outboundMessages); got != 0 {
+		t.Fatalf("outboundMessages after abnormal close = %d, want cleared stale transport audio", got)
+	}
+	if concrete.opusEncoder != nil {
+		t.Fatal("opusEncoder after abnormal close != nil, want fresh encoder on reconnect")
 	}
 }
 
