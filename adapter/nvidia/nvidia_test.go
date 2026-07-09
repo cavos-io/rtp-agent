@@ -257,6 +257,51 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	if got, want := len(concrete.outboundMessages), 1; got != want {
+		t.Fatalf("outboundMessages count = %d, want %d", got, want)
+	}
+	message := concrete.outboundMessages[0]
+	if len(message) < 2 {
+		t.Fatalf("outbound message len = %d, want audio type + opus payload", len(message))
+	}
+	if message[0] != nvidiaRealtimeMsgAudio {
+		t.Fatalf("outbound message type = 0x%02x, want audio 0x%02x", message[0], nvidiaRealtimeMsgAudio)
+	}
+	decoder, err := opus.NewDecoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels)
+	if err != nil {
+		t.Fatalf("NewDecoder() error = %v", err)
+	}
+	decoded := make([]int16, 5760)
+	n, err := decoder.Decode(message[1:], decoded)
+	if err != nil {
+		t.Fatalf("Decode(outbound opus) error = %v", err)
+	}
+	if n == 0 {
+		t.Fatal("Decode(outbound opus) samples = 0, want speech packet")
+	}
+}
+
 func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
@@ -1507,6 +1552,14 @@ func makeNvidiaRealtimePCMFrame() []int16 {
 	pcm := make([]int16, 480)
 	for i := range pcm {
 		pcm[i] = int16((i%32 - 16) * 128)
+	}
+	return pcm
+}
+
+func makeNvidiaRealtimePCMInputFrame() []int16 {
+	pcm := make([]int16, 1920)
+	for i := range pcm {
+		pcm[i] = int16((i%64 - 32) * 64)
 	}
 	return pcm
 }

@@ -26,6 +26,7 @@ const (
 	defaultNvidiaRealtimeSilenceThresholdMS = 500
 	defaultNvidiaRealtimeSampleRate         = 24000
 	defaultNvidiaRealtimeNumChannels        = 1
+	defaultNvidiaRealtimeInputChunkSamples  = 1920
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
 	nvidiaRealtimeMsgHandshake              = 0x00
 	nvidiaRealtimeMsgAudio                  = 0x01
@@ -54,8 +55,11 @@ type nvidiaRealtimeSession struct {
 	provider           string
 	chatCtx            *llm.ChatContext
 	outboundAudio      []*model.AudioFrame
+	outboundMessages   [][]byte
 	events             chan llm.RealtimeEvent
+	opusEncoder        *opus.Encoder
 	opusDecoder        *opus.Decoder
+	inputAudioBuffer   []byte
 	currentGeneration  *nvidiaRealtimeGeneration
 	generationSeq      int
 	silenceTimer       *time.Timer
@@ -369,7 +373,7 @@ func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		return nil
 	}
 	s.outboundAudio = append(s.outboundAudio, cloneNvidiaRealtimeAudioFrame(normalized))
-	return nil
+	return s.queueInputAudioMessagesLocked(normalized)
 }
 
 func (s *nvidiaRealtimeSession) PushVideo(_ *images.VideoFrame) error {
@@ -386,6 +390,38 @@ func (s *nvidiaRealtimeSession) ClearAudio() error {
 
 func (s *nvidiaRealtimeSession) websocketURL() string {
 	return buildNvidiaRealtimeWebsocketURL(s.useSSL, s.baseURL, s.voice, s.textPrompt, s.seed)
+}
+
+func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	if s.opusEncoder == nil {
+		encoder, err := opus.NewEncoder(defaultNvidiaRealtimeSampleRate, defaultNvidiaRealtimeNumChannels, opus.AppVoIP)
+		if err != nil {
+			return err
+		}
+		s.opusEncoder = encoder
+	}
+	s.inputAudioBuffer = append(s.inputAudioBuffer, frame.Data...)
+	chunkBytes := defaultNvidiaRealtimeInputChunkSamples * defaultNvidiaRealtimeNumChannels * 2
+	for len(s.inputAudioBuffer) >= chunkBytes {
+		chunk := s.inputAudioBuffer[:chunkBytes]
+		pcm := littleEndianBytesToInt16Slice(chunk)
+		encoded := make([]byte, 4096)
+		n, err := s.opusEncoder.Encode(pcm, encoded)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			message := make([]byte, 1+n)
+			message[0] = nvidiaRealtimeMsgAudio
+			copy(message[1:], encoded[:n])
+			s.outboundMessages = append(s.outboundMessages, message)
+		}
+		s.inputAudioBuffer = s.inputAudioBuffer[chunkBytes:]
+	}
+	return nil
 }
 
 func (s *nvidiaRealtimeSession) handleTextToken(text string) {
@@ -582,6 +618,14 @@ func int16SliceToLittleEndianBytes(samples []int16) []byte {
 		binary.LittleEndian.PutUint16(data[i*2:], uint16(sample))
 	}
 	return data
+}
+
+func littleEndianBytesToInt16Slice(data []byte) []int16 {
+	samples := make([]int16, len(data)/2)
+	for i := range samples {
+		samples[i] = int16(binary.LittleEndian.Uint16(data[i*2:]))
+	}
+	return samples
 }
 
 func (g *nvidiaRealtimeGeneration) markFirstToken() {
