@@ -2273,10 +2273,55 @@ func speechmaticsFlushPendingRawFinals(state *speechmaticsStreamState) []*stt.Sp
 	if state == nil || len(state.pendingRawFinals) == 0 {
 		return nil
 	}
-	events := state.pendingRawFinals
+	events := speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)
 	state.pendingRawFinals = nil
 	speechmaticsRecordRawFinalTrimBeforeTime(state, events)
 	return events
+}
+
+func speechmaticsMergePendingRawFinals(state *speechmaticsStreamState, events []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(events) < 2 || state == nil || state.speakerActiveFormat != "" || state.speakerPassiveFormat != "" {
+		return events
+	}
+	merged := make([]*stt.SpeechEvent, 0, len(events))
+	for _, event := range events {
+		if len(merged) == 0 || !speechmaticsCanMergeTranscriptEvents(merged[len(merged)-1], event) {
+			merged = append(merged, event)
+			continue
+		}
+		speechmaticsMergeTranscriptEvent(merged[len(merged)-1], event, speechmaticsRawWordDelimiter(state))
+	}
+	return merged
+}
+
+func speechmaticsCanMergeTranscriptEvents(left, right *stt.SpeechEvent) bool {
+	if left == nil || right == nil || left.Type != stt.SpeechEventFinalTranscript || right.Type != stt.SpeechEventFinalTranscript {
+		return false
+	}
+	if len(left.Alternatives) != 1 || len(right.Alternatives) != 1 {
+		return false
+	}
+	leftAlt := left.Alternatives[0]
+	rightAlt := right.Alternatives[0]
+	return leftAlt.SpeakerID == rightAlt.SpeakerID && leftAlt.Language == rightAlt.Language
+}
+
+func speechmaticsMergeTranscriptEvent(left, right *stt.SpeechEvent, delimiter string) {
+	leftAlt := &left.Alternatives[0]
+	rightAlt := right.Alternatives[0]
+	switch {
+	case leftAlt.Text == "":
+		leftAlt.Text = rightAlt.Text
+	case rightAlt.Text != "":
+		leftAlt.Text += delimiter + rightAlt.Text
+	}
+	leftAlt.EndTime = rightAlt.EndTime
+	leftAlt.Words = append(leftAlt.Words, rightAlt.Words...)
+	if leftAlt.Confidence == 0 {
+		leftAlt.Confidence = rightAlt.Confidence
+	} else if rightAlt.Confidence != 0 {
+		leftAlt.Confidence = (leftAlt.Confidence + rightAlt.Confidence) / 2
+	}
 }
 
 type speechmaticsRawTranscriptFragment struct {
@@ -2332,7 +2377,7 @@ func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmatics
 	var events []*stt.SpeechEvent
 	var flushedFinals []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
-		flushedFinals = append(flushedFinals, state.pendingRawFinals...)
+		flushedFinals = append(flushedFinals, speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)...)
 		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)

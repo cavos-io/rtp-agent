@@ -1088,6 +1088,63 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	}
 }
 
+func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *testing.T) {
+	var firstFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.0,
+			"end_time":0.2,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &firstFinal); err != nil {
+		t.Fatalf("unmarshal first final: %v", err)
+	}
+	var secondFinal smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.2,
+			"end_time":0.4,
+			"alternatives":[{"content":"world","confidence":0.8,"speaker":"S1","language":"en"}]
+		}]
+	}`), &secondFinal); err != nil {
+		t.Fatalf("unmarshal second final: %v", err)
+	}
+	var partial smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"alternatives":[{"content":"again","confidence":0.7,"speaker":"S1","language":"en"}]
+		}]
+	}`), &partial); err != nil {
+		t.Fatalf("unmarshal partial: %v", err)
+	}
+
+	state := &speechmaticsStreamState{includePartials: true, bufferRawFinals: true}
+	if events := speechmaticsEvents(firstFinal, state); len(events) != 0 {
+		t.Fatalf("first final events before following partial = %#v, want buffered final", events)
+	}
+	if events := speechmaticsEvents(secondFinal, state); len(events) != 0 {
+		t.Fatalf("second final events before following partial = %#v, want buffered final", events)
+	}
+	events := speechmaticsEvents(partial, state)
+	if len(events) != 2 {
+		t.Fatalf("events after following partial = %#v, want merged final then partial", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello world" {
+		t.Fatalf("first event = %#v, want merged final transcript", events[0])
+	}
+	if events[1].Type != stt.SpeechEventInterimTranscript || events[1].Alternatives[0].Text != "again" {
+		t.Fatalf("second event = %#v, want following interim transcript", events[1])
+	}
+}
+
 func TestSpeechmaticsEventsRawFinalIgnoresReferenceMalformedMetadataWithResults(t *testing.T) {
 	var final smResponse
 	if err := json.Unmarshal([]byte(`{
