@@ -560,14 +560,14 @@ func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"appt", "approx", "dept", "est", "etc", "fig", "misc", "pp", "ref", "sec", "vol", "vs"} {
+	for _, suffix := range []string{"adj", "adv", "agric", "appt", "approx", "assoc", "assn", "avg", "bldg", "chem", "co", "comm", "comp", "cong", "corp", "del", "dept", "dist", "div", "dr", "eng", "engr", "est", "etc", "fig", "ga", "govt", "hr", "inc", "ind", "inst", "intl", "jr", "ltd", "mach", "mfg", "min", "misc", "mktg", "mo", "mtg", "natl", "org", "pp", "prof", "rd", "ref", "rev", "sec", "serv", "sr", "sta", "tech", "tel", "trans", "univ", "util", "vol", "vs"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"Assoc", "Asst", "Atty", "Ave", "Blvd", "Ch", "Dept", "Dir", "Esq", "Fig", "Hon", "Hosp", "Med", "Mgr", "Mt", "No", "Ref", "Sec", "Supt", "Vol"} {
+	for _, suffix := range []string{"Agric", "Ala", "Ariz", "Ark", "Assoc", "Assn", "Asst", "Atty", "Ave", "Bldg", "Blvd", "Bros", "Calif", "Ch", "Chem", "Cmdr", "Colo", "Comm", "Comp", "Cong", "Conn", "Del", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fla", "Fr", "Ga", "Govt", "Hon", "Hosp", "Hr", "Ill", "Ind", "Inst", "Intl", "Kans", "Ky", "Lab", "Mach", "Mass", "Med", "Mfg", "Mich", "Mgr", "Minn", "Miss", "Messrs", "Mktg", "Mmes", "Mont", "Msgr", "Mt", "Mtg", "Natl", "Neb", "Nev", "No", "Okla", "Ore", "Org", "Penn", "Rd", "Ref", "Sec", "Serv", "Sta", "Supt", "Tech", "Tel", "Tenn", "Tex", "Trans", "Univ", "Util", "Va", "Vol", "Vt", "Wash", "Wis", "Wyo"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
@@ -600,7 +600,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "No", "Not", "If", "As", "For", "On", "In", "At", "To", "Why", "When", "Where", "Also", "Then", "Let", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
+	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "No", "Not", "If", "As", "For", "On", "In", "At", "To", "Why", "When", "Where", "Also", "Then", "Let", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please", "Should", "Now", "Today", "After", "Before", "Because", "Since", "While", "Once", "Maybe", "Yes", "First", "Second", "Finally", "Take", "Go", "And", "Or", "Yet", "Still", "Instead", "Meanwhile", "Later", "Soon", "There", "Here", "These", "Those", "Another", "Any", "Some", "All", "Each", "Every", "Most", "Many", "Much", "Several", "Both", "Neither", "One", "Two", "Three", "Last", "Previous", "New", "Only", "Other", "More"} {
 		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
 			switch trimmed[len(starter)] {
 			case ' ', '\t', '\n', '\r':
