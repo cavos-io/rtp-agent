@@ -151,6 +151,9 @@ func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ stri
 }
 
 func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	streamLanguage := s.language
 	if language != "" {
 		streamLanguage = language

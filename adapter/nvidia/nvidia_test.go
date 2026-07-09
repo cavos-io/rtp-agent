@@ -872,6 +872,12 @@ func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *t
 		t.Fatalf("NewNvidiaSTT error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if stream, err := provider.Stream(ctx, ""); !errors.Is(err, context.Canceled) || stream != nil {
+		t.Fatalf("Stream(canceled) = (%v, %v), want nil context.Canceled", stream, err)
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
 	stream, err := provider.Stream(ctx, "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
