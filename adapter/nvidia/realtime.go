@@ -47,6 +47,7 @@ type NvidiaRealtimeModel struct {
 	seed               *int
 	silenceThresholdMS int
 	useSSL             bool
+	preconnect         bool
 }
 
 type nvidiaRealtimeSession struct {
@@ -171,6 +172,7 @@ func WithNvidiaRealtimeBaseURL(baseURL string) NvidiaRealtimeOption {
 			return
 		}
 		m.baseURL, m.useSSL = normalizeNvidiaRealtimeBaseURL(baseURL)
+		m.preconnect = true
 	}
 }
 
@@ -210,6 +212,7 @@ func NewNvidiaRealtimeModel(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
 		textPrompt:         defaultNvidiaRealtimeTextPrompt,
 		silenceThresholdMS: defaultNvidiaRealtimeSilenceThresholdMS,
 		useSSL:             useSSL,
+		preconnect:         os.Getenv(nvidiaPersonaplexURLEnv) != "",
 	}
 	for _, opt := range opts {
 		opt(model)
@@ -285,7 +288,7 @@ func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
-	return &nvidiaRealtimeSession{
+	session := &nvidiaRealtimeSession{
 		baseURL:            m.baseURL,
 		voice:              m.voice,
 		textPrompt:         m.textPrompt,
@@ -299,7 +302,11 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		events:             newNvidiaRealtimeEventStream(),
 		transportNotify:    make(chan struct{}),
 		retryDelay:         defaultNvidiaRealtimeInitialRetryDelay,
-	}, nil
+	}
+	if m.preconnect {
+		session.startRealtimeTransportLocked()
+	}
+	return session, nil
 }
 
 func (m *NvidiaRealtimeModel) Close() error {

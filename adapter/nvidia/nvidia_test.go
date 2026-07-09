@@ -614,6 +614,42 @@ func TestNvidiaRealtimePushAudioSendsAfterHandshakeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeSessionPreconnectsConfiguredProviderLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		connected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before preconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for configured PersonaPlex session preconnect")
+	}
+}
+
 func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
@@ -819,13 +855,14 @@ func TestNvidiaRealtimeProviderWriteFailureRetriesLikeReference(t *testing.T) {
 	}))
 	defer server.Close()
 
-	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
 	}
 	defer session.Close()
 	concrete := session.(*nvidiaRealtimeSession)
+	concrete.baseURL, concrete.useSSL = normalizeNvidiaRealtimeBaseURL(server.URL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
