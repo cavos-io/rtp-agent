@@ -243,6 +243,7 @@ type speechmaticsRealtimeGeneration struct {
 
 type speechmaticsRealtimeMessage struct {
 	textCh       chan string
+	timedTextCh  chan llm.RealtimeTimedText
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
 	closed       bool
@@ -610,6 +611,7 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[st
 	}
 	message := &speechmaticsRealtimeMessage{
 		textCh:       make(chan string, 16),
+		timedTextCh:  make(chan llm.RealtimeTimedText, 16),
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
 	}
@@ -621,6 +623,7 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[st
 	case generation.messageCh <- llm.MessageGeneration{
 		MessageID:    itemID,
 		TextCh:       message.textCh,
+		TimedTextCh:  message.timedTextCh,
 		AudioCh:      message.audioCh,
 		ModalitiesCh: message.modalitiesCh,
 	}:
@@ -645,6 +648,12 @@ func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]a
 	select {
 	case message.textCh <- delta:
 	default:
+	}
+	if startTime, ok := speechmaticsRealtimeOptionalFloat(event, "start_time"); ok {
+		select {
+		case message.timedTextCh <- llm.RealtimeTimedText{Text: delta, StartTime: startTime}:
+		default:
+		}
 	}
 	return true
 }
@@ -699,6 +708,7 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[str
 	if message != nil && !message.closed {
 		message.closed = true
 		close(message.textCh)
+		close(message.timedTextCh)
 		close(message.audioCh)
 	}
 	s.mu.Unlock()
@@ -854,6 +864,7 @@ func (s *speechmaticsRealtimeSession) closeCurrentGenerationLocked() {
 		if message != nil && !message.closed {
 			message.closed = true
 			close(message.textCh)
+			close(message.timedTextCh)
 			close(message.audioCh)
 		}
 	}
@@ -890,6 +901,19 @@ func speechmaticsRealtimeInt(event map[string]any, key string) int {
 		return int(value)
 	default:
 		return 0
+	}
+}
+
+func speechmaticsRealtimeOptionalFloat(event map[string]any, key string) (float64, bool) {
+	switch value := event[key].(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	default:
+		return 0, false
 	}
 }
 

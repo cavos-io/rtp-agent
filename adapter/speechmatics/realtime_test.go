@@ -369,6 +369,43 @@ func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t
 	assertSpeechmaticsRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_timed"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{"type": "response.output_item.added", "item_id": "msg_timed"}); !ok {
+		t.Fatal("response.output_item.added ignored")
+	}
+	message := assertSpeechmaticsRealtimeMessage(t, created.Generation.MessageCh)
+	if ok := session.handleServerEvent(map[string]any{
+		"type":       "response.output_audio_transcript.delta",
+		"item_id":    "msg_timed",
+		"delta":      "hello",
+		"start_time": 1.25,
+	}); !ok {
+		t.Fatal("audio transcript delta ignored")
+	}
+	if got := assertSpeechmaticsRealtimeText(t, message.TextCh); got != "hello" {
+		t.Fatalf("text delta = %q, want hello", got)
+	}
+	timed := assertSpeechmaticsRealtimeTimedText(t, message.TimedTextCh)
+	if timed.Text != "hello" || timed.StartTime != 1.25 {
+		t.Fatalf("timed text = %#v, want hello at 1.25", timed)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -782,6 +819,20 @@ func assertSpeechmaticsRealtimeAudio(t *testing.T, ch <-chan *model.AudioFrame) 
 		t.Fatal("timed out waiting for audio delta")
 	}
 	return nil
+}
+
+func assertSpeechmaticsRealtimeTimedText(t *testing.T, ch <-chan llm.RealtimeTimedText) llm.RealtimeTimedText {
+	t.Helper()
+	select {
+	case timed, ok := <-ch:
+		if !ok {
+			t.Fatal("timed text channel closed")
+		}
+		return timed
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for timed text delta")
+	}
+	return llm.RealtimeTimedText{}
 }
 
 func assertSpeechmaticsRealtimeClosedText(t *testing.T, ch <-chan string) {
