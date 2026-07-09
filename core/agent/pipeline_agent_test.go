@@ -573,6 +573,73 @@ func TestPipelineAgentStartsToolUpdateReplyBeforeToolReturns(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentToolFinalReplyAfterNewerTurnUsesMaybeCoveredInstructions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "progress acknowledged"}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: ""}},
+				},
+			},
+		},
+	}
+	tool := &blockingRunContextUpdatingTool{
+		updateSent: make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.generateReply()
+	}()
+
+	select {
+	case <-tool.updateSent:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not send run context update")
+	}
+	waitForLLMCalls(t, l, 2, "progress reply")
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "newer user turn"}}})
+	close(tool.release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("generateReply did not finish after final tool return")
+	}
+	if len(l.chatContexts) < 3 {
+		t.Fatalf("LLM chat contexts = %d, want final tool reply context", len(l.chatContexts))
+	}
+	finalCtx := l.chatContexts[len(l.chatContexts)-1]
+	instructions := instructionMessageFromContext(t, finalCtx).TextContent()
+	if !strings.Contains(instructions, "You may have already mentioned them") {
+		t.Fatalf("final tool reply instructions = %q, want maybe-covered stale-result prompt", instructions)
+	}
+}
+
 func TestPipelineAgentStartsSubsequentToolUpdateReplyBeforeFinalReturn(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

@@ -61,6 +61,9 @@ type pipelineReplyOptions struct {
 	SpeechHandle       *SpeechHandle
 }
 
+const toolReplyAtTailInstructions = "New results arrived from background tool calls (call_ids: %s).\nSummarize the results naturally. Do NOT repeat information you have already told the user."
+const toolReplyMaybeCoveredInstructions = "New results arrived from background tool calls (call_ids: %s).\nYou may have already mentioned them in your most recent replies.\nIf you already told the user everything in these results, reply with an empty response (no text at all).\nOtherwise, summarize only what you have not said yet, with a natural transition.\nNever repeat information you have already told the user."
+
 func NewPipelineAgent(
 	vad vad.VAD,
 	stt stt.STT,
@@ -856,6 +859,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	toolSteps := 0
 	var pendingToolOutCh <-chan ToolExecutionOutput
 	var pendingToolUpdateReplyDone chan struct{}
+	var pendingToolReplyTailItem llm.ChatItem
+	var toolReplyInstructions string
 	closePendingToolUpdateReplyDone := func() {
 		if pendingToolUpdateReplyDone != nil {
 			close(pendingToolUpdateReplyDone)
@@ -890,6 +895,15 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				inferenceCtx = replyCtx.Copy()
 			}
 			applyAgentInstructionsModality(inferenceCtx, inputModality)
+		}
+		if toolReplyInstructions != "" {
+			if inferenceCtx == replyCtx {
+				inferenceCtx = replyCtx.Copy()
+			}
+			if err := updateAgentInstructionsMessage(inferenceCtx, llm.NewInstructions(toolReplyInstructions), true); err != nil {
+				logger.Logger.Warnw("failed to set reply instructions", err)
+			}
+			toolReplyInstructions = ""
 		}
 
 		var chatOptions []llm.ChatOption
@@ -1063,6 +1077,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		var functionCalls []*llm.FunctionCall
 		var functionCallOutputs []*llm.FunctionCallOutput
 		var releasedByUpdate bool
+		var deferredToolReply bool
+		deferredToolReplyAtTail := true
 		for toolOut := range toolOutCh {
 			executedTools = true
 			if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
@@ -1075,9 +1091,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 		}
 		if releasedByUpdate {
+			pendingToolReplyTailItem = lastChatItem(va.chatCtx)
 			pendingToolOutCh = toolOutCh
 		}
 		if !executedTools && pendingToolOutCh != nil {
+			deferredToolReply = true
+			deferredToolReplyAtTail = chatItemIsTail(va.chatCtx, pendingToolReplyTailItem)
 			for toolOut := range pendingToolOutCh {
 				executedTools = true
 				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
@@ -1091,6 +1110,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			if !releasedByUpdate {
 				pendingToolOutCh = nil
+				pendingToolReplyTailItem = nil
 			}
 		}
 
@@ -1110,6 +1130,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 					logger.Logger.Warnw("failed to refresh reply instructions", err)
 				}
 			}
+		}
+		if deferredToolReply && replyRequired {
+			toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, deferredToolReplyAtTail)
 		}
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			closePendingToolUpdateReplyDone()
@@ -1146,6 +1169,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				if !pendingReleasedByUpdate && !replyRequired {
 					pendingToolOutCh = nil
+					pendingToolReplyTailItem = nil
+				}
+				if pendingReleasedByUpdate {
+					pendingToolReplyTailItem = lastChatItem(va.chatCtx)
 				}
 				if executedTools {
 					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
@@ -1164,6 +1191,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 						}
 					}
 				}
+				if replyRequired {
+					toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, chatItemIsTail(va.chatCtx, pendingToolReplyTailItem))
+				}
 			}
 			if !executedTools || !replyRequired {
 				closePendingToolUpdateReplyDone()
@@ -1178,6 +1208,40 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func pipelineToolReplyInstructions(outputs []*llm.FunctionCallOutput, atTail bool) string {
+	callIDs := make([]string, 0, len(outputs))
+	for _, out := range outputs {
+		if out != nil && out.CallID != "" {
+			callIDs = append(callIDs, out.CallID)
+		}
+	}
+	if atTail {
+		return fmt.Sprintf(toolReplyAtTailInstructions, formatPythonStringList(callIDs))
+	}
+	return fmt.Sprintf(toolReplyMaybeCoveredInstructions, formatPythonStringList(callIDs))
+}
+
+func lastChatItem(chatCtx *llm.ChatContext) llm.ChatItem {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
+		return nil
+	}
+	return chatCtx.Items[len(chatCtx.Items)-1]
+}
+
+func chatItemIsTail(chatCtx *llm.ChatContext, item llm.ChatItem) bool {
+	if item == nil {
+		return true
+	}
+	tail := lastChatItem(chatCtx)
+	if tail == nil {
+		return false
+	}
+	if tail == item {
+		return true
+	}
+	return tail.GetID() != "" && tail.GetID() == item.GetID()
 }
 
 func drainLLMGenerationText(ctx context.Context, genData *LLMGenerationData, speech *SpeechHandle) (string, error) {
