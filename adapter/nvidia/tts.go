@@ -342,6 +342,9 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	for i := 0; i < len(trimmed)-1; i++ {
 		switch trimmed[i] {
 		case '.', '!', '?':
+			if trimmed[i] == '.' && nvidiaTTSProtectedAbbreviation(trimmed[:i]) {
+				continue
+			}
 			if trimmed[i+1] != ' ' && trimmed[i+1] != '\n' && trimmed[i+1] != '\t' {
 				continue
 			}
@@ -351,4 +354,17 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func nvidiaTTSProtectedAbbreviation(prefix string) bool {
+	fields := strings.Fields(prefix)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[len(fields)-1] {
+	case "Mr", "St", "Mrs", "Ms", "Dr":
+		return true
+	default:
+		return false
+	}
 }

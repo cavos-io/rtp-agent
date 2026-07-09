@@ -2625,6 +2625,31 @@ func TestNvidiaTTSStreamKeepsSentenceTailPendingLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitAbbreviationLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("Please connect me to Dr. Smith tomorrow"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if concrete.flushed {
+		t.Fatal("flushed = true after abbreviation, want wait for real sentence boundary")
+	}
+	if got, want := concrete.text, "Please connect me to Dr. Smith tomorrow"; got != want {
+		t.Fatalf("text = %q, want unsplit abbreviation text %q", got, want)
+	}
+}
+
 func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
