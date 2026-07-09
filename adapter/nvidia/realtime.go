@@ -762,11 +762,17 @@ func (s *nvidiaRealtimeSession) receiveRealtimeTransport(ctx context.Context, co
 func (s *nvidiaRealtimeSession) finishRealtimeTransportReceive(ctx context.Context, normalClose bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.transportCtx != ctx {
+	if s.transportCtx != ctx || s.closed {
 		return
 	}
 	if normalClose {
 		s.finalizeGenerationLocked(false)
+	} else {
+		s.finalizeGenerationLocked(true)
+		s.events.send(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewRealtimeModelError(s.label, llm.NewAPIConnectionError("PersonaPlex connection closed unexpectedly"), true),
+		})
 	}
 	if s.transportCancel != nil {
 		s.transportCancel()
