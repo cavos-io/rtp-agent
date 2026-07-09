@@ -371,7 +371,7 @@ func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	}
 	normalized, err := normalizeNvidiaRealtimeInputFrame(frame)
 	if err != nil {
-		return err
+		return nil
 	}
 	if normalized == nil || len(normalized.Data) == 0 {
 		return nil
