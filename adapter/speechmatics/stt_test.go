@@ -2089,6 +2089,32 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNullActiveAsPassive(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSegmentEventsIgnoreReferenceNullActiveAnnotations(t *testing.T) {
+	state := &speechmaticsStreamState{}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"null active",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":null,
+			"annotation":["ends_with_final","ends_with_eos"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one passive transcript", events)
+	}
+	if state.latestSegmentAnnotationSet {
+		t.Fatalf("latest annotation = %#v, want passive null is_active to leave endpointing annotations unchanged", state.latestSegmentAnnotation)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsTreatReferenceNumericInactiveAsPassive(t *testing.T) {
 	state := &speechmaticsStreamState{
 		speakerActiveFormat:  "@{speaker_id}: {text}",

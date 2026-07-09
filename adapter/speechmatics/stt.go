@@ -2457,12 +2457,13 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			(speakerPresent && segment.SpeakerID != "" && speechmaticsConfiguredSpeakerFiltered(speakerID, state)) {
 			continue
 		}
-		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, segment.IsActive)
+		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
+		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active)
 		formatSpeakerID := speakerID
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
-		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i)), state)
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -2564,8 +2565,8 @@ func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.Spe
 		left.Language == right.Language
 }
 
-func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, isActive *bool) {
-	if state == nil || (isActive != nil && !*isActive) {
+func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool) {
+	if state == nil || !active {
 		return
 	}
 	state.latestSegmentAnnotationSet = true
