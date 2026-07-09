@@ -472,6 +472,33 @@ func TestNvidiaRealtimeTextDeltasDoNotBlockBeforeConsumerLikeReference(t *testin
 	}
 }
 
+func TestNvidiaRealtimeTurnEventsDoNotBlockBeforeConsumerLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 20; i++ {
+			concrete.handleTextToken("x")
+			_ = session.Interrupt()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("generation event emission blocked before consumer drained events, want reference nonblocking emit behavior")
+	}
+}
+
 func TestNvidiaRealtimeSessionBinaryAudioDecodesReferenceOpus(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()

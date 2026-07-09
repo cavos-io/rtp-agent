@@ -27,6 +27,7 @@ const (
 	defaultNvidiaRealtimeSampleRate         = 24000
 	defaultNvidiaRealtimeNumChannels        = 1
 	defaultNvidiaRealtimeInputChunkSamples  = 1920
+	nvidiaRealtimeEventBuffer               = 1024
 	nvidiaRealtimeGenerationStreamBuffer    = 1024
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
 	nvidiaRealtimeMsgHandshake              = 0x00
@@ -214,7 +215,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             make(chan llm.RealtimeEvent, 16),
+		events:             make(chan llm.RealtimeEvent, nvidiaRealtimeEventBuffer),
 	}, nil
 }
 
