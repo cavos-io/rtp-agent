@@ -567,7 +567,7 @@ func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"Assoc", "Asst", "Atty", "Ave", "Blvd", "Bros", "Ch", "Dept", "Dir", "Esq", "Fig", "Fr", "Hon", "Hosp", "Intl", "Med", "Mfg", "Mgr", "Messrs", "Mmes", "Msgr", "Mt", "No", "Ref", "Sec", "Supt", "Univ", "Vol"} {
+	for _, suffix := range []string{"Agric", "Assoc", "Asst", "Atty", "Ave", "Blvd", "Bros", "Ch", "Chem", "Comm", "Comp", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fr", "Hon", "Hosp", "Intl", "Lab", "Mach", "Med", "Mfg", "Mgr", "Messrs", "Mktg", "Mmes", "Msgr", "Mt", "Natl", "No", "Org", "Ref", "Sec", "Serv", "Supt", "Tech", "Tel", "Trans", "Univ", "Util", "Vol"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
