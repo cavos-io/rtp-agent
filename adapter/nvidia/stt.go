@@ -121,6 +121,9 @@ func (s *NvidiaSTT) InputSampleRate() uint32 {
 	if s == nil {
 		return defaultNvidiaSTTSampleRate
 	}
+	if s.sampleRate < 0 {
+		return 0
+	}
 	return uint32(s.sampleRate)
 }
 func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {

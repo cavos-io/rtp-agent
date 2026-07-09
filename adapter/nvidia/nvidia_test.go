@@ -1402,6 +1402,9 @@ func TestNvidiaSTTAllowsZeroSampleRateLikeReference(t *testing.T) {
 	if got, want := provider.sampleRate, -1; got != want {
 		t.Fatalf("sampleRate negative override = %d, want reference value %d", got, want)
 	}
+	if got, want := provider.InputSampleRate(), uint32(0); got != want {
+		t.Fatalf("InputSampleRate() with negative sample rate = %d, want %d to avoid unsigned wrap", got, want)
+	}
 }
 
 func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
