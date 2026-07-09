@@ -302,6 +302,7 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	s.textPrompt = instructions
+	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	return nil
 }
@@ -390,6 +391,13 @@ func (s *nvidiaRealtimeSession) ClearAudio() error {
 
 func (s *nvidiaRealtimeSession) websocketURL() string {
 	return buildNvidiaRealtimeWebsocketURL(s.useSSL, s.baseURL, s.voice, s.textPrompt, s.seed)
+}
+
+func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
+	s.outboundMessages = nil
+	s.inputAudioBuffer = nil
+	s.opusEncoder = nil
+	s.opusDecoder = nil
 }
 
 func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.AudioFrame) error {

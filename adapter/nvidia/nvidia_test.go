@@ -465,6 +465,47 @@ func TestNvidiaRealtimeInstructionUpdateInterruptsGenerationLikeReference(t *tes
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	partial := makeNvidiaRealtimePCMInputFrame()[:960]
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(partial),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(partial)),
+	}); err != nil {
+		t.Fatalf("PushAudio(partial) error = %v", err)
+	}
+	if len(concrete.inputAudioBuffer) == 0 {
+		t.Fatal("inputAudioBuffer empty before instruction update, want pending partial audio")
+	}
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	if got := len(concrete.inputAudioBuffer); got != 0 {
+		t.Fatalf("inputAudioBuffer after instruction update = %d, want cleared", got)
+	}
+	if got := len(concrete.outboundMessages); got != 0 {
+		t.Fatalf("outboundMessages after instruction update = %d, want cleared", got)
+	}
+	if concrete.opusEncoder != nil {
+		t.Fatal("opusEncoder after instruction update != nil, want reset")
+	}
+	if concrete.opusDecoder != nil {
+		t.Fatal("opusDecoder after instruction update != nil, want reset")
+	}
+}
+
 func TestNvidiaRealtimeSessionFinalizesOnSilenceLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeSilenceThresholdMS(5))
 	session, err := realtimeModel.Session()
