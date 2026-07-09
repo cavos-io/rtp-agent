@@ -57,6 +57,15 @@ func TestNvidiaRealtimeDefaultsMatchReference(t *testing.T) {
 	if model.useSSL {
 		t.Fatal("useSSL = true, want false for reference localhost default")
 	}
+	if got, want := model.InputSampleRate(), 24000; got != want {
+		t.Fatalf("InputSampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := model.OutputSampleRate(), 24000; got != want {
+		t.Fatalf("OutputSampleRate() = %d, want reference sample rate %d", got, want)
+	}
+	if got, want := model.NumChannels(), 1; got != want {
+		t.Fatalf("NumChannels() = %d, want mono", got)
+	}
 	caps := model.Capabilities()
 	if caps.MessageTruncation || caps.TurnDetection || caps.UserTranscription || caps.AutoToolReplyGeneration || !caps.AudioOutput || caps.ManualFunctionCalls || caps.PerResponseToolChoice {
 		t.Fatalf("Capabilities() = %+v, want PersonaPlex reference audio-output-only realtime flags", caps)

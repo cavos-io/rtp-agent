@@ -14,6 +14,8 @@ const (
 	defaultNvidiaRealtimeTextPrompt         = "You are a helpful assistant."
 	defaultNvidiaRealtimeModel              = "personaplex-7b"
 	defaultNvidiaRealtimeSilenceThresholdMS = 500
+	defaultNvidiaRealtimeSampleRate         = 24000
+	defaultNvidiaRealtimeNumChannels        = 1
 	nvidiaPersonaplexURLEnv                 = "PERSONAPLEX_URL"
 )
 
@@ -104,6 +106,18 @@ func (m *NvidiaRealtimeModel) Model() string {
 
 func (m *NvidiaRealtimeModel) Provider() string {
 	return "nvidia"
+}
+
+func (m *NvidiaRealtimeModel) InputSampleRate() int {
+	return defaultNvidiaRealtimeSampleRate
+}
+
+func (m *NvidiaRealtimeModel) OutputSampleRate() int {
+	return defaultNvidiaRealtimeSampleRate
+}
+
+func (m *NvidiaRealtimeModel) NumChannels() int {
+	return defaultNvidiaRealtimeNumChannels
 }
 
 func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
