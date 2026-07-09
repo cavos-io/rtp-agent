@@ -194,6 +194,11 @@ type nvidiaSTTResult struct {
 	Alternative nvidiaSTTAlternative
 }
 
+type nvidiaSTTResponse struct {
+	RequestID string
+	Results   []nvidiaSTTResult
+}
+
 func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
@@ -299,6 +304,17 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 	})
 	if result.IsFinal && s.speaking {
 		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+	}
+	return events
+}
+
+func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.SpeechEvent {
+	events := make([]stt.SpeechEvent, 0, len(response.Results)+2)
+	for _, result := range response.Results {
+		if result.RequestID == "" {
+			result.RequestID = response.RequestID
+		}
+		events = append(events, s.eventsFromResult(result)...)
 	}
 	return events
 }

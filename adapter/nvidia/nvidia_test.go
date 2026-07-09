@@ -606,6 +606,58 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
+	stream := &nvidiaSTTStream{language: "en-US"}
+
+	events := stream.eventsFromResponse(nvidiaSTTResponse{
+		RequestID: "nvidia-response",
+		Results: []nvidiaSTTResult{
+			{Alternative: nvidiaSTTAlternative{Transcript: "   "}},
+			{
+				IsFinal: false,
+				Alternative: nvidiaSTTAlternative{
+					Transcript: "first",
+					Confidence: 0.4,
+				},
+			},
+			{
+				IsFinal: true,
+				Alternative: nvidiaSTTAlternative{
+					Transcript: "second",
+					Confidence: 0.8,
+				},
+			},
+		},
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want start, interim, final, end", len(events))
+	}
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q", i, events[i].Type, want)
+		}
+	}
+	if got, want := events[1].RequestID, "nvidia-response"; got != want {
+		t.Fatalf("interim RequestID = %q, want %q", got, want)
+	}
+	if got, want := events[2].RequestID, "nvidia-response"; got != want {
+		t.Fatalf("final RequestID = %q, want %q", got, want)
+	}
+	if got, want := events[1].Alternatives[0].Text, "first"; got != want {
+		t.Fatalf("interim text = %q, want %q", got, want)
+	}
+	if got, want := events[2].Alternatives[0].Text, "second"; got != want {
+		t.Fatalf("final text = %q, want %q", got, want)
+	}
+}
+
 func TestNvidiaSTTStreamExposesReferenceTimingOffset(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
