@@ -196,7 +196,8 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	if err := session.Truncate(llm.RealtimeTruncateOptions{MessageID: "msg", Modalities: []string{"audio"}, AudioEndMillis: 12}); err != nil {
 		t.Fatalf("Truncate() error = %v", err)
 	}
-	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil || !strings.Contains(err.Error(), "generate_reply is not yet supported") {
+	generateReplyErr := "generate_reply is not yet supported by the PersonaPlex realtime model."
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil || err.Error() != generateReplyErr {
 		t.Fatalf("GenerateReply() error = %v, want reference unsupported generation error", err)
 	}
 	if err := session.Say("hello"); err == nil || err.Error() != "RealtimeSession does not implement say(). use a TTS model instead" {

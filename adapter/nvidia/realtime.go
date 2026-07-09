@@ -32,6 +32,7 @@ const (
 	nvidiaRealtimeMsgHandshake              = 0x00
 	nvidiaRealtimeMsgAudio                  = 0x01
 	nvidiaRealtimeMsgText                   = 0x02
+	nvidiaRealtimeGenerateReplyUnsupported  = "generate_reply is not yet supported by the PersonaPlex realtime model."
 )
 
 type NvidiaRealtimeModel struct {
@@ -439,7 +440,7 @@ func (s *nvidiaRealtimeSession) UpdateOptions(_ llm.RealtimeSessionOptions) erro
 }
 
 func (s *nvidiaRealtimeSession) GenerateReply(_ llm.RealtimeGenerateReplyOptions) error {
-	return fmt.Errorf("generate_reply is not yet supported by the PersonaPlex realtime model")
+	return fmt.Errorf("%s", nvidiaRealtimeGenerateReplyUnsupported)
 }
 
 func (s *nvidiaRealtimeSession) Say(_ string) error {
