@@ -6176,6 +6176,43 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing.T) {
+	stream := &nvidiaSTTStream{language: "en-US"}
+
+	first := stream.eventsFromResponse(nvidiaSTTResponse{
+		Results: []nvidiaSTTResult{{
+			IsFinal: true,
+			Alternative: nvidiaSTTAlternative{
+				Transcript: "first utterance",
+			},
+		}},
+	})
+	if len(first) != 3 {
+		t.Fatalf("first event count = %d, want start, final, end", len(first))
+	}
+	if first[0].Type != stt.SpeechEventStartOfSpeech || first[1].Type != stt.SpeechEventFinalTranscript || first[2].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("first event types = %q, %q, %q; want start, final, end", first[0].Type, first[1].Type, first[2].Type)
+	}
+
+	second := stream.eventsFromResponse(nvidiaSTTResponse{
+		Results: []nvidiaSTTResult{{
+			IsFinal: false,
+			Alternative: nvidiaSTTAlternative{
+				Transcript: "second starts",
+			},
+		}},
+	})
+	if len(second) != 2 {
+		t.Fatalf("second event count = %d, want start + interim for new utterance", len(second))
+	}
+	if second[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("second event[0].Type = %q, want start_of_speech after prior final", second[0].Type)
+	}
+	if second[1].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("second event[1].Type = %q, want interim_transcript", second[1].Type)
+	}
+}
+
 func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
@@ -6234,7 +6271,10 @@ func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T)
 	if secondID == firstID {
 		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
 	}
-	thirdID := third[0].RequestID
+	if len(third) != 3 {
+		t.Fatalf("third event count = %d, want start, final, end after prior final", len(third))
+	}
+	thirdID := third[1].RequestID
 	if !strings.HasPrefix(thirdID, "nvidia-") {
 		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
 	}

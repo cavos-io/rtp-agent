@@ -373,6 +373,7 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 		Alternatives: []stt.SpeechData{s.speechDataFromAlternative(result.Alternative, result.IsFinal)},
 	})
 	if result.IsFinal && s.speaking {
+		s.speaking = false
 		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
 	return events
