@@ -289,7 +289,7 @@ func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				return nil, err
 			}
 		}
-		if s.hasText && strings.TrimSpace(s.text) != "" {
+		if s.flushed && s.hasText && strings.TrimSpace(s.text) != "" {
 			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
