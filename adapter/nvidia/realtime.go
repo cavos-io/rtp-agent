@@ -506,6 +506,9 @@ func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if s.closed || frame == nil || len(frame.Data) == 0 || frame.SampleRate == 0 {
 		return nil
 	}
+	if len(frame.Data)%2 != 0 {
+		return nil
+	}
 	normalized, err := s.normalizeInputFrameLocked(frame)
 	if err != nil {
 		return nil

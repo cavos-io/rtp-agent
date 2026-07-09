@@ -400,6 +400,31 @@ func TestNvidiaRealtimePushAudioSkipsZeroRateFramesLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimePushAudioSkipsOddBytePCMFramesLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{7},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(odd-byte PCM) error = %v, want nil skipped frame", err)
+	}
+	if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+		t.Fatalf("odd-byte frame queued audio=%d messages=%d buffered=%d, want all empty", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+	}
+}
+
 func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
