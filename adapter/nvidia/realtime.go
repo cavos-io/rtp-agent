@@ -734,7 +734,6 @@ func (s *nvidiaRealtimeSession) startRealtimeTransportLocked() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.transportStarted = true
-	s.restartPending = false
 	s.transportCtx = ctx
 	s.transportCancel = cancel
 	s.transportDone = done
@@ -788,6 +787,7 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 	if s.closed {
 		return
 	}
+	s.restartPending = false
 	s.events.send(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
