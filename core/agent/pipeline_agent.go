@@ -485,13 +485,6 @@ func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
 	}
 }
 
-// resetVADStallTimerLocked (re)arms the speech-stall watchdog while the user is
-// in the VAD speaking state and stops it otherwise. It must be called with
-// va.mu held. The VAD only emits an end-of-speech event once it has processed
-// MinSilenceDuration of trailing silence, and that only happens while audio
-// frames keep arriving. If the input stalls mid-speech the session would stay
-// pinned to UserStateSpeaking forever, so this timer synthesizes an end of
-// speech when no VAD activity has advanced for vadStallTimeout.
 func (va *PipelineAgent) resetVADStallTimerLocked() {
 	if va.vadStallTimer != nil {
 		va.vadStallTimer.Stop()
@@ -1962,8 +1955,6 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			session.UpdateAgentState(AgentStateSpeaking)
 			startedSpeaking = true
 		}
-		// Push the speaking-stall watchdog deadline out: audio is still
-		// advancing, so the agent is legitimately speaking rather than stuck.
 		session.notifyAgentSpeakingProgress()
 		if speech != nil && speech.IsInterrupted() {
 			transcriptSync.Close()
