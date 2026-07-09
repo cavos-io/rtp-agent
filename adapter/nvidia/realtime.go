@@ -2,6 +2,7 @@ package nvidia
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -107,6 +108,21 @@ func (m *NvidiaRealtimeModel) Model() string {
 
 func (m *NvidiaRealtimeModel) Provider() string {
 	return "nvidia"
+}
+
+func (m *NvidiaRealtimeModel) websocketURL() string {
+	scheme := "ws"
+	if m.useSSL {
+		scheme = "wss"
+	}
+	values := url.Values{}
+	if m.seed != nil {
+		values.Set("seed", fmt.Sprintf("%d", *m.seed))
+	}
+	values.Set("text_prompt", m.textPrompt)
+	values.Set("voice_prompt", m.voice+".pt")
+	query := strings.ReplaceAll(values.Encode(), "+", "%20")
+	return fmt.Sprintf("%s://%s/api/chat?%s", scheme, m.baseURL, query)
 }
 
 func (m *NvidiaRealtimeModel) InputSampleRate() int {

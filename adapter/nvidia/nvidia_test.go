@@ -129,6 +129,21 @@ func TestNvidiaRealtimeStripsOnlyFirstURLSchemeLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimeWebsocketURLMatchesReference(t *testing.T) {
+	model := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL("https://personaplex.example:9443"),
+		WithNvidiaRealtimeVoice("VARF1"),
+		WithNvidiaRealtimeTextPrompt("Speak tersely & listen."),
+		WithNvidiaRealtimeSeed(7),
+	)
+
+	got := model.websocketURL()
+	want := "wss://personaplex.example:9443/api/chat?seed=7&text_prompt=Speak%20tersely%20%26%20listen.&voice_prompt=VARF1.pt"
+	if got != want {
+		t.Fatalf("websocketURL() = %q, want %q", got, want)
+	}
+}
+
 func TestNvidiaTTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
