@@ -1090,6 +1090,10 @@ func TestSpeechmaticsEventsRawFinalWaitsForReferenceFollowingPartial(t *testing.
 	if got := speechmaticsTimedWordTexts(events[1].Alternatives[0].Words); !reflect.DeepEqual(got, []string{"done", "next"}) {
 		t.Fatalf("second event words = %#v, want buffered final word before following partial word", got)
 	}
+
+	if events := speechmaticsEvents(partial, state); len(events) != 0 {
+		t.Fatalf("repeated following partial events = %#v, want suppressed unchanged reference view", events)
+	}
 }
 
 func TestSpeechmaticsEventsRawFinalsMergeBeforeReferenceFollowingPartial(t *testing.T) {

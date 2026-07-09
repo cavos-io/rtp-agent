@@ -1048,6 +1048,7 @@ type speechmaticsStreamState struct {
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
 	latestRawPartialEvents     []*stt.SpeechEvent
+	latestRawPartialContext    []*stt.SpeechEvent
 	splitRawFinalEOSSentences  bool
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
@@ -2251,6 +2252,7 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 func speechmaticsClearLatestRawPartialEvents(state *speechmaticsStreamState) {
 	if state != nil {
 		state.latestRawPartialEvents = nil
+		state.latestRawPartialContext = nil
 	}
 }
 
@@ -2385,18 +2387,23 @@ func speechmaticsTranscriptGroupedEvents(resp smResponse, state *speechmaticsStr
 func speechmaticsRawPartialTranscriptEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	var events []*stt.SpeechEvent
 	var flushedFinals []*stt.SpeechEvent
+	var partialContext []*stt.SpeechEvent
 	if state != nil && len(state.pendingRawFinals) > 0 {
 		flushedFinals = append(flushedFinals, speechmaticsMergePendingRawFinals(state, state.pendingRawFinals)...)
 		events = append(events, flushedFinals...)
 		state.pendingRawFinals = nil
 		speechmaticsRecordRawFinalTrimBeforeTime(state, events)
+		state.latestRawPartialContext = speechmaticsCloneTranscriptEvents(flushedFinals)
+	}
+	if state != nil {
+		partialContext = state.latestRawPartialContext
 	}
 	if state != nil && !state.includePartials {
 		return events
 	}
 	partials := speechmaticsRawTranscriptEvents(resp, state, stt.SpeechEventInterimTranscript)
 	partials = speechmaticsDropDuplicateTranscriptPartials(partials, flushedFinals)
-	partials = speechmaticsPrefixRawFinalContextToPartials(partials, flushedFinals, state)
+	partials = speechmaticsPrefixRawFinalContextToPartials(partials, partialContext, state)
 	if state != nil && speechmaticsTranscriptEventSlicesSame(partials, state.latestRawPartialEvents) {
 		return events
 	}
@@ -2434,6 +2441,17 @@ func speechmaticsPrefixRawFinalContextToPartial(partial *stt.SpeechEvent, finals
 		return merged
 	}
 	return partial
+}
+
+func speechmaticsCloneTranscriptEvents(events []*stt.SpeechEvent) []*stt.SpeechEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	clones := make([]*stt.SpeechEvent, 0, len(events))
+	for _, event := range events {
+		clones = append(clones, speechmaticsCloneTranscriptEvent(event))
+	}
+	return clones
 }
 
 func speechmaticsCanPrefixTranscriptEvent(prefix, event *stt.SpeechEvent) bool {
