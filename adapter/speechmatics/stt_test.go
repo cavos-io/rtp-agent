@@ -1298,6 +1298,55 @@ func TestSpeechmaticsEventsRawTranscriptSplitsReferenceEOSSentences(t *testing.T
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptKeepsReferenceConversationalEOSInOneSegment(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"is_eos":false,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.3,
+			"end_time":0.3,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		},{
+			"type":"word",
+			"start_time":0.4,
+			"end_time":0.6,
+			"is_eos":false,
+			"alternatives":[{"content":"next","confidence":0.8,"speaker":"S1","language":"en"}]
+		},{
+			"type":"punctuation",
+			"attaches_to":"previous",
+			"start_time":0.6,
+			"end_time":0.6,
+			"is_eos":true,
+			"alternatives":[{"content":".","confidence":1.0,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw eos transcript: %v", err)
+	}
+
+	state := &speechmaticsStreamState{splitRawFinalEOSSentences: false}
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one final transcript for reference conversational emit_sentences=false", events)
+	}
+	alt := events[0].Alternatives[0]
+	if alt.Text != "hello. next." {
+		t.Fatalf("text = %q, want combined same-speaker final transcript", alt.Text)
+	}
+	if alt.StartTime != 0.1 || alt.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want full combined sentence span", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestSpeechmaticsEventsRawTranscriptAppliesReferencePassiveSpeakerFormat(t *testing.T) {
 	var resp smResponse
 	if err := json.Unmarshal([]byte(`{

@@ -483,16 +483,17 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 			errCh:  make(chan error, 1),
 			done:   make(chan struct{}),
 			state: &speechmaticsStreamState{
-				language:             streamLanguage,
-				speakerActiveFormat:  s.speakerActiveFormat,
-				speakerPassiveFormat: s.speakerPassiveFormat,
-				focusSpeakers:        cloneSpeechmaticsStringSlice(s.focusSpeakers),
-				ignoreSpeakers:       cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
-				focusMode:            s.focusMode,
-				includePartials:      speechmaticsIncludePartials(s),
-				bufferRawFinals:      true,
-				startTimeOffset:      startTimeOffset,
-				startTime:            float64(streamStartTime.UnixNano()) / 1e9,
+				language:                  streamLanguage,
+				speakerActiveFormat:       s.speakerActiveFormat,
+				speakerPassiveFormat:      s.speakerPassiveFormat,
+				focusSpeakers:             cloneSpeechmaticsStringSlice(s.focusSpeakers),
+				ignoreSpeakers:            cloneSpeechmaticsStringSlice(s.ignoreSpeakers),
+				focusMode:                 s.focusMode,
+				includePartials:           speechmaticsIncludePartials(s),
+				bufferRawFinals:           true,
+				startTimeOffset:           startTimeOffset,
+				startTime:                 float64(streamStartTime.UnixNano()) / 1e9,
+				splitRawFinalEOSSentences: false,
 			},
 			owner:                     s,
 			waitForRecognitionStarted: true,
@@ -1047,6 +1048,7 @@ type speechmaticsStreamState struct {
 	rawTrimBeforeTimeSet       bool
 	rawTrimBeforeTime          float64
 	latestRawPartialEvents     []*stt.SpeechEvent
+	splitRawFinalEOSSentences  bool
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
@@ -2366,7 +2368,7 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	var events []*stt.SpeechEvent
 	groupStart := 0
 	for i := 1; i <= len(fragments); i++ {
-		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1]) {
+		if i < len(fragments) && fragments[i].speakerGroupID == fragments[groupStart].speakerGroupID && !speechmaticsSplitRawTranscriptAtEOS(eventType, fragments[i-1], state) {
 			continue
 		}
 		if event := speechmaticsRawTranscriptEventFromGroup(eventType, fragments[groupStart:i], state); event != nil {
@@ -2377,8 +2379,8 @@ func speechmaticsRawTranscriptEventsFromFragments(eventType stt.SpeechEventType,
 	return events
 }
 
-func speechmaticsSplitRawTranscriptAtEOS(eventType stt.SpeechEventType, fragment speechmaticsRawTranscriptFragment) bool {
-	return eventType == stt.SpeechEventFinalTranscript && fragment.isEOS
+func speechmaticsSplitRawTranscriptAtEOS(eventType stt.SpeechEventType, fragment speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) bool {
+	return (state == nil || state.splitRawFinalEOSSentences) && eventType == stt.SpeechEventFinalTranscript && fragment.isEOS
 }
 
 func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, fragments []speechmaticsRawTranscriptFragment, state *speechmaticsStreamState) *stt.SpeechEvent {
