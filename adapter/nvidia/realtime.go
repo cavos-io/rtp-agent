@@ -800,6 +800,7 @@ func (s *nvidiaRealtimeSession) sendRealtimeTransport(ctx context.Context, conn 
 				break
 			}
 			if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+				s.failRealtimeTransport(ctx, llm.NewAPIConnectionError(fmt.Sprintf("Connection failed: %v", err)))
 				return
 			}
 		}

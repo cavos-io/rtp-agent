@@ -656,6 +656,87 @@ func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.
 	}
 }
 
+func TestNvidiaRealtimeProviderWriteFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	accepted := make(chan struct{}, 1)
+	release := make(chan struct{})
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		accepted <- struct{}{}
+		<-release
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	defer close(release)
+
+	clientConn, _, err := websocket.DefaultDialer.Dial(strings.Replace(server.URL, "http://", "ws://", 1), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	select {
+	case <-accepted:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket accept")
+	}
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("client Close() error = %v", err)
+	}
+
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete := session.(*nvidiaRealtimeSession)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	concrete.mu.Lock()
+	concrete.transportStarted = true
+	concrete.transportCtx = ctx
+	concrete.transportCancel = cancel
+	concrete.outboundMessages = [][]byte{{nvidiaRealtimeMsgAudio, 1, 2, 3}}
+	concrete.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		concrete.sendRealtimeTransport(ctx, clientConn)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendRealtimeTransport blocked on closed websocket")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeError || ev.Error == nil {
+			t.Fatalf("event = %+v, want realtime error event", ev)
+		}
+		var modelErr *llm.RealtimeModelError
+		if !errors.As(ev.Error, &modelErr) {
+			t.Fatalf("error = %T %v, want RealtimeModelError", ev.Error, ev.Error)
+		}
+		if !modelErr.Recoverable {
+			t.Fatalf("Recoverable = false, want true")
+		}
+		if !strings.Contains(modelErr.Error(), "Connection failed:") {
+			t.Fatalf("error = %v, want Connection failed wrapper", modelErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for write failure error event")
+	}
+}
+
 func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverErr := make(chan error, 1)
