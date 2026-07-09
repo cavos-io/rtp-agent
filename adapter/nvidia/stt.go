@@ -176,6 +176,7 @@ type nvidiaSTTStream struct {
 	inputSampleRate uint32
 	startTimeOffset float64
 	startTime       float64
+	requestSeq      int
 }
 
 type nvidiaSTTWord struct {
@@ -314,9 +315,14 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 
 func (s *nvidiaSTTStream) eventsFromResponse(response nvidiaSTTResponse) []stt.SpeechEvent {
 	events := make([]stt.SpeechEvent, 0, len(response.Results)+2)
+	requestID := response.RequestID
 	for _, result := range response.Results {
 		if result.RequestID == "" {
-			result.RequestID = response.RequestID
+			if requestID == "" {
+				s.requestSeq++
+				requestID = fmt.Sprintf("nvidia-response-%d", s.requestSeq)
+			}
+			result.RequestID = requestID
 		}
 		events = append(events, s.eventsFromResult(result)...)
 	}
