@@ -213,6 +213,50 @@ func TestNvidiaRealtimeSessionLifecycleMatchesReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{1000, -1000, 500, -500}),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+		ParticipantID:     "caller-1",
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	frame.Data[0] = 99
+
+	if got, want := len(concrete.outboundAudio), 1; got != want {
+		t.Fatalf("outboundAudio count = %d, want %d", got, want)
+	}
+	got := concrete.outboundAudio[0]
+	if got.SampleRate != 24000 || got.NumChannels != 1 {
+		t.Fatalf("outbound audio format = %d Hz/%d ch, want 24000 Hz/1 ch", got.SampleRate, got.NumChannels)
+	}
+	if got.SamplesPerChannel != 3 {
+		t.Fatalf("outbound SamplesPerChannel = %d, want 3 from 16 kHz to 24 kHz resample", got.SamplesPerChannel)
+	}
+	if got.ParticipantID != "caller-1" {
+		t.Fatalf("outbound ParticipantID = %q, want caller-1", got.ParticipantID)
+	}
+	if len(got.Data) != int(got.SamplesPerChannel)*2 {
+		t.Fatalf("outbound data len = %d, want samples_per_channel*2", len(got.Data))
+	}
+	if got.Data[0] == 99 {
+		t.Fatal("outbound audio aliases source frame, want immutable copy")
+	}
+}
+
 func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()

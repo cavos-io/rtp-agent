@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -235,6 +236,58 @@ func cloneNvidiaRealtimeAudioFrame(frame *model.AudioFrame) *model.AudioFrame {
 	return &cloned
 }
 
+func normalizeNvidiaRealtimeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	normalized, err := downmixNvidiaRealtimeInputFrame(frame)
+	if err != nil {
+		return nil, err
+	}
+	return audio.ResampleAudioFrame(normalized, defaultNvidiaRealtimeSampleRate)
+}
+
+func downmixNvidiaRealtimeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels == defaultNvidiaRealtimeNumChannels {
+		return cloneNvidiaRealtimeAudioFrame(frame), nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot downmix audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        frame.SampleRate,
+			NumChannels:       defaultNvidiaRealtimeNumChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	channels := int(frame.NumChannels)
+	samplesPerChannel := int(frame.SamplesPerChannel)
+	data := make([]byte, samplesPerChannel*2)
+	for sampleIdx := 0; sampleIdx < samplesPerChannel; sampleIdx++ {
+		sum := int32(0)
+		for ch := 0; ch < channels; ch++ {
+			offset := (sampleIdx*channels + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		mono := int16(sum / int32(channels))
+		binary.LittleEndian.PutUint16(data[sampleIdx*2:], uint16(mono))
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       defaultNvidiaRealtimeNumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
 func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,7 +361,14 @@ func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if s.closed || frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	s.outboundAudio = append(s.outboundAudio, cloneNvidiaRealtimeAudioFrame(frame))
+	normalized, err := normalizeNvidiaRealtimeInputFrame(frame)
+	if err != nil {
+		return err
+	}
+	if normalized == nil || len(normalized.Data) == 0 {
+		return nil
+	}
+	s.outboundAudio = append(s.outboundAudio, cloneNvidiaRealtimeAudioFrame(normalized))
 	return nil
 }
 
