@@ -590,6 +590,9 @@ func (s *speechmaticsTTSChunkedStream) queueHeldTailAudio() {
 		Frame:     s.pendingTail,
 	})
 	s.pendingTail = nil
+	if s.pcm != nil {
+		s.pcm.Clear()
+	}
 	s.resetSlowFlush()
 }
 

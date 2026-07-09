@@ -1023,6 +1023,9 @@ type speechmaticsSTTStream struct {
 	drainEvents                []*stt.SpeechEvent
 	overflowEvents             []*stt.SpeechEvent
 	forcedEOUPending           bool
+	forcedEOUStartedAt         time.Time
+	lastForcedEOULatency       time.Duration
+	lastSpeakEndLatency        time.Duration
 	pendingLocalEndpointingEOU bool
 	forcedEOUSeq               uint64
 	forcedEOUCompleted         bool
@@ -1056,6 +1059,10 @@ type speechmaticsStreamState struct {
 	turnHasTranscript          bool
 	latestSegmentAnnotationSet bool
 	latestSegmentAnnotation    []string
+	latestSegmentEndTimeSet    bool
+	latestSegmentEndTime       float64
+	smartTurnCutoffSet         bool
+	smartTurnCutoff            float64
 }
 
 type smAlternative struct {
@@ -2066,10 +2073,12 @@ func (s *speechmaticsSTTStream) handleResponse(resp smResponse) bool {
 		return true
 	}
 	if resp.Message == "EndOfUtterance" {
+		s.cancelLocalEndpointingForceEndOfUtterance()
 		if s.owner != nil && s.owner.turnDetectionMode == "fixed" {
 			if s.consumeCompletedFixedEOU() {
 				return true
 			}
+			s.recordForcedEOULatency()
 			s.clearForcedEOU()
 			for _, event := range s.fixedEOUEndEvents() {
 				if !s.enqueueEvent(event) {
@@ -2616,6 +2625,10 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	if state == nil || len(fragments) == 0 {
 		return
 	}
+	endTime := fragments[len(fragments)-1].endTime - speechmaticsStartTimeOffset(state)
+	if !speechmaticsShouldRecordEndpointingEvidence(state, endTime) {
+		return
+	}
 	var annotations []string
 	if eventType == stt.SpeechEventFinalTranscript {
 		annotations = append(annotations, speechmaticsAnnotationEndsWithFinal)
@@ -2627,6 +2640,8 @@ func speechmaticsRecordLatestRawTranscriptAnnotation(state *speechmaticsStreamSt
 	annotations = speechmaticsAppendRawSpeechRateAnnotation(annotations, fragments)
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = annotations
+	state.latestSegmentEndTimeSet = true
+	state.latestSegmentEndTime = endTime
 }
 
 func speechmaticsAppendRawDisfluencyAnnotation(annotations []string, fragments []speechmaticsRawTranscriptFragment) []string {
@@ -2795,14 +2810,14 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 			(speakerPresent && segment.SpeakerID != "" && speechmaticsConfiguredSpeakerFiltered(speakerID, state)) {
 			continue
 		}
-		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
-		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active)
 		formatSpeakerID := speakerID
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
 		startTime := segment.Metadata.StartTime + startTimeOffset
 		endTime := segment.Metadata.EndTime + startTimeOffset
+		active := speechmaticsSegmentIsActive(segment.IsActive, speechmaticsSegmentIsActivePresent(resp, i))
+		speechmaticsRecordLatestSegmentAnnotation(state, segment.Annotation, active, segment.Metadata.EndTime)
 		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state), startTime, endTime, segment.Annotation, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
@@ -2905,12 +2920,21 @@ func speechmaticsTranscriptAlternativesSameTimingAndIdentity(left, right stt.Spe
 		left.Language == right.Language
 }
 
-func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool) {
+func speechmaticsRecordLatestSegmentAnnotation(state *speechmaticsStreamState, annotations []string, active bool, endTime float64) {
 	if state == nil || !active {
+		return
+	}
+	if !speechmaticsShouldRecordEndpointingEvidence(state, endTime) {
 		return
 	}
 	state.latestSegmentAnnotationSet = true
 	state.latestSegmentAnnotation = cloneSpeechmaticsStringSlice(annotations)
+	state.latestSegmentEndTimeSet = true
+	state.latestSegmentEndTime = endTime
+}
+
+func speechmaticsShouldRecordEndpointingEvidence(state *speechmaticsStreamState, endTime float64) bool {
+	return state == nil || !state.smartTurnCutoffSet || endTime > state.smartTurnCutoff
 }
 
 func speechmaticsSpeakerFiltered(speakerID string, state *speechmaticsStreamState) bool {
@@ -3459,6 +3483,7 @@ func (s *speechmaticsSTTStream) beginForcedEOU(allowProviderManaged bool) (uint6
 		return 0, 0, false
 	}
 	s.forcedEOUPending = true
+	s.forcedEOUStartedAt = time.Now()
 	s.forcedEOUSeq++
 	timestamp := 0.0
 	if s.state != nil {
@@ -3513,6 +3538,7 @@ func (s *speechmaticsSTTStream) consumeCurrentForcedEOU() bool {
 	if s.closed || !s.forcedEOUPending {
 		return false
 	}
+	s.recordForcedEOULatencyLocked()
 	s.forcedEOUPending = false
 	s.forcedEOUSeq++
 	return true
@@ -3621,6 +3647,7 @@ func (s *speechmaticsSTTStream) clearForcedEOU() {
 	}
 	s.mu.Lock()
 	s.forcedEOUPending = false
+	s.forcedEOUStartedAt = time.Time{}
 	s.forcedEOUSeq++
 	s.mu.Unlock()
 }
@@ -3656,7 +3683,7 @@ func (s *speechmaticsSTTStream) runVAD(vadStream corevad.VADStream) {
 		case corevad.VADEventStartOfSpeech:
 			s.handleVADStartOfSpeech()
 		case corevad.VADEventEndOfSpeech:
-			s.scheduleLocalEndpointingForceEndOfUtterance()
+			s.scheduleLocalEndpointingForceEndOfUtterance(event)
 		}
 	}
 }
@@ -3673,13 +3700,15 @@ func (s *speechmaticsSTTStream) handleVADStartOfSpeech() {
 	s.pendingLocalEndpointingEOU = false
 	s.localEndpointingEOUSeq++
 	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
 	s.mu.Unlock()
 }
 
-func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance() {
+func (s *speechmaticsSTTStream) scheduleLocalEndpointingForceEndOfUtterance(event *corevad.VADEvent) {
 	if s == nil {
 		return
 	}
+	s.recordVADEndLatency(event)
 	delay := time.Duration(0)
 	if s.providerManagedEndpointing {
 		delay = s.localEndpointingForceEOUDelay()
@@ -3721,6 +3750,24 @@ func (s *speechmaticsSTTStream) localEndpointingForceEOUDelay() time.Duration {
 	return s.localEndpointingDelay()
 }
 
+func (s *speechmaticsSTTStream) recordVADEndLatency(event *corevad.VADEvent) {
+	if s == nil || event == nil || event.Timestamp <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.smartTurnCutoffSet = true
+	s.state.smartTurnCutoff = event.Timestamp
+	if s.state.audioSecondsSent <= event.Timestamp {
+		s.lastSpeakEndLatency = 0
+		return
+	}
+	s.lastSpeakEndLatency = time.Duration((s.state.audioSecondsSent - event.Timestamp) * float64(time.Second))
+}
+
 func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	if s == nil {
 		return 0
@@ -3734,12 +3781,64 @@ func (s *speechmaticsSTTStream) localEndpointingDelay() time.Duration {
 	}
 	s.mu.Unlock()
 	if annotationsSet {
-		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations)
+		return s.subtractReferenceLatenciesFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, annotations))
 	}
 	if hasTranscript {
-		return speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped})
+		return s.subtractReferenceLatenciesFromEndpointingDelay(speechmaticsLocalEndpointingDelayWithAnnotations(s.owner, []string{speechmaticsAnnotationVADStopped}))
 	}
 	return speechmaticsLocalEndpointingDelay(s.owner)
+}
+
+func (s *speechmaticsSTTStream) subtractReferenceLatenciesFromEndpointingDelay(delay time.Duration) time.Duration {
+	if s == nil || delay <= speechmaticsMinEndOfTurnDelay {
+		return delay
+	}
+	s.mu.Lock()
+	state := s.state
+	forcedEOULatency := s.lastForcedEOULatency
+	speakEndLatency := s.lastSpeakEndLatency
+	var lag float64
+	if state != nil && state.latestSegmentEndTimeSet && state.audioSecondsSent > state.latestSegmentEndTime {
+		lag = state.audioSecondsSent - state.latestSegmentEndTime
+	}
+	s.mu.Unlock()
+	if forcedEOULatency > 0 {
+		delay -= forcedEOULatency
+		if delay <= speechmaticsMinEndOfTurnDelay {
+			return speechmaticsMinEndOfTurnDelay
+		}
+	}
+	if speakEndLatency > 0 {
+		delay -= speakEndLatency
+		if delay <= speechmaticsMinEndOfTurnDelay {
+			return speechmaticsMinEndOfTurnDelay
+		}
+	}
+	if lag <= 0 {
+		return delay
+	}
+	delay -= time.Duration(lag * float64(time.Second))
+	if delay < speechmaticsMinEndOfTurnDelay {
+		return speechmaticsMinEndOfTurnDelay
+	}
+	return delay
+}
+
+func (s *speechmaticsSTTStream) recordForcedEOULatency() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordForcedEOULatencyLocked()
+}
+
+func (s *speechmaticsSTTStream) recordForcedEOULatencyLocked() {
+	if s == nil || s.forcedEOUStartedAt.IsZero() {
+		return
+	}
+	s.lastForcedEOULatency = time.Since(s.forcedEOUStartedAt)
+	s.forcedEOUStartedAt = time.Time{}
 }
 
 func (s *speechmaticsSTTStream) sendScheduledLocalEndpointingForceEndOfUtterance(seq uint64) {
@@ -3776,6 +3875,16 @@ func (s *speechmaticsSTTStream) closeLocalEndpointingTurn() {
 	s.mu.Unlock()
 }
 
+func (s *speechmaticsSTTStream) cancelLocalEndpointingForceEndOfUtterance() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.pendingLocalEndpointingEOU = false
+	s.localEndpointingEOUSeq++
+	s.mu.Unlock()
+}
+
 func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	if s == nil {
 		return
@@ -3785,6 +3894,7 @@ func (s *speechmaticsSTTStream) reopenLocalEndpointingTurn() {
 	s.pendingLocalEndpointingEOU = false
 	s.localEndpointingEOUSeq++
 	speechmaticsClearLatestEndpointingAnnotation(s.state)
+	speechmaticsClearTurnTranscriptEvidence(s.state)
 	s.mu.Unlock()
 }
 
@@ -3794,6 +3904,10 @@ func speechmaticsClearLatestEndpointingAnnotation(state *speechmaticsStreamState
 	}
 	state.latestSegmentAnnotationSet = false
 	state.latestSegmentAnnotation = nil
+	state.latestSegmentEndTimeSet = false
+	state.latestSegmentEndTime = 0
+	state.smartTurnCutoffSet = false
+	state.smartTurnCutoff = 0
 }
 
 func (s *speechmaticsSTTStream) closeVADStream() {
@@ -3879,8 +3993,14 @@ func (s *speechmaticsSTTStream) recordSpeakerResult(speakers []SpeechmaticsSpeak
 	select {
 	case resultCh <- result:
 	default:
-		<-resultCh
-		resultCh <- result
+		select {
+		case <-resultCh:
+		default:
+		}
+		select {
+		case resultCh <- result:
+		default:
+		}
 	}
 }
 

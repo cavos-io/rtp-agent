@@ -1565,6 +1565,73 @@ func TestSpeechmaticsTTSChunkedStreamFlushesReferenceSlowTailBeforeEOF(t *testin
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamSlowTailFlushResetsReferenceProgressivePCM(t *testing.T) {
+	body := newSpeechmaticsDelayedChunkBody(make([]byte, 4096), make([]byte, 480))
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     body,
+		sampleRate: 6000,
+		requestID:  "slow-reset",
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("head Next error = %v", err)
+		}
+		if audio == nil || audio.Frame == nil || audio.IsFinal {
+			t.Fatalf("head Next = %+v, want non-final head audio", audio)
+		}
+		if len(stream.pendingAudio) == 0 {
+			break
+		}
+	}
+	if stream.pendingTail == nil {
+		t.Fatal("pendingTail = nil, want held final tail before slow provider chunk")
+	}
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		next, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: next, err: err}
+	}()
+
+	var slowTail *tts.SynthesizedAudio
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("slow tail Next error = %v", result.err)
+		}
+		slowTail = result.audio
+	case <-time.After(350 * time.Millisecond):
+		t.Fatal("slow Speechmatics TTS tail was not flushed before next provider chunk")
+	}
+	if slowTail == nil || slowTail.Frame == nil || slowTail.IsFinal {
+		t.Fatalf("slow tail = %+v, want non-final delayed tail flush", slowTail)
+	}
+	if slowTail.Frame.SamplesPerChannel != 60 {
+		t.Fatalf("slow tail samples = %d, want reference 10ms tail", slowTail.Frame.SamplesPerChannel)
+	}
+
+	body.releaseNextChunk()
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next burst Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("next burst = %+v, want non-final audio after slow flush", audio)
+	}
+	if audio.Frame.SamplesPerChannel != 60 {
+		t.Fatalf("next burst samples = %d, want reference progressive ramp reset after slow flush", audio.Frame.SamplesPerChannel)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamReadyChunkCancelsReferenceSlowTailFlush(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:       io.NopCloser(bytes.NewReader(nil)),
@@ -2042,6 +2109,72 @@ func (b *speechmaticsSlowTailBody) Close() error {
 
 func (b *speechmaticsSlowTailBody) releaseEOF() {
 	b.releaseOnce.Do(func() { close(b.release) })
+}
+
+type speechmaticsDelayedChunkBody struct {
+	chunks      []speechmaticsDelayedReadChunk
+	nextRelease chan struct{}
+	close       chan struct{}
+	mu          sync.Mutex
+}
+
+type speechmaticsDelayedReadChunk struct {
+	data    []byte
+	release chan struct{}
+}
+
+func newSpeechmaticsDelayedChunkBody(first, second []byte) *speechmaticsDelayedChunkBody {
+	return &speechmaticsDelayedChunkBody{
+		chunks: []speechmaticsDelayedReadChunk{
+			{data: first},
+			{data: second, release: make(chan struct{})},
+		},
+		close: make(chan struct{}),
+	}
+}
+
+func (b *speechmaticsDelayedChunkBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	if len(b.chunks) == 0 {
+		b.mu.Unlock()
+		return 0, io.EOF
+	}
+	chunk := b.chunks[0]
+	b.chunks = b.chunks[1:]
+	b.nextRelease = chunk.release
+	b.mu.Unlock()
+
+	if chunk.release != nil {
+		select {
+		case <-chunk.release:
+		case <-b.close:
+			return 0, io.EOF
+		}
+	}
+	return copy(p, chunk.data), nil
+}
+
+func (b *speechmaticsDelayedChunkBody) Close() error {
+	select {
+	case <-b.close:
+	default:
+		close(b.close)
+	}
+	return nil
+}
+
+func (b *speechmaticsDelayedChunkBody) releaseNextChunk() {
+	b.mu.Lock()
+	release := b.nextRelease
+	b.mu.Unlock()
+	if release == nil {
+		return
+	}
+	select {
+	case <-release:
+	default:
+		close(release)
+	}
 }
 
 type speechmaticsCloseCountBody struct {

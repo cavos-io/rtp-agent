@@ -5643,6 +5643,57 @@ func TestSpeechmaticsSTTAdaptiveLocalVADDelayAppliesReferenceSegmentAnnotationPe
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceTTFB(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			audioSecondsSent:           1.00,
+			latestSegmentEndTime:       0.80,
+			latestSegmentEndTimeSet:    true,
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		},
+	}
+
+	if got, want := stream.localEndpointingDelay(), speechmaticsMinEndOfTurnDelay; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference TTFB-subtracted minimum %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceForcedEOULatency(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		},
+		lastForcedEOULatency: 60 * time.Millisecond,
+	}
+
+	if got, want := stream.localEndpointingDelay(), speechmaticsMinEndOfTurnDelay; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference forced-EOU-latency-subtracted minimum %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADDelaySubtractsReferenceSpeakEndLatency(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	stream := &speechmaticsSTTStream{
+		owner: provider,
+		state: &speechmaticsStreamState{
+			audioSecondsSent:           1.00,
+			latestSegmentAnnotationSet: true,
+			latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		},
+	}
+	stream.recordVADEndLatency(&vad.VADEvent{Timestamp: 0.95})
+
+	if got, want := stream.localEndpointingDelay(), 20*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay = %s, want reference speak-end-latency-subtracted delay %s", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTSmartTurnLocalVADDelayAppliesReferenceSmartTurnPenalty(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTSmartTurnDetection())
 	stream := &speechmaticsSTTStream{
@@ -6188,6 +6239,84 @@ func TestSpeechmaticsSTTAdaptiveLocalVADStartClearsReferenceEndpointAnnotations(
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveLocalVADStartClearsReferenceEndpointTiming(t *testing.T) {
+	state := &speechmaticsStreamState{
+		audioSecondsSent:           1.00,
+		turnHasTranscript:          true,
+		latestSegmentAnnotationSet: true,
+		latestSegmentAnnotation:    []string{"ends_with_final", "ends_with_eos"},
+		latestSegmentEndTimeSet:    true,
+		latestSegmentEndTime:       0.80,
+	}
+	stream := &speechmaticsSTTStream{
+		owner: NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection()),
+		state: state,
+	}
+	if got, want := stream.localEndpointingDelay(), speechmaticsMinEndOfTurnDelay; got != want {
+		t.Fatalf("local endpointing delay before start = %s, want previous latency-subtracted delay %s", got, want)
+	}
+
+	stream.reopenLocalEndpointingTurn()
+
+	if state.latestSegmentEndTimeSet {
+		t.Fatalf("latest segment end time still set after speech start: %v", state.latestSegmentEndTime)
+	}
+	if got, want := stream.localEndpointingDelay(), 140*time.Millisecond; got != want {
+		t.Fatalf("local endpointing delay after speech start = %s, want reference fresh-turn delay without stale latency %s", got, want)
+	}
+}
+
+func TestSpeechmaticsSTTAdaptiveLocalVADCutoffIgnoresReferenceLateEndpointEvidence(t *testing.T) {
+	state := &speechmaticsStreamState{audioSecondsSent: 1.0, includePartials: true}
+	stream := &speechmaticsSTTStream{state: state}
+	stream.recordVADEndLatency(&vad.VADEvent{Timestamp: 0.8})
+
+	var late smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"late",
+			"language":"en",
+			"speaker_id":"agent",
+			"is_active":true,
+			"annotation":["ends_with_final","ends_with_eos"],
+			"metadata":{"start_time":0.4,"end_time":0.8}
+		}]
+	}`), &late); err != nil {
+		t.Fatalf("unmarshal late segment: %v", err)
+	}
+
+	events := speechmaticsEvents(late, state)
+	if len(events) != 1 || events[0].Alternatives[0].Text != "late" {
+		t.Fatalf("events = %#v, want transcript still emitted", events)
+	}
+	if state.latestSegmentAnnotationSet {
+		t.Fatalf("latest endpoint annotation = %#v, want late transcript before cutoff ignored", state.latestSegmentAnnotation)
+	}
+	if state.latestSegmentEndTimeSet {
+		t.Fatalf("latest endpoint end time = %v, want late transcript before cutoff ignored", state.latestSegmentEndTime)
+	}
+
+	var fresh smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddPartialSegment",
+		"segments":[{
+			"text":"fresh",
+			"language":"en",
+			"speaker_id":"agent",
+			"is_active":true,
+			"annotation":["ends_with_final"],
+			"metadata":{"start_time":0.8,"end_time":0.95}
+		}]
+	}`), &fresh); err != nil {
+		t.Fatalf("unmarshal fresh segment: %v", err)
+	}
+	_ = speechmaticsEvents(fresh, state)
+	if !state.latestSegmentAnnotationSet || state.latestSegmentEndTime != 0.95 {
+		t.Fatalf("fresh endpoint evidence = (%v, %v), want recorded after cutoff", state.latestSegmentAnnotationSet, state.latestSegmentEndTime)
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveLocalVADDelayClampsReferenceMinimumDelay(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key",
 		WithSpeechmaticsSTTAdaptiveTurnDetection(),
@@ -6255,7 +6384,7 @@ func TestSpeechmaticsSTTAdaptiveLocalVADWithoutTranscriptUsesReferenceMinimumDel
 	}
 	defer stream.Close()
 
-	stream.scheduleLocalEndpointingForceEndOfUtterance()
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
 
 	select {
 	case message := <-controlMessages:
@@ -6308,6 +6437,41 @@ func TestSpeechmaticsSTTAdaptiveProviderEndOfTurnCancelsReferenceDelayedEOU(t *t
 	}
 }
 
+func TestSpeechmaticsSTTAdaptiveProviderEndOfUtteranceCancelsReferenceDelayedEOU(t *testing.T) {
+	originalDelay := speechmaticsLocalEndpointingDelay
+	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
+	t.Cleanup(func() { speechmaticsLocalEndpointingDelay = originalDelay })
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTAdaptiveTurnDetection())
+	controlMessages := make(chan map[string]interface{}, 4)
+	stream := &speechmaticsSTTStream{
+		owner:                      provider,
+		events:                     make(chan *stt.SpeechEvent, 4),
+		providerManagedEndpointing: true,
+		writeJSON: func(message interface{}) error {
+			control, ok := message.(map[string]interface{})
+			if !ok {
+				t.Fatalf("control message = %#v, want JSON object", message)
+			}
+			controlMessages <- control
+			return nil
+		},
+		closeConn: func() error { return nil },
+		state:     &speechmaticsStreamState{},
+	}
+	defer stream.Close()
+
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
+	if ok := stream.handleResponse(smResponse{Message: "EndOfUtterance"}); !ok {
+		t.Fatal("EndOfUtterance stopped read loop")
+	}
+	select {
+	case message := <-controlMessages:
+		t.Fatalf("control message after provider EndOfUtterance = %#v, want canceled delayed ForceEndOfUtterance", message)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestSpeechmaticsSTTAdaptiveProviderStartOfTurnCancelsReferenceDelayedEOU(t *testing.T) {
 	originalDelay := speechmaticsLocalEndpointingDelay
 	speechmaticsLocalEndpointingDelay = func(*SpeechmaticsSTT) time.Duration { return 20 * time.Millisecond }
@@ -6333,7 +6497,7 @@ func TestSpeechmaticsSTTAdaptiveProviderStartOfTurnCancelsReferenceDelayedEOU(t 
 	}
 	defer stream.Close()
 
-	stream.scheduleLocalEndpointingForceEndOfUtterance()
+	stream.scheduleLocalEndpointingForceEndOfUtterance(nil)
 	if ok := stream.handleResponse(smResponse{Message: "StartOfTurn"}); !ok {
 		t.Fatal("StartOfTurn stopped read loop")
 	}
@@ -9149,6 +9313,25 @@ func TestSpeechmaticsSTTGetSpeakerIDsRequestsReferenceSpeakersResult(t *testing.
 	}
 	if len(speakers) != 1 || speakers[0].Label != "agent" || speakers[0].SpeakerID != "spk-1" {
 		t.Fatalf("speakers = %#v, want agent speaker id", speakers)
+	}
+}
+
+func TestSpeechmaticsSTTSpeakersResultDoesNotBlockReferenceReadLoopWithoutWaiter(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		speakerResultCh: make(chan []SpeechmaticsSpeakerIdentifier),
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.recordSpeakerResult([]SpeechmaticsSpeakerIdentifier{
+			{Label: "agent", SpeakerID: "spk-1"},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recordSpeakerResult blocked without waiter, want reference nonblocking SpeakersResult handling")
 	}
 }
 
