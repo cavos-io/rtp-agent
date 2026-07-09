@@ -58,7 +58,7 @@ type nvidiaRealtimeSession struct {
 	chatCtx            *llm.ChatContext
 	outboundAudio      []*model.AudioFrame
 	outboundMessages   [][]byte
-	events             chan llm.RealtimeEvent
+	events             *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent]
 	opusEncoder        *opus.Encoder
 	opusDecoder        *opus.Decoder
 	inputAudioBuffer   []byte
@@ -72,14 +72,77 @@ type nvidiaRealtimeGeneration struct {
 	responseID   string
 	messageCh    chan llm.MessageGeneration
 	functionCh   chan *llm.FunctionCall
-	textCh       chan string
+	textStream   *nvidiaRealtimeUnboundedStream[string]
 	timedTextCh  chan llm.RealtimeTimedText
-	audioCh      chan *model.AudioFrame
+	audioStream  *nvidiaRealtimeUnboundedStream[*model.AudioFrame]
 	modalitiesCh chan []string
 	outputText   string
 	createdAt    time.Time
 	firstTokenAt *time.Time
 	done         bool
+}
+
+type nvidiaRealtimeUnboundedStream[T any] struct {
+	in   chan T
+	out  chan T
+	once sync.Once
+}
+
+func newNvidiaRealtimeUnboundedStream[T any]() *nvidiaRealtimeUnboundedStream[T] {
+	return newNvidiaRealtimeUnboundedStreamWithBuffer[T](nvidiaRealtimeGenerationStreamBuffer)
+}
+
+func newNvidiaRealtimeEventStream() *nvidiaRealtimeUnboundedStream[llm.RealtimeEvent] {
+	return newNvidiaRealtimeUnboundedStreamWithBuffer[llm.RealtimeEvent](nvidiaRealtimeEventBuffer)
+}
+
+func newNvidiaRealtimeUnboundedStreamWithBuffer[T any](buffer int) *nvidiaRealtimeUnboundedStream[T] {
+	stream := &nvidiaRealtimeUnboundedStream[T]{
+		in:  make(chan T, buffer),
+		out: make(chan T, buffer),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) run() {
+	var pending []T
+	in := s.in
+	for in != nil || len(pending) > 0 {
+		var out chan T
+		var next T
+		if len(pending) > 0 {
+			out = s.out
+			next = pending[0]
+		}
+		select {
+		case value, ok := <-in:
+			if !ok {
+				in = nil
+				continue
+			}
+			pending = append(pending, value)
+		case out <- next:
+			var zero T
+			pending[0] = zero
+			pending = pending[1:]
+		}
+	}
+	close(s.out)
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) send(value T) {
+	s.in <- value
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) close() {
+	s.once.Do(func() {
+		close(s.in)
+	})
+}
+
+func (s *nvidiaRealtimeUnboundedStream[T]) channel() <-chan T {
+	return s.out
 }
 
 type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
@@ -215,7 +278,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 		modelName:          m.Model(),
 		provider:           m.Provider(),
 		chatCtx:            llm.EmptyChatContext(),
-		events:             make(chan llm.RealtimeEvent, nvidiaRealtimeEventBuffer),
+		events:             newNvidiaRealtimeEventStream(),
 	}, nil
 }
 
@@ -355,12 +418,12 @@ func (s *nvidiaRealtimeSession) Close() error {
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
 	s.closed = true
-	close(s.events)
+	s.events.close()
 	return nil
 }
 
 func (s *nvidiaRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
-	return s.events
+	return s.events.channel()
 }
 
 func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
@@ -371,7 +434,7 @@ func (s *nvidiaRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	}
 	normalized, err := normalizeNvidiaRealtimeInputFrame(frame)
 	if err != nil {
-		return err
+		return nil
 	}
 	if normalized == nil || len(normalized.Data) == 0 {
 		return nil
@@ -443,7 +506,7 @@ func (s *nvidiaRealtimeSession) handleTextToken(text string) {
 	}
 	generation := s.ensureGenerationLocked()
 	generation.outputText += text
-	generation.textCh <- text
+	generation.textStream.send(text)
 }
 
 func (s *nvidiaRealtimeSession) handleTextPayload(payload []byte) {
@@ -490,12 +553,12 @@ func (s *nvidiaRealtimeSession) handleAudioPayload(payload []byte) {
 	data := int16SliceToLittleEndianBytes(pcm[:n])
 	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
-	generation.audioCh <- &model.AudioFrame{
+	generation.audioStream.send(&model.AudioFrame{
 		Data:              data,
 		SampleRate:        defaultNvidiaRealtimeSampleRate,
 		NumChannels:       defaultNvidiaRealtimeNumChannels,
 		SamplesPerChannel: uint32(n / defaultNvidiaRealtimeNumChannels),
-	}
+	})
 	s.resetSilenceTimerLocked()
 }
 
@@ -507,7 +570,7 @@ func (s *nvidiaRealtimeSession) handleAudioFrame(frame *model.AudioFrame) {
 	}
 	generation := s.ensureGenerationLocked()
 	generation.markFirstToken()
-	generation.audioCh <- frame
+	generation.audioStream.send(frame)
 	s.resetSilenceTimerLocked()
 }
 
@@ -521,29 +584,29 @@ func (s *nvidiaRealtimeSession) ensureGenerationLocked() *nvidiaRealtimeGenerati
 		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 1),
-		textCh:       make(chan string, nvidiaRealtimeGenerationStreamBuffer),
+		textStream:   newNvidiaRealtimeUnboundedStream[string](),
 		timedTextCh:  make(chan llm.RealtimeTimedText, nvidiaRealtimeGenerationStreamBuffer),
-		audioCh:      make(chan *model.AudioFrame, nvidiaRealtimeGenerationStreamBuffer),
+		audioStream:  newNvidiaRealtimeUnboundedStream[*model.AudioFrame](),
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    responseID,
-		TextCh:       generation.textCh,
+		TextCh:       generation.textStream.channel(),
 		TimedTextCh:  generation.timedTextCh,
-		AudioCh:      generation.audioCh,
+		AudioCh:      generation.audioStream.channel(),
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.currentGeneration = generation
-	s.events <- llm.RealtimeEvent{
+	s.events.send(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:  generation.messageCh,
 			FunctionCh: generation.functionCh,
 			ResponseID: responseID,
 		},
-	}
+	})
 	return generation
 }
 
@@ -554,9 +617,9 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 	}
 	s.cancelSilenceTimerLocked()
 	generation.done = true
-	close(generation.textCh)
+	generation.textStream.close()
 	close(generation.timedTextCh)
-	close(generation.audioCh)
+	generation.audioStream.close()
 	close(generation.functionCh)
 	close(generation.messageCh)
 	close(generation.modalitiesCh)
@@ -572,7 +635,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 		if generation.firstTokenAt != nil {
 			ttft = generation.firstTokenAt.Sub(generation.createdAt).Seconds()
 		}
-		s.events <- llm.RealtimeEvent{
+		s.events.send(llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeMetricsCollected,
 			Metrics: &telemetry.RealtimeModelMetrics{
 				Label:     s.label,
@@ -586,7 +649,7 @@ func (s *nvidiaRealtimeSession) finalizeGenerationLocked(interrupted bool) {
 					ModelProvider: s.provider,
 				},
 			},
-		}
+		})
 	}
 	s.currentGeneration = nil
 }

@@ -257,6 +257,31 @@ func TestNvidiaRealtimePushAudioNormalizesReferenceInput(t *testing.T) {
 	}
 }
 
+func TestNvidiaRealtimePushAudioSkipsMalformedFramesLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3},
+		SampleRate:        24000,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	}
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio(malformed) error = %v, want nil skipped frame", err)
+	}
+	if len(concrete.outboundAudio) != 0 || len(concrete.outboundMessages) != 0 || len(concrete.inputAudioBuffer) != 0 {
+		t.Fatalf("malformed frame queued audio=%d messages=%d buffered=%d, want all empty", len(concrete.outboundAudio), len(concrete.outboundMessages), len(concrete.inputAudioBuffer))
+	}
+}
+
 func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
@@ -472,6 +497,91 @@ func TestNvidiaRealtimeTextDeltasDoNotBlockBeforeConsumerLikeReference(t *testin
 	}
 }
 
+func TestNvidiaRealtimeTextDeltasDoNotBlockPastBufferLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+
+	const extra = 128
+	total := nvidiaRealtimeGenerationStreamBuffer + extra
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < total; i++ {
+			concrete.handleTextToken("x")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		ev := <-session.EventCh()
+		msg := <-ev.Generation.MessageCh
+		for i := 0; i < total; i++ {
+			<-msg.TextCh
+		}
+		<-done
+		t.Fatal("handleTextToken blocked after fixed stream buffer filled, want reference unbounded stream behavior")
+	}
+}
+
+func TestNvidiaRealtimeAudioFramesDoNotBlockPastBufferLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+
+	pcm := makeNvidiaRealtimePCMFrame()
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        defaultNvidiaRealtimeSampleRate,
+		NumChannels:       defaultNvidiaRealtimeNumChannels,
+		SamplesPerChannel: uint32(len(pcm) / defaultNvidiaRealtimeNumChannels),
+	}
+	const extra = 128
+	total := nvidiaRealtimeGenerationStreamBuffer + extra
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < total; i++ {
+			concrete.handleAudioFrame(frame)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		ev := <-session.EventCh()
+		msg := <-ev.Generation.MessageCh
+		for i := 0; i < total; i++ {
+			<-msg.AudioCh
+		}
+		<-done
+		t.Fatal("handleAudioFrame blocked after fixed stream buffer filled, want reference unbounded stream behavior")
+	}
+}
+
 func TestNvidiaRealtimeTurnEventsDoNotBlockBeforeConsumerLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel()
 	session, err := realtimeModel.Session()
@@ -496,6 +606,38 @@ func TestNvidiaRealtimeTurnEventsDoNotBlockBeforeConsumerLikeReference(t *testin
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("generation event emission blocked before consumer drained events, want reference nonblocking emit behavior")
+	}
+}
+
+func TestNvidiaRealtimeTurnEventsDoNotBlockPastBufferLikeReference(t *testing.T) {
+	realtimeModel := NewNvidiaRealtimeModel()
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	turns := nvidiaRealtimeEventBuffer/2 + 128
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < turns; i++ {
+			concrete.handleTextToken("x")
+			_ = session.Interrupt()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		for i := 0; i < turns*2; i++ {
+			<-session.EventCh()
+		}
+		<-done
+		t.Fatal("generation event emission blocked after fixed event buffer filled, want reference callback-style event behavior")
 	}
 }
 
@@ -900,6 +1042,19 @@ func TestNvidiaTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAllowsEmptyVoiceLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "", WithNvidiaTTSVoice(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	if got := provider.voice; got != "" {
+		t.Fatalf("voice = %q, want explicit empty voice", got)
+	}
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() = %q, want explicit empty voice", got)
+	}
+}
+
 func TestNvidiaTTSAllowsEmptyLanguageCodeLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "", WithNvidiaTTSLanguageCode(""))
 	if err != nil {
@@ -1053,6 +1208,82 @@ func TestNvidiaTTSStreamConstructsBeforeUnsupportedTransport(t *testing.T) {
 	}
 	if audio, err := stream.Next(); err != io.EOF || audio != nil {
 		t.Fatalf("Next() after Close = (%v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestNvidiaTTSStreamNextWaitsForInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Next() before input returned (%v, %v), want wait for input like reference", got.audio, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err != io.EOF {
+			t.Fatalf("Next() after Close = (%v, %v), want nil EOF", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
+func TestNvidiaTTSStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			t.Errorf("Next() audio = %v, want nil", audio)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Next() before cancel returned %v, want wait for cancellation", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Next() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after cancellation")
 	}
 }
 
@@ -1265,6 +1496,18 @@ func TestNvidiaSTTUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTAllowsExplicitEmptyAPIKeyLikeReference(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "env-secret")
+
+	provider, err := NewNvidiaSTT("", "", WithNvidiaSTTAPIKey(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT explicit empty api key error = %v, want nil like reference", err)
+	}
+	if got, want := provider.apiKey, ""; got != want {
+		t.Fatalf("apiKey = %q, want explicit empty key", got)
+	}
+}
+
 func TestNvidiaSTTRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "")
 
@@ -1343,6 +1586,19 @@ func TestNvidiaSTTOptionsMatchReference(t *testing.T) {
 	}
 	if got, want := provider.maxSpeakerCount, -1; got != want {
 		t.Fatalf("maxSpeakerCount negative override = %d, want reference value %d", got, want)
+	}
+}
+
+func TestNvidiaSTTAllowsEmptyModelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTModel(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	if got := provider.model; got != "" {
+		t.Fatalf("model = %q, want explicit empty model", got)
+	}
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() = %q, want explicit empty model", got)
 	}
 }
 
@@ -1485,6 +1741,27 @@ func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	}
 	if final.StartTime != 1.35 || final.EndTime != 2.15 {
 		t.Fatalf("final timing = (%v, %v), want first/last word seconds plus offset", final.StartTime, final.EndTime)
+	}
+}
+
+func TestNvidiaSTTFinalDiarizationTieKeepsFirstSpeakerLikeReference(t *testing.T) {
+	stream := &nvidiaSTTStream{
+		language: "en-US",
+		stt:      &NvidiaSTT{diarization: true},
+	}
+
+	data := stream.speechDataFromAlternative(nvidiaSTTAlternative{
+		Transcript: "one two three four",
+		Words: []nvidiaSTTWord{
+			{Word: "one", SpeakerTag: 1},
+			{Word: "two", SpeakerTag: 2},
+			{Word: "three", SpeakerTag: 2},
+			{Word: "four", SpeakerTag: 1},
+		},
+	}, true)
+
+	if got, want := data.SpeakerID, "S1"; got != want {
+		t.Fatalf("SpeakerID = %q, want first speaker among tied majority counts %q", got, want)
 	}
 }
 
@@ -1650,8 +1927,134 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{}); err != nil {
 		t.Fatalf("PushFrame(empty) error = %v, want nil", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame(non-empty) error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
+	}
+}
+
+func TestNvidiaSTTStreamNextWaitsForInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		event, err := stream.Next()
+		done <- result{event: event, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Next() before input returned (%v, %v), want wait for input like reference", got.event, got.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.event != nil || got.err != io.EOF {
+			t.Fatalf("Next() after Close = (%v, %v), want nil EOF", got.event, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after Close")
+	}
+}
+
+func TestNvidiaSTTStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if event != nil {
+			t.Errorf("Next() event = %v, want nil", event)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Next() before cancel returned %v, want wait for cancellation", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Next() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not unblock after cancellation")
+	}
+}
+
+func TestNvidiaSTTStreamAcceptsAudioBeforeTransportErrorLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{1, 0},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	event, err := stream.Next()
+	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
+	}
+}
+
+func TestNvidiaSTTFlushAfterAudioReportsTransportErrorLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() after audio then Flush = (%v, %v), want nil unsupported transport error", event, err)
 	}
 }
 
@@ -1784,8 +2187,8 @@ func TestNvidiaSTTFlushStillRejectsMismatchedSampleRateLikeReference(t *testing.
 		t.Fatalf("Stream() error = %v", err)
 	}
 
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame(first) error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) error = %v, want nil queued input like reference", err)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
@@ -1860,8 +2263,11 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if got, want := concrete.language, "id-ID"; got != want {
 		t.Fatalf("stream language = %q, want %q", got, want)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("PushFrame() error = %v, want explicit unsupported streaming error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame() error = %v, want nil queued input like reference", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

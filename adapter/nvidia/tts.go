@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -40,6 +41,12 @@ func WithNvidiaTTSServer(server string) NvidiaTTSOption {
 func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
 		t.functionID = functionID
+	}
+}
+
+func WithNvidiaTTSVoice(voice string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		t.voice = voice
 	}
 }
 
@@ -101,18 +108,23 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &nvidiaTTSSynthesizeStream{ctx: ctx}, nil
+	return &nvidiaTTSSynthesizeStream{
+		ctx:          ctx,
+		stateChanged: make(chan struct{}),
+	}, nil
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	ctx        context.Context
-	done       bool
-	closed     bool
-	inputEnded bool
-	hasText    bool
-	flushed    bool
-	text       string
-	exception  error
+	mu           sync.Mutex
+	stateChanged chan struct{}
+	ctx          context.Context
+	done         bool
+	closed       bool
+	inputEnded   bool
+	hasText      bool
+	flushed      bool
+	text         string
+	exception    error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -156,7 +168,14 @@ func (s *nvidiaTTSChunkedStream) Exception() error {
 	return s.exception
 }
 
+func (s *nvidiaTTSSynthesizeStream) notifyLocked() {
+	close(s.stateChanged)
+	s.stateChanged = make(chan struct{})
+}
+
 func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
@@ -167,6 +186,7 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true
 			s.exception = err
+			s.notifyLocked()
 			return err
 		}
 	}
@@ -178,10 +198,13 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.hasText = true
 	s.text += text
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
@@ -192,16 +215,20 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true
 			s.exception = err
+			s.notifyLocked()
 			return err
 		}
 	}
 	if s.hasText {
 		s.flushed = true
+		s.notifyLocked()
 	}
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
@@ -212,6 +239,7 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 		if err := s.ctx.Err(); err != nil {
 			s.done = true
 			s.exception = err
+			s.notifyLocked()
 			return err
 		}
 	}
@@ -222,45 +250,79 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 	if !s.hasText {
 		s.done = true
 	}
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed = true
 	s.done = true
+	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
-		s.done = true
-		return nil, io.EOF
-	}
-	if s.inputEnded && !s.hasText {
-		s.done = true
-		return nil, io.EOF
-	}
-	if s.inputEnded && strings.TrimSpace(s.text) == "" {
-		s.done = true
-		return nil, io.EOF
-	}
-	if s.ctx != nil {
-		if err := s.ctx.Err(); err != nil {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.done = true
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.inputEnded && !s.hasText {
+			s.done = true
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.inputEnded && strings.TrimSpace(s.text) == "" {
+			s.done = true
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		if s.ctx != nil {
+			if err := s.ctx.Err(); err != nil {
+				s.done = true
+				s.exception = err
+				s.mu.Unlock()
+				return nil, err
+			}
+		}
+		if s.hasText && strings.TrimSpace(s.text) != "" {
+			err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 			s.done = true
 			s.exception = err
+			s.mu.Unlock()
 			return nil, err
 		}
+		changed := s.stateChanged
+		ctx := s.ctx
+		s.mu.Unlock()
+		if ctx == nil {
+			<-changed
+			continue
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			s.mu.Lock()
+			s.done = true
+			s.exception = ctx.Err()
+			s.mu.Unlock()
+			return nil, ctx.Err()
+		}
 	}
-	err := fmt.Errorf("nvidia riva tts streaming is not implemented")
-	s.done = true
-	s.exception = err
-	return nil, err
 }
 
 func (s *nvidiaTTSSynthesizeStream) Done() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.done
 }
 
 func (s *nvidiaTTSSynthesizeStream) Exception() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.exception
 }
