@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -20,7 +21,10 @@ const (
 	defaultNvidiaTTSSampleRate = 16000
 	nvidiaAPIKeyEnv            = "NVIDIA_API_KEY"
 	nvidiaTTSMissingAPIKey     = "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	nvidiaTTSWhitespaceCutset  = " \t\r\n\f\v"
 )
+
+var nvidiaTTSNewlineWhitespace = regexp.MustCompile(`\s*\n+\s*`)
 
 type NvidiaTTS struct {
 	apiKey       string
@@ -199,13 +203,19 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	text = strings.ReplaceAll(text, "\n", " ")
+	text, collapsePreviousWhitespace := nvidiaTTSNormalizeInputText(text)
 	if s.flushed && s.pendingText != "" {
+		if collapsePreviousWhitespace {
+			s.pendingText = strings.TrimRight(s.pendingText, nvidiaTTSWhitespaceCutset)
+		}
 		s.pendingText += text
 		s.notifyLocked()
 		return nil
 	}
 	s.hasText = true
+	if collapsePreviousWhitespace {
+		s.text = strings.TrimRight(s.text, nvidiaTTSWhitespaceCutset)
+	}
 	s.text += text
 	if prefix, tail, ok := nvidiaTTSCompletedSentencePrefix(s.text); ok {
 		s.text = prefix
@@ -341,6 +351,24 @@ func (s *nvidiaTTSSynthesizeStream) Exception() error {
 	return s.exception
 }
 
+func nvidiaTTSNormalizeInputText(text string) (string, bool) {
+	return nvidiaTTSNewlineWhitespace.ReplaceAllString(text, " "), nvidiaTTSStartsWithNewlineGroup(text)
+}
+
+func nvidiaTTSStartsWithNewlineGroup(text string) bool {
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '\n':
+			return true
+		case ' ', '\t', '\r', '\f', '\v':
+			continue
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if utf8.RuneCountInString(trimmed) < 21 {
@@ -392,16 +420,16 @@ func nvidiaTTSQuotedBoundaryEnd(text string, next int) (int, bool) {
 		return next + 1, true
 	}
 	if strings.HasPrefix(text[next:], "”") {
-		return next + len("”"), true
+		return next + len("”"), false
 	}
-	if text[next] == '\'' || text[next] == ')' {
+	if text[next] == '\'' || text[next] == ')' || text[next] == ']' || text[next] == '}' {
 		return next + 1, false
 	}
 	return next, false
 }
 
 func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
-	if nvidiaTTSProtectedAbbreviation(text[:dot]) {
+	if nvidiaTTSProtectedAbbreviation(text[:dot], text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedInitial(text, dot, text[next:]) {
@@ -410,10 +438,13 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedSuffix(text, dot, text[next:]) {
 		return true
 	}
-	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
+	if nvidiaTTSFirstPhDDot(text, dot) {
 		return true
 	}
-	if nvidiaTTSProtectedPhD(text, dot) {
+	if nvidiaTTSFinalPhDDot(text, dot) {
+		return !nvidiaTTSTailStartsSentence(text[next:])
+	}
+	if nvidiaTTSProtectedAcronym(text, dot, text[next:]) {
 		return true
 	}
 	if nvidiaTTSProtectedDecimal(text, dot, next) {
@@ -422,7 +453,7 @@ func nvidiaTTSProtectedPeriod(text string, dot int, next int) bool {
 	if nvidiaTTSProtectedWebsite(text[next:]) {
 		return true
 	}
-	return nvidiaTTSProtectedMultipleDots(text, dot, next)
+	return nvidiaTTSProtectedMultipleDots(text, dot, next, text[next:])
 }
 
 func nvidiaTTSProtectedDecimal(text string, dot int, next int) bool {
@@ -438,18 +469,24 @@ func nvidiaTTSProtectedWebsite(tail string) bool {
 	return false
 }
 
-func nvidiaTTSProtectedMultipleDots(text string, dot int, next int) bool {
-	return (dot > 0 && text[dot-1] == '.') || (next < len(text) && text[next] == '.')
+func nvidiaTTSProtectedMultipleDots(text string, dot int, next int, tail string) bool {
+	if next < len(text) && text[next] == '.' {
+		return true
+	}
+	if dot > 0 && text[dot-1] == '.' {
+		return !nvidiaTTSASCIITailStartsCapital(tail)
+	}
+	return false
 }
 
-func nvidiaTTSProtectedAbbreviation(prefix string) bool {
+func nvidiaTTSProtectedAbbreviation(prefix string, tail string) bool {
 	fields := strings.Fields(prefix)
 	if len(fields) == 0 {
 		return false
 	}
 	switch fields[len(fields)-1] {
-	case "Mr", "St", "Mrs", "Ms", "Dr":
-		return true
+	case "Mr", "St", "Mrs", "Ms", "Dr", "Prof", "Capt", "Cpt", "Lt":
+		return !nvidiaTTSTailStartsSentence(tail)
 	default:
 		return false
 	}
@@ -463,7 +500,7 @@ func nvidiaTTSProtectedAcronym(text string, dot int, tail string) bool {
 		if letters > 3 {
 			return false
 		}
-		return !nvidiaTTSAcronymEndingAtIsUppercase(text, dot, letters) || !nvidiaTTSTailStartsSentence(tail)
+		return !nvidiaTTSTailStartsSentence(tail)
 	}
 	next := dot + 1
 	return next+1 < len(text) && nvidiaTTSASCIIAlpha(text[next]) && text[next+1] == '.'
@@ -480,23 +517,15 @@ func nvidiaTTSAcronymLettersEndingAt(text string, dot int) int {
 	return letters
 }
 
-func nvidiaTTSAcronymEndingAtIsUppercase(text string, dot int, letters int) bool {
-	for i := dot; letters > 0 && i >= 1; i, letters = i-2, letters-1 {
-		if text[i] != '.' || text[i-1] < 'A' || text[i-1] > 'Z' {
-			return false
-		}
-	}
-	return true
-}
-
 func nvidiaTTSASCIIAlpha(b byte) bool {
 	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }
 
-func nvidiaTTSProtectedPhD(text string, dot int) bool {
-	if dot >= 2 && text[dot-2:dot+1] == "Ph." {
-		return dot+2 < len(text) && text[dot+1:dot+3] == "D."
-	}
+func nvidiaTTSFirstPhDDot(text string, dot int) bool {
+	return dot >= 2 && text[dot-2:dot+1] == "Ph." && dot+2 < len(text) && text[dot+1:dot+3] == "D."
+}
+
+func nvidiaTTSFinalPhDDot(text string, dot int) bool {
 	return dot >= 4 && text[dot-4:dot+1] == "Ph.D."
 }
 
@@ -522,7 +551,7 @@ func nvidiaTTSASCIITailStartsCapital(tail string) bool {
 }
 
 func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
-	for _, suffix := range []string{"Inc", "Ltd", "Jr", "Sr", "Co"} {
+	for _, suffix := range []string{"Inc", "Ltd", "LLC", "Corp", "Jr", "Sr", "Co"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
@@ -542,10 +571,10 @@ func nvidiaTTSASCIIWhitespace(b byte) bool {
 }
 
 func nvidiaTTSTailStartsSentence(tail string) bool {
-	if !strings.HasPrefix(tail, " ") {
+	if tail == "" || !nvidiaTTSASCIIWhitespace(tail[0]) {
 		return false
 	}
-	trimmed := strings.TrimPrefix(tail, " ")
+	trimmed := strings.TrimLeft(tail, nvidiaTTSWhitespaceCutset)
 	if trimmed == "" {
 		return false
 	}
@@ -554,7 +583,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This"} {
+	for _, starter := range []string{"I", "You", "Can", "Do", "Is", "Are", "Why", "When", "Where", "Also", "Then", "He", "She", "It", "They", "Their", "Our", "We", "But", "However", "That", "This", "Next", "Please"} {
 		if strings.HasPrefix(trimmed, starter) && len(trimmed) > len(starter) {
 			switch trimmed[len(starter)] {
 			case ' ', '\t', '\n', '\r':
