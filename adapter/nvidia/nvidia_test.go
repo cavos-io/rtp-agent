@@ -4250,6 +4250,69 @@ func TestNvidiaTTSStreamDoesNotSplitAdministrativeAbbreviationNonStarterLikeRefe
 	}
 }
 
+func TestNvidiaTTSStreamDoesNotSplitStateAbbreviationNonStarterLikeReference(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "Ala", text: "Please ask about Ala. Tomorrow follows"},
+		{name: "Ariz", text: "Please ask about Ariz. Tomorrow follows"},
+		{name: "Ark", text: "Please ask about Ark. Tomorrow follows"},
+		{name: "Calif", text: "Please ask about Calif. Tomorrow follows"},
+		{name: "Colo", text: "Please ask about Colo. Tomorrow follows"},
+		{name: "Conn", text: "Please ask about Conn. Tomorrow follows"},
+		{name: "Del", text: "Please ask about Del. Tomorrow follows"},
+		{name: "Fla", text: "Please ask about Fla. Tomorrow follows"},
+		{name: "Ga", text: "Please ask about Ga. Tomorrow follows"},
+		{name: "Ill", text: "Please ask about Ill. Tomorrow follows"},
+		{name: "Ind", text: "Please ask about Ind. Tomorrow follows"},
+		{name: "Kans", text: "Please ask about Kans. Tomorrow follows"},
+		{name: "Ky", text: "Please ask about Ky. Tomorrow follows"},
+		{name: "Mass", text: "Please ask about Mass. Tomorrow follows"},
+		{name: "Mich", text: "Please ask about Mich. Tomorrow follows"},
+		{name: "Minn", text: "Please ask about Minn. Tomorrow follows"},
+		{name: "Miss", text: "Please ask about Miss. Tomorrow follows"},
+		{name: "Mont", text: "Please ask about Mont. Tomorrow follows"},
+		{name: "Neb", text: "Please ask about Neb. Tomorrow follows"},
+		{name: "Nev", text: "Please ask about Nev. Tomorrow follows"},
+		{name: "Okla", text: "Please ask about Okla. Tomorrow follows"},
+		{name: "Ore", text: "Please ask about Ore. Tomorrow follows"},
+		{name: "Penn", text: "Please ask about Penn. Tomorrow follows"},
+		{name: "Tenn", text: "Please ask about Tenn. Tomorrow follows"},
+		{name: "Tex", text: "Please ask about Tex. Tomorrow follows"},
+		{name: "Va", text: "Please ask about Va. Tomorrow follows"},
+		{name: "Vt", text: "Please ask about Vt. Tomorrow follows"},
+		{name: "Wash", text: "Please ask about Wash. Tomorrow follows"},
+		{name: "Wis", text: "Please ask about Wis. Tomorrow follows"},
+		{name: "Wyo", text: "Please ask about Wyo. Tomorrow follows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, err := NewNvidiaTTS("secret", "")
+			if err != nil {
+				t.Fatalf("NewNvidiaTTS error = %v", err)
+			}
+			stream, err := provider.Stream(context.Background())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+			if !ok {
+				t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+			}
+
+			if err := stream.PushText(tc.text); err != nil {
+				t.Fatalf("PushText() error = %v", err)
+			}
+			if concrete.flushed {
+				t.Fatal("flushed = true after state abbreviation, want wait for real sentence boundary")
+			}
+			if got := concrete.text; got != tc.text {
+				t.Fatalf("text = %q, want unsplit state abbreviation text %q", got, tc.text)
+			}
+		})
+	}
+}
+
 func TestNvidiaTTSStreamDoesNotSplitCapitalAbbreviationNonStarterLikeReference(t *testing.T) {
 	for _, tc := range []struct {
 		name string

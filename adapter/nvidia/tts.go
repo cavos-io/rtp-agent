@@ -567,7 +567,7 @@ func nvidiaTTSProtectedSuffix(text string, dot int, tail string) bool {
 		}
 		return !nvidiaTTSTailStartsSentence(tail)
 	}
-	for _, suffix := range []string{"Agric", "Assoc", "Assn", "Asst", "Atty", "Ave", "Bldg", "Blvd", "Bros", "Ch", "Chem", "Cmdr", "Comm", "Comp", "Cong", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fr", "Govt", "Hon", "Hosp", "Hr", "Inst", "Intl", "Lab", "Mach", "Med", "Mfg", "Mgr", "Messrs", "Mktg", "Mmes", "Msgr", "Mt", "Mtg", "Natl", "No", "Org", "Rd", "Ref", "Sec", "Serv", "Sta", "Supt", "Tech", "Tel", "Trans", "Univ", "Util", "Vol"} {
+	for _, suffix := range []string{"Agric", "Ala", "Ariz", "Ark", "Assoc", "Assn", "Asst", "Atty", "Ave", "Bldg", "Blvd", "Bros", "Calif", "Ch", "Chem", "Cmdr", "Colo", "Comm", "Comp", "Cong", "Conn", "Del", "Dept", "Dir", "Dist", "Div", "Eng", "Engr", "Esq", "Fig", "Fla", "Fr", "Ga", "Govt", "Hon", "Hosp", "Hr", "Ill", "Ind", "Inst", "Intl", "Kans", "Ky", "Lab", "Mach", "Mass", "Med", "Mfg", "Mich", "Mgr", "Minn", "Miss", "Messrs", "Mktg", "Mmes", "Mont", "Msgr", "Mt", "Mtg", "Natl", "Neb", "Nev", "No", "Okla", "Ore", "Org", "Penn", "Rd", "Ref", "Sec", "Serv", "Sta", "Supt", "Tech", "Tel", "Tenn", "Tex", "Trans", "Univ", "Util", "Va", "Vol", "Vt", "Wash", "Wis", "Wyo"} {
 		start := dot - len(suffix)
 		if start <= 0 || !nvidiaTTSASCIIWhitespace(text[start-1]) || text[start:dot] != suffix {
 			continue
