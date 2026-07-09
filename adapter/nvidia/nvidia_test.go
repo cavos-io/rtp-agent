@@ -2149,6 +2149,96 @@ func TestNvidiaRealtimeInstructionUpdateDuringRetryReconnectsLikeReference(t *te
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateAfterRetryReconnectRestartsAgainLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	requestPaths := make(chan string, 6)
+	connected := make(chan struct{}, 2)
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths <- r.URL.RawQuery
+		if attempts.Add(1) == 1 {
+			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		connected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-session.EventCh():
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry update: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial retryable dial error")
+	}
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before retry reconnect: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnect after instruction update during retry")
+	}
+
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before second instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect after post-retry instruction update")
+	}
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+			t.Fatalf("event after second instruction reconnect = %+v, want session_reconnected", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session_reconnected after second instruction reconnect")
+	}
+
+	var sawNewerPrompt bool
+	for {
+		select {
+		case query := <-requestPaths:
+			if strings.Contains(query, "text_prompt=newer%20prompt") {
+				sawNewerPrompt = true
+			}
+		default:
+			if !sawNewerPrompt {
+				t.Fatal("second reconnect did not use newer text_prompt")
+			}
+			return
+		}
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateClearsPendingAudioLikeReference(t *testing.T) {
 	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeTextPrompt("old prompt"))
 	session, err := realtimeModel.Session()

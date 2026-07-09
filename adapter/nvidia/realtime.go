@@ -493,6 +493,9 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		go s.emitSessionReconnectedAfterTransportDone(transportDone)
 		s.startRealtimeTransportLocked()
 	} else if s.preconnect {
+		if wasRetrying {
+			s.restartPending = false
+		}
 		s.startRealtimeTransportLocked()
 		if !wasRetrying {
 			s.events.send(llm.RealtimeEvent{
