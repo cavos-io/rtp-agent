@@ -2732,7 +2732,7 @@ func speechmaticsRawTranscriptEventFromGroup(eventType stt.SpeechEventType, frag
 	if fragments[0].formatSpeakerID != "" || speakerID == "" {
 		formatSpeakerID = fragments[0].formatSpeakerID
 	}
-	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, active, state)
+	text = speechmaticsFormattedSegmentText(text, formatSpeakerID, fragments[0].language, fragments[0].startTime, fragments[len(fragments)-1].endTime, nil, active, state)
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
@@ -2798,7 +2798,9 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		if speechmaticsSegmentSpeakerIDNull(resp, i) {
 			formatSpeakerID = "None"
 		}
-		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, active, state)
+		startTime := segment.Metadata.StartTime + startTimeOffset
+		endTime := segment.Metadata.EndTime + startTimeOffset
+		text := speechmaticsFormattedSegmentText(segment.Text, formatSpeakerID, speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state), startTime, endTime, segment.Annotation, active, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
@@ -2806,8 +2808,8 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 					Text:      text,
 					Language:  speechmaticsSegmentLanguage(segment.Language, speechmaticsSegmentLanguagePresent(resp, i), state),
 					SpeakerID: speakerID,
-					StartTime: segment.Metadata.StartTime + startTimeOffset,
-					EndTime:   segment.Metadata.EndTime + startTimeOffset,
+					StartTime: startTime,
+					EndTime:   endTime,
 				},
 			},
 		})
@@ -3013,7 +3015,7 @@ func speechmaticsSegmentSpeakerID(speakerID string, present bool) string {
 	return "UU"
 }
 
-func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state *speechmaticsStreamState) string {
+func speechmaticsFormattedSegmentText(text, speakerID, language string, startTime, endTime float64, annotation []string, active bool, state *speechmaticsStreamState) string {
 	format := ""
 	if state != nil {
 		if active {
@@ -3025,8 +3027,50 @@ func speechmaticsFormattedSegmentText(text, speakerID string, active bool, state
 	if format == "" {
 		format = "{text}"
 	}
-	format = strings.ReplaceAll(format, "{speaker_id}", speakerID)
-	return strings.ReplaceAll(format, "{text}", text)
+	ts := ""
+	if state != nil && state.startTime > 0 {
+		ts = speechmaticsReferenceTimestamp(state.startTime + startTime)
+	}
+	replacer := strings.NewReplacer(
+		"{speaker_id}", speakerID,
+		"{text}", text,
+		"{content}", text,
+		"{lang}", language,
+		"{start_time}", speechmaticsReferenceFloatText(startTime),
+		"{end_time}", speechmaticsReferenceFloatText(endTime),
+		"{annotation}", speechmaticsReferenceStringListText(annotation),
+		"{ts}", ts,
+	)
+	return replacer.Replace(format)
+}
+
+func speechmaticsReferenceFloatText(value float64) string {
+	text := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.ContainsAny(text, ".eE") {
+		text += ".0"
+	}
+	return text
+}
+
+func speechmaticsReferenceStringListText(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, "'"+strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`)+"'")
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func speechmaticsReferenceTimestamp(seconds float64) string {
+	sec, frac := math.Modf(seconds)
+	msec := int64(math.Round(frac * 1000))
+	if msec >= 1000 {
+		sec++
+		msec -= 1000
+	}
+	return time.Unix(int64(sec), msec*int64(time.Millisecond)).UTC().Format("2006-01-02T15:04:05.000+00:00")
 }
 
 func speechmaticsStartTimeOffset(state *speechmaticsStreamState) float64 {

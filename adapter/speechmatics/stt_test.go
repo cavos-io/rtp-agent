@@ -1605,6 +1605,33 @@ func TestSpeechmaticsEventsRawTranscriptAppliesReferencePassiveSpeakerFormat(t *
 	}
 }
 
+func TestSpeechmaticsEventsRawTranscriptAppliesReferenceExtendedSpeakerFormat(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddTranscript",
+		"results":[{
+			"type":"word",
+			"start_time":0.1,
+			"end_time":0.3,
+			"alternatives":[{"content":"hello","confidence":0.9,"speaker":"S1","language":"en"}]
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal raw speaker transcript: %v", err)
+	}
+	state := &speechmaticsStreamState{
+		startTime:           1700000000,
+		speakerActiveFormat: "{speaker_id}|{text}|{content}|{lang}|{start_time}|{end_time}|{annotation}|{ts}",
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one raw transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "S1|hello|hello|en|0.1|0.3|[]|2023-11-14T22:13:20.100+00:00" {
+		t.Fatalf("text = %q, want reference extended speaker format", got)
+	}
+}
+
 func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	tests := []struct {
 		message string
@@ -2364,6 +2391,33 @@ func TestSpeechmaticsSegmentEventsTreatReferenceNullActiveAsPassive(t *testing.T
 	}
 	if got := events[0].Alternatives[0].Text; got != "@S1 [background]: null active" {
 		t.Fatalf("text = %q, want reference passive format for explicit null is_active", got)
+	}
+}
+
+func TestSpeechmaticsSegmentEventsApplyReferenceExtendedSpeakerFormat(t *testing.T) {
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"hello",
+			"language":"en",
+			"speaker_id":"S1",
+			"annotation":["ends_with_final","ends_with_eos"],
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+	state := &speechmaticsStreamState{
+		speakerActiveFormat: "{speaker_id}|{text}|{content}|{lang}|{start_time}|{end_time}|{annotation}",
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 1 || len(events[0].Alternatives) != 1 {
+		t.Fatalf("events = %#v, want one transcript", events)
+	}
+	if got := events[0].Alternatives[0].Text; got != "S1|hello|hello|en|0.1|0.4|['ends_with_final', 'ends_with_eos']" {
+		t.Fatalf("text = %q, want reference extended speaker format", got)
 	}
 }
 
