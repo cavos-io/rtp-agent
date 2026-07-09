@@ -429,6 +429,21 @@ func TestPerformToolExecutionsMasksInternalErrors(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsToolErrorOutputIsVisibleButInternalErrorIsMasked(t *testing.T) {
+	toolErr := executeOneToolCall(t, &fakeGenerationTool{name: "lookup", err: llm.NewToolError("visible tool failure")})
+	if toolErr.FncCallOut == nil || !toolErr.FncCallOut.IsError || toolErr.FncCallOut.Output != "visible tool failure" {
+		t.Fatalf("ToolError output = %#v, want visible error output", toolErr.FncCallOut)
+	}
+
+	internal := executeOneToolCall(t, &fakeGenerationTool{name: "lookup", err: errors.New("database password leaked")})
+	if internal.FncCallOut == nil || !internal.FncCallOut.IsError {
+		t.Fatalf("internal error output = %#v, want masked error output", internal.FncCallOut)
+	}
+	if strings.Contains(internal.FncCallOut.Output, "database password leaked") {
+		t.Fatalf("internal error output = %q, want masked message", internal.FncCallOut.Output)
+	}
+}
+
 func TestPerformToolExecutionsReportsUnknownFunctionAsToolError(t *testing.T) {
 	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "ignored"}})
 	functionCh := make(chan *llm.FunctionToolCall, 1)
