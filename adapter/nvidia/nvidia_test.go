@@ -655,6 +655,19 @@ func TestNvidiaSTTAllowsEmptyLanguageLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTAllowsZeroSampleRateLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(0))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	if got, want := provider.sampleRate, 0; got != want {
+		t.Fatalf("sampleRate = %d, want explicit zero sample rate", got)
+	}
+	if got, want := provider.InputSampleRate(), uint32(0); got != want {
+		t.Fatalf("InputSampleRate() = %d, want explicit zero sample rate", got)
+	}
+}
+
 func TestNvidiaSTTResponseEventsMatchReferenceOrdering(t *testing.T) {
 	stream := &nvidiaSTTStream{
 		language:        "en-US",
