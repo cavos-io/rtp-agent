@@ -79,6 +79,7 @@ type nvidiaRealtimeSession struct {
 	transportCancel    context.CancelFunc
 	transportDone      chan struct{}
 	transportNotify    chan struct{}
+	transportReady     bool
 	transportSent      int
 	retryDelay         time.Duration
 	retryTimer         *time.Timer
@@ -508,7 +509,9 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	if s.restartPending {
-		if s.restartEventQueued && len(s.events.in) == 0 && len(s.events.out) == 0 {
+		if s.transportReady {
+			s.restartPending = false
+		} else if s.restartEventQueued && len(s.events.in) == 0 && len(s.events.out) == 0 {
 			s.restartPending = false
 			s.restartEventQueued = false
 		} else {
@@ -662,6 +665,7 @@ func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
 	s.transportStarted = false
 	s.transportCtx = nil
 	s.transportDone = nil
+	s.transportReady = false
 	s.notifyRealtimeTransportLocked()
 }
 
@@ -898,6 +902,11 @@ func (s *nvidiaRealtimeSession) waitRealtimeHandshake(ctx context.Context, conn 
 			continue
 		}
 		if data[0] == nvidiaRealtimeMsgHandshake {
+			s.mu.Lock()
+			if s.transportCtx == ctx && !s.closed {
+				s.transportReady = true
+			}
+			s.mu.Unlock()
 			return true
 		}
 		s.handleBinaryMessage(data)

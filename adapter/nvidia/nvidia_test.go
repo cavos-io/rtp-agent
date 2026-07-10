@@ -2270,6 +2270,125 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateDuringReconnectRestartsAgainLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	firstConnected := make(chan struct{}, 1)
+	secondConnected := make(chan struct{}, 1)
+	thirdConnected := make(chan struct{}, 1)
+	releaseSecond := make(chan struct{})
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		switch attempt {
+		case 1:
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			firstConnected <- struct{}{}
+			<-r.Context().Done()
+		case 2:
+			if !strings.Contains(r.URL.RawQuery, "text_prompt=new%20prompt") {
+				serverErr <- errors.New("second reconnect did not use first updated prompt")
+				return
+			}
+			secondConnected <- struct{}{}
+			select {
+			case <-releaseSecond:
+			case <-r.Context().Done():
+			}
+		case 3:
+			if !strings.Contains(r.URL.RawQuery, "text_prompt=newer%20prompt") {
+				serverErr <- errors.New("third reconnect did not use latest updated prompt")
+				return
+			}
+			thirdConnected <- struct{}{}
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	select {
+	case <-firstConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-secondConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first instruction reconnect")
+	}
+	deadline := time.After(time.Second)
+	for {
+		concrete.mu.Lock()
+		ready := concrete.transportReady
+		concrete.mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for first instruction reconnect handshake")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+	close(releaseSecond)
+	select {
+	case <-thirdConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before second instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second instruction reconnect with latest prompt")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateDuringRetryReconnectsLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	requestPaths := make(chan string, 4)
