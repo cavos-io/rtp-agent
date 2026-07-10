@@ -2800,19 +2800,26 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if !ok {
 		t.Fatal("chunked stream does not implement tts.ExceptionStream")
 	}
+	concrete, ok := stream.(*nvidiaTTSChunkedStream)
+	if !ok {
+		t.Fatalf("chunked stream type = %T, want *nvidiaTTSChunkedStream", stream)
+	}
+	if got, want := concrete.text, "hello"; got != want {
+		t.Fatalf("chunked stream input text = %q, want %q", got, want)
+	}
 	if doneStream.Done() {
 		t.Fatal("Done() = true before synthesis output")
 	}
-	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
-		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported synthesis error", audio, err)
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported streaming error from synthesize-with-stream path", audio, err)
 	}
 	if !doneStream.Done() {
 		t.Fatal("Done() = false after synthesis error")
 	}
-	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
-		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("Exception() after synthesis error = %v, want unsupported streaming error", err)
 	}
-	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
 		t.Fatalf("Next() after synthesis error = (%v, %v), want repeated reference task exception", audio, err)
 	}
 }

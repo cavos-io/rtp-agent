@@ -162,7 +162,7 @@ func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.done = true
 		return nil, io.EOF
 	}
-	err := fmt.Errorf("nvidia riva tts synthesis is not implemented")
+	err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 	s.done = true
 	s.exception = err
 	return nil, err
