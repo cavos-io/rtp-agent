@@ -27,16 +27,24 @@ const (
 var nvidiaTTSNewlineWhitespace = regexp.MustCompile(`\s*\n+\s*`)
 
 type NvidiaTTS struct {
-	apiKey       string
-	voice        string
-	functionID   string
-	server       string
-	sampleRate   int
-	useSSL       bool
-	languageCode string
+	apiKey         string
+	apiKeyExplicit bool
+	voice          string
+	functionID     string
+	server         string
+	sampleRate     int
+	useSSL         bool
+	languageCode   string
 }
 
 type NvidiaTTSOption func(*NvidiaTTS)
+
+func WithNvidiaTTSAPIKey(apiKey string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		t.apiKey = apiKey
+		t.apiKeyExplicit = true
+	}
+}
 
 func WithNvidiaTTSServer(server string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
@@ -88,7 +96,7 @@ func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*Nvidia
 	for _, opt := range opts {
 		opt(provider)
 	}
-	if provider.useSSL && provider.apiKey == "" {
+	if provider.useSSL && provider.apiKey == "" && !provider.apiKeyExplicit {
 		return nil, fmt.Errorf("%s", nvidiaTTSMissingAPIKey)
 	}
 	return provider, nil

@@ -2688,6 +2688,18 @@ func TestNvidiaTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAllowsExplicitEmptyAPIKeyLikeReference(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "env-secret")
+
+	provider, err := NewNvidiaTTS("", "", WithNvidiaTTSAPIKey(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS explicit empty api key error = %v, want nil like reference", err)
+	}
+	if got, want := provider.apiKey, ""; got != want {
+		t.Fatalf("apiKey = %q, want explicit empty key", got)
+	}
+}
+
 func TestNvidiaTTSRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "")
 
