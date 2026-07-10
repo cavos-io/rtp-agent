@@ -2473,6 +2473,40 @@ func TestNvidiaRealtimeAudioDuringRetryWaitsForBackoffLikeReference(t *testing.T
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateDuringRetryWaitsForBackoffLikeReference(t *testing.T) {
+	retryTimer := time.AfterFunc(time.Hour, func() {})
+	defer retryTimer.Stop()
+	session := &nvidiaRealtimeSession{
+		baseURL:         "127.0.0.1:1",
+		voice:           defaultNvidiaRealtimeVoice,
+		textPrompt:      "old prompt",
+		transportNotify: make(chan struct{}),
+		retryTimer:      retryTimer,
+		events:          newNvidiaRealtimeEventStream(nil),
+		preconnect:      true,
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() during retry backoff error = %v", err)
+	}
+
+	session.mu.Lock()
+	started := session.transportStarted
+	pendingRetry := session.retryTimer != nil
+	prompt := session.textPrompt
+	session.mu.Unlock()
+	if started {
+		t.Fatal("UpdateInstructions() during retry backoff started transport before retry timer fired")
+	}
+	if !pendingRetry {
+		t.Fatal("retryTimer cleared, want existing retry backoff preserved")
+	}
+	if prompt != "new prompt" {
+		t.Fatalf("textPrompt = %q, want updated prompt for retry reconnect", prompt)
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateDuringReconnectRestartsAgainLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	firstConnected := make(chan struct{}, 1)

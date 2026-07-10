@@ -527,7 +527,11 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	wasRetrying := s.retryTimer != nil
 	s.textPrompt = instructions
 	s.restartPending = true
-	s.resetRealtimeTransportLocked()
+	if wasRetrying {
+		s.resetRealtimeTransportPreservingRetryLocked()
+	} else {
+		s.resetRealtimeTransportLocked()
+	}
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
 		go s.restartRealtimeTransportAfterDone(transportDone)
@@ -535,11 +539,10 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 		if wasRetrying {
 			s.restartPending = false
 			s.restartEventQueued = false
+			return nil
 		}
 		s.startRealtimeTransportLocked()
-		if !wasRetrying {
-			s.sendSessionReconnectedLocked()
-		}
+		s.sendSessionReconnectedLocked()
 	} else {
 		s.sendSessionReconnectedLocked()
 	}
@@ -644,7 +647,15 @@ func (s *nvidiaRealtimeSession) websocketURL() string {
 }
 
 func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
-	s.stopRealtimeTransportLocked()
+	s.resetRealtimeTransportStateLocked(false)
+}
+
+func (s *nvidiaRealtimeSession) resetRealtimeTransportPreservingRetryLocked() {
+	s.resetRealtimeTransportStateLocked(true)
+}
+
+func (s *nvidiaRealtimeSession) resetRealtimeTransportStateLocked(preserveRetry bool) {
+	s.stopRealtimeTransportLocked(preserveRetry)
 	s.outboundMessages = nil
 	s.transportSent = 0
 	s.inputAudioBuffer = nil
@@ -657,12 +668,12 @@ func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
 	s.opusDecoder = nil
 }
 
-func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
+func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked(preserveRetry bool) {
 	if s.transportCancel != nil {
 		s.transportCancel()
 		s.transportCancel = nil
 	}
-	if s.retryTimer != nil {
+	if s.retryTimer != nil && !preserveRetry {
 		s.retryTimer.Stop()
 		s.retryTimer = nil
 	}
