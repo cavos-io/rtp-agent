@@ -1092,14 +1092,16 @@ func (s *speechmaticsRealtimeSession) handleInputTranscriptFailed(event map[stri
 	if partial == "" {
 		return false
 	}
+	transcription := &llm.InputTranscriptionCompleted{
+		ItemID:       itemID,
+		ContentIndex: contentIndex,
+		Transcript:   partial,
+		IsFinal:      true,
+	}
+	s.trackFinalInputTranscription(transcription)
 	return s.emitRealtimeEvent(llm.RealtimeEvent{
-		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
-		InputTranscription: &llm.InputTranscriptionCompleted{
-			ItemID:       itemID,
-			ContentIndex: contentIndex,
-			Transcript:   partial,
-			IsFinal:      true,
-		},
+		Type:               llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: transcription,
 	})
 }
 

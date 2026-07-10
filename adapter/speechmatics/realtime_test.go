@@ -1106,6 +1106,19 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
 
 	if ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "msg_user_failed",
+			"type":    "message",
+			"role":    "user",
+			"content": []any{map[string]any{"type": "input_audio"}},
+		},
+	}); !ok {
+		t.Fatal("conversation item added event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+
+	if ok := session.handleServerEvent(map[string]any{
 		"type":          "conversation.item.input_audio_transcription.delta",
 		"item_id":       "msg_user_failed",
 		"content_index": 1,
@@ -1127,6 +1140,12 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 	final := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
 	if final.InputTranscription == nil || final.InputTranscription.Transcript != "half " || !final.InputTranscription.IsFinal {
 		t.Fatalf("failed transcript final = %#v, want accumulated partial final=true", final.InputTranscription)
+	}
+	session.mu.Lock()
+	tracked, _ := session.remoteItems["msg_user_failed"].(*llm.ChatMessage)
+	session.mu.Unlock()
+	if tracked == nil || len(tracked.Content) != 1 || tracked.Content[0].Text != "half " {
+		t.Fatalf("tracked failed transcript = %#v, want finalized partial", tracked)
 	}
 
 	if ok := session.handleServerEvent(map[string]any{
