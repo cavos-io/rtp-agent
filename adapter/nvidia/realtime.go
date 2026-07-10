@@ -425,9 +425,19 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		srcNumerator := (outputStart + uint64(outIdx)) * uint64(frame.SampleRate)
 		srcGlobal := srcNumerator / uint64(outputRate)
 		srcRemainder := srcNumerator % uint64(outputRate)
+		outOffsetBase := outIdx * sampleBytes
 		if srcGlobal < inputStart {
-			if len(previousSample) == sampleBytes {
-				copy(out[outIdx*sampleBytes:(outIdx+1)*sampleBytes], previousSample)
+			if len(previousSample) == sampleBytes && inputStart-srcGlobal == 1 {
+				for ch := 0; ch < channelCount; ch++ {
+					prevOffset := ch * 2
+					outOffset := outOffsetBase + prevOffset
+					sample := int16(binary.LittleEndian.Uint16(previousSample[prevOffset:]))
+					if srcRemainder != 0 && inputSamples > 0 {
+						nextSample := int16(binary.LittleEndian.Uint16(frame.Data[prevOffset:]))
+						sample = interpolateNvidiaRealtimeSample(sample, nextSample, srcRemainder, uint64(outputRate))
+					}
+					binary.LittleEndian.PutUint16(out[outOffset:], uint16(sample))
+				}
 				continue
 			}
 			srcGlobal = inputStart
@@ -441,7 +451,7 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		}
 		for ch := 0; ch < channelCount; ch++ {
 			inOffset := (srcIdx*channelCount + ch) * 2
-			outOffset := (outIdx*channelCount + ch) * 2
+			outOffset := outOffsetBase + ch*2
 			sample := int16(binary.LittleEndian.Uint16(frame.Data[inOffset:]))
 			if srcRemainder != 0 && srcIdx+1 < inputSamples {
 				nextOffset := ((srcIdx+1)*channelCount + ch) * 2

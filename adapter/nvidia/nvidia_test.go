@@ -439,6 +439,28 @@ func TestNvidiaRealtimeInputResamplerInterpolatesBetweenSamplesLikeReference(t *
 	}
 }
 
+func TestNvidiaRealtimeInputResamplerInterpolatesAcrossFrameBoundaryLikeReference(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{1000, 2000}),
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	previous := int16SliceToLittleEndianBytes([]int16{0})
+
+	resampled, err := resampleNvidiaRealtimeInputFrame(frame, 24000, 1, 10, 5, previous)
+	if err != nil {
+		t.Fatalf("resampleNvidiaRealtimeInputFrame() error = %v", err)
+	}
+	got := littleEndianBytesToInt16Slice(resampled.Data)
+	if len(got) != 1 {
+		t.Fatalf("resampled samples = %v, want 1 sample", got)
+	}
+	if got[0] <= 0 || got[0] >= 1000 {
+		t.Fatalf("resampled boundary sample = %v, want interpolation between previous and current frame", got)
+	}
+}
+
 func TestNvidiaRealtimePushAudioBuffersSmallResampledFramesLikeReference(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
