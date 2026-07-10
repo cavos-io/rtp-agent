@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -7477,6 +7478,117 @@ func TestNvidiaSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) 
 	err = stream.PushFrame(&model.AudioFrame{SampleRate: 0, NumChannels: 1})
 	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
 		t.Fatalf("PushFrame(zero after nonzero) error = %v, want reference consistency error", err)
+	}
+}
+
+func TestNvidiaSTTStreamNormalizesInputSampleRateLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000, 6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 6,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame(48kHz) error = %v, want nil", err)
+	}
+	if got, want := concrete.inputSampleRate, uint32(16000); got != want {
+		t.Fatalf("inputSampleRate = %d, want provider-normalized sample rate %d", got, want)
+	}
+}
+
+func TestNvidiaSTTStreamPreservesResamplePhaseLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	whole, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(whole) error = %v", err)
+	}
+	wholeStream := whole.(*nvidiaSTTStream)
+	wholeFrame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000, 6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 6,
+	}
+	wholeNormalized, err := wholeStream.normalizeInputFrame(wholeFrame)
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(whole) error = %v", err)
+	}
+
+	split, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(split) error = %v", err)
+	}
+	splitStream := split.(*nvidiaSTTStream)
+	first, err := splitStream.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(first split) error = %v", err)
+	}
+	second, err := splitStream.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(second split) error = %v", err)
+	}
+
+	var got []int16
+	if first != nil {
+		got = append(got, littleEndianBytesToInt16Slice(first.Data)...)
+	}
+	if second != nil {
+		got = append(got, littleEndianBytesToInt16Slice(second.Data)...)
+	}
+	want := littleEndianBytesToInt16Slice(wholeNormalized.Data)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("split normalized PCM = %v, want whole-frame PCM %v from stateful reference resampler", got, want)
+	}
+}
+
+func TestNvidiaSTTFlushDrainsBufferedResampleInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}); err != nil {
+		t.Fatalf("PushFrame(short 48kHz) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
+		t.Fatalf("Next() after buffered resample Flush = (%v, %v), want unsupported transport error", event, err)
 	}
 }
 
