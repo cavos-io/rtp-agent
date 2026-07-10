@@ -339,6 +339,24 @@ func minNvidiaSTTResampleInputSamples(inputRate uint32, outputRate uint32) uint3
 	return uint32((uint64(inputRate) + uint64(outputRate) - 1) / uint64(outputRate))
 }
 
+func (s *nvidiaSTTStream) drainPendingResampleInputLocked() error {
+	if s.inputResampleFrame == nil || s.flushed {
+		return nil
+	}
+	outputRate := uint32(0)
+	if s.stt != nil && s.stt.sampleRate > 0 {
+		outputRate = uint32(s.stt.sampleRate)
+	}
+	normalized, err := s.resamplePendingInputFrame(outputRate, true)
+	if err != nil {
+		return err
+	}
+	if normalized != nil && len(normalized.Data) > 0 {
+		s.streamErr = fmt.Errorf("nvidia riva stt streaming is not implemented")
+	}
+	return nil
+}
+
 func (s *nvidiaSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -350,18 +368,8 @@ func (s *nvidiaSTTStream) Flush() error {
 			return err
 		}
 	}
-	if s.inputResampleFrame != nil && !s.flushed {
-		outputRate := uint32(0)
-		if s.stt != nil && s.stt.sampleRate > 0 {
-			outputRate = uint32(s.stt.sampleRate)
-		}
-		normalized, err := s.resamplePendingInputFrame(outputRate, true)
-		if err != nil {
-			return err
-		}
-		if normalized != nil && len(normalized.Data) > 0 {
-			s.streamErr = fmt.Errorf("nvidia riva stt streaming is not implemented")
-		}
+	if err := s.drainPendingResampleInputLocked(); err != nil {
+		return err
 	}
 	s.flushed = true
 	s.notifyLocked()
@@ -381,6 +389,9 @@ func (s *nvidiaSTTStream) EndInput() error {
 		if err := s.ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if err := s.drainPendingResampleInputLocked(); err != nil {
+		return err
 	}
 	s.flushed = true
 	s.inputEnded = true

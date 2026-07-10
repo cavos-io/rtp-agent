@@ -7592,6 +7592,35 @@ func TestNvidiaSTTFlushDrainsBufferedResampleInputLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTEndInputDrainsBufferedResampleInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}); err != nil {
+		t.Fatalf("PushFrame(short 48kHz) error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
+		t.Fatalf("Next() after buffered resample EndInput = (%v, %v), want unsupported transport error", event, err)
+	}
+}
+
 func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
