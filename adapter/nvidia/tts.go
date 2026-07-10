@@ -700,7 +700,7 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 			return true
 		}
 	}
-	for _, starter := range []string{"I'd", "I've", "I'm", "It's", "That's", "There's", "They're", "We've", "You're", "We're", "Can't", "Let's", "We'll", "We’ll", "You'll", "You’ll", "I'll", "I’ll", "Don't", "Don’t"} {
+	for _, starter := range []string{"I'd", "I've", "I'm", "It's", "That's", "There's", "They're", "We've", "You're", "We're", "Can't", "Let's", "We'll", "We’ll", "You'll", "You’ll", "I'll", "I’ll", "Don't"} {
 		if strings.HasPrefix(trimmed, starter) {
 			return true
 		}
