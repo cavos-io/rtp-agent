@@ -255,6 +255,45 @@ func TestNvidiaSTTNativeStreamingTransportClose(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTNativeStreamingTransportClientCreationError(t *testing.T) {
+	wantErr := errors.New("riva test transport unavailable")
+	provider, err := NewNvidiaSTT("", "model", WithNvidiaSTTUseSSL(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.clientFactory = func(context.Context, *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+		return nil, nil, wantErr
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v, want asynchronous transport error", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("Next() = (%v, %v), want nil client creation error", event, err)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("second Next() = (%v, %v), want nil EOF", event, err)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportMatchesReference(t *testing.T) {
+	t.Run("config", TestNvidiaSTTStreamingConfigMatchesReference)
+	t.Run("ordered audio", TestNvidiaSTTNativeStreamingTransportSendsConfigAndAudioInOrder)
+	t.Run("ordered transcripts", TestNvidiaSTTNativeStreamingTransportDrainsFinalAfterFlush)
+	t.Run("local metadata", TestNvidiaSTTNativeStreamingTransportLocalMetadata)
+	t.Run("hosted metadata", TestNvidiaSTTNativeStreamingTransportHostedMetadata)
+	t.Run("credentials", TestNvidiaSTTNativeStreamingTransportCredentials)
+	t.Run("cancel", TestNvidiaSTTNativeStreamingTransportCancel)
+	t.Run("provider error", TestNvidiaSTTNativeStreamingTransportError)
+	t.Run("client error", TestNvidiaSTTNativeStreamingTransportClientCreationError)
+	t.Run("close", TestNvidiaSTTNativeStreamingTransportClose)
+}
+
 func TestNvidiaSTTNativeStreamingTransportDrainsFinalAfterFlush(t *testing.T) {
 	server, address := startNvidiaRivaTestServer(t)
 	server.responsesOnEOF = []*rivapb.StreamingRecognizeResponse{{
@@ -9803,7 +9842,7 @@ func TestNvidiaSTTFlushStillRejectsMismatchedSampleRateLikeReference(t *testing.
 	}
 }
 
-func TestNvidiaSTTStreamReturnsCallerCancellationBeforeUnsupportedTransport(t *testing.T) {
+func TestNvidiaSTTStreamReturnsCallerCancellationBeforeTransportWork(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaSTT error = %v", err)
