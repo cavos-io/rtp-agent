@@ -1157,6 +1157,8 @@ func TestSpeechmaticsRealtimeSessionOutputDoneEventsAreReferenceNoops(t *testing
 	for _, eventType := range []string{
 		"response.output_text.done",
 		"response.text.done",
+		"response.output_audio_transcript.done",
+		"response.audio_transcript.done",
 		"response.output_audio.done",
 		"response.audio.done",
 	} {

@@ -951,7 +951,7 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseContentPartAdded(event)
 	case "response.output_text.delta", "response.text.delta", "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		return s.handleResponseTextDelta(event)
-	case "response.output_text.done", "response.text.done", "response.output_audio.done", "response.audio.done":
+	case "response.output_text.done", "response.text.done", "response.output_audio_transcript.done", "response.audio_transcript.done", "response.output_audio.done", "response.audio.done":
 		return s.handleResponseContentDone()
 	case "response.output_audio.delta", "response.audio.delta":
 		return s.handleResponseAudioDelta(event)
