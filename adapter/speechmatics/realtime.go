@@ -296,6 +296,7 @@ type speechmaticsRealtimeSession struct {
 	voice            string
 	instructions     string
 	tools            []map[string]any
+	chatCommands     []map[string]any
 	inputSampleRate  int
 	outputSampleRate int
 	dialWebsocket    SpeechmaticsRealtimeWebsocketDialer
@@ -347,6 +348,7 @@ func (s *speechmaticsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext
 	if chatCtx == nil {
 		return nil
 	}
+	commands := make([]map[string]any, 0, len(chatCtx.Items))
 	for _, item := range chatCtx.Items {
 		switch item := item.(type) {
 		case *llm.ChatMessage:
@@ -354,22 +356,26 @@ func (s *speechmaticsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext
 			if text == "" {
 				continue
 			}
-			if err := s.enqueueCommand(map[string]any{
+			commands = append(commands, map[string]any{
 				"type": "conversation.item.create",
 				"role": string(item.Role),
 				"text": text,
-			}); err != nil {
-				return err
-			}
+			})
 		case *llm.FunctionCallOutput:
-			if err := s.enqueueCommand(map[string]any{
+			commands = append(commands, map[string]any{
 				"type":     "function_call_output",
 				"call_id":  item.CallID,
 				"output":   item.Output,
 				"is_error": item.IsError,
-			}); err != nil {
-				return err
-			}
+			})
+		}
+	}
+	s.mu.Lock()
+	s.chatCommands = cloneSpeechmaticsRealtimeCommands(commands)
+	s.mu.Unlock()
+	for _, command := range commands {
+		if err := s.enqueueCommand(command); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -666,13 +672,15 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 func (s *speechmaticsRealtimeSession) reconnectSessionCommands() []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.tools) == 0 {
-		return nil
+	commands := make([]map[string]any, 0, 1+len(s.chatCommands))
+	if len(s.tools) > 0 {
+		commands = append(commands, map[string]any{
+			"type":  "session.update",
+			"tools": cloneSpeechmaticsRealtimeTools(s.tools),
+		})
 	}
-	return []map[string]any{{
-		"type":  "session.update",
-		"tools": cloneSpeechmaticsRealtimeTools(s.tools),
-	}}
+	commands = append(commands, cloneSpeechmaticsRealtimeCommands(s.chatCommands)...)
+	return commands
 }
 
 func (s *speechmaticsRealtimeSession) sessionCreateCommand() map[string]any {
@@ -696,6 +704,21 @@ func cloneSpeechmaticsRealtimeTools(tools []map[string]any) []map[string]any {
 	for _, tool := range tools {
 		next := make(map[string]any, len(tool))
 		for key, value := range tool {
+			next[key] = value
+		}
+		cloned = append(cloned, next)
+	}
+	return cloned
+}
+
+func cloneSpeechmaticsRealtimeCommands(commands []map[string]any) []map[string]any {
+	if commands == nil {
+		return nil
+	}
+	cloned := make([]map[string]any, 0, len(commands))
+	for _, command := range commands {
+		next := make(map[string]any, len(command))
+		for key, value := range command {
 			next[key] = value
 		}
 		cloned = append(cloned, next)
