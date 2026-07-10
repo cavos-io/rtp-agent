@@ -52,6 +52,25 @@ func expectNvidiaRealtimeAcquireMetrics(t *testing.T, events <-chan llm.Realtime
 	}
 }
 
+func expectNvidiaRealtimeReconnectSkippingAcquireMetrics(t *testing.T, events <-chan llm.RealtimeEvent) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == llm.RealtimeEventTypeMetricsCollected && ev.Metrics != nil && ev.Metrics.RequestID == "" {
+				continue
+			}
+			if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
+				t.Fatalf("event = %+v, want session_reconnected", ev)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for session_reconnected")
+		}
+	}
+}
+
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nvidia" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.nvidia", PluginTitle)
@@ -396,6 +415,27 @@ func TestNvidiaRealtimePushAudioPreservesResamplePhaseLikeReference(t *testing.T
 	}
 	if got, want := concatNvidiaRealtimeOutboundAudioData(split.outboundAudio), concatNvidiaRealtimeOutboundAudioData(whole.outboundAudio); !bytes.Equal(got, want) {
 		t.Fatalf("split resampled PCM = %v, want whole-frame PCM %v from stateful resampler phase", littleEndianBytesToInt16Slice(got), littleEndianBytesToInt16Slice(want))
+	}
+}
+
+func TestNvidiaRealtimeInputResamplerInterpolatesBetweenSamplesLikeReference(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 1000}),
+		SampleRate:        12000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	resampled, err := resampleNvidiaRealtimeInputFrame(frame, 24000, 4, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("resampleNvidiaRealtimeInputFrame() error = %v", err)
+	}
+	got := littleEndianBytesToInt16Slice(resampled.Data)
+	if len(got) != 4 {
+		t.Fatalf("resampled samples = %v, want 4 samples", got)
+	}
+	if got[1] <= got[0] || got[1] >= got[2] {
+		t.Fatalf("resampled samples = %v, want interpolated sample between source endpoints", got)
 	}
 }
 
@@ -2343,14 +2383,7 @@ func TestNvidiaRealtimeInstructionUpdateAfterRetryReconnectRestartsAgainLikeRefe
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for reconnect after post-retry instruction update")
 	}
-	select {
-	case ev := <-session.EventCh():
-		if ev.Type != llm.RealtimeEventTypeSessionReconnected || ev.Reconnect == nil {
-			t.Fatalf("event after second instruction reconnect = %+v, want session_reconnected", ev)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for session_reconnected after second instruction reconnect")
-	}
+	expectNvidiaRealtimeReconnectSkippingAcquireMetrics(t, session.EventCh())
 
 	var sawNewerPrompt bool
 	for {

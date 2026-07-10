@@ -422,13 +422,16 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 	channelCount := int(frame.NumChannels)
 	sampleBytes := channelCount * 2
 	for outIdx := 0; outIdx < int(outSamples); outIdx++ {
-		srcGlobal := (outputStart + uint64(outIdx)) * uint64(frame.SampleRate) / uint64(outputRate)
+		srcNumerator := (outputStart + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobal := srcNumerator / uint64(outputRate)
+		srcRemainder := srcNumerator % uint64(outputRate)
 		if srcGlobal < inputStart {
 			if len(previousSample) == sampleBytes {
 				copy(out[outIdx*sampleBytes:(outIdx+1)*sampleBytes], previousSample)
 				continue
 			}
 			srcGlobal = inputStart
+			srcRemainder = 0
 		}
 		srcIdx := int(srcGlobal - inputStart)
 		if srcIdx < 0 {
@@ -439,7 +442,13 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		for ch := 0; ch < channelCount; ch++ {
 			inOffset := (srcIdx*channelCount + ch) * 2
 			outOffset := (outIdx*channelCount + ch) * 2
-			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+			sample := int16(binary.LittleEndian.Uint16(frame.Data[inOffset:]))
+			if srcRemainder != 0 && srcIdx+1 < inputSamples {
+				nextOffset := ((srcIdx+1)*channelCount + ch) * 2
+				nextSample := int16(binary.LittleEndian.Uint16(frame.Data[nextOffset:]))
+				sample = interpolateNvidiaRealtimeSample(sample, nextSample, srcRemainder, uint64(outputRate))
+			}
+			binary.LittleEndian.PutUint16(out[outOffset:], uint16(sample))
 		}
 	}
 	return &model.AudioFrame{
@@ -449,6 +458,22 @@ func resampleNvidiaRealtimeInputFrame(frame *model.AudioFrame, outputRate uint32
 		SamplesPerChannel: outSamples,
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+func interpolateNvidiaRealtimeSample(a int16, b int16, numerator uint64, denominator uint64) int16 {
+	if denominator == 0 || numerator == 0 {
+		return a
+	}
+	if numerator >= denominator {
+		return b
+	}
+	weighted := int64(a)*int64(denominator-numerator) + int64(b)*int64(numerator)
+	if weighted >= 0 {
+		weighted += int64(denominator / 2)
+	} else {
+		weighted -= int64(denominator / 2)
+	}
+	return int16(weighted / int64(denominator))
 }
 
 func lastNvidiaRealtimeInputSample(frame *model.AudioFrame) []byte {
