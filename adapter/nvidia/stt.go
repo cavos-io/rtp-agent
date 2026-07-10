@@ -200,6 +200,7 @@ type nvidiaSTTStream struct {
 	inputEnded         bool
 	flushed            bool
 	streamErr          error
+	streamErrReturned  bool
 	speaking           bool
 	pushedSampleRate   uint32
 	inputSampleRate    uint32
@@ -431,10 +432,14 @@ func (s *nvidiaSTTStream) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	cancel := s.transportCancel
+	done := s.transportDone
 	s.notifyLocked()
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if done != nil {
+		<-done
 	}
 	return nil
 }
@@ -455,9 +460,12 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		}
 		if s.streamErr != nil {
-			err := s.streamErr
-			s.mu.Unlock()
-			return nil, err
+			if !s.streamErrReturned {
+				s.streamErrReturned = true
+				err := s.streamErr
+				s.mu.Unlock()
+				return nil, err
+			}
 		}
 		if s.closed || s.transportFinished {
 			s.mu.Unlock()

@@ -69,6 +69,7 @@ func (s *nvidiaSTTStream) failTransport(err error) {
 	s.mu.Lock()
 	if s.streamErr == nil && !s.closed {
 		s.streamErr = err
+		s.transportFinished = true
 		s.notifyLocked()
 	}
 	s.mu.Unlock()
@@ -84,11 +85,11 @@ func (s *nvidiaSTTStream) runTransport() {
 	}
 	defer closer.Close()
 
-	ctx := s.transportCtx
+	pairs := []string{"function-id", s.stt.functionID}
 	if s.stt.apiKey != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+s.stt.apiKey)
+		pairs = append(pairs, "authorization", "Bearer "+s.stt.apiKey)
 	}
-	ctx = metadata.AppendToOutgoingContext(ctx, "function-id", s.stt.functionID)
+	ctx := metadata.NewOutgoingContext(s.transportCtx, metadata.Pairs(pairs...))
 	rpc, err := client.StreamingRecognize(ctx)
 	if err != nil {
 		s.failTransport(err)

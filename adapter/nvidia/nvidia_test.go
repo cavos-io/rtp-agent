@@ -24,7 +24,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type nvidiaRivaTestServer struct {
@@ -32,6 +34,8 @@ type nvidiaRivaTestServer struct {
 	requests       chan *rivapb.StreamingRecognizeRequest
 	metadata       chan metadata.MD
 	responsesOnEOF []*rivapb.StreamingRecognizeResponse
+	release        <-chan struct{}
+	terminalErr    error
 }
 
 func (s *nvidiaRivaTestServer) StreamingRecognize(stream grpc.BidiStreamingServer[
@@ -54,6 +58,200 @@ func (s *nvidiaRivaTestServer) StreamingRecognize(stream grpc.BidiStreamingServe
 			return err
 		}
 		s.requests <- req
+		if s.release != nil {
+			select {
+			case <-s.release:
+				return s.terminalErr
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
+		}
+	}
+}
+
+func receiveNvidiaRivaMetadata(t *testing.T, metadataCh <-chan metadata.MD) metadata.MD {
+	t.Helper()
+	select {
+	case md := <-metadataCh:
+		return md
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Riva metadata")
+		return nil
+	}
+}
+
+func nvidiaSTTInsecureTestClientFactory(address string) nvidiaSTTClientFactory {
+	return func(context.Context, *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+		conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(nvidiaSTTTransportCredentials(false)))
+		if err != nil {
+			return nil, nil, err
+		}
+		return rivapb.NewRivaSpeechRecognitionClient(conn), conn, nil
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportLocalMetadata(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("", "model",
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+		WithNvidiaSTTFunctionID("local-function"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	md := receiveNvidiaRivaMetadata(t, server.metadata)
+	if got := md.Get("authorization"); len(got) != 0 {
+		t.Fatalf("authorization = %v, want none", got)
+	}
+	if got := md.Get("function-id"); !slices.Equal(got, []string{"local-function"}) {
+		t.Fatalf("function-id = %v, want local-function", got)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportHostedMetadata(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("secret", "model", WithNvidiaSTTFunctionID("hosted-function"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.clientFactory = nvidiaSTTInsecureTestClientFactory(address)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	md := receiveNvidiaRivaMetadata(t, server.metadata)
+	if got := md.Get("authorization"); !slices.Equal(got, []string{"Bearer secret"}) {
+		t.Fatalf("authorization = %v, want Bearer secret", got)
+	}
+	if got := md.Get("function-id"); !slices.Equal(got, []string{"hosted-function"}) {
+		t.Fatalf("function-id = %v, want hosted-function", got)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportCredentials(t *testing.T) {
+	if got := nvidiaSTTTransportCredentials(true).Info().SecurityProtocol; got != "tls" {
+		t.Fatalf("hosted protocol = %q, want tls", got)
+	}
+	if got := nvidiaSTTTransportCredentials(false).Info().SecurityProtocol; got != "insecure" {
+		t.Fatalf("local protocol = %q, want insecure", got)
+	}
+}
+
+type nvidiaBlockingCloser struct {
+	closer  io.Closer
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *nvidiaBlockingCloser) Close() error {
+	close(c.started)
+	<-c.release
+	return c.closer.Close()
+}
+
+func TestNvidiaSTTNativeStreamingTransportCancel(t *testing.T) {
+	provider, _ := newLocalNvidiaSTT(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Next returned before cancel: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not unblock after cancel")
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportError(t *testing.T) {
+	release := make(chan struct{})
+	server, address := startNvidiaRivaTestServer(t)
+	server.release = release
+	server.terminalErr = status.Error(codes.Unavailable, "riva unavailable")
+	provider, err := NewNvidiaSTT("", "model", WithNvidiaSTTServer(address), WithNvidiaSTTUseSSL(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	close(release)
+	if event, err := stream.Next(); event != nil || status.Code(err) != codes.Unavailable {
+		t.Fatalf("Next() = (%v, %v), want nil Unavailable", event, err)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("second Next() = (%v, %v), want nil EOF", event, err)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportClose(t *testing.T) {
+	_, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("", "model", WithNvidiaSTTServer(address), WithNvidiaSTTUseSSL(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseFactory := nvidiaSTTInsecureTestClientFactory(address)
+	closer := &nvidiaBlockingCloser{started: make(chan struct{}), release: make(chan struct{})}
+	provider.clientFactory = func(ctx context.Context, provider *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+		client, baseCloser, err := baseFactory(ctx, provider)
+		closer.closer = baseCloser
+		return client, closer, err
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- stream.Close() }()
+	select {
+	case <-closer.started:
+	case <-time.After(time.Second):
+		t.Fatal("transport closer did not start")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Close returned before transport cleanup: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(closer.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after transport cleanup")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
 	}
 }
 
