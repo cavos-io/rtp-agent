@@ -438,6 +438,78 @@ func TestSpeechmaticsRealtimeSessionIdleInterruptDoesNotCancel(t *testing.T) {
 	assertSpeechmaticsRealtimeNoCommand(t, session)
 }
 
+func TestSpeechmaticsRealtimeSessionPendingGenerateReplyIsInterruptible(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer now", InstructionsSet: true}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	create := nextSpeechmaticsRealtimeCommand(t, session)
+	if create["type"] != "response.create" {
+		t.Fatalf("command = %#v, want response.create", create)
+	}
+	metadata, _ := create["metadata"].(map[string]any)
+	clientEventID, _ := metadata["client_event_id"].(string)
+	if clientEventID == "" {
+		t.Fatalf("metadata = %#v, want client_event_id", create["metadata"])
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "response.cancel", "", nil)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":       "resp_generate",
+			"metadata": map[string]any{"client_event_id": clientEventID},
+		},
+	}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil || !created.Generation.UserInitiated {
+		t.Fatalf("generation = %#v, want user initiated", created.Generation)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionPendingGenerateReplyExpires(t *testing.T) {
+	previousTimeout := speechmaticsRealtimePendingResponseTimeout
+	speechmaticsRealtimePendingResponseTimeout = 0
+	t.Cleanup(func() { speechmaticsRealtimePendingResponseTimeout = previousTimeout })
+
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer now", InstructionsSet: true}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "response.create", "type", "response.create")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertSpeechmaticsRealtimeNoCommand(t, session)
+}
+
 func TestSpeechmaticsRealtimeSessionTruncateAudioMatchesReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -858,6 +930,34 @@ func TestSpeechmaticsRealtimeSessionConversationItemAddedEmitsRemoteItem(t *test
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionRemoteFunctionOutputAllowsReferenceEmptyStrings(t *testing.T) {
+	session := &speechmaticsRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent, 1),
+	}
+
+	ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "out_empty",
+			"type":    "function_call_output",
+			"call_id": "",
+			"output":  "",
+		},
+	})
+
+	if !ok {
+		t.Fatal("conversation.item.added function output ignored")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	output, ok := event.RemoteItem.Item.(*llm.FunctionCallOutput)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.FunctionCallOutput", event.RemoteItem.Item)
+	}
+	if output.ID != "out_empty" || output.CallID != "" || output.Output != "" {
+		t.Fatalf("function output = %#v, want empty call_id/output preserved", output)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptCompletedDerivesConfidence(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -1037,6 +1137,38 @@ func TestSpeechmaticsRealtimeSessionContentPartAddedSetsReferenceModalities(t *t
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionOutputDoneEventsAreReferenceNoops(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_done"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	for _, eventType := range []string{
+		"response.output_text.done",
+		"response.text.done",
+		"response.output_audio_transcript.done",
+		"response.audio_transcript.done",
+		"response.output_audio.done",
+		"response.audio.done",
+	} {
+		if ok := session.handleServerEvent(map[string]any{"type": eventType}); !ok {
+			t.Fatalf("%s ignored, want reference no-op handled", eventType)
+		}
+	}
+	assertSpeechmaticsRealtimeNoCommand(t, session)
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -1106,6 +1238,19 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
 
 	if ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "msg_user_failed",
+			"type":    "message",
+			"role":    "user",
+			"content": []any{map[string]any{"type": "input_audio"}},
+		},
+	}); !ok {
+		t.Fatal("conversation item added event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+
+	if ok := session.handleServerEvent(map[string]any{
 		"type":          "conversation.item.input_audio_transcription.delta",
 		"item_id":       "msg_user_failed",
 		"content_index": 1,
@@ -1128,6 +1273,12 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 	if final.InputTranscription == nil || final.InputTranscription.Transcript != "half " || !final.InputTranscription.IsFinal {
 		t.Fatalf("failed transcript final = %#v, want accumulated partial final=true", final.InputTranscription)
 	}
+	session.mu.Lock()
+	tracked, _ := session.remoteItems["msg_user_failed"].(*llm.ChatMessage)
+	session.mu.Unlock()
+	if tracked == nil || len(tracked.Content) != 1 || tracked.Content[0].Text != "half " {
+		t.Fatalf("tracked failed transcript = %#v, want finalized partial", tracked)
+	}
 
 	if ok := session.handleServerEvent(map[string]any{
 		"type":          "conversation.item.input_audio_transcription.failed",
@@ -1135,6 +1286,49 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 		"content_index": 1,
 	}); ok {
 		t.Fatal("second failed event handled, want ignored after accumulator cleared")
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionDeletedItemClearsInputTranscriptAccumulator(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"delta":         "stale ",
+	}); !ok {
+		t.Fatal("initial transcript delta ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "msg_user_1",
+	}); !ok {
+		t.Fatal("conversation.item.deleted ignored")
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"delta":         "fresh",
+	}); !ok {
+		t.Fatal("post-delete transcript delta ignored")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if event.InputTranscription == nil || event.InputTranscription.Transcript != "fresh" {
+		t.Fatalf("post-delete transcript = %#v, want fresh only", event.InputTranscription)
 	}
 }
 
@@ -1184,6 +1378,40 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 	call := assertSpeechmaticsRealtimeFunctionCall(t, created.Generation.FunctionCh)
 	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"city":"Paris"}` {
 		t.Fatalf("function call = %#v, want reference function call item", call)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionFunctionCallAllowsReferenceEmptyArguments(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_empty_args"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_empty",
+			"type":      "function_call",
+			"call_id":   "call_empty",
+			"name":      "noop",
+			"arguments": "",
+		},
+	}); !ok {
+		t.Fatal("function call with empty arguments ignored")
+	}
+	call := assertSpeechmaticsRealtimeFunctionCall(t, created.Generation.FunctionCh)
+	if call.ID != "fc_empty" || call.CallID != "call_empty" || call.Name != "noop" || call.Arguments != "" {
+		t.Fatalf("function call = %#v, want empty arguments preserved", call)
 	}
 }
 
@@ -1245,6 +1473,68 @@ func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing
 	}
 	if metrics.TTFT < 0 || metrics.Duration < 0 || metrics.TokensPerSecond < 0 {
 		t.Fatalf("metrics timing = ttft %f duration %f tps %f, want non-negative", metrics.TTFT, metrics.Duration, metrics.TokensPerSecond)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionResponseDoneAppendsAudioTranscriptToRemoteItem(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "msg_audio",
+			"type":    "message",
+			"role":    "assistant",
+			"content": []any{},
+		},
+	}); !ok {
+		t.Fatal("conversation.item.added ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_audio"}); !ok {
+		t.Fatal("response.created ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{"type": "response.output_item.added", "item_id": "msg_audio"}); !ok {
+		t.Fatal("response.output_item.added ignored")
+	}
+	message := assertSpeechmaticsRealtimeMessage(t, created.Generation.MessageCh)
+	for _, event := range []map[string]any{
+		{"type": "response.output_audio_transcript.delta", "item_id": "msg_audio", "delta": "Hi "},
+		{"type": "response.audio_transcript.delta", "item_id": "msg_audio", "delta": "there"},
+	} {
+		if ok := session.handleServerEvent(event); !ok {
+			t.Fatalf("audio transcript delta ignored: %#v", event)
+		}
+	}
+	if got := assertSpeechmaticsRealtimeText(t, message.TextCh); got != "Hi " {
+		t.Fatalf("first text delta = %q, want Hi ", got)
+	}
+	if got := assertSpeechmaticsRealtimeText(t, message.TextCh); got != "there" {
+		t.Fatalf("second text delta = %q, want there", got)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_audio", "status": "completed"},
+	}); !ok {
+		t.Fatal("response.done ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	session.mu.Lock()
+	tracked, _ := session.remoteItems["msg_audio"].(*llm.ChatMessage)
+	session.mu.Unlock()
+	if tracked == nil || len(tracked.Content) != 1 || tracked.Content[0].Text != "Hi there" {
+		t.Fatalf("tracked content = %#v, want appended audio transcript", tracked)
 	}
 }
 
