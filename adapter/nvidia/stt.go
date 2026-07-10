@@ -38,6 +38,7 @@ type NvidiaSTT struct {
 	useSSL          bool
 	diarization     bool
 	maxSpeakerCount int
+	clientFactory   nvidiaSTTClientFactory
 }
 
 type NvidiaSTTOption func(*NvidiaSTT)
@@ -122,6 +123,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		useSSL:          true,
 		diarization:     false,
 		maxSpeakerCount: 0,
+		clientFactory:   newNvidiaSTTClient,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -171,13 +173,19 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if language != "" {
 		streamLanguage = language
 	}
-	return &nvidiaSTTStream{
-		stt:          s,
-		ctx:          ctx,
-		language:     streamLanguage,
-		stateChanged: make(chan struct{}),
-		startTime:    float64(time.Now().UnixNano()) / float64(time.Second),
-	}, nil
+	transportCtx, transportCancel := context.WithCancel(ctx)
+	stream := &nvidiaSTTStream{
+		stt:             s,
+		ctx:             transportCtx,
+		language:        streamLanguage,
+		stateChanged:    make(chan struct{}),
+		transportCancel: transportCancel,
+		transportDone:   make(chan struct{}),
+		transportNotify: make(chan struct{}),
+		startTime:       float64(time.Now().UnixNano()) / float64(time.Second),
+	}
+	go stream.runTransport()
+	return stream, nil
 }
 
 type nvidiaSTTStream struct {
@@ -200,6 +208,11 @@ type nvidiaSTTStream struct {
 	startTimeOffset    float64
 	startTime          float64
 	requestSeq         int
+	transportCancel    context.CancelFunc
+	transportDone      chan struct{}
+	transportNotify    chan struct{}
+	transportAudio     [][]byte
+	transportEOF       bool
 }
 
 type nvidiaSTTWord struct {
@@ -255,9 +268,7 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	streamErr := fmt.Errorf("nvidia riva stt streaming is not implemented")
-	s.streamErr = streamErr
-	s.notifyLocked()
+	s.enqueueTransportAudioLocked(frame.Data)
 	return nil
 }
 
@@ -361,7 +372,7 @@ func (s *nvidiaSTTStream) drainPendingResampleInputLocked() error {
 		return err
 	}
 	if normalized != nil && len(normalized.Data) > 0 {
-		s.streamErr = fmt.Errorf("nvidia riva stt streaming is not implemented")
+		s.enqueueTransportAudioLocked(normalized.Data)
 	}
 	return nil
 }
@@ -381,6 +392,8 @@ func (s *nvidiaSTTStream) Flush() error {
 		return err
 	}
 	s.flushed = true
+	s.transportEOF = true
+	s.notifyTransportLocked()
 	s.notifyLocked()
 	return nil
 }
@@ -404,15 +417,21 @@ func (s *nvidiaSTTStream) EndInput() error {
 	}
 	s.flushed = true
 	s.inputEnded = true
+	s.transportEOF = true
+	s.notifyTransportLocked()
 	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
+	cancel := s.transportCancel
 	s.notifyLocked()
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return nil
 }
 
