@@ -6531,7 +6531,7 @@ func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamIgnoresTextAfterFlushLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -6552,19 +6552,50 @@ func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 	if err := stream.PushText("second"); err != nil {
-		t.Fatalf("PushText(second) error = %v, want nil accepted second segment", err)
+		t.Fatalf("PushText(second) error = %v, want nil ignored second segment", err)
 	}
-	if got, want := concrete.text, "firstsecond"; got != want {
-		t.Fatalf("stream text = %q, want both flushed segments %q", got, want)
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text = %q, want first flushed segment only %q", got, want)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("second Flush() error = %v", err)
 	}
 	if err := stream.PushText("third"); err != nil {
-		t.Fatalf("PushText(third) error = %v, want nil accepted third segment", err)
+		t.Fatalf("PushText(third) error = %v, want nil ignored third segment", err)
 	}
-	if got, want := concrete.text, "firstsecondthird"; got != want {
-		t.Fatalf("stream text after third segment = %q, want all flushed segments %q", got, want)
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text after third segment = %q, want first flushed segment only %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamIgnoresTextAfterExplicitFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v, want nil ignored late text", err)
+	}
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text after post-flush PushText = %q, want unchanged first segment %q", got, want)
+	}
+	if got, want := concrete.readyText, []string{"first"}; !slices.Equal(got, want) {
+		t.Fatalf("readyText after post-flush PushText = %q, want %q", got, want)
 	}
 }
 
@@ -6597,8 +6628,8 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText("late"); err != nil {
 		t.Fatalf("PushText(late) error = %v", err)
 	}
-	if got, want := concrete.text, "   late"; got != want {
-		t.Fatalf("text after second segment = %q, want preserved whitespace plus late text %q", got, want)
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after second segment = %q, want flushed whitespace segment only %q", got, want)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("second Flush() error = %v", err)
@@ -6606,12 +6637,12 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText(" tail"); err != nil {
 		t.Fatalf("PushText(tail) error = %v", err)
 	}
-	if got, want := concrete.text, "   late tail"; got != want {
-		t.Fatalf("text after third segment = %q, want all text after whitespace flush %q", got, want)
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after third segment = %q, want flushed whitespace segment only %q", got, want)
 	}
 }
 
-func TestNvidiaTTSStreamWhitespaceFlushStillAcceptsLaterTextLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamWhitespaceFlushIgnoresLaterTextLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -6644,11 +6675,19 @@ func TestNvidiaTTSStreamWhitespaceFlushStillAcceptsLaterTextLikeReference(t *tes
 	}()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after later flushed text returned %v, want unsupported transport error", err)
+		t.Fatalf("Next() after ignored later text returned %v, want wait for close", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != io.EOF {
+			t.Fatalf("Next() after Close error = %v, want EOF", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() after later flushed text did not start transport")
+		t.Fatal("Next() did not unblock after Close")
 	}
 }
 

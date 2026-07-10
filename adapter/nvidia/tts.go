@@ -121,19 +121,20 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	mu           sync.Mutex
-	stateChanged chan struct{}
-	ctx          context.Context
-	done         bool
-	closed       bool
-	inputEnded   bool
-	hasText      bool
-	flushed      bool
-	text         string
-	pendingText  string
-	readyText    []string
-	queuedLen    int
-	exception    error
+	mu            sync.Mutex
+	stateChanged  chan struct{}
+	ctx           context.Context
+	done          bool
+	closed        bool
+	inputEnded    bool
+	hasText       bool
+	flushed       bool
+	segmentClosed bool
+	text          string
+	pendingText   string
+	readyText     []string
+	queuedLen     int
+	exception     error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -205,6 +206,9 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.segmentClosed {
+		return nil
+	}
 	text, collapsePreviousWhitespace := nvidiaTTSNormalizeInputText(text)
 	if s.flushed && s.pendingText != "" {
 		if collapsePreviousWhitespace {
@@ -248,6 +252,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	if s.hasText {
 		s.queuePendingInputLocked()
 		s.flushed = true
+		s.segmentClosed = true
 		s.notifyLocked()
 	}
 	return nil
@@ -273,6 +278,7 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 	if s.hasText {
 		s.queuePendingInputLocked()
 		s.flushed = true
+		s.segmentClosed = true
 	}
 	s.inputEnded = true
 	if !s.hasText {
