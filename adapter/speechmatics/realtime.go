@@ -446,8 +446,25 @@ func (s *speechmaticsRealtimeSession) Say(text string) error {
 	})
 }
 
-func (s *speechmaticsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
+func (s *speechmaticsRealtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	if speechmaticsRealtimeModalitiesInclude(options.Modalities, "audio") {
+		return s.enqueueCommand(map[string]any{
+			"type":          "conversation.item.truncate",
+			"item_id":       options.MessageID,
+			"content_index": 0,
+			"audio_end_ms":  options.AudioEndMillis,
+		})
+	}
 	return nil
+}
+
+func speechmaticsRealtimeModalitiesInclude(modalities []string, want string) bool {
+	for _, modality := range modalities {
+		if modality == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *speechmaticsRealtimeSession) Interrupt() error {

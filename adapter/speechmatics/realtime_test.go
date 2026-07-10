@@ -437,6 +437,34 @@ func TestSpeechmaticsRealtimeSessionIdleInterruptDoesNotCancel(t *testing.T) {
 	assertSpeechmaticsRealtimeNoCommand(t, session)
 }
 
+func TestSpeechmaticsRealtimeSessionTruncateAudioMatchesReference(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:      "msg_123",
+		Modalities:     []string{"text", "audio"},
+		AudioEndMillis: 1500,
+	}); err != nil {
+		t.Fatalf("Truncate error = %v", err)
+	}
+
+	command := nextSpeechmaticsRealtimeCommand(t, session)
+	if command["type"] != "conversation.item.truncate" ||
+		command["item_id"] != "msg_123" ||
+		command["content_index"] != 0 ||
+		command["audio_end_ms"] != 1500 {
+		t.Fatalf("truncate command = %#v, want reference audio truncate", command)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
