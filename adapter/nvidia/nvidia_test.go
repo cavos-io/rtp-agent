@@ -7120,7 +7120,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsKeepSpeakingAfterFinalLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	first := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -7137,6 +7137,9 @@ func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing
 	if first[0].Type != stt.SpeechEventStartOfSpeech || first[1].Type != stt.SpeechEventFinalTranscript || first[2].Type != stt.SpeechEventEndOfSpeech {
 		t.Fatalf("first event types = %q, %q, %q; want start, final, end", first[0].Type, first[1].Type, first[2].Type)
 	}
+	if !stream.speaking {
+		t.Fatal("speaking = false after final, want reference state to remain true")
+	}
 
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
 		Results: []nvidiaSTTResult{{
@@ -7146,14 +7149,14 @@ func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing
 			},
 		}},
 	})
-	if len(second) != 2 {
-		t.Fatalf("second event count = %d, want start + interim for new utterance", len(second))
+	if len(second) != 1 {
+		t.Fatalf("second event count = %d, want interim only while reference speaking state remains true", len(second))
 	}
-	if second[0].Type != stt.SpeechEventStartOfSpeech {
-		t.Fatalf("second event[0].Type = %q, want start_of_speech after prior final", second[0].Type)
+	if second[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("second event[0].Type = %q, want interim_transcript without another start_of_speech", second[0].Type)
 	}
-	if second[1].Type != stt.SpeechEventInterimTranscript {
-		t.Fatalf("second event[1].Type = %q, want interim_transcript", second[1].Type)
+	if !stream.speaking {
+		t.Fatal("speaking = false after later interim, want reference state to remain true")
 	}
 }
 
@@ -7215,10 +7218,13 @@ func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T)
 	if secondID == firstID {
 		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
 	}
-	if len(third) != 3 {
-		t.Fatalf("third event count = %d, want start, final, end after prior final", len(third))
+	if len(third) != 2 {
+		t.Fatalf("third event count = %d, want final, end without another start after prior final", len(third))
 	}
-	thirdID := third[1].RequestID
+	if third[0].Type != stt.SpeechEventFinalTranscript || third[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event types = %q, %q; want final, end", third[0].Type, third[1].Type)
+	}
+	thirdID := third[0].RequestID
 	if !strings.HasPrefix(thirdID, "nvidia-") {
 		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
 	}
