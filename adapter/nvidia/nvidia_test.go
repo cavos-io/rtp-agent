@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -734,6 +735,38 @@ func TestNvidiaRealtimeSessionPreconnectsConfiguredProviderLikeReference(t *test
 		t.Fatalf("websocket server error before preconnect: %v", err)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for configured PersonaPlex session preconnect")
+	}
+}
+
+func TestNvidiaRealtimeCloseWaitsForTransportExitLikeReference(t *testing.T) {
+	done := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	session := &nvidiaRealtimeSession{
+		transportStarted: true,
+		transportCancel: func() {
+			close(cancelCalled)
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				close(done)
+			}()
+		},
+		transportDone:   done,
+		transportNotify: make(chan struct{}),
+		events:          newNvidiaRealtimeEventStream(nil),
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-cancelCalled:
+	default:
+		t.Fatal("Close() did not cancel realtime transport")
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("Close() returned before realtime transport exited, want reference aclose to await main task")
 	}
 }
 
@@ -2269,6 +2302,125 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 	}
 }
 
+func TestNvidiaRealtimeInstructionUpdateDuringReconnectRestartsAgainLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	firstConnected := make(chan struct{}, 1)
+	secondConnected := make(chan struct{}, 1)
+	thirdConnected := make(chan struct{}, 1)
+	releaseSecond := make(chan struct{})
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		switch attempt {
+		case 1:
+			if _, _, err := conn.ReadMessage(); err != nil {
+				serverErr <- err
+				return
+			}
+			firstConnected <- struct{}{}
+			<-r.Context().Done()
+		case 2:
+			if !strings.Contains(r.URL.RawQuery, "text_prompt=new%20prompt") {
+				serverErr <- errors.New("second reconnect did not use first updated prompt")
+				return
+			}
+			secondConnected <- struct{}{}
+			select {
+			case <-releaseSecond:
+			case <-r.Context().Done():
+			}
+		case 3:
+			if !strings.Contains(r.URL.RawQuery, "text_prompt=newer%20prompt") {
+				serverErr <- errors.New("third reconnect did not use latest updated prompt")
+				return
+			}
+			thirdConnected <- struct{}{}
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+	concrete, ok := session.(*nvidiaRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
+	}
+
+	pcm := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(pcm),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(pcm)),
+	}); err != nil {
+		t.Fatalf("PushAudio() error = %v", err)
+	}
+	select {
+	case <-firstConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("first UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-secondConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first instruction reconnect")
+	}
+	deadline := time.After(time.Second)
+	for {
+		concrete.mu.Lock()
+		ready := concrete.transportReady
+		concrete.mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for first instruction reconnect handshake")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := session.UpdateInstructions("newer prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions() error = %v", err)
+	}
+	close(releaseSecond)
+	select {
+	case <-thirdConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before second instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second instruction reconnect with latest prompt")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateDuringRetryReconnectsLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	requestPaths := make(chan string, 4)
@@ -2688,6 +2840,25 @@ func TestNvidiaTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNvidiaTTSAPIKeyEmptyStringFallsBackToEnvironmentLikeReference(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "env-secret")
+
+	provider, err := NewNvidiaTTS("", "", WithNvidiaTTSAPIKey(""))
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS empty api key error = %v, want nil env fallback like reference", err)
+	}
+	if got, want := provider.apiKey, "env-secret"; got != want {
+		t.Fatalf("apiKey = %q, want environment key for empty api_key %q", got, want)
+	}
+
+	t.Setenv("NVIDIA_API_KEY", "")
+	_, err = NewNvidiaTTS("", "", WithNvidiaTTSAPIKey(""))
+	wantErr := "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("NewNvidiaTTS empty api_key without env error = %v, want missing key error", err)
+	}
+}
+
 func TestNvidiaTTSRequiresAPIKeyWhenUsingSSL(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "")
 
@@ -2800,19 +2971,26 @@ func TestNvidiaTTSReportsUnsupportedRivaCalls(t *testing.T) {
 	if !ok {
 		t.Fatal("chunked stream does not implement tts.ExceptionStream")
 	}
+	concrete, ok := stream.(*nvidiaTTSChunkedStream)
+	if !ok {
+		t.Fatalf("chunked stream type = %T, want *nvidiaTTSChunkedStream", stream)
+	}
+	if got, want := concrete.text, "hello"; got != want {
+		t.Fatalf("chunked stream input text = %q, want %q", got, want)
+	}
 	if doneStream.Done() {
 		t.Fatal("Done() = true before synthesis output")
 	}
-	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
-		t.Fatalf("Next() = (%v, %v), want nil explicit unsupported synthesis error", audio, err)
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
+		t.Fatalf("Next() = (%v, %v), want nil unsupported streaming error from synthesize-with-stream path", audio, err)
 	}
 	if !doneStream.Done() {
 		t.Fatal("Done() = false after synthesis error")
 	}
-	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") {
-		t.Fatalf("Exception() after synthesis error = %v, want unsupported synthesis error", err)
+	if err := exceptionStream.Exception(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
+		t.Fatalf("Exception() after synthesis error = %v, want unsupported streaming error", err)
 	}
-	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts synthesis is not implemented") || audio != nil {
+	if audio, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") || audio != nil {
 		t.Fatalf("Next() after synthesis error = (%v, %v), want repeated reference task exception", audio, err)
 	}
 }
@@ -6531,7 +6709,7 @@ func TestNvidiaTTSStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamIgnoresTextAfterFlushLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -6552,19 +6730,50 @@ func TestNvidiaTTSStreamAcceptsTextAfterFlushLikeReference(t *testing.T) {
 		t.Fatalf("Flush() error = %v", err)
 	}
 	if err := stream.PushText("second"); err != nil {
-		t.Fatalf("PushText(second) error = %v, want nil accepted second segment", err)
+		t.Fatalf("PushText(second) error = %v, want nil ignored second segment", err)
 	}
-	if got, want := concrete.text, "firstsecond"; got != want {
-		t.Fatalf("stream text = %q, want both flushed segments %q", got, want)
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text = %q, want first flushed segment only %q", got, want)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("second Flush() error = %v", err)
 	}
 	if err := stream.PushText("third"); err != nil {
-		t.Fatalf("PushText(third) error = %v, want nil accepted third segment", err)
+		t.Fatalf("PushText(third) error = %v, want nil ignored third segment", err)
 	}
-	if got, want := concrete.text, "firstsecondthird"; got != want {
-		t.Fatalf("stream text after third segment = %q, want all flushed segments %q", got, want)
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text after third segment = %q, want first flushed segment only %q", got, want)
+	}
+}
+
+func TestNvidiaTTSStreamIgnoresTextAfterExplicitFlushLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaTTSSynthesizeStream", stream)
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v, want nil ignored late text", err)
+	}
+	if got, want := concrete.text, "first"; got != want {
+		t.Fatalf("stream text after post-flush PushText = %q, want unchanged first segment %q", got, want)
+	}
+	if got, want := concrete.readyText, []string{"first"}; !slices.Equal(got, want) {
+		t.Fatalf("readyText after post-flush PushText = %q, want %q", got, want)
 	}
 }
 
@@ -6597,8 +6806,8 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText("late"); err != nil {
 		t.Fatalf("PushText(late) error = %v", err)
 	}
-	if got, want := concrete.text, "   late"; got != want {
-		t.Fatalf("text after second segment = %q, want preserved whitespace plus late text %q", got, want)
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after second segment = %q, want flushed whitespace segment only %q", got, want)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("second Flush() error = %v", err)
@@ -6606,12 +6815,12 @@ func TestNvidiaTTSStreamPreservesWhitespaceInputLikeReference(t *testing.T) {
 	if err := stream.PushText(" tail"); err != nil {
 		t.Fatalf("PushText(tail) error = %v", err)
 	}
-	if got, want := concrete.text, "   late tail"; got != want {
-		t.Fatalf("text after third segment = %q, want all text after whitespace flush %q", got, want)
+	if got, want := concrete.text, "   "; got != want {
+		t.Fatalf("text after third segment = %q, want flushed whitespace segment only %q", got, want)
 	}
 }
 
-func TestNvidiaTTSStreamWhitespaceFlushStillAcceptsLaterTextLikeReference(t *testing.T) {
+func TestNvidiaTTSStreamWhitespaceFlushIgnoresLaterTextLikeReference(t *testing.T) {
 	provider, err := NewNvidiaTTS("secret", "")
 	if err != nil {
 		t.Fatalf("NewNvidiaTTS error = %v", err)
@@ -6644,11 +6853,19 @@ func TestNvidiaTTSStreamWhitespaceFlushStillAcceptsLaterTextLikeReference(t *tes
 	}()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "riva tts streaming is not implemented") {
-			t.Fatalf("Next() after later flushed text returned %v, want unsupported transport error", err)
+		t.Fatalf("Next() after ignored later text returned %v, want wait for close", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != io.EOF {
+			t.Fatalf("Next() after Close error = %v, want EOF", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Next() after later flushed text did not start transport")
+		t.Fatal("Next() did not unblock after Close")
 	}
 }
 
@@ -7081,7 +7298,7 @@ func TestNvidiaSTTResponseEventsPreserveMultipleResultOrder(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing.T) {
+func TestNvidiaSTTResponseEventsKeepSpeakingAfterFinalLikeReference(t *testing.T) {
 	stream := &nvidiaSTTStream{language: "en-US"}
 
 	first := stream.eventsFromResponse(nvidiaSTTResponse{
@@ -7098,6 +7315,9 @@ func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing
 	if first[0].Type != stt.SpeechEventStartOfSpeech || first[1].Type != stt.SpeechEventFinalTranscript || first[2].Type != stt.SpeechEventEndOfSpeech {
 		t.Fatalf("first event types = %q, %q, %q; want start, final, end", first[0].Type, first[1].Type, first[2].Type)
 	}
+	if !stream.speaking {
+		t.Fatal("speaking = false after final, want reference state to remain true")
+	}
 
 	second := stream.eventsFromResponse(nvidiaSTTResponse{
 		Results: []nvidiaSTTResult{{
@@ -7107,14 +7327,14 @@ func TestNvidiaSTTResponseEventsStartNewSpeechAfterFinalLikeReference(t *testing
 			},
 		}},
 	})
-	if len(second) != 2 {
-		t.Fatalf("second event count = %d, want start + interim for new utterance", len(second))
+	if len(second) != 1 {
+		t.Fatalf("second event count = %d, want interim only while reference speaking state remains true", len(second))
 	}
-	if second[0].Type != stt.SpeechEventStartOfSpeech {
-		t.Fatalf("second event[0].Type = %q, want start_of_speech after prior final", second[0].Type)
+	if second[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("second event[0].Type = %q, want interim_transcript without another start_of_speech", second[0].Type)
 	}
-	if second[1].Type != stt.SpeechEventInterimTranscript {
-		t.Fatalf("second event[1].Type = %q, want interim_transcript", second[1].Type)
+	if !stream.speaking {
+		t.Fatal("speaking = false after later interim, want reference state to remain true")
 	}
 }
 
@@ -7176,10 +7396,13 @@ func TestNvidiaSTTResponseEventsUseReferenceRequestIDLikeReference(t *testing.T)
 	if secondID == firstID {
 		t.Fatalf("second RequestID = %q, want new synthetic id per response", secondID)
 	}
-	if len(third) != 3 {
-		t.Fatalf("third event count = %d, want start, final, end after prior final", len(third))
+	if len(third) != 2 {
+		t.Fatalf("third event count = %d, want final, end without another start after prior final", len(third))
 	}
-	thirdID := third[1].RequestID
+	if third[0].Type != stt.SpeechEventFinalTranscript || third[1].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event types = %q, %q; want final, end", third[0].Type, third[1].Type)
+	}
+	thirdID := third[0].RequestID
 	if !strings.HasPrefix(thirdID, "nvidia-") {
 		t.Fatalf("third RequestID = %q, want synthetic nvidia- prefix like reference", thirdID)
 	}
@@ -7406,6 +7629,177 @@ func TestNvidiaSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) 
 	err = stream.PushFrame(&model.AudioFrame{SampleRate: 0, NumChannels: 1})
 	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
 		t.Fatalf("PushFrame(zero after nonzero) error = %v, want reference consistency error", err)
+	}
+}
+
+func TestNvidiaSTTStreamNormalizesInputSampleRateLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000, 6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 6,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame(48kHz) error = %v, want nil", err)
+	}
+	if got, want := concrete.inputSampleRate, uint32(16000); got != want {
+		t.Fatalf("inputSampleRate = %d, want provider-normalized sample rate %d", got, want)
+	}
+}
+
+func TestNvidiaSTTStreamNormalizesInputChannelsLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+
+	normalized, err := concrete.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{1000, 3000, 5000, 9000}),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(stereo) error = %v", err)
+	}
+	if normalized.NumChannels != 1 || normalized.SampleRate != 16000 || normalized.SamplesPerChannel != 2 {
+		t.Fatalf("normalized format = %d Hz/%d ch/%d samples, want 16000 Hz/1 ch/2 samples", normalized.SampleRate, normalized.NumChannels, normalized.SamplesPerChannel)
+	}
+	if got, want := littleEndianBytesToInt16Slice(normalized.Data), []int16{2000, 7000}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized mono PCM = %v, want channel averages %v", got, want)
+	}
+}
+
+func TestNvidiaSTTStreamPreservesResamplePhaseLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	whole, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(whole) error = %v", err)
+	}
+	wholeStream := whole.(*nvidiaSTTStream)
+	wholeFrame := &model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000, 6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 6,
+	}
+	wholeNormalized, err := wholeStream.normalizeInputFrame(wholeFrame)
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(whole) error = %v", err)
+	}
+
+	split, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream(split) error = %v", err)
+	}
+	splitStream := split.(*nvidiaSTTStream)
+	first, err := splitStream.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(first split) error = %v", err)
+	}
+	second, err := splitStream.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{6000, 9000, 12000, 15000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 4,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(second split) error = %v", err)
+	}
+
+	var got []int16
+	if first != nil {
+		got = append(got, littleEndianBytesToInt16Slice(first.Data)...)
+	}
+	if second != nil {
+		got = append(got, littleEndianBytesToInt16Slice(second.Data)...)
+	}
+	want := littleEndianBytesToInt16Slice(wholeNormalized.Data)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("split normalized PCM = %v, want whole-frame PCM %v from stateful reference resampler", got, want)
+	}
+}
+
+func TestNvidiaSTTFlushDrainsBufferedResampleInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}); err != nil {
+		t.Fatalf("PushFrame(short 48kHz) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
+		t.Fatalf("Next() after buffered resample Flush = (%v, %v), want unsupported transport error", event, err)
+	}
+}
+
+func TestNvidiaSTTEndInputDrainsBufferedResampleInputLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{0, 3000}),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}); err != nil {
+		t.Fatalf("PushFrame(short 48kHz) error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
+		t.Fatalf("Next() after buffered resample EndInput = (%v, %v), want unsupported transport error", event, err)
 	}
 }
 

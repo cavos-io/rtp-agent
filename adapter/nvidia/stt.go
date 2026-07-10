@@ -181,20 +181,25 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 type nvidiaSTTStream struct {
-	mu              sync.Mutex
-	stateChanged    chan struct{}
-	stt             *NvidiaSTT
-	ctx             context.Context
-	language        string
-	closed          bool
-	inputEnded      bool
-	flushed         bool
-	streamErr       error
-	speaking        bool
-	inputSampleRate uint32
-	startTimeOffset float64
-	startTime       float64
-	requestSeq      int
+	mu                 sync.Mutex
+	stateChanged       chan struct{}
+	stt                *NvidiaSTT
+	ctx                context.Context
+	language           string
+	closed             bool
+	inputEnded         bool
+	flushed            bool
+	streamErr          error
+	speaking           bool
+	pushedSampleRate   uint32
+	inputSampleRate    uint32
+	inputResampleIn    uint64
+	inputResampleOut   uint64
+	inputResampleLast  []byte
+	inputResampleFrame *model.AudioFrame
+	startTimeOffset    float64
+	startTime          float64
+	requestSeq         int
 }
 
 type nvidiaSTTWord struct {
@@ -240,14 +245,18 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if err := s.checkInputSampleRate(frame); err != nil {
 		return err
 	}
+	frame, normalizeErr := s.normalizeInputFrame(frame)
+	if normalizeErr != nil {
+		return normalizeErr
+	}
 	if s.flushed {
 		return nil
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	err := fmt.Errorf("nvidia riva stt streaming is not implemented")
-	s.streamErr = err
+	streamErr := fmt.Errorf("nvidia riva stt streaming is not implemented")
+	s.streamErr = streamErr
 	s.notifyLocked()
 	return nil
 }
@@ -256,15 +265,103 @@ func (s *nvidiaSTTStream) checkInputSampleRate(frame *model.AudioFrame) error {
 	if frame == nil {
 		return nil
 	}
-	if s.inputSampleRate == 0 {
+	if s.pushedSampleRate == 0 {
 		if frame.SampleRate == 0 {
 			return nil
 		}
-		s.inputSampleRate = frame.SampleRate
+		s.pushedSampleRate = frame.SampleRate
 		return nil
 	}
-	if s.inputSampleRate != frame.SampleRate {
+	if s.pushedSampleRate != frame.SampleRate {
 		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	return nil
+}
+
+func (s *nvidiaSTTStream) normalizeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	if len(frame.Data) == 0 {
+		s.inputSampleRate = frame.SampleRate
+		return frame, nil
+	}
+	normalized, err := downmixNvidiaRealtimeInputFrame(frame)
+	if err != nil {
+		return nil, err
+	}
+	frame = normalized
+	outputRate := uint32(0)
+	if s.stt != nil && s.stt.sampleRate > 0 {
+		outputRate = uint32(s.stt.sampleRate)
+	}
+	if outputRate == 0 || frame.SampleRate == 0 || frame.SampleRate == outputRate {
+		s.inputSampleRate = frame.SampleRate
+		s.inputResampleIn = 0
+		s.inputResampleOut = 0
+		s.inputResampleLast = nil
+		s.inputResampleFrame = nil
+		return frame, nil
+	}
+	s.inputSampleRate = outputRate
+	s.inputResampleFrame = appendNvidiaRealtimeInputFrame(s.inputResampleFrame, frame)
+	if s.inputResampleFrame == nil || s.inputResampleFrame.SamplesPerChannel < minNvidiaSTTResampleInputSamples(frame.SampleRate, outputRate) {
+		return nil, nil
+	}
+	return s.resamplePendingInputFrame(outputRate, false)
+}
+
+func (s *nvidiaSTTStream) resamplePendingInputFrame(outputRate uint32, flush bool) (*model.AudioFrame, error) {
+	pending := s.inputResampleFrame
+	if pending == nil {
+		return nil, nil
+	}
+	inputStart := s.inputResampleIn
+	outputStart := s.inputResampleOut
+	inputEnd := inputStart + uint64(pending.SamplesPerChannel)
+	outputEnd := inputEnd * uint64(outputRate) / uint64(pending.SampleRate)
+	if flush {
+		outputEnd = (inputEnd*uint64(outputRate) + uint64(pending.SampleRate) - 1) / uint64(pending.SampleRate)
+	}
+	if outputEnd <= outputStart {
+		return nil, nil
+	}
+	outSamples := uint32(outputEnd - outputStart)
+	normalized, err := resampleNvidiaRealtimeInputFrame(pending, outputRate, outSamples, inputStart, outputStart, s.inputResampleLast)
+	if err != nil {
+		return nil, err
+	}
+	s.inputResampleFrame = nil
+	s.inputResampleIn = inputEnd
+	s.inputResampleOut = outputEnd
+	s.inputResampleLast = lastNvidiaRealtimeInputSample(pending)
+	if normalized != nil {
+		s.inputSampleRate = normalized.SampleRate
+	}
+	return normalized, nil
+}
+
+func minNvidiaSTTResampleInputSamples(inputRate uint32, outputRate uint32) uint32 {
+	if inputRate == 0 || outputRate == 0 || inputRate <= outputRate {
+		return 1
+	}
+	return uint32((uint64(inputRate) + uint64(outputRate) - 1) / uint64(outputRate))
+}
+
+func (s *nvidiaSTTStream) drainPendingResampleInputLocked() error {
+	if s.inputResampleFrame == nil || s.flushed {
+		return nil
+	}
+	outputRate := uint32(0)
+	if s.stt != nil && s.stt.sampleRate > 0 {
+		outputRate = uint32(s.stt.sampleRate)
+	}
+	normalized, err := s.resamplePendingInputFrame(outputRate, true)
+	if err != nil {
+		return err
+	}
+	if normalized != nil && len(normalized.Data) > 0 {
+		s.streamErr = fmt.Errorf("nvidia riva stt streaming is not implemented")
 	}
 	return nil
 }
@@ -279,6 +376,9 @@ func (s *nvidiaSTTStream) Flush() error {
 		if err := s.ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if err := s.drainPendingResampleInputLocked(); err != nil {
+		return err
 	}
 	s.flushed = true
 	s.notifyLocked()
@@ -298,6 +398,9 @@ func (s *nvidiaSTTStream) EndInput() error {
 		if err := s.ctx.Err(); err != nil {
 			return err
 		}
+	}
+	if err := s.drainPendingResampleInputLocked(); err != nil {
+		return err
 	}
 	s.flushed = true
 	s.inputEnded = true
@@ -376,7 +479,6 @@ func (s *nvidiaSTTStream) eventsFromResult(result nvidiaSTTResult) []stt.SpeechE
 		Alternatives: []stt.SpeechData{s.speechDataFromAlternative(result.Alternative, result.IsFinal)},
 	})
 	if result.IsFinal && s.speaking {
-		s.speaking = false
 		events = append(events, stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
 	return events

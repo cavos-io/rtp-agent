@@ -38,6 +38,14 @@ type NvidiaTTS struct {
 
 type NvidiaTTSOption func(*NvidiaTTS)
 
+func WithNvidiaTTSAPIKey(apiKey string) NvidiaTTSOption {
+	return func(t *NvidiaTTS) {
+		if apiKey != "" {
+			t.apiKey = apiKey
+		}
+	}
+}
+
 func WithNvidiaTTSServer(server string) NvidiaTTSOption {
 	return func(t *NvidiaTTS) {
 		t.server = server
@@ -121,19 +129,20 @@ func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type nvidiaTTSSynthesizeStream struct {
-	mu           sync.Mutex
-	stateChanged chan struct{}
-	ctx          context.Context
-	done         bool
-	closed       bool
-	inputEnded   bool
-	hasText      bool
-	flushed      bool
-	text         string
-	pendingText  string
-	readyText    []string
-	queuedLen    int
-	exception    error
+	mu            sync.Mutex
+	stateChanged  chan struct{}
+	ctx           context.Context
+	done          bool
+	closed        bool
+	inputEnded    bool
+	hasText       bool
+	flushed       bool
+	segmentClosed bool
+	text          string
+	pendingText   string
+	readyText     []string
+	queuedLen     int
+	exception     error
 }
 
 type nvidiaTTSChunkedStream struct {
@@ -161,7 +170,7 @@ func (s *nvidiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.done = true
 		return nil, io.EOF
 	}
-	err := fmt.Errorf("nvidia riva tts synthesis is not implemented")
+	err := fmt.Errorf("nvidia riva tts streaming is not implemented")
 	s.done = true
 	s.exception = err
 	return nil, err
@@ -203,6 +212,9 @@ func (s *nvidiaTTSSynthesizeStream) PushText(text string) error {
 		}
 	}
 	if text == "" {
+		return nil
+	}
+	if s.segmentClosed {
 		return nil
 	}
 	text, collapsePreviousWhitespace := nvidiaTTSNormalizeInputText(text)
@@ -248,6 +260,7 @@ func (s *nvidiaTTSSynthesizeStream) Flush() error {
 	if s.hasText {
 		s.queuePendingInputLocked()
 		s.flushed = true
+		s.segmentClosed = true
 		s.notifyLocked()
 	}
 	return nil
@@ -273,6 +286,7 @@ func (s *nvidiaTTSSynthesizeStream) EndInput() error {
 	if s.hasText {
 		s.queuePendingInputLocked()
 		s.flushed = true
+		s.segmentClosed = true
 	}
 	s.inputEnded = true
 	if !s.hasText {
