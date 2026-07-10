@@ -636,6 +636,43 @@ func TestSpeechmaticsRealtimeSessionServerEventsEmitReferenceGenerationStreams(t
 	assertSpeechmaticsRealtimeClosedAudio(t, message.AudioCh)
 }
 
+func TestSpeechmaticsRealtimeSessionConversationItemAddedEmitsRemoteItem(t *testing.T) {
+	session := &speechmaticsRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent, 1),
+	}
+
+	ok := session.handleServerEvent(map[string]any{
+		"type":             "conversation.item.added",
+		"previous_item_id": "prev_123",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "hello"},
+			},
+		},
+	})
+
+	if !ok {
+		t.Fatal("conversation.item.added ignored, want remote item event")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	if event.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want payload")
+	}
+	if event.RemoteItem.PreviousItemID != "prev_123" || !event.RemoteItem.PreviousItemIDSet {
+		t.Fatalf("RemoteItem previous = %#v, want explicit prev_123", event.RemoteItem)
+	}
+	msg, ok := event.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", event.RemoteItem.Item)
+	}
+	if msg.ID != "msg_123" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
+		t.Fatalf("message = %#v, want user text message", msg)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

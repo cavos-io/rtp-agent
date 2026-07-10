@@ -802,6 +802,8 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleInputTranscriptCompleted(event)
 	case "conversation.item.input_audio_transcription.failed":
 		return s.handleInputTranscriptFailed(event)
+	case "conversation.item.added", "conversation.item.created":
+		return s.handleConversationItemAdded(event)
 	case "response.created":
 		return s.handleResponseCreated(event)
 	case "response.output_item.added":
@@ -816,6 +818,113 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseDone(event)
 	}
 	return false
+}
+
+func (s *speechmaticsRealtimeSession) handleConversationItemAdded(event map[string]any) bool {
+	item, _ := event["item"].(map[string]any)
+	if item == nil {
+		return false
+	}
+	chatItem, ok := speechmaticsRealtimeChatItem(item)
+	if !ok {
+		return false
+	}
+	previousItemID, previousItemIDSet := event["previous_item_id"].(string)
+	return s.emitRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID:    previousItemID,
+			PreviousItemIDSet: previousItemIDSet,
+			Item:              chatItem,
+		},
+	})
+}
+
+func speechmaticsRealtimeChatItem(item map[string]any) (llm.ChatItem, bool) {
+	switch speechmaticsRealtimeString(item, "type") {
+	case "message":
+		return speechmaticsRealtimeChatMessage(item)
+	case "function_call":
+		return speechmaticsRealtimeFunctionCallItem(item)
+	case "function_call_output":
+		return speechmaticsRealtimeFunctionCallOutputItem(item)
+	default:
+		return nil, false
+	}
+}
+
+func speechmaticsRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, bool) {
+	roleRaw := speechmaticsRealtimeString(item, "role")
+	role := llm.ChatRole(roleRaw)
+	switch role {
+	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
+	default:
+		return nil, false
+	}
+	contents, ok := item["content"].([]any)
+	if !ok {
+		return nil, false
+	}
+	return &llm.ChatMessage{
+		ID:      speechmaticsRealtimeString(item, "id"),
+		Role:    role,
+		Content: speechmaticsRealtimeChatContent(role, contents),
+	}, true
+}
+
+func speechmaticsRealtimeChatContent(role llm.ChatRole, contents []any) []llm.ChatContent {
+	out := make([]llm.ChatContent, 0, len(contents))
+	for _, content := range contents {
+		part, ok := content.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch speechmaticsRealtimeString(part, "type") {
+		case "input_text", "output_text":
+			text, hasText := part["text"].(string)
+			if text != "" || (hasText && role == llm.ChatRoleUser) {
+				out = append(out, llm.ChatContent{Text: text})
+			}
+		case "input_audio":
+			transcript, hasTranscript := part["transcript"].(string)
+			if hasTranscript && role == llm.ChatRoleUser {
+				out = append(out, llm.ChatContent{Text: transcript})
+			}
+		case "input_image":
+			imageURL, hasImageURL := part["image_url"].(string)
+			if hasImageURL && role == llm.ChatRoleUser {
+				out = append(out, llm.ChatContent{Image: &llm.ImageContent{Image: imageURL}})
+			}
+		}
+	}
+	return out
+}
+
+func speechmaticsRealtimeFunctionCallItem(item map[string]any) (*llm.FunctionCall, bool) {
+	call := &llm.FunctionCall{
+		ID:        speechmaticsRealtimeString(item, "id"),
+		CallID:    speechmaticsRealtimeString(item, "call_id"),
+		Name:      speechmaticsRealtimeString(item, "name"),
+		Arguments: speechmaticsRealtimeString(item, "arguments"),
+	}
+	if call.ID == "" || call.CallID == "" || call.Name == "" || call.Arguments == "" {
+		return nil, false
+	}
+	return call, true
+}
+
+func speechmaticsRealtimeFunctionCallOutputItem(item map[string]any) (*llm.FunctionCallOutput, bool) {
+	output, hasOutput := item["output"].(string)
+	callID := speechmaticsRealtimeString(item, "call_id")
+	if callID == "" || !hasOutput {
+		return nil, false
+	}
+	return &llm.FunctionCallOutput{
+		ID:      speechmaticsRealtimeString(item, "id"),
+		CallID:  callID,
+		Output:  output,
+		IsError: false,
+	}, true
 }
 
 func (s *speechmaticsRealtimeSession) handleInputTranscriptDelta(event map[string]any) bool {
