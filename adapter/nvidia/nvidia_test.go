@@ -2688,15 +2688,22 @@ func TestNvidiaTTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
-func TestNvidiaTTSAllowsExplicitEmptyAPIKeyLikeReference(t *testing.T) {
+func TestNvidiaTTSAPIKeyEmptyStringFallsBackToEnvironmentLikeReference(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "env-secret")
 
 	provider, err := NewNvidiaTTS("", "", WithNvidiaTTSAPIKey(""))
 	if err != nil {
-		t.Fatalf("NewNvidiaTTS explicit empty api key error = %v, want nil like reference", err)
+		t.Fatalf("NewNvidiaTTS empty api key error = %v, want nil env fallback like reference", err)
 	}
-	if got, want := provider.apiKey, ""; got != want {
-		t.Fatalf("apiKey = %q, want explicit empty key", got)
+	if got, want := provider.apiKey, "env-secret"; got != want {
+		t.Fatalf("apiKey = %q, want environment key for empty api_key %q", got, want)
+	}
+
+	t.Setenv("NVIDIA_API_KEY", "")
+	_, err = NewNvidiaTTS("", "", WithNvidiaTTSAPIKey(""))
+	wantErr := "NVIDIA_API_KEY is not set while using SSL. Either pass api_key parameter, set NVIDIA_API_KEY environment variable or disable SSL and use a locally hosted Riva NIM service."
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("NewNvidiaTTS empty api_key without env error = %v, want missing key error", err)
 	}
 }
 
