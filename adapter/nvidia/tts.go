@@ -466,6 +466,14 @@ func nvidiaTTSCompletedSentencePrefix(text string) (string, string, bool) {
 			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) && strings.TrimSpace(trimmed[boundaryEnd:]) != "" {
 				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
 			}
+		case '…':
+			boundaryEnd, quoted := nvidiaTTSQuotedBoundaryEnd(trimmed, next)
+			if !nvidiaTTSASCIIBoundaryTailStartsSentence(trimmed[boundaryEnd:], quoted) {
+				continue
+			}
+			if nvidiaTTSSentenceLongEnough(trimmed[:boundaryEnd]) {
+				return strings.TrimSpace(trimmed[:boundaryEnd]), strings.TrimSpace(trimmed[boundaryEnd:]), true
+			}
 		}
 	}
 	return "", "", false
