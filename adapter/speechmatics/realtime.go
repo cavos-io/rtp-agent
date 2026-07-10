@@ -416,7 +416,14 @@ func (s *speechmaticsRealtimeSession) GenerateReply(options llm.RealtimeGenerate
 		"type": "response.create",
 	}
 	if options.InstructionsSet {
-		command["instructions"] = options.Instructions
+		instructions := options.Instructions
+		s.mu.Lock()
+		sessionInstructions := s.instructions
+		s.mu.Unlock()
+		if sessionInstructions != "" {
+			instructions = sessionInstructions + "\n" + instructions
+		}
+		command["instructions"] = instructions
 	}
 	if len(options.Tools) > 0 {
 		tools, err := speechmaticsRealtimeTools(options.Tools)

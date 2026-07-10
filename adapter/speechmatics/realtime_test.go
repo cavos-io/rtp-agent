@@ -459,7 +459,7 @@ func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer now", InstructionsSet: true}); err != nil {
 		t.Fatalf("GenerateReply error = %v", err)
 	}
-	assertSpeechmaticsRealtimeCommand(t, session, "response.create", "instructions", "answer now")
+	assertSpeechmaticsRealtimeCommand(t, session, "response.create", "instructions", "new instructions\nanswer now")
 	if err := session.Say("hello"); err != nil {
 		t.Fatalf("Say error = %v", err)
 	}
@@ -544,6 +544,32 @@ func TestSpeechmaticsRealtimeGenerateReplyPreservesPerResponseTools(t *testing.T
 	if !ok || gotToolChoice["type"] != "function" || gotToolChoice["name"] != "lookup_weather" {
 		t.Fatalf("tool_choice = %#v, want original map", command["tool_choice"])
 	}
+}
+
+func TestSpeechmaticsRealtimeGenerateReplyPrependsSessionInstructions(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled(), WithRealtimeSystemPrompt("base prompt"))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+	if err := session.UpdateInstructions("updated base"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.update", "instructions", "updated base")
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+		Instructions:    "answer concisely",
+		InstructionsSet: true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	assertSpeechmaticsRealtimeCommand(t, session, "response.create", "instructions", "updated base\nanswer concisely")
 }
 
 func TestSpeechmaticsRealtimeSessionBuffersBurstAudioCommandsInOrder(t *testing.T) {
