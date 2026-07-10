@@ -781,7 +781,7 @@ func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.Audio
 }
 
 func (s *nvidiaRealtimeSession) ensureRealtimeTransportLocked() {
-	if s.closed || s.transportStarted || len(s.outboundMessages) == 0 {
+	if s.closed || s.transportStarted || s.restartPending || len(s.outboundMessages) == 0 {
 		return
 	}
 	s.startRealtimeTransportLocked()

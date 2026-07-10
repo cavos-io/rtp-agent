@@ -2396,6 +2396,47 @@ func TestNvidiaRealtimeInstructionReconnectWaitsForOldTransportExitLikeReference
 	}
 }
 
+func TestNvidiaRealtimeAudioDuringInstructionReconnectWaitsForOldTransportLikeReference(t *testing.T) {
+	oldDone := make(chan struct{})
+	session := &nvidiaRealtimeSession{
+		baseURL:          "127.0.0.1:1",
+		voice:            defaultNvidiaRealtimeVoice,
+		textPrompt:       "old prompt",
+		transportStarted: true,
+		transportCancel:  func() {},
+		transportDone:    oldDone,
+		transportNotify:  make(chan struct{}),
+		events:           newNvidiaRealtimeEventStream(nil),
+		preconnect:       true,
+	}
+	defer session.Close()
+	defer close(oldDone)
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	frame := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(frame),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(frame)),
+	}); err != nil {
+		t.Fatalf("PushAudio() during restart error = %v", err)
+	}
+
+	session.mu.Lock()
+	started := session.transportStarted
+	queued := len(session.outboundMessages)
+	session.mu.Unlock()
+	if queued == 0 {
+		t.Fatal("outboundMessages empty, want caller audio queued for replacement PersonaPlex socket")
+	}
+	if started {
+		t.Fatal("PushAudio() during instruction restart started transport before old transport exited")
+	}
+}
+
 func TestNvidiaRealtimeInstructionUpdateDuringReconnectRestartsAgainLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	firstConnected := make(chan struct{}, 1)
