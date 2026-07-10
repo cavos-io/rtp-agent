@@ -324,11 +324,12 @@ type speechmaticsRealtimeGeneration struct {
 }
 
 type speechmaticsRealtimeMessage struct {
-	textCh       chan string
-	timedTextCh  chan llm.RealtimeTimedText
-	audioCh      chan *model.AudioFrame
-	modalitiesCh chan []string
-	closed       bool
+	textCh        chan string
+	timedTextCh   chan llm.RealtimeTimedText
+	audioCh       chan *model.AudioFrame
+	modalitiesCh  chan []string
+	modalitiesSet bool
+	closed        bool
 }
 
 func (s *speechmaticsRealtimeSession) UpdateInstructions(instructions string) error {
@@ -821,6 +822,8 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseCreated(event)
 	case "response.output_item.added":
 		return s.handleResponseOutputItemAdded(event)
+	case "response.content_part.added":
+		return s.handleResponseContentPartAdded(event)
 	case "response.output_text.delta", "response.text.delta", "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		return s.handleResponseTextDelta(event)
 	case "response.output_audio.delta", "response.audio.delta":
@@ -1095,8 +1098,6 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[st
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
 	}
-	message.modalitiesCh <- []string{"audio", "text"}
-	close(message.modalitiesCh)
 	generation.messages[itemID] = message
 	s.mu.Unlock()
 	select {
@@ -1110,6 +1111,24 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[st
 	default:
 	}
 	return true
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseContentPartAdded(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	if itemID == "" {
+		return false
+	}
+	part, _ := event["part"].(map[string]any)
+	partType := speechmaticsRealtimeString(part, "type")
+	modalities := []string{"audio", "text"}
+	if partType == "text" || partType == "output_text" {
+		modalities = []string{"text"}
+	}
+	s.mu.Lock()
+	message := s.realtimeMessageLocked(itemID)
+	ok := s.setRealtimeMessageModalitiesLocked(message, modalities)
+	s.mu.Unlock()
+	return ok
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]any) bool {
@@ -1155,6 +1174,9 @@ func (s *speechmaticsRealtimeSession) handleResponseAudioDelta(event map[string]
 	if message == nil {
 		return false
 	}
+	s.mu.Lock()
+	s.setRealtimeMessageModalitiesLocked(message, []string{"audio", "text"})
+	s.mu.Unlock()
 	s.recordFirstToken(itemID)
 	select {
 	case message.audioCh <- &model.AudioFrame{
@@ -1186,6 +1208,7 @@ func (s *speechmaticsRealtimeSession) handleResponseOutputItemDone(event map[str
 	s.mu.Lock()
 	message := s.realtimeMessageLocked(itemID)
 	if message != nil && !message.closed {
+		s.setRealtimeMessageModalitiesLocked(message, []string{"audio", "text"})
 		message.closed = true
 		close(message.textCh)
 		close(message.timedTextCh)
@@ -1334,6 +1357,16 @@ func (s *speechmaticsRealtimeSession) realtimeMessageLocked(itemID string) *spee
 	return s.generation.messages[itemID]
 }
 
+func (s *speechmaticsRealtimeSession) setRealtimeMessageModalitiesLocked(message *speechmaticsRealtimeMessage, modalities []string) bool {
+	if message == nil || message.closed || message.modalitiesSet {
+		return false
+	}
+	message.modalitiesSet = true
+	message.modalitiesCh <- append([]string(nil), modalities...)
+	close(message.modalitiesCh)
+	return true
+}
+
 func (s *speechmaticsRealtimeSession) closeCurrentGenerationLocked() {
 	if s.generation == nil || s.generation.done {
 		return
@@ -1342,6 +1375,7 @@ func (s *speechmaticsRealtimeSession) closeCurrentGenerationLocked() {
 	generation.done = true
 	for _, message := range generation.messages {
 		if message != nil && !message.closed {
+			s.setRealtimeMessageModalitiesLocked(message, []string{"audio", "text"})
 			message.closed = true
 			close(message.textCh)
 			close(message.timedTextCh)

@@ -823,6 +823,44 @@ func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionContentPartAddedSetsReferenceModalities(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_text"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{"id": "msg_text", "type": "message"},
+	}); !ok {
+		t.Fatal("response.output_item.added ignored")
+	}
+	message := assertSpeechmaticsRealtimeMessage(t, created.Generation.MessageCh)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":    "response.content_part.added",
+		"item_id": "msg_text",
+		"part":    map[string]any{"type": "text"},
+	}); !ok {
+		t.Fatal("response.content_part.added ignored")
+	}
+
+	modalities := assertSpeechmaticsRealtimeModalities(t, message.ModalitiesCh)
+	if len(modalities) != 1 || modalities[0] != "text" {
+		t.Fatalf("modalities = %#v, want text-only", modalities)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -1469,6 +1507,20 @@ func assertSpeechmaticsRealtimeAudio(t *testing.T, ch <-chan *model.AudioFrame) 
 		return frame
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for audio delta")
+	}
+	return nil
+}
+
+func assertSpeechmaticsRealtimeModalities(t *testing.T, ch <-chan []string) []string {
+	t.Helper()
+	select {
+	case modalities, ok := <-ch:
+		if !ok {
+			t.Fatal("modalities channel closed")
+		}
+		return modalities
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for modalities")
 	}
 	return nil
 }
