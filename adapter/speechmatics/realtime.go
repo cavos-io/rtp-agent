@@ -313,6 +313,8 @@ type speechmaticsRealtimeSession struct {
 	closeOnce        sync.Once
 	generation       *speechmaticsRealtimeGeneration
 	inputTranscripts map[string]map[int]string
+	pendingResponses map[string]struct{}
+	nextResponseID   int
 }
 
 type speechmaticsRealtimeGeneration struct {
@@ -415,8 +417,10 @@ func (s *speechmaticsRealtimeSession) UpdateOptions(options llm.RealtimeSessionO
 }
 
 func (s *speechmaticsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	eventID := s.nextResponseCreateID()
 	command := map[string]any{
-		"type": "response.create",
+		"type":     "response.create",
+		"metadata": map[string]any{"client_event_id": eventID},
 	}
 	if options.InstructionsSet {
 		instructions := options.Instructions
@@ -438,7 +442,40 @@ func (s *speechmaticsRealtimeSession) GenerateReply(options llm.RealtimeGenerate
 	if options.ToolChoice != nil {
 		command["tool_choice"] = options.ToolChoice
 	}
-	return s.enqueueCommand(command)
+	if err := s.enqueueCommand(command); err != nil {
+		s.clearPendingResponse(eventID)
+		return err
+	}
+	return nil
+}
+
+func (s *speechmaticsRealtimeSession) nextResponseCreateID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextResponseID++
+	eventID := fmt.Sprintf("response_create_%d", s.nextResponseID)
+	if s.pendingResponses == nil {
+		s.pendingResponses = make(map[string]struct{})
+	}
+	s.pendingResponses[eventID] = struct{}{}
+	return eventID
+}
+
+func (s *speechmaticsRealtimeSession) clearPendingResponse(eventID string) {
+	s.mu.Lock()
+	s.clearPendingResponseLocked(eventID)
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsRealtimeSession) clearPendingResponseLocked(eventID string) bool {
+	if eventID == "" || s.pendingResponses == nil {
+		return false
+	}
+	if _, ok := s.pendingResponses[eventID]; !ok {
+		return false
+	}
+	delete(s.pendingResponses, eventID)
+	return true
 }
 
 func (s *speechmaticsRealtimeSession) Say(text string) error {
@@ -523,7 +560,7 @@ func (s *speechmaticsRealtimeSession) Interrupt() error {
 func (s *speechmaticsRealtimeSession) hasActiveGeneration() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.closed && s.generation != nil && !s.generation.done
+	return !s.closed && ((s.generation != nil && !s.generation.done) || len(s.pendingResponses) > 0)
 }
 
 func (s *speechmaticsRealtimeSession) Close() error {
@@ -531,6 +568,7 @@ func (s *speechmaticsRealtimeSession) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		s.pendingCommands = nil
+		s.pendingResponses = nil
 		s.closeCurrentGenerationLocked()
 		cancel := s.cancel
 		conn := s.conn
@@ -1136,9 +1174,13 @@ func (s *speechmaticsRealtimeSession) handleProviderError(event map[string]any) 
 
 func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any) bool {
 	responseID := speechmaticsRealtimeString(event, "response_id")
+	var clientEventID string
 	if responseID == "" {
 		if response, _ := event["response"].(map[string]any); response != nil {
 			responseID = speechmaticsRealtimeString(response, "id")
+			if metadata, _ := response["metadata"].(map[string]any); metadata != nil {
+				clientEventID = speechmaticsRealtimeString(metadata, "client_event_id")
+			}
 		}
 	}
 	if responseID == "" {
@@ -1158,13 +1200,15 @@ func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any
 		createdAt:  time.Now(),
 	}
 	s.generation = generation
+	userInitiated := s.clearPendingResponseLocked(clientEventID)
 	s.mu.Unlock()
 	return s.emitRealtimeEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
-			MessageCh:  generation.messageCh,
-			FunctionCh: generation.functionCh,
-			ResponseID: responseID,
+			MessageCh:     generation.messageCh,
+			FunctionCh:    generation.functionCh,
+			ResponseID:    responseID,
+			UserInitiated: userInitiated,
 		},
 	})
 }

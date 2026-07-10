@@ -438,6 +438,51 @@ func TestSpeechmaticsRealtimeSessionIdleInterruptDoesNotCancel(t *testing.T) {
 	assertSpeechmaticsRealtimeNoCommand(t, session)
 }
 
+func TestSpeechmaticsRealtimeSessionPendingGenerateReplyIsInterruptible(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer now", InstructionsSet: true}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	create := nextSpeechmaticsRealtimeCommand(t, session)
+	if create["type"] != "response.create" {
+		t.Fatalf("command = %#v, want response.create", create)
+	}
+	metadata, _ := create["metadata"].(map[string]any)
+	clientEventID, _ := metadata["client_event_id"].(string)
+	if clientEventID == "" {
+		t.Fatalf("metadata = %#v, want client_event_id", create["metadata"])
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "response.cancel", "", nil)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":       "resp_generate",
+			"metadata": map[string]any{"client_event_id": clientEventID},
+		},
+	}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil || !created.Generation.UserInitiated {
+		t.Fatalf("generation = %#v, want user initiated", created.Generation)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionTruncateAudioMatchesReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
