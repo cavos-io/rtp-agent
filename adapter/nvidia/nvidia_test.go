@@ -1594,7 +1594,8 @@ waitReconnect:
 }
 
 func TestNvidiaRealtimeSessionGenerationEventsMatchReference(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel()
+	// Keep provider dial failures from racing the synthetic generation events.
+	realtimeModel := newNvidiaRealtimeModelWithoutPreconnect()
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
