@@ -530,8 +530,7 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	s.resetRealtimeTransportLocked()
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
-		go s.emitSessionReconnectedAfterTransportDone(transportDone)
-		s.startRealtimeTransportLocked()
+		go s.restartRealtimeTransportAfterDone(transportDone)
 	} else if s.preconnect {
 		if wasRetrying {
 			s.restartPending = false
@@ -864,7 +863,7 @@ func (s *nvidiaRealtimeSession) emitConnectionAcquiredMetrics(ctx context.Contex
 	})
 }
 
-func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-chan struct{}) {
+func (s *nvidiaRealtimeSession) restartRealtimeTransportAfterDone(done <-chan struct{}) {
 	<-done
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -872,6 +871,7 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 		return
 	}
 	s.sendSessionReconnectedLocked()
+	s.startRealtimeTransportLocked()
 }
 
 func (s *nvidiaRealtimeSession) sendSessionReconnectedLocked() {

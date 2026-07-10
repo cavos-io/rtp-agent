@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2299,6 +2300,99 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for session_reconnected after provider reconnect")
+	}
+}
+
+func TestNvidiaRealtimeInstructionReconnectWaitsForOldTransportExitLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	firstConnected := make(chan struct{}, 1)
+	firstTransportDone := make(chan struct{})
+	secondConnected := make(chan struct{}, 1)
+	overlap := make(chan struct{})
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	var overlapOnce sync.Once
+	markOverlap := func() {
+		overlapOnce.Do(func() { close(overlap) })
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		switch attempt {
+		case 1:
+			firstConnected <- struct{}{}
+			<-r.Context().Done()
+		case 2:
+			select {
+			case <-firstTransportDone:
+			default:
+				markOverlap()
+			}
+			secondConnected <- struct{}{}
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-firstConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
+	concrete := session.(*nvidiaRealtimeSession)
+	concrete.mu.Lock()
+	oldDone := concrete.transportDone
+	concrete.mu.Unlock()
+	if oldDone == nil {
+		t.Fatal("transportDone = nil, want active transport before instruction restart")
+	}
+	go func() {
+		<-oldDone
+		close(firstTransportDone)
+	}()
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-overlap:
+		t.Fatal("instruction reconnect opened a new PersonaPlex websocket before old transport exited")
+	case <-firstTransportDone:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before old transport exit: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old PersonaPlex transport exit")
+	}
+	select {
+	case <-secondConnected:
+	case <-overlap:
+		t.Fatal("instruction reconnect opened a new PersonaPlex websocket before old transport exited")
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instruction reconnect after old transport exit")
 	}
 }
 
