@@ -1052,6 +1052,12 @@ func (s *speechmaticsRealtimeSession) handleResponseCreated(event map[string]any
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseOutputItemAdded(event map[string]any) bool {
+	if item, _ := event["item"].(map[string]any); item != nil {
+		itemType := speechmaticsRealtimeString(item, "type")
+		if itemType != "" && itemType != "message" {
+			return true
+		}
+	}
 	itemID := speechmaticsRealtimeString(event, "item_id")
 	if itemID == "" {
 		if item, _ := event["item"].(map[string]any); item != nil {

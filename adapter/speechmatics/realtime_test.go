@@ -896,6 +896,17 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
 
 	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "fc_123",
+			"type": "function_call",
+		},
+	}); !ok {
+		t.Fatal("function call output item added ignored")
+	}
+	assertSpeechmaticsRealtimeNoMessage(t, created.Generation.MessageCh)
+
+	if ok := session.handleServerEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "fc_123",
@@ -1361,6 +1372,18 @@ func assertSpeechmaticsRealtimeMessage(t *testing.T, ch <-chan llm.MessageGenera
 		t.Fatal("timed out waiting for message generation")
 	}
 	return llm.MessageGeneration{}
+}
+
+func assertSpeechmaticsRealtimeNoMessage(t *testing.T, ch <-chan llm.MessageGeneration) {
+	t.Helper()
+	select {
+	case message, ok := <-ch:
+		if !ok {
+			t.Fatal("message channel closed")
+		}
+		t.Fatalf("message = %#v, want no message generation", message)
+	case <-time.After(25 * time.Millisecond):
+	}
 }
 
 func assertSpeechmaticsRealtimeText(t *testing.T, ch <-chan string) string {
