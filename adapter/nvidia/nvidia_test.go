@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2299,6 +2300,210 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for session_reconnected after provider reconnect")
+	}
+}
+
+func TestNvidiaRealtimeInstructionReconnectWaitsForOldTransportExitLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	firstConnected := make(chan struct{}, 1)
+	firstTransportDone := make(chan struct{})
+	secondConnected := make(chan struct{}, 1)
+	overlap := make(chan struct{})
+	serverErr := make(chan error, 1)
+	var attempts atomic.Int32
+	var overlapOnce sync.Once
+	markOverlap := func() {
+		overlapOnce.Do(func() { close(overlap) })
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		switch attempt {
+		case 1:
+			firstConnected <- struct{}{}
+			<-r.Context().Done()
+		case 2:
+			select {
+			case <-firstTransportDone:
+			default:
+				markOverlap()
+			}
+			secondConnected <- struct{}{}
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(
+		WithNvidiaRealtimeBaseURL(server.URL),
+		WithNvidiaRealtimeTextPrompt("old prompt"),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-firstConnected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before first connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first PersonaPlex connection")
+	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
+	concrete := session.(*nvidiaRealtimeSession)
+	concrete.mu.Lock()
+	oldDone := concrete.transportDone
+	concrete.mu.Unlock()
+	if oldDone == nil {
+		t.Fatal("transportDone = nil, want active transport before instruction restart")
+	}
+	go func() {
+		<-oldDone
+		close(firstTransportDone)
+	}()
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	select {
+	case <-overlap:
+		t.Fatal("instruction reconnect opened a new PersonaPlex websocket before old transport exited")
+	case <-firstTransportDone:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before old transport exit: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old PersonaPlex transport exit")
+	}
+	select {
+	case <-secondConnected:
+	case <-overlap:
+		t.Fatal("instruction reconnect opened a new PersonaPlex websocket before old transport exited")
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before instruction reconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instruction reconnect after old transport exit")
+	}
+}
+
+func TestNvidiaRealtimeAudioDuringInstructionReconnectWaitsForOldTransportLikeReference(t *testing.T) {
+	oldDone := make(chan struct{})
+	session := &nvidiaRealtimeSession{
+		baseURL:          "127.0.0.1:1",
+		voice:            defaultNvidiaRealtimeVoice,
+		textPrompt:       "old prompt",
+		transportStarted: true,
+		transportCancel:  func() {},
+		transportDone:    oldDone,
+		transportNotify:  make(chan struct{}),
+		events:           newNvidiaRealtimeEventStream(nil),
+		preconnect:       true,
+	}
+	defer session.Close()
+	defer close(oldDone)
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() error = %v", err)
+	}
+	frame := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(frame),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(frame)),
+	}); err != nil {
+		t.Fatalf("PushAudio() during restart error = %v", err)
+	}
+
+	session.mu.Lock()
+	started := session.transportStarted
+	queued := len(session.outboundMessages)
+	session.mu.Unlock()
+	if queued == 0 {
+		t.Fatal("outboundMessages empty, want caller audio queued for replacement PersonaPlex socket")
+	}
+	if started {
+		t.Fatal("PushAudio() during instruction restart started transport before old transport exited")
+	}
+}
+
+func TestNvidiaRealtimeAudioDuringRetryWaitsForBackoffLikeReference(t *testing.T) {
+	retryTimer := time.AfterFunc(time.Hour, func() {})
+	defer retryTimer.Stop()
+	session := &nvidiaRealtimeSession{
+		baseURL:         "127.0.0.1:1",
+		voice:           defaultNvidiaRealtimeVoice,
+		textPrompt:      defaultNvidiaRealtimeTextPrompt,
+		transportNotify: make(chan struct{}),
+		retryTimer:      retryTimer,
+		events:          newNvidiaRealtimeEventStream(nil),
+		preconnect:      true,
+	}
+	defer session.Close()
+
+	frame := makeNvidiaRealtimePCMInputFrame()
+	if err := session.PushAudio(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes(frame),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(frame)),
+	}); err != nil {
+		t.Fatalf("PushAudio() during retry backoff error = %v", err)
+	}
+
+	session.mu.Lock()
+	started := session.transportStarted
+	queued := len(session.outboundMessages)
+	session.mu.Unlock()
+	if queued == 0 {
+		t.Fatal("outboundMessages empty, want caller audio queued during retry backoff")
+	}
+	if started {
+		t.Fatal("PushAudio() during retry backoff started transport before retry timer fired")
+	}
+}
+
+func TestNvidiaRealtimeInstructionUpdateDuringRetryWaitsForBackoffLikeReference(t *testing.T) {
+	retryTimer := time.AfterFunc(time.Hour, func() {})
+	defer retryTimer.Stop()
+	session := &nvidiaRealtimeSession{
+		baseURL:         "127.0.0.1:1",
+		voice:           defaultNvidiaRealtimeVoice,
+		textPrompt:      "old prompt",
+		transportNotify: make(chan struct{}),
+		retryTimer:      retryTimer,
+		events:          newNvidiaRealtimeEventStream(nil),
+		preconnect:      true,
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions("new prompt"); err != nil {
+		t.Fatalf("UpdateInstructions() during retry backoff error = %v", err)
+	}
+
+	session.mu.Lock()
+	started := session.transportStarted
+	pendingRetry := session.retryTimer != nil
+	prompt := session.textPrompt
+	session.mu.Unlock()
+	if started {
+		t.Fatal("UpdateInstructions() during retry backoff started transport before retry timer fired")
+	}
+	if !pendingRetry {
+		t.Fatal("retryTimer cleared, want existing retry backoff preserved")
+	}
+	if prompt != "new prompt" {
+		t.Fatalf("textPrompt = %q, want updated prompt for retry reconnect", prompt)
 	}
 }
 
@@ -4946,6 +5151,336 @@ func TestNvidiaTTSStreamStartsAdditionalStartersAfterSuffixLikeReference(t *test
 				t.Fatal("Next() did not start after additional starter boundary")
 			}
 		})
+	}
+}
+
+func TestNvidiaTTSStreamStartsSureAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Sure, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Sure starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Sure starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsAlrightAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Alright, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Alright starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Alright starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsAbsolutelyAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Absolutely, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Absolutely starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Absolutely starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsGotItAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Got it, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Got it starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Got it starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsOkayAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Okay, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Okay starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Okay starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsRightAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Right, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Right starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Right starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsGreatAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Great, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Great starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Great starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsPerfectAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Perfect, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Perfect starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Perfect starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsExcellentAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Excellent, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Excellent starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Excellent starter boundary")
+	}
+}
+
+func TestNvidiaTTSStreamStartsFineAfterSuffixLikeReference(t *testing.T) {
+	provider, err := NewNvidiaTTS("secret", "")
+	if err != nil {
+		t.Fatalf("NewNvidiaTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- result{audio: audio, err: err}
+	}()
+
+	if err := stream.PushText("Please contact Foo Inc. Fine, I can help now"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.audio != nil || got.err == nil || !strings.Contains(got.err.Error(), "riva tts streaming is not implemented") {
+			t.Fatalf("Next() after Fine starter = (%v, %v), want unsupported stream error", got.audio, got.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not start after Fine starter boundary")
 	}
 }
 

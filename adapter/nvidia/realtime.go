@@ -527,20 +527,22 @@ func (s *nvidiaRealtimeSession) UpdateInstructions(instructions string) error {
 	wasRetrying := s.retryTimer != nil
 	s.textPrompt = instructions
 	s.restartPending = true
-	s.resetRealtimeTransportLocked()
+	if wasRetrying {
+		s.resetRealtimeTransportPreservingRetryLocked()
+	} else {
+		s.resetRealtimeTransportLocked()
+	}
 	s.finalizeGenerationLocked(true)
 	if wasStarted && transportDone != nil {
-		go s.emitSessionReconnectedAfterTransportDone(transportDone)
-		s.startRealtimeTransportLocked()
+		go s.restartRealtimeTransportAfterDone(transportDone)
 	} else if s.preconnect {
 		if wasRetrying {
 			s.restartPending = false
 			s.restartEventQueued = false
+			return nil
 		}
 		s.startRealtimeTransportLocked()
-		if !wasRetrying {
-			s.sendSessionReconnectedLocked()
-		}
+		s.sendSessionReconnectedLocked()
 	} else {
 		s.sendSessionReconnectedLocked()
 	}
@@ -645,7 +647,15 @@ func (s *nvidiaRealtimeSession) websocketURL() string {
 }
 
 func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
-	s.stopRealtimeTransportLocked()
+	s.resetRealtimeTransportStateLocked(false)
+}
+
+func (s *nvidiaRealtimeSession) resetRealtimeTransportPreservingRetryLocked() {
+	s.resetRealtimeTransportStateLocked(true)
+}
+
+func (s *nvidiaRealtimeSession) resetRealtimeTransportStateLocked(preserveRetry bool) {
+	s.stopRealtimeTransportLocked(preserveRetry)
 	s.outboundMessages = nil
 	s.transportSent = 0
 	s.inputAudioBuffer = nil
@@ -658,12 +668,12 @@ func (s *nvidiaRealtimeSession) resetRealtimeTransportLocked() {
 	s.opusDecoder = nil
 }
 
-func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked() {
+func (s *nvidiaRealtimeSession) stopRealtimeTransportLocked(preserveRetry bool) {
 	if s.transportCancel != nil {
 		s.transportCancel()
 		s.transportCancel = nil
 	}
-	if s.retryTimer != nil {
+	if s.retryTimer != nil && !preserveRetry {
 		s.retryTimer.Stop()
 		s.retryTimer = nil
 	}
@@ -782,7 +792,7 @@ func (s *nvidiaRealtimeSession) queueInputAudioMessagesLocked(frame *model.Audio
 }
 
 func (s *nvidiaRealtimeSession) ensureRealtimeTransportLocked() {
-	if s.closed || s.transportStarted || len(s.outboundMessages) == 0 {
+	if s.closed || s.transportStarted || s.restartPending || s.retryTimer != nil || len(s.outboundMessages) == 0 {
 		return
 	}
 	s.startRealtimeTransportLocked()
@@ -864,7 +874,7 @@ func (s *nvidiaRealtimeSession) emitConnectionAcquiredMetrics(ctx context.Contex
 	})
 }
 
-func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-chan struct{}) {
+func (s *nvidiaRealtimeSession) restartRealtimeTransportAfterDone(done <-chan struct{}) {
 	<-done
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -872,6 +882,7 @@ func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-
 		return
 	}
 	s.sendSessionReconnectedLocked()
+	s.startRealtimeTransportLocked()
 }
 
 func (s *nvidiaRealtimeSession) sendSessionReconnectedLocked() {
