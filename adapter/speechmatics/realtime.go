@@ -330,12 +330,13 @@ type speechmaticsRealtimeGeneration struct {
 }
 
 type speechmaticsRealtimeMessage struct {
-	textCh        chan string
-	timedTextCh   chan llm.RealtimeTimedText
-	audioCh       chan *model.AudioFrame
-	modalitiesCh  chan []string
-	modalitiesSet bool
-	closed        bool
+	textCh          chan string
+	timedTextCh     chan llm.RealtimeTimedText
+	audioCh         chan *model.AudioFrame
+	modalitiesCh    chan []string
+	modalitiesSet   bool
+	audioTranscript string
+	closed          bool
 }
 
 func (s *speechmaticsRealtimeSession) UpdateInstructions(instructions string) error {
@@ -1310,6 +1311,12 @@ func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]a
 		return false
 	}
 	s.recordFirstToken(itemID)
+	eventType := speechmaticsRealtimeString(event, "type")
+	if eventType == "response.output_audio_transcript.delta" || eventType == "response.audio_transcript.delta" {
+		s.mu.Lock()
+		message.audioTranscript += delta
+		s.mu.Unlock()
+	}
 	select {
 	case message.textCh <- delta:
 	default:
@@ -1395,6 +1402,7 @@ func (s *speechmaticsRealtimeSession) handleResponseDone(event map[string]any) b
 	s.mu.Lock()
 	metrics := s.responseDoneMetricsLocked(response)
 	errorEvent := speechmaticsRealtimeResponseDoneError(response)
+	s.appendAudioTranscriptsToRemoteItemsLocked()
 	s.closeCurrentGenerationLocked()
 	s.mu.Unlock()
 	ok := true
@@ -1410,6 +1418,22 @@ func (s *speechmaticsRealtimeSession) handleResponseDone(event map[string]any) b
 		ok = false
 	}
 	return ok
+}
+
+func (s *speechmaticsRealtimeSession) appendAudioTranscriptsToRemoteItemsLocked() {
+	if s.generation == nil {
+		return
+	}
+	for itemID, message := range s.generation.messages {
+		if message == nil || message.audioTranscript == "" {
+			continue
+		}
+		remoteMessage, ok := s.remoteItems[itemID].(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		remoteMessage.Content = append(remoteMessage.Content, llm.ChatContent{Text: message.audioTranscript})
+	}
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string]any) bool {
