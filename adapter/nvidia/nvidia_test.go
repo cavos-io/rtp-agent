@@ -29,8 +29,9 @@ import (
 
 type nvidiaRivaTestServer struct {
 	rivapb.UnimplementedRivaSpeechRecognitionServer
-	requests chan *rivapb.StreamingRecognizeRequest
-	metadata chan metadata.MD
+	requests       chan *rivapb.StreamingRecognizeRequest
+	metadata       chan metadata.MD
+	responsesOnEOF []*rivapb.StreamingRecognizeResponse
 }
 
 func (s *nvidiaRivaTestServer) StreamingRecognize(stream grpc.BidiStreamingServer[
@@ -42,12 +43,76 @@ func (s *nvidiaRivaTestServer) StreamingRecognize(stream grpc.BidiStreamingServe
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
+			for _, response := range s.responsesOnEOF {
+				if err := stream.Send(response); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		if err != nil {
 			return err
 		}
 		s.requests <- req
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportDrainsFinalAfterFlush(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	server.responsesOnEOF = []*rivapb.StreamingRecognizeResponse{{
+		Results: []*rivapb.StreamingRecognitionResult{
+			{Alternatives: []*rivapb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: .7}}, IsFinal: false},
+			{Alternatives: []*rivapb.SpeechRecognitionAlternative{{Transcript: "hello there", Confidence: .9}}, IsFinal: true},
+		},
+	}}
+	provider, err := NewNvidiaSTT("", "model",
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	events := make([]*stt.SpeechEvent, 0, len(wantTypes))
+	for i, wantType := range wantTypes {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next(%d) error = %v", i, err)
+		}
+		if event.Type != wantType {
+			t.Fatalf("Next(%d) type = %q, want %q", i, event.Type, wantType)
+		}
+		events = append(events, event)
+	}
+	if got := events[1].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("interim text = %q, want hello", got)
+	}
+	if got := events[2].Alternatives[0].Text; got != "hello there" {
+		t.Fatalf("final text = %q, want hello there", got)
+	}
+	if events[1].RequestID == "" || !strings.HasPrefix(events[1].RequestID, "nvidia-") || events[1].RequestID != events[2].RequestID {
+		t.Fatalf("transcript request ids = %q/%q, want shared nvidia id", events[1].RequestID, events[2].RequestID)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("Next() after drained response = (%v, %v), want nil EOF", event, err)
 	}
 }
 
@@ -9365,10 +9430,7 @@ func TestNvidiaSTTEndInputDrainsBufferedResampleInputLikeReference(t *testing.T)
 }
 
 func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9471,10 +9533,7 @@ func TestNvidiaSTTEndInputFlushesBeforeCloseLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9507,10 +9566,7 @@ func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTFlushStopsWorkerLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)

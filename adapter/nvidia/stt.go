@@ -176,7 +176,8 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	transportCtx, transportCancel := context.WithCancel(ctx)
 	stream := &nvidiaSTTStream{
 		stt:             s,
-		ctx:             transportCtx,
+		ctx:             ctx,
+		transportCtx:    transportCtx,
 		language:        streamLanguage,
 		stateChanged:    make(chan struct{}),
 		transportCancel: transportCancel,
@@ -193,6 +194,7 @@ type nvidiaSTTStream struct {
 	stateChanged       chan struct{}
 	stt                *NvidiaSTT
 	ctx                context.Context
+	transportCtx       context.Context
 	language           string
 	closed             bool
 	inputEnded         bool
@@ -213,6 +215,8 @@ type nvidiaSTTStream struct {
 	transportNotify    chan struct{}
 	transportAudio     [][]byte
 	transportEOF       bool
+	transportFinished  bool
+	events             []stt.SpeechEvent
 }
 
 type nvidiaSTTWord struct {
@@ -438,9 +442,11 @@ func (s *nvidiaSTTStream) Close() error {
 func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	for {
 		s.mu.Lock()
-		if s.closed {
+		if len(s.events) > 0 {
+			event := s.events[0]
+			s.events = s.events[1:]
 			s.mu.Unlock()
-			return nil, io.EOF
+			return &event, nil
 		}
 		if s.ctx != nil {
 			if err := s.ctx.Err(); err != nil {
@@ -453,11 +459,7 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 			s.mu.Unlock()
 			return nil, err
 		}
-		if s.inputEnded {
-			s.mu.Unlock()
-			return nil, io.EOF
-		}
-		if s.flushed {
+		if s.closed || s.transportFinished {
 			s.mu.Unlock()
 			return nil, io.EOF
 		}
