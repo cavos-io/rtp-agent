@@ -769,11 +769,13 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context, done c
 		}
 		s.mu.Unlock()
 	}()
+	start := time.Now()
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.websocketURL(), nil)
 	if err != nil {
 		s.failRealtimeTransport(ctx, llm.NewAPIConnectionError(fmt.Sprintf("Connection failed: %v", err)))
 		return
 	}
+	s.emitConnectionAcquiredMetrics(ctx, time.Since(start).Seconds())
 	s.mu.Lock()
 	if s.transportCtx == ctx && !s.closed {
 		s.retryDelay = defaultNvidiaRealtimeInitialRetryDelay
@@ -795,6 +797,27 @@ func (s *nvidiaRealtimeSession) runRealtimeTransport(ctx context.Context, done c
 	}
 	go s.receiveRealtimeTransport(ctx, conn)
 	s.sendRealtimeTransport(ctx, conn)
+}
+
+func (s *nvidiaRealtimeSession) emitConnectionAcquiredMetrics(ctx context.Context, acquireTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transportCtx != ctx || s.closed {
+		return
+	}
+	s.events.send(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			Label:            s.label,
+			Timestamp:        time.Now(),
+			AcquireTime:      acquireTime,
+			ConnectionReused: false,
+			Metadata: &telemetry.Metadata{
+				ModelName:     s.modelName,
+				ModelProvider: s.provider,
+			},
+		},
+	})
 }
 
 func (s *nvidiaRealtimeSession) emitSessionReconnectedAfterTransportDone(done <-chan struct{}) {

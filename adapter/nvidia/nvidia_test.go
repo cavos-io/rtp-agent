@@ -37,6 +37,21 @@ func newNvidiaRealtimeModelWithoutPreconnect(opts ...NvidiaRealtimeOption) *Nvid
 	return model
 }
 
+func expectNvidiaRealtimeAcquireMetrics(t *testing.T, events <-chan llm.RealtimeEvent) {
+	t.Helper()
+	select {
+	case ev := <-events:
+		if ev.Type != llm.RealtimeEventTypeMetricsCollected || ev.Metrics == nil {
+			t.Fatalf("event = %+v, want connection-acquire metrics", ev)
+		}
+		if ev.Metrics.RequestID != "" || ev.Metrics.AcquireTime <= 0 || ev.Metrics.ConnectionReused {
+			t.Fatalf("metrics = %+v, want acquire metric with empty request id, positive acquire time, reused=false", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connection-acquire metrics")
+	}
+}
+
 func TestNvidiaPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nvidia" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.nvidia", PluginTitle)
@@ -660,6 +675,63 @@ func TestNvidiaRealtimeSessionPreconnectsConfiguredProviderLikeReference(t *test
 	}
 }
 
+func TestNvidiaRealtimePreconnectEmitsAcquireMetricsLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	serverErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{nvidiaRealtimeMsgHandshake}); err != nil {
+			serverErr <- err
+			return
+		}
+		connected <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	realtimeModel := NewNvidiaRealtimeModel(WithNvidiaRealtimeBaseURL(server.URL))
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+	defer session.Close()
+
+	select {
+	case <-connected:
+	case err := <-serverErr:
+		t.Fatalf("websocket server error before preconnect: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for configured PersonaPlex session preconnect")
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeMetricsCollected || ev.Metrics == nil {
+			t.Fatalf("event after preconnect = %+v, want metrics_collected", ev)
+		}
+		if ev.Metrics.RequestID != "" {
+			t.Fatalf("metrics request id = %q, want empty connection-acquire metric", ev.Metrics.RequestID)
+		}
+		if ev.Metrics.AcquireTime <= 0 {
+			t.Fatalf("metrics acquire_time = %v, want positive duration", ev.Metrics.AcquireTime)
+		}
+		if ev.Metrics.ConnectionReused {
+			t.Fatal("metrics connection_reused = true, want false for new websocket")
+		}
+		if ev.Metrics.Metadata == nil || ev.Metrics.Metadata.ModelName != "personaplex-7b" || ev.Metrics.Metadata.ModelProvider != "nvidia" {
+			t.Fatalf("metrics metadata = %+v, want personaplex-7b/nvidia", ev.Metrics.Metadata)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for connection-acquire metrics")
+	}
+}
+
 func TestNvidiaRealtimeDialFailureEmitsRecoverableErrorLikeReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
@@ -958,6 +1030,7 @@ func TestNvidiaRealtimeHandshakeAbnormalCloseEmitsRecoverableErrorLikeReference(
 	}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
 	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
 
 	select {
 	case ev := <-session.EventCh():
@@ -1152,6 +1225,7 @@ func TestNvidiaRealtimeProviderNormalCloseFinalizesGenerationLikeReference(t *te
 	}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
 	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
 
 	var ev llm.RealtimeEvent
 	select {
@@ -1295,6 +1369,7 @@ func TestNvidiaRealtimeProviderAbnormalCloseInterruptsGenerationLikeReference(t 
 	}); err != nil {
 		t.Fatalf("PushAudio() error = %v", err)
 	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
 
 	var ev llm.RealtimeEvent
 	select {
@@ -2019,6 +2094,7 @@ func TestNvidiaRealtimeInstructionUpdatesCoalesceActiveRestartLikeReference(t *t
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for first PersonaPlex connection")
 	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
 
 	if err := session.UpdateInstructions("new prompt"); err != nil {
 		t.Fatalf("first UpdateInstructions() error = %v", err)
@@ -2109,6 +2185,7 @@ func TestNvidiaRealtimeInstructionUpdateEmitsReconnectAfterHandshakeLikeReferenc
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for first PersonaPlex connection")
 	}
+	expectNvidiaRealtimeAcquireMetrics(t, session.EventCh())
 
 	if err := session.UpdateInstructions("new prompt"); err != nil {
 		t.Fatalf("UpdateInstructions() error = %v", err)
