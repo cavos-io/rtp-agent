@@ -930,6 +930,34 @@ func TestSpeechmaticsRealtimeSessionConversationItemAddedEmitsRemoteItem(t *test
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionRemoteFunctionOutputAllowsReferenceEmptyStrings(t *testing.T) {
+	session := &speechmaticsRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent, 1),
+	}
+
+	ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "out_empty",
+			"type":    "function_call_output",
+			"call_id": "",
+			"output":  "",
+		},
+	})
+
+	if !ok {
+		t.Fatal("conversation.item.added function output ignored")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+	output, ok := event.RemoteItem.Item.(*llm.FunctionCallOutput)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.FunctionCallOutput", event.RemoteItem.Item)
+	}
+	if output.ID != "out_empty" || output.CallID != "" || output.Output != "" {
+		t.Fatalf("function output = %#v, want empty call_id/output preserved", output)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptCompletedDerivesConfidence(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

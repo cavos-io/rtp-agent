@@ -1071,9 +1071,9 @@ func speechmaticsRealtimeFunctionCallItem(item map[string]any) (*llm.FunctionCal
 }
 
 func speechmaticsRealtimeFunctionCallOutputItem(item map[string]any) (*llm.FunctionCallOutput, bool) {
-	output, hasOutput := item["output"].(string)
-	callID := speechmaticsRealtimeString(item, "call_id")
-	if callID == "" || !hasOutput {
+	callID, hasCallID := speechmaticsRealtimeRequiredString(item, "call_id")
+	output, hasOutput := speechmaticsRealtimeRequiredString(item, "output")
+	if !hasCallID || !hasOutput {
 		return nil, false
 	}
 	return &llm.FunctionCallOutput{
