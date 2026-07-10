@@ -586,16 +586,21 @@ func (s *nvidiaRealtimeSession) Interrupt() error {
 
 func (s *nvidiaRealtimeSession) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
+	transportDone := s.transportDone
 	s.finalizeGenerationLocked(true)
 	s.resetRealtimeTransportLocked()
 	s.restartPending = false
 	s.restartEventQueued = false
 	s.closed = true
 	s.events.close()
+	s.mu.Unlock()
+	if transportDone != nil {
+		<-transportDone
+	}
 	return nil
 }
 

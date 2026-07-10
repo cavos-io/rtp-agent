@@ -738,6 +738,38 @@ func TestNvidiaRealtimeSessionPreconnectsConfiguredProviderLikeReference(t *test
 	}
 }
 
+func TestNvidiaRealtimeCloseWaitsForTransportExitLikeReference(t *testing.T) {
+	done := make(chan struct{})
+	cancelCalled := make(chan struct{})
+	session := &nvidiaRealtimeSession{
+		transportStarted: true,
+		transportCancel: func() {
+			close(cancelCalled)
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				close(done)
+			}()
+		},
+		transportDone:   done,
+		transportNotify: make(chan struct{}),
+		events:          newNvidiaRealtimeEventStream(nil),
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-cancelCalled:
+	default:
+		t.Fatal("Close() did not cancel realtime transport")
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("Close() returned before realtime transport exited, want reference aclose to await main task")
+	}
+}
+
 func TestNvidiaRealtimePreconnectEmitsAcquireMetricsLikeReference(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	connected := make(chan struct{}, 1)
