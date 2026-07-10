@@ -908,6 +908,60 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptCompletedDerivesConfidence(t 
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionFinalInputTranscriptUpdatesRemoteItem(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_user_1",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_audio"},
+			},
+		},
+	}); !ok {
+		t.Fatal("conversation item added event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "msg_user_1",
+		"transcript": "hello world",
+		"logprobs": []any{
+			map[string]any{"logprob": -0.2},
+		},
+	}); !ok {
+		t.Fatal("input transcription event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	session.mu.Lock()
+	tracked, _ := session.remoteItems["msg_user_1"].(*llm.ChatMessage)
+	session.mu.Unlock()
+	if tracked == nil {
+		t.Fatal("tracked item = nil, want chat message")
+	}
+	if len(tracked.Content) != 1 || tracked.Content[0].Text != "hello world" {
+		t.Fatalf("tracked content = %#v, want final transcript", tracked.Content)
+	}
+	wantConfidence := math.Exp(-0.2)
+	if tracked.TranscriptConfidence == nil || math.Abs(*tracked.TranscriptConfidence-wantConfidence) > 1e-9 {
+		t.Fatalf("tracked confidence = %#v, want %.12f", tracked.TranscriptConfidence, wantConfidence)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionAudioTranscriptDeltaEmitsReferenceTimedText(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

@@ -1052,16 +1052,37 @@ func (s *speechmaticsRealtimeSession) handleInputTranscriptCompleted(event map[s
 	itemID := speechmaticsRealtimeString(event, "item_id")
 	contentIndex := speechmaticsRealtimeInt(event, "content_index")
 	s.clearInputTranscriptAccumulator(itemID, contentIndex)
+	transcription := &llm.InputTranscriptionCompleted{
+		ItemID:       itemID,
+		ContentIndex: contentIndex,
+		Transcript:   speechmaticsRealtimeString(event, "transcript"),
+		IsFinal:      true,
+		Confidence:   speechmaticsRealtimeConfidenceFromLogprobs(event["logprobs"]),
+	}
+	s.trackFinalInputTranscription(transcription)
 	return s.emitRealtimeEvent(llm.RealtimeEvent{
-		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
-		InputTranscription: &llm.InputTranscriptionCompleted{
-			ItemID:       itemID,
-			ContentIndex: contentIndex,
-			Transcript:   speechmaticsRealtimeString(event, "transcript"),
-			IsFinal:      true,
-			Confidence:   speechmaticsRealtimeConfidenceFromLogprobs(event["logprobs"]),
-		},
+		Type:               llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: transcription,
 	})
+}
+
+func (s *speechmaticsRealtimeSession) trackFinalInputTranscription(transcription *llm.InputTranscriptionCompleted) {
+	if transcription == nil || !transcription.IsFinal {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msg, ok := s.remoteItems[transcription.ItemID].(*llm.ChatMessage)
+	if !ok {
+		return
+	}
+	if len(msg.Content) == 1 && msg.Content[0].Text == transcription.Transcript &&
+		msg.Content[0].Image == nil && msg.Content[0].Audio == nil && msg.Content[0].Instructions == nil {
+		msg.TranscriptConfidence = transcription.Confidence
+		return
+	}
+	msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})
+	msg.TranscriptConfidence = transcription.Confidence
 }
 
 func (s *speechmaticsRealtimeSession) handleInputTranscriptFailed(event map[string]any) bool {
