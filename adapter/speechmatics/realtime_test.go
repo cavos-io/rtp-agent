@@ -1308,6 +1308,40 @@ func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionFunctionCallAllowsReferenceEmptyArguments(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_empty_args"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	created := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_empty",
+			"type":      "function_call",
+			"call_id":   "call_empty",
+			"name":      "noop",
+			"arguments": "",
+		},
+	}); !ok {
+		t.Fatal("function call with empty arguments ignored")
+	}
+	call := assertSpeechmaticsRealtimeFunctionCall(t, created.Generation.FunctionCh)
+	if call.ID != "fc_empty" || call.CallID != "call_empty" || call.Name != "noop" || call.Arguments != "" {
+		t.Fatalf("function call = %#v, want empty arguments preserved", call)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionResponseDoneEmitsReferenceMetrics(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled(), WithRealtimeModel("flow-pro"))
 	if err != nil {

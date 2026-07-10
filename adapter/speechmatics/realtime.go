@@ -1054,14 +1054,18 @@ func speechmaticsRealtimeChatContent(role llm.ChatRole, contents []any) []llm.Ch
 }
 
 func speechmaticsRealtimeFunctionCallItem(item map[string]any) (*llm.FunctionCall, bool) {
-	call := &llm.FunctionCall{
-		ID:        speechmaticsRealtimeString(item, "id"),
-		CallID:    speechmaticsRealtimeString(item, "call_id"),
-		Name:      speechmaticsRealtimeString(item, "name"),
-		Arguments: speechmaticsRealtimeString(item, "arguments"),
-	}
-	if call.ID == "" || call.CallID == "" || call.Name == "" || call.Arguments == "" {
+	id, hasID := speechmaticsRealtimeRequiredString(item, "id")
+	callID, hasCallID := speechmaticsRealtimeRequiredString(item, "call_id")
+	name, hasName := speechmaticsRealtimeRequiredString(item, "name")
+	arguments, hasArguments := speechmaticsRealtimeRequiredString(item, "arguments")
+	if !hasID || !hasCallID || !hasName || !hasArguments {
 		return nil, false
+	}
+	call := &llm.FunctionCall{
+		ID:        id,
+		CallID:    callID,
+		Name:      name,
+		Arguments: arguments,
 	}
 	return call, true
 }
@@ -1437,14 +1441,18 @@ func (s *speechmaticsRealtimeSession) appendAudioTranscriptsToRemoteItemsLocked(
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseFunctionCall(item map[string]any) bool {
-	call := &llm.FunctionCall{
-		ID:        speechmaticsRealtimeString(item, "id"),
-		CallID:    speechmaticsRealtimeString(item, "call_id"),
-		Name:      speechmaticsRealtimeString(item, "name"),
-		Arguments: speechmaticsRealtimeString(item, "arguments"),
-	}
-	if call.ID == "" || call.CallID == "" || call.Name == "" || call.Arguments == "" {
+	id, hasID := speechmaticsRealtimeRequiredString(item, "id")
+	callID, hasCallID := speechmaticsRealtimeRequiredString(item, "call_id")
+	name, hasName := speechmaticsRealtimeRequiredString(item, "name")
+	arguments, hasArguments := speechmaticsRealtimeRequiredString(item, "arguments")
+	if !hasID || !hasCallID || !hasName || !hasArguments {
 		return false
+	}
+	call := &llm.FunctionCall{
+		ID:        id,
+		CallID:    callID,
+		Name:      name,
+		Arguments: arguments,
 	}
 	s.mu.Lock()
 	generation := s.generation
@@ -1601,6 +1609,11 @@ func (s *speechmaticsRealtimeSession) emitRealtimeEvent(event llm.RealtimeEvent)
 func speechmaticsRealtimeString(event map[string]any, key string) string {
 	value, _ := event[key].(string)
 	return value
+}
+
+func speechmaticsRealtimeRequiredString(event map[string]any, key string) (string, bool) {
+	value, ok := event[key].(string)
+	return value, ok
 }
 
 func speechmaticsRealtimeInt(event map[string]any, key string) int {
