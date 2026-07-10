@@ -443,7 +443,16 @@ func (s *speechmaticsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) erro
 }
 
 func (s *speechmaticsRealtimeSession) Interrupt() error {
+	if !s.hasActiveGeneration() {
+		return nil
+	}
 	return s.enqueueCommand(map[string]any{"type": "response.cancel"})
+}
+
+func (s *speechmaticsRealtimeSession) hasActiveGeneration() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.generation != nil && !s.generation.done
 }
 
 func (s *speechmaticsRealtimeSession) Close() error {

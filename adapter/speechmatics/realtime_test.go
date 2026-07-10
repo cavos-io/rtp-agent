@@ -419,6 +419,24 @@ func TestSpeechmaticsRealtimeSessionSuppressesSendErrorWhenReconnectSucceeds(t *
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionIdleInterruptDoesNotCancel(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	assertSpeechmaticsRealtimeNoCommand(t, session)
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
@@ -458,6 +476,11 @@ func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 		t.Fatalf("ClearAudio error = %v", err)
 	}
 	assertSpeechmaticsRealtimeCommand(t, session, "input_audio_buffer.clear", "", nil)
+	rtSession := session.(*speechmaticsRealtimeSession)
+	if ok := rtSession.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_interrupt"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
@@ -1341,6 +1364,16 @@ func nextSpeechmaticsRealtimeCommand(t *testing.T, session llm.RealtimeSession) 
 		t.Fatal("missing realtime command")
 	}
 	return nil
+}
+
+func assertSpeechmaticsRealtimeNoCommand(t *testing.T, session llm.RealtimeSession) {
+	t.Helper()
+	rtSession := session.(*speechmaticsRealtimeSession)
+	select {
+	case command := <-rtSession.commandCh:
+		t.Fatalf("command = %#v, want no command", command)
+	case <-time.After(25 * time.Millisecond):
+	}
 }
 
 func assertSpeechmaticsRealtimeEventType(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
