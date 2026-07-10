@@ -282,6 +282,15 @@ func (s *nvidiaSTTStream) normalizeInputFrame(frame *model.AudioFrame) (*model.A
 	if frame == nil {
 		return nil, nil
 	}
+	if len(frame.Data) == 0 {
+		s.inputSampleRate = frame.SampleRate
+		return frame, nil
+	}
+	normalized, err := downmixNvidiaRealtimeInputFrame(frame)
+	if err != nil {
+		return nil, err
+	}
+	frame = normalized
 	outputRate := uint32(0)
 	if s.stt != nil && s.stt.sampleRate > 0 {
 		outputRate = uint32(s.stt.sampleRate)

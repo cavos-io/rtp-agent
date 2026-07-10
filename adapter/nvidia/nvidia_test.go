@@ -7509,6 +7509,37 @@ func TestNvidiaSTTStreamNormalizesInputSampleRateLikeReference(t *testing.T) {
 	}
 }
 
+func TestNvidiaSTTStreamNormalizesInputChannelsLikeReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewNvidiaSTT error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	concrete, ok := stream.(*nvidiaSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *nvidiaSTTStream", stream)
+	}
+
+	normalized, err := concrete.normalizeInputFrame(&model.AudioFrame{
+		Data:              int16SliceToLittleEndianBytes([]int16{1000, 3000, 5000, 9000}),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	})
+	if err != nil {
+		t.Fatalf("normalizeInputFrame(stereo) error = %v", err)
+	}
+	if normalized.NumChannels != 1 || normalized.SampleRate != 16000 || normalized.SamplesPerChannel != 2 {
+		t.Fatalf("normalized format = %d Hz/%d ch/%d samples, want 16000 Hz/1 ch/2 samples", normalized.SampleRate, normalized.NumChannels, normalized.SamplesPerChannel)
+	}
+	if got, want := littleEndianBytesToInt16Slice(normalized.Data), []int16{2000, 7000}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized mono PCM = %v, want channel averages %v", got, want)
+	}
+}
+
 func TestNvidiaSTTStreamPreservesResamplePhaseLikeReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
 	if err != nil {
