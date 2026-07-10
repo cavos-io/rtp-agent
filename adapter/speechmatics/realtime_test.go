@@ -483,6 +483,33 @@ func TestSpeechmaticsRealtimeSessionPendingGenerateReplyIsInterruptible(t *testi
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionPendingGenerateReplyExpires(t *testing.T) {
+	previousTimeout := speechmaticsRealtimePendingResponseTimeout
+	speechmaticsRealtimePendingResponseTimeout = 0
+	t.Cleanup(func() { speechmaticsRealtimePendingResponseTimeout = previousTimeout })
+
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer now", InstructionsSet: true}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertSpeechmaticsRealtimeCommand(t, session, "response.create", "type", "response.create")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertSpeechmaticsRealtimeNoCommand(t, session)
+}
+
 func TestSpeechmaticsRealtimeSessionTruncateAudioMatchesReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

@@ -32,6 +32,8 @@ const (
 	speechmaticsFlowURLEnv                      = "SPEECHMATICS_FLOW_URL"
 )
 
+var speechmaticsRealtimePendingResponseTimeout = 10 * time.Second
+
 type RealtimeModel struct {
 	mu               sync.Mutex
 	sessions         map[*speechmaticsRealtimeSession]struct{}
@@ -313,7 +315,7 @@ type speechmaticsRealtimeSession struct {
 	closeOnce        sync.Once
 	generation       *speechmaticsRealtimeGeneration
 	inputTranscripts map[string]map[int]string
-	pendingResponses map[string]struct{}
+	pendingResponses map[string]time.Time
 	nextResponseID   int
 }
 
@@ -455,9 +457,9 @@ func (s *speechmaticsRealtimeSession) nextResponseCreateID() string {
 	s.nextResponseID++
 	eventID := fmt.Sprintf("response_create_%d", s.nextResponseID)
 	if s.pendingResponses == nil {
-		s.pendingResponses = make(map[string]struct{})
+		s.pendingResponses = make(map[string]time.Time)
 	}
-	s.pendingResponses[eventID] = struct{}{}
+	s.pendingResponses[eventID] = time.Now()
 	return eventID
 }
 
@@ -476,6 +478,24 @@ func (s *speechmaticsRealtimeSession) clearPendingResponseLocked(eventID string)
 	}
 	delete(s.pendingResponses, eventID)
 	return true
+}
+
+func (s *speechmaticsRealtimeSession) clearExpiredPendingResponsesLocked(now time.Time) {
+	if len(s.pendingResponses) == 0 {
+		return
+	}
+	if speechmaticsRealtimePendingResponseTimeout <= 0 {
+		s.pendingResponses = nil
+		return
+	}
+	for eventID, createdAt := range s.pendingResponses {
+		if now.Sub(createdAt) >= speechmaticsRealtimePendingResponseTimeout {
+			delete(s.pendingResponses, eventID)
+		}
+	}
+	if len(s.pendingResponses) == 0 {
+		s.pendingResponses = nil
+	}
 }
 
 func (s *speechmaticsRealtimeSession) Say(text string) error {
@@ -560,6 +580,7 @@ func (s *speechmaticsRealtimeSession) Interrupt() error {
 func (s *speechmaticsRealtimeSession) hasActiveGeneration() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.clearExpiredPendingResponsesLocked(time.Now())
 	return !s.closed && ((s.generation != nil && !s.generation.done) || len(s.pendingResponses) > 0)
 }
 
