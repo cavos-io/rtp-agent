@@ -38,6 +38,7 @@ type NvidiaSTT struct {
 	useSSL          bool
 	diarization     bool
 	maxSpeakerCount int
+	clientFactory   nvidiaSTTClientFactory
 }
 
 type NvidiaSTTOption func(*NvidiaSTT)
@@ -122,6 +123,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		useSSL:          true,
 		diarization:     false,
 		maxSpeakerCount: 0,
+		clientFactory:   newNvidiaSTTClient,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -171,13 +173,20 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if language != "" {
 		streamLanguage = language
 	}
-	return &nvidiaSTTStream{
-		stt:          s,
-		ctx:          ctx,
-		language:     streamLanguage,
-		stateChanged: make(chan struct{}),
-		startTime:    float64(time.Now().UnixNano()) / float64(time.Second),
-	}, nil
+	transportCtx, transportCancel := context.WithCancel(ctx)
+	stream := &nvidiaSTTStream{
+		stt:             s,
+		ctx:             ctx,
+		transportCtx:    transportCtx,
+		language:        streamLanguage,
+		stateChanged:    make(chan struct{}),
+		transportCancel: transportCancel,
+		transportDone:   make(chan struct{}),
+		transportNotify: make(chan struct{}),
+		startTime:       float64(time.Now().UnixNano()) / float64(time.Second),
+	}
+	go stream.runTransport()
+	return stream, nil
 }
 
 type nvidiaSTTStream struct {
@@ -185,11 +194,13 @@ type nvidiaSTTStream struct {
 	stateChanged       chan struct{}
 	stt                *NvidiaSTT
 	ctx                context.Context
+	transportCtx       context.Context
 	language           string
 	closed             bool
 	inputEnded         bool
 	flushed            bool
 	streamErr          error
+	streamErrReturned  bool
 	speaking           bool
 	pushedSampleRate   uint32
 	inputSampleRate    uint32
@@ -200,6 +211,13 @@ type nvidiaSTTStream struct {
 	startTimeOffset    float64
 	startTime          float64
 	requestSeq         int
+	transportCancel    context.CancelFunc
+	transportDone      chan struct{}
+	transportNotify    chan struct{}
+	transportAudio     [][]byte
+	transportEOF       bool
+	transportFinished  bool
+	events             []stt.SpeechEvent
 }
 
 type nvidiaSTTWord struct {
@@ -255,9 +273,7 @@ func (s *nvidiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	streamErr := fmt.Errorf("nvidia riva stt streaming is not implemented")
-	s.streamErr = streamErr
-	s.notifyLocked()
+	s.enqueueTransportAudioLocked(frame.Data)
 	return nil
 }
 
@@ -361,7 +377,7 @@ func (s *nvidiaSTTStream) drainPendingResampleInputLocked() error {
 		return err
 	}
 	if normalized != nil && len(normalized.Data) > 0 {
-		s.streamErr = fmt.Errorf("nvidia riva stt streaming is not implemented")
+		s.enqueueTransportAudioLocked(normalized.Data)
 	}
 	return nil
 }
@@ -381,6 +397,8 @@ func (s *nvidiaSTTStream) Flush() error {
 		return err
 	}
 	s.flushed = true
+	s.transportEOF = true
+	s.notifyTransportLocked()
 	s.notifyLocked()
 	return nil
 }
@@ -404,24 +422,36 @@ func (s *nvidiaSTTStream) EndInput() error {
 	}
 	s.flushed = true
 	s.inputEnded = true
+	s.transportEOF = true
+	s.notifyTransportLocked()
 	s.notifyLocked()
 	return nil
 }
 
 func (s *nvidiaSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.closed = true
+	cancel := s.transportCancel
+	done := s.transportDone
 	s.notifyLocked()
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	return nil
 }
 
 func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	for {
 		s.mu.Lock()
-		if s.closed {
+		if len(s.events) > 0 {
+			event := s.events[0]
+			s.events = s.events[1:]
 			s.mu.Unlock()
-			return nil, io.EOF
+			return &event, nil
 		}
 		if s.ctx != nil {
 			if err := s.ctx.Err(); err != nil {
@@ -430,15 +460,14 @@ func (s *nvidiaSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		}
 		if s.streamErr != nil {
-			err := s.streamErr
-			s.mu.Unlock()
-			return nil, err
+			if !s.streamErrReturned {
+				s.streamErrReturned = true
+				err := s.streamErr
+				s.mu.Unlock()
+				return nil, err
+			}
 		}
-		if s.inputEnded {
-			s.mu.Unlock()
-			return nil, io.EOF
-		}
-		if s.flushed {
+		if s.closed || s.transportFinished {
 			s.mu.Unlock()
 			return nil, io.EOF
 		}

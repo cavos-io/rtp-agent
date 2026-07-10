@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -22,7 +23,384 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
+
+type nvidiaRivaTestServer struct {
+	rivapb.UnimplementedRivaSpeechRecognitionServer
+	requests       chan *rivapb.StreamingRecognizeRequest
+	metadata       chan metadata.MD
+	responsesOnEOF []*rivapb.StreamingRecognizeResponse
+	release        <-chan struct{}
+	terminalErr    error
+}
+
+func (s *nvidiaRivaTestServer) StreamingRecognize(stream grpc.BidiStreamingServer[
+	rivapb.StreamingRecognizeRequest,
+	rivapb.StreamingRecognizeResponse,
+]) error {
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	s.metadata <- md
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			for _, response := range s.responsesOnEOF {
+				if err := stream.Send(response); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		s.requests <- req
+		if s.release != nil {
+			select {
+			case <-s.release:
+				return s.terminalErr
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
+		}
+	}
+}
+
+func receiveNvidiaRivaMetadata(t *testing.T, metadataCh <-chan metadata.MD) metadata.MD {
+	t.Helper()
+	select {
+	case md := <-metadataCh:
+		return md
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Riva metadata")
+		return nil
+	}
+}
+
+func nvidiaSTTInsecureTestClientFactory(address string) nvidiaSTTClientFactory {
+	return func(context.Context, *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+		conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(nvidiaSTTTransportCredentials(false)))
+		if err != nil {
+			return nil, nil, err
+		}
+		return rivapb.NewRivaSpeechRecognitionClient(conn), conn, nil
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportLocalMetadata(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("", "model",
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+		WithNvidiaSTTFunctionID("local-function"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	md := receiveNvidiaRivaMetadata(t, server.metadata)
+	if got := md.Get("authorization"); len(got) != 0 {
+		t.Fatalf("authorization = %v, want none", got)
+	}
+	if got := md.Get("function-id"); !slices.Equal(got, []string{"local-function"}) {
+		t.Fatalf("function-id = %v, want local-function", got)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportHostedMetadata(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("secret", "model", WithNvidiaSTTFunctionID("hosted-function"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.clientFactory = nvidiaSTTInsecureTestClientFactory(address)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	md := receiveNvidiaRivaMetadata(t, server.metadata)
+	if got := md.Get("authorization"); !slices.Equal(got, []string{"Bearer secret"}) {
+		t.Fatalf("authorization = %v, want Bearer secret", got)
+	}
+	if got := md.Get("function-id"); !slices.Equal(got, []string{"hosted-function"}) {
+		t.Fatalf("function-id = %v, want hosted-function", got)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportCredentials(t *testing.T) {
+	if got := nvidiaSTTTransportCredentials(true).Info().SecurityProtocol; got != "tls" {
+		t.Fatalf("hosted protocol = %q, want tls", got)
+	}
+	if got := nvidiaSTTTransportCredentials(false).Info().SecurityProtocol; got != "insecure" {
+		t.Fatalf("local protocol = %q, want insecure", got)
+	}
+}
+
+type nvidiaBlockingCloser struct {
+	closer  io.Closer
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *nvidiaBlockingCloser) Close() error {
+	close(c.started)
+	<-c.release
+	return c.closer.Close()
+}
+
+func TestNvidiaSTTNativeStreamingTransportCancel(t *testing.T) {
+	provider, _ := newLocalNvidiaSTT(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Next returned before cancel: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not unblock after cancel")
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportError(t *testing.T) {
+	release := make(chan struct{})
+	server, address := startNvidiaRivaTestServer(t)
+	server.release = release
+	server.terminalErr = status.Error(codes.Unavailable, "riva unavailable")
+	provider, err := NewNvidiaSTT("", "model", WithNvidiaSTTServer(address), WithNvidiaSTTUseSSL(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	close(release)
+	if event, err := stream.Next(); event != nil || status.Code(err) != codes.Unavailable {
+		t.Fatalf("Next() = (%v, %v), want nil Unavailable", event, err)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("second Next() = (%v, %v), want nil EOF", event, err)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportClose(t *testing.T) {
+	_, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("", "model", WithNvidiaSTTServer(address), WithNvidiaSTTUseSSL(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseFactory := nvidiaSTTInsecureTestClientFactory(address)
+	closer := &nvidiaBlockingCloser{started: make(chan struct{}), release: make(chan struct{})}
+	provider.clientFactory = func(ctx context.Context, provider *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+		client, baseCloser, err := baseFactory(ctx, provider)
+		closer.closer = baseCloser
+		return client, closer, err
+	}
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- stream.Close() }()
+	select {
+	case <-closer.started:
+	case <-time.After(time.Second):
+		t.Fatal("transport closer did not start")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Close returned before transport cleanup: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(closer.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after transport cleanup")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+}
+
+func TestNvidiaSTTNativeStreamingTransportDrainsFinalAfterFlush(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	server.responsesOnEOF = []*rivapb.StreamingRecognizeResponse{{
+		Results: []*rivapb.StreamingRecognitionResult{
+			{Alternatives: []*rivapb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: .7}}, IsFinal: false},
+			{Alternatives: []*rivapb.SpeechRecognitionAlternative{{Transcript: "hello there", Confidence: .9}}, IsFinal: true},
+		},
+	}}
+	provider, err := NewNvidiaSTT("", "model",
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	events := make([]*stt.SpeechEvent, 0, len(wantTypes))
+	for i, wantType := range wantTypes {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next(%d) error = %v", i, err)
+		}
+		if event.Type != wantType {
+			t.Fatalf("Next(%d) type = %q, want %q", i, event.Type, wantType)
+		}
+		events = append(events, event)
+	}
+	if got := events[1].Alternatives[0].Text; got != "hello" {
+		t.Fatalf("interim text = %q, want hello", got)
+	}
+	if got := events[2].Alternatives[0].Text; got != "hello there" {
+		t.Fatalf("final text = %q, want hello there", got)
+	}
+	if events[1].RequestID == "" || !strings.HasPrefix(events[1].RequestID, "nvidia-") || events[1].RequestID != events[2].RequestID {
+		t.Fatalf("transcript request ids = %q/%q, want shared nvidia id", events[1].RequestID, events[2].RequestID)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("Next() after drained response = (%v, %v), want nil EOF", event, err)
+	}
+}
+
+func startNvidiaRivaTestServer(t *testing.T) (*nvidiaRivaTestServer, string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	service := &nvidiaRivaTestServer{
+		requests: make(chan *rivapb.StreamingRecognizeRequest, 8),
+		metadata: make(chan metadata.MD, 1),
+	}
+	rivapb.RegisterRivaSpeechRecognitionServer(server, service)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	return service, listener.Addr().String()
+}
+
+func receiveNvidiaRivaRequest(t *testing.T, requests <-chan *rivapb.StreamingRecognizeRequest) *rivapb.StreamingRecognizeRequest {
+	t.Helper()
+	select {
+	case request := <-requests:
+		return request
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Riva request")
+		return nil
+	}
+}
+
+func newLocalNvidiaSTT(t *testing.T, opts ...NvidiaSTTOption) (*NvidiaSTT, *nvidiaRivaTestServer) {
+	t.Helper()
+	server, address := startNvidiaRivaTestServer(t)
+	opts = append([]NvidiaSTTOption{
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+	}, opts...)
+	provider, err := NewNvidiaSTT("", "", opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return provider, server
+}
+
+func TestNvidiaSTTNativeStreamingTransportSendsConfigAndAudioInOrder(t *testing.T) {
+	server, address := startNvidiaRivaTestServer(t)
+	provider, err := NewNvidiaSTT("", "model",
+		WithNvidiaSTTServer(address),
+		WithNvidiaSTTUseSSL(false),
+		WithNvidiaSTTFunctionID("local-function"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx, "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cancel()
+		_ = stream.Close()
+	}()
+
+	first := &model.AudioFrame{Data: []byte{1, 0, 2, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}
+	second := &model.AudioFrame{Data: []byte{3, 0, 4, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}
+	if err := stream.PushFrame(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.PushFrame(second); err != nil {
+		t.Fatal(err)
+	}
+
+	configReq := receiveNvidiaRivaRequest(t, server.requests)
+	firstReq := receiveNvidiaRivaRequest(t, server.requests)
+	secondReq := receiveNvidiaRivaRequest(t, server.requests)
+	if configReq.GetStreamingConfig() == nil {
+		t.Fatal("first request missing config")
+	}
+	if !bytes.Equal(firstReq.GetAudioContent(), first.Data) {
+		t.Fatalf("first audio = %v", firstReq.GetAudioContent())
+	}
+	if !bytes.Equal(secondReq.GetAudioContent(), second.Data) {
+		t.Fatalf("second audio = %v", secondReq.GetAudioContent())
+	}
+}
 
 func TestNvidiaSTTStreamingConfigMatchesReference(t *testing.T) {
 	provider, err := NewNvidiaSTT("secret", "parakeet-rnnt-1.1b",
@@ -8896,10 +9274,7 @@ func TestNvidiaSTTStreamSeedsReferenceStartTime(t *testing.T) {
 }
 
 func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -8911,8 +9286,17 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
 		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
 	}
-	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
+	defer stream.Close()
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); !bytes.Equal(got, []byte{0, 1}) {
+		t.Fatalf("Riva audio = %v, want only non-empty frame", got)
+	}
+	select {
+	case request := <-server.requests:
+		t.Fatalf("unexpected request after empty frame: %v", request)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -8992,11 +9376,8 @@ func TestNvidiaSTTStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
 	}
 }
 
-func TestNvidiaSTTStreamAcceptsAudioBeforeTransportErrorLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+func TestNvidiaSTTStreamSendsAcceptedAudioToTransportLikeReference(t *testing.T) {
+	provider, server := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9011,17 +9392,17 @@ func TestNvidiaSTTStreamAcceptsAudioBeforeTransportErrorLikeReference(t *testing
 	if err != nil {
 		t.Fatalf("PushFrame(non-empty) error = %v, want nil queued input like reference", err)
 	}
-	event, err := stream.Next()
-	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
+	defer stream.Close()
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); !bytes.Equal(got, []byte{1, 0}) {
+		t.Fatalf("Riva audio = %v, want accepted input", got)
 	}
 }
 
-func TestNvidiaSTTFlushAfterAudioReportsTransportErrorLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+func TestNvidiaSTTFlushAfterAudioClosesTransportLikeReference(t *testing.T) {
+	provider, server := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9033,9 +9414,14 @@ func TestNvidiaSTTFlushAfterAudioReportsTransportErrorLikeReference(t *testing.T
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	event, err := stream.Next()
-	if event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("Next() after audio then Flush = (%v, %v), want nil unsupported transport error", event, err)
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); !bytes.Equal(got, []byte{1, 0}) {
+		t.Fatalf("Riva audio = %v, want flushed input", got)
+	}
+	if event, err := stream.Next(); event != nil || err != io.EOF {
+		t.Fatalf("Next() after flushed local stream = (%v, %v), want nil EOF", event, err)
 	}
 }
 
@@ -9188,10 +9574,7 @@ func TestNvidiaSTTStreamPreservesResamplePhaseLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTFlushDrainsBufferedResampleInputLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t, WithNvidiaSTTSampleRate(16000))
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9207,16 +9590,16 @@ func TestNvidiaSTTFlushDrainsBufferedResampleInputLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
-		t.Fatalf("Next() after buffered resample Flush = (%v, %v), want unsupported transport error", event, err)
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); len(got) != 2 {
+		t.Fatalf("flushed resampled Riva audio = %v, want one 16-bit sample", got)
 	}
 }
 
 func TestNvidiaSTTEndInputDrainsBufferedResampleInputLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "", WithNvidiaSTTSampleRate(16000))
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t, WithNvidiaSTTSampleRate(16000))
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9236,16 +9619,16 @@ func TestNvidiaSTTEndInputDrainsBufferedResampleInputLikeReference(t *testing.T)
 	if err := ending.EndInput(); err != nil {
 		t.Fatalf("EndInput() error = %v", err)
 	}
-	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "nvidia riva stt streaming is not implemented") {
-		t.Fatalf("Next() after buffered resample EndInput = (%v, %v), want unsupported transport error", event, err)
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); len(got) != 2 {
+		t.Fatalf("end-input resampled Riva audio = %v, want one 16-bit sample", got)
 	}
 }
 
 func TestNvidiaSTTStreamEndInputCompletesEmptyReferenceStream(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9348,10 +9731,7 @@ func TestNvidiaSTTEndInputFlushesBeforeCloseLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9384,10 +9764,7 @@ func TestNvidiaSTTFlushKeepsInputOpenLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTFlushStopsWorkerLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, _ := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
@@ -9471,10 +9848,7 @@ func TestNvidiaSTTReturnsCallerCancellationBeforeUnsupportedRecognize(t *testing
 }
 
 func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t)
 	recognizeErr := "Not implemented"
 	if _, err := provider.Recognize(context.Background(), nil, ""); err == nil || err.Error() != recognizeErr {
 		t.Fatalf("Recognize() error = %v, want explicit unsupported recognition error", err)
@@ -9494,8 +9868,11 @@ func TestNvidiaSTTReportsUnsupportedRivaCallsAndClosedInput(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
 		t.Fatalf("PushFrame() error = %v, want nil queued input like reference", err)
 	}
-	if event, err := stream.Next(); event != nil || err == nil || !strings.Contains(err.Error(), "riva stt streaming is not implemented") {
-		t.Fatalf("Next() = (%v, %v), want nil unsupported transport error", event, err)
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
+	}
+	if got := receiveNvidiaRivaRequest(t, server.requests).GetAudioContent(); !bytes.Equal(got, []byte{1, 0}) {
+		t.Fatalf("Riva audio = %v, want pushed input", got)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
