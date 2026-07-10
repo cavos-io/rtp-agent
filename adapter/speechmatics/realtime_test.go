@@ -1109,6 +1109,36 @@ func TestSpeechmaticsRealtimeSessionContentPartAddedSetsReferenceModalities(t *t
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionOutputDoneEventsAreReferenceNoops(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{"type": "response.created", "response_id": "resp_done"}); !ok {
+		t.Fatal("response.created event ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	for _, eventType := range []string{
+		"response.output_text.done",
+		"response.text.done",
+		"response.output_audio.done",
+		"response.audio.done",
+	} {
+		if ok := session.handleServerEvent(map[string]any{"type": eventType}); !ok {
+			t.Fatalf("%s ignored, want reference no-op handled", eventType)
+		}
+	}
+	assertSpeechmaticsRealtimeNoCommand(t, session)
+}
+
 func TestSpeechmaticsRealtimeSessionInputTranscriptDeltasAccumulateLikeReference(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

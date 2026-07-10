@@ -950,6 +950,8 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleResponseContentPartAdded(event)
 	case "response.output_text.delta", "response.text.delta", "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		return s.handleResponseTextDelta(event)
+	case "response.output_text.done", "response.text.done", "response.output_audio.done", "response.audio.done":
+		return s.handleResponseContentDone()
 	case "response.output_audio.delta", "response.audio.delta":
 		return s.handleResponseAudioDelta(event)
 	case "response.output_item.done":
@@ -1319,6 +1321,12 @@ func (s *speechmaticsRealtimeSession) handleResponseTextDelta(event map[string]a
 		}
 	}
 	return true
+}
+
+func (s *speechmaticsRealtimeSession) handleResponseContentDone() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.generation != nil && !s.generation.done
 }
 
 func (s *speechmaticsRealtimeSession) handleResponseAudioDelta(event map[string]any) bool {
