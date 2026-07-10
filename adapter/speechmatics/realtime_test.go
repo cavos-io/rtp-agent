@@ -465,6 +465,49 @@ func TestSpeechmaticsRealtimeSessionTruncateAudioMatchesReference(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionTruncateTextRewritesRemoteMessage(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+	if ok := session.handleServerEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"role": "assistant",
+			"content": []any{
+				map[string]any{"type": "output_text", "text": "full transcript"},
+			},
+		},
+	}); !ok {
+		t.Fatal("conversation.item.added ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeRemoteItemAdded)
+
+	transcript := "played transcript"
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"text"},
+		AudioTranscript: &transcript,
+	}); err != nil {
+		t.Fatalf("Truncate error = %v", err)
+	}
+
+	deleteCommand := nextSpeechmaticsRealtimeCommand(t, session)
+	if deleteCommand["type"] != "conversation.item.delete" || deleteCommand["item_id"] != "msg_123" {
+		t.Fatalf("delete command = %#v, want conversation.item.delete msg_123", deleteCommand)
+	}
+	createCommand := nextSpeechmaticsRealtimeCommand(t, session)
+	assertSpeechmaticsRealtimeChatContextMessage(t, createCommand, "assistant", "played transcript")
+}
+
 func TestSpeechmaticsRealtimeSessionControlMethods(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {

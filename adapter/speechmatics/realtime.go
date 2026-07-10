@@ -297,6 +297,7 @@ type speechmaticsRealtimeSession struct {
 	instructions     string
 	tools            []map[string]any
 	chatCommands     []map[string]any
+	remoteItems      map[string]llm.ChatItem
 	inputSampleRate  int
 	outputSampleRate int
 	dialWebsocket    SpeechmaticsRealtimeWebsocketDialer
@@ -455,7 +456,51 @@ func (s *speechmaticsRealtimeSession) Truncate(options llm.RealtimeTruncateOptio
 			"audio_end_ms":  options.AudioEndMillis,
 		})
 	}
-	return nil
+	if options.AudioTranscript == nil {
+		return nil
+	}
+	s.mu.Lock()
+	role := ""
+	if item, ok := s.remoteItems[options.MessageID].(*llm.ChatMessage); ok {
+		role = string(item.Role)
+		item.Content = []llm.ChatContent{{Text: *options.AudioTranscript}}
+	}
+	s.mu.Unlock()
+	if role == "" {
+		return nil
+	}
+	if err := s.enqueueCommand(map[string]any{
+		"type":    "conversation.item.delete",
+		"item_id": options.MessageID,
+	}); err != nil {
+		return err
+	}
+	return s.enqueueCommand(map[string]any{
+		"type": "conversation.item.create",
+		"role": role,
+		"text": *options.AudioTranscript,
+	})
+}
+
+func (s *speechmaticsRealtimeSession) trackRemoteItem(item llm.ChatItem) {
+	if item == nil || item.GetID() == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.remoteItems == nil {
+		s.remoteItems = make(map[string]llm.ChatItem)
+	}
+	s.remoteItems[item.GetID()] = item
+	s.mu.Unlock()
+}
+
+func (s *speechmaticsRealtimeSession) deleteRemoteItem(itemID string) {
+	if itemID == "" {
+		return
+	}
+	s.mu.Lock()
+	delete(s.remoteItems, itemID)
+	s.mu.Unlock()
 }
 
 func speechmaticsRealtimeModalitiesInclude(modalities []string, want string) bool {
@@ -835,6 +880,8 @@ func (s *speechmaticsRealtimeSession) handleServerEvent(event map[string]any) bo
 		return s.handleInputTranscriptFailed(event)
 	case "conversation.item.added", "conversation.item.created":
 		return s.handleConversationItemAdded(event)
+	case "conversation.item.deleted":
+		return s.handleConversationItemDeleted(event)
 	case "response.created":
 		return s.handleResponseCreated(event)
 	case "response.output_item.added":
@@ -862,6 +909,7 @@ func (s *speechmaticsRealtimeSession) handleConversationItemAdded(event map[stri
 	if !ok {
 		return false
 	}
+	s.trackRemoteItem(chatItem)
 	previousItemID, previousItemIDSet := event["previous_item_id"].(string)
 	return s.emitRealtimeEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeRemoteItemAdded,
@@ -871,6 +919,15 @@ func (s *speechmaticsRealtimeSession) handleConversationItemAdded(event map[stri
 			Item:              chatItem,
 		},
 	})
+}
+
+func (s *speechmaticsRealtimeSession) handleConversationItemDeleted(event map[string]any) bool {
+	itemID := speechmaticsRealtimeString(event, "item_id")
+	if itemID == "" {
+		return false
+	}
+	s.deleteRemoteItem(itemID)
+	return true
 }
 
 func speechmaticsRealtimeChatItem(item map[string]any) (llm.ChatItem, bool) {
