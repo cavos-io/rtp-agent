@@ -571,10 +571,6 @@ func (s *speechmaticsRealtimeSession) websocketWriteLoop() {
 				continue
 			}
 			if err := conn.WriteJSON(command); err != nil {
-				s.emitRealtimeEvent(llm.RealtimeEvent{
-					Type:  llm.RealtimeEventTypeError,
-					Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime send failed: %v", err)),
-				})
 				s.reconnectRealtimeWebsocket()
 			}
 		}
@@ -604,11 +600,11 @@ func (s *speechmaticsRealtimeSession) currentRealtimeConn() *websocket.Conn {
 	return s.conn
 }
 
-func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
+func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() bool {
 	s.mu.Lock()
 	if s.closed || s.reconnecting {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	s.reconnecting = true
 	oldConn := s.conn
@@ -627,7 +623,7 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 			Error: llm.NewAPIConnectionError(fmt.Sprintf("Speechmatics realtime reconnect failed: %v", err)),
 		})
 		_ = s.Close()
-		return
+		return false
 	}
 	if err := conn.WriteJSON(s.sessionCreateCommand()); err != nil {
 		s.mu.Lock()
@@ -639,7 +635,7 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to reinitialize Speechmatics realtime session: %v", err)),
 		})
 		_ = s.Close()
-		return
+		return false
 	}
 	for _, command := range s.reconnectSessionCommands() {
 		if err := conn.WriteJSON(command); err != nil {
@@ -652,7 +648,7 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 				Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to restore Speechmatics realtime session: %v", err)),
 			})
 			_ = s.Close()
-			return
+			return false
 		}
 	}
 
@@ -667,6 +663,7 @@ func (s *speechmaticsRealtimeSession) reconnectRealtimeWebsocket() {
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	})
+	return true
 }
 
 func (s *speechmaticsRealtimeSession) reconnectSessionCommands() []map[string]any {
