@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	rivapb "github.com/cavos-io/rtp-agent/adapter/nvidia/internal/rivapb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -22,6 +23,35 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hraban/opus"
 )
+
+func TestNvidiaSTTStreamingConfigMatchesReference(t *testing.T) {
+	provider, err := NewNvidiaSTT("secret", "parakeet-rnnt-1.1b",
+		WithNvidiaSTTSampleRate(24000),
+		WithNvidiaSTTPunctuate(false),
+		WithNvidiaSTTDiarization(true),
+		WithNvidiaSTTMaxSpeakerCount(4),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := nvidiaSTTStreamingConfig(provider, "id-ID")
+	cfg := got.GetConfig()
+	if cfg.GetEncoding() != rivapb.AudioEncoding_LINEAR_PCM ||
+		cfg.GetSampleRateHertz() != 24000 ||
+		cfg.GetLanguageCode() != "id-ID" ||
+		cfg.GetModel() != "parakeet-rnnt-1.1b" ||
+		cfg.GetMaxAlternatives() != 1 ||
+		cfg.GetAudioChannelCount() != 1 ||
+		!cfg.GetEnableWordTimeOffsets() ||
+		cfg.GetEnableAutomaticPunctuation() || !got.GetInterimResults() {
+		t.Fatalf("streaming config = %+v, want reference Riva config", got)
+	}
+	if d := cfg.GetDiarizationConfig(); d == nil ||
+		!d.GetEnableSpeakerDiarization() || d.GetMaxSpeakerCount() != 4 {
+		t.Fatalf("diarization config = %+v, want enabled with max 4", d)
+	}
+}
 
 func concatNvidiaRealtimeOutboundAudioData(frames []*model.AudioFrame) []byte {
 	var data []byte
