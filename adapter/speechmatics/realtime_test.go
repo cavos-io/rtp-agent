@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -854,6 +855,56 @@ func TestSpeechmaticsRealtimeSessionConversationItemAddedEmitsRemoteItem(t *test
 	}
 	if msg.ID != "msg_123" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
 		t.Fatalf("message = %#v, want user text message", msg)
+	}
+}
+
+func TestSpeechmaticsRealtimeSessionInputTranscriptCompletedDerivesConfidence(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.completed",
+		"item_id":       "msg_user_1",
+		"content_index": 2,
+		"transcript":    "hello",
+		"logprobs": []any{
+			map[string]any{"logprob": -0.1},
+			map[string]any{"logprob": -0.3},
+		},
+	}); !ok {
+		t.Fatal("input transcription event ignored")
+	}
+	ev := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want transcription payload")
+	}
+	wantConfidence := math.Exp((-0.1 + -0.3) / 2)
+	if ev.InputTranscription.ItemID != "msg_user_1" || ev.InputTranscription.ContentIndex != 2 || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final msg_user_1 transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.Confidence == nil || math.Abs(*ev.InputTranscription.Confidence-wantConfidence) > 1e-9 {
+		t.Fatalf("Confidence = %#v, want %.12f", ev.InputTranscription.Confidence, wantConfidence)
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "msg_user_2",
+		"transcript": "empty",
+		"logprobs":   []any{},
+	}); !ok {
+		t.Fatal("input transcription event with empty logprobs ignored")
+	}
+	ev = assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if ev.InputTranscription.Confidence != nil {
+		t.Fatalf("Confidence = %#v, want nil for empty logprobs", ev.InputTranscription.Confidence)
 	}
 }
 

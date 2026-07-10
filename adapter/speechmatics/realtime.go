@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -1058,6 +1059,7 @@ func (s *speechmaticsRealtimeSession) handleInputTranscriptCompleted(event map[s
 			ContentIndex: contentIndex,
 			Transcript:   speechmaticsRealtimeString(event, "transcript"),
 			IsFinal:      true,
+			Confidence:   speechmaticsRealtimeConfidenceFromLogprobs(event["logprobs"]),
 		},
 	})
 }
@@ -1503,6 +1505,27 @@ func speechmaticsRealtimeOptionalFloat(event map[string]any, key string) (float6
 	default:
 		return 0, false
 	}
+}
+
+func speechmaticsRealtimeConfidenceFromLogprobs(value any) *float64 {
+	logprobs, ok := value.([]any)
+	if !ok || len(logprobs) == 0 {
+		return nil
+	}
+	total := 0.0
+	for _, raw := range logprobs {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			return nil
+		}
+		logprob, ok := speechmaticsRealtimeOptionalFloat(entry, "logprob")
+		if !ok {
+			return nil
+		}
+		total += logprob
+	}
+	confidence := math.Exp(total / float64(len(logprobs)))
+	return &confidence
 }
 
 func (s *speechmaticsRealtimeSession) drainCommandQueue() {
