@@ -989,6 +989,7 @@ func (s *speechmaticsRealtimeSession) handleConversationItemDeleted(event map[st
 	if itemID == "" {
 		return false
 	}
+	s.clearInputTranscriptAccumulators(itemID)
 	s.deleteRemoteItem(itemID)
 	return true
 }
@@ -1187,6 +1188,18 @@ func (s *speechmaticsRealtimeSession) clearInputTranscriptAccumulator(itemID str
 		delete(s.inputTranscripts, itemID)
 	}
 	return partial
+}
+
+func (s *speechmaticsRealtimeSession) clearInputTranscriptAccumulators(itemID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputTranscripts == nil {
+		return
+	}
+	delete(s.inputTranscripts, itemID)
+	if len(s.inputTranscripts) == 0 {
+		s.inputTranscripts = nil
+	}
 }
 
 func (s *speechmaticsRealtimeSession) handleProviderError(event map[string]any) bool {

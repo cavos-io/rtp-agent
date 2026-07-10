@@ -1289,6 +1289,49 @@ func TestSpeechmaticsRealtimeSessionInputTranscriptFailedFinalizesReferenceParti
 	}
 }
 
+func TestSpeechmaticsRealtimeSessionDeletedItemClearsInputTranscriptAccumulator(t *testing.T) {
+	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	sessionInterface, err := rtModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := sessionInterface.(*speechmaticsRealtimeSession)
+	assertSpeechmaticsRealtimeCommand(t, session, "session.create", "model", "flow")
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"delta":         "stale ",
+	}); !ok {
+		t.Fatal("initial transcript delta ignored")
+	}
+	assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "msg_user_1",
+	}); !ok {
+		t.Fatal("conversation.item.deleted ignored")
+	}
+
+	if ok := session.handleServerEvent(map[string]any{
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "msg_user_1",
+		"content_index": 0,
+		"delta":         "fresh",
+	}); !ok {
+		t.Fatal("post-delete transcript delta ignored")
+	}
+	event := assertSpeechmaticsRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if event.InputTranscription == nil || event.InputTranscription.Transcript != "fresh" {
+		t.Fatalf("post-delete transcript = %#v, want fresh only", event.InputTranscription)
+	}
+}
+
 func TestSpeechmaticsRealtimeSessionOutputItemDoneEmitsReferenceFunctionCall(t *testing.T) {
 	rtModel, err := NewRealtimeModel("test-key", WithRealtimeWebsocketDisabled())
 	if err != nil {
