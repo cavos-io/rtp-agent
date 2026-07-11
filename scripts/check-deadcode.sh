@@ -13,16 +13,6 @@ if (( ${#staged_go_files[@]} == 0 )); then
   exit 0
 fi
 
-if ! command -v staticcheck >/dev/null 2>&1; then
-  echo "missing staticcheck: go install honnef.co/go/tools/cmd/staticcheck@latest"
-  exit 1
-fi
-
-if ! command -v deadcode >/dev/null 2>&1; then
-  echo "missing deadcode: go install golang.org/x/tools/cmd/deadcode@latest"
-  exit 1
-fi
-
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/check-deadcode.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -30,9 +20,9 @@ staticcheck_out="$tmpdir/staticcheck.out"
 deadcode_out="$tmpdir/deadcode.out"
 
 set +e
-staticcheck ./... >"$staticcheck_out" 2>&1
+go tool staticcheck ./... >"$staticcheck_out" 2>&1
 staticcheck_status=$?
-deadcode -test ./... >"$deadcode_out" 2>&1
+go tool deadcode -test ./... >"$deadcode_out" 2>&1
 deadcode_status=$?
 set -e
 

@@ -109,6 +109,7 @@ func UploadSessionReport(
 			h := make(textproto.MIMEHeader)
 			h.Set("Content-Disposition", `form-data; name="chat_history"; filename="chat_history.json"`)
 			h.Set("Content-Type", "application/json")
+			h.Set("Content-Length", strconv.Itoa(len(chatJSON)))
 			part, err := w.CreatePart(h)
 			if err == nil {
 				part.Write(chatJSON)
@@ -125,6 +126,7 @@ func UploadSessionReport(
 			h := make(textproto.MIMEHeader)
 			h.Set("Content-Disposition", `form-data; name="audio"; filename="recording.ogg"`)
 			h.Set("Content-Type", "audio/ogg")
+			h.Set("Content-Length", strconv.Itoa(len(audioData)))
 			part, err := w.CreatePart(h)
 			if err == nil {
 				part.Write(audioData)

@@ -240,6 +240,10 @@ type JobContext struct {
 
 func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobContext {
 	report, tagger := livekitNewJobContextSessionReport(job)
+	tmpDir, err := os.MkdirTemp("", job.GetId())
+	if err != nil {
+		logger.Logger.Errorw("failed to create temporary directory", err)
+	}
 	return &JobContext{
 		Job:              job,
 		url:              url,
@@ -250,6 +254,7 @@ func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobCo
 		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
 		shutdownDone:     make(chan struct{}),
 		entrypointDone:   make(chan struct{}),
+		sessionDirectory: tmpDir,
 		logContextFields: livekitJobContextLogFields(job),
 	}
 }

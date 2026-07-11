@@ -148,3 +148,51 @@ func TestRecorderIOStopFlushesAndClosesOutput(t *testing.T) {
 		t.Fatal("recording size after Stop() = 0, want flushed and closed output")
 	}
 }
+
+func TestRecorderIOResamplesFramesToRecordingRate(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	now := time.Unix(100, 0)
+	recorder.now = func() time.Time { return now }
+	if err := recorder.Start(filepath.Join(t.TempDir(), "session.ogg"), 48000); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	recorder.RecordInput(&model.AudioFrame{
+		Data:              make([]byte, 24000*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 24000,
+	})
+	now = now.Add(time.Second)
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	if recorder.timestamp != 48000 {
+		t.Fatalf("encoded timestamp = %d, want 48000 samples for one second", recorder.timestamp)
+	}
+}
+
+func TestRecorderIOPreservesElapsedSilence(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	now := time.Unix(100, 0)
+	recorder.now = func() time.Time { return now }
+	if err := recorder.Start(filepath.Join(t.TempDir(), "session.ogg"), 48000); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	recorder.RecordOutput(&model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	})
+	now = now.Add(time.Second)
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	if recorder.timestamp != 48000 {
+		t.Fatalf("encoded timestamp = %d, want one second including trailing silence", recorder.timestamp)
+	}
+}
