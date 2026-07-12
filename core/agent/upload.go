@@ -202,14 +202,20 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
-		for _, item := range report.ChatHistory.Items {
+		history := report.ChatHistory.ToDict(llm.ChatContextDictOptions{
+			IncludeTimestamp: true,
+		})
+
+		items, _ := history["items"].([]map[string]any)
+		for _, item := range items {
+			createdAt := unixSecondsToTime(item["created_at"].(float64))
 			attrs := map[string]interface{}{
-				"chat.item": chatItemReportDict(item),
+				"chat.item": item,
 			}
-			if functionCallOutput, ok := item.(*llm.FunctionCallOutput); ok && functionCallOutput.IsError {
-				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(item.GetCreatedAt()))
+			if item["type"] == "function_call_output" && item["is_error"] == true {
+				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(createdAt))
 			} else {
-				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, item.GetCreatedAt())
+				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, createdAt)
 			}
 		}
 	}
