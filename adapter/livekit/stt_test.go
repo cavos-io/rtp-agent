@@ -1052,7 +1052,7 @@ func assertLiveKitPanicsWithMessage(t *testing.T, want string, fn func()) {
 	fn()
 }
 
-func TestInferenceSTTStreamFlushDoesNotFinalize(t *testing.T) {
+func TestInferenceSTTStreamFlushFinalizesSegmentAndKeepsSessionOpen(t *testing.T) {
 	conn := &fakeInferenceWebsocketConn{}
 	stream := &inferenceSTTStream{
 		conn:    conn,
@@ -1063,8 +1063,8 @@ func TestInferenceSTTStreamFlushDoesNotFinalize(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
 	}
-	if len(conn.writes) != 0 {
-		t.Fatalf("writes = %#v, want no websocket finalize on flush", conn.writes)
+	if len(conn.writes) != 1 || conn.writes[0]["type"] != "session.finalize" {
+		t.Fatalf("writes = %#v, want one session.finalize message", conn.writes)
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("after"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
 		t.Fatalf("PushFrame after Flush returned error: %v", err)

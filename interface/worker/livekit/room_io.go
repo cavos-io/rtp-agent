@@ -2393,8 +2393,9 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 	}
 	rio.mu.Lock()
 	ch := rio.audioSubscribed
+	ready := rio.audioOutputDiagnostics.TrackSubscribed
 	rio.mu.Unlock()
-	if ch == nil {
+	if ready || ch == nil {
 		return nil
 	}
 	timeout := rio.audioSubscriptionTimeout()

@@ -173,6 +173,58 @@ func TestRecorderIOResamplesFramesToRecordingRate(t *testing.T) {
 	}
 }
 
+func TestRecorderIOResamplingInterpolatesPCM(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              []byte{0, 0, 0xe8, 0x03},
+		SampleRate:        2,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	resampled, err := resampleRecordedAudioFrame(frame, 4)
+	if err != nil {
+		t.Fatalf("resampleRecordedAudioFrame() error = %v", err)
+	}
+	want := []byte{0, 0, 0xf4, 0x01, 0xe8, 0x03, 0xe8, 0x03}
+	if string(resampled.Data) != string(want) {
+		t.Fatalf("resampled PCM = %v, want linearly interpolated %v", resampled.Data, want)
+	}
+}
+
+func TestRecorderIOPlacesConsecutiveFramesOnMediaTimeline(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	now := time.Unix(100, 0)
+	recorder.now = func() time.Time { return now }
+	if err := recorder.Start(filepath.Join(t.TempDir(), "session.ogg"), 48000); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	recorder.RecordInput(frame)
+	recorder.RecordInput(frame)
+
+	if got := recorder.inFrames[1].receivedAt.Sub(recorder.inFrames[0].receivedAt); got != 10*time.Millisecond {
+		t.Fatalf("consecutive frame offset = %v, want 10ms media duration", got)
+	}
+	now = now.Add(time.Second)
+	recorder.RecordInput(frame)
+	if got := recorder.inFrames[2].receivedAt; !got.Equal(now) {
+		t.Fatalf("frame after media gap starts at %v, want wall time %v", got, now)
+	}
+	recorder.inputNextTime = now.Add(time.Second)
+	recorder.RecordInput(frame)
+	if got := recorder.inFrames[3].receivedAt; !got.Equal(now) {
+		t.Fatalf("frame after runaway media cursor starts at %v, want wall time %v", got, now)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 func TestRecorderIOPreservesElapsedSilence(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
 	now := time.Unix(100, 0)

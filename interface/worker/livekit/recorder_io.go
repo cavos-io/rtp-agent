@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
@@ -37,6 +36,8 @@ type RecorderIO struct {
 
 	InputStartTime  *time.Time
 	OutputStartTime *time.Time
+	inputNextTime   time.Time
+	outputNextTime  time.Time
 
 	sequenceNumber uint16
 	timestamp      uint32
@@ -49,6 +50,8 @@ type recordedAudioFrame struct {
 	frame      *model.AudioFrame
 	receivedAt time.Time
 }
+
+const recordedAudioContinuityTolerance = 500 * time.Millisecond
 
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	return &RecorderIO{
@@ -147,6 +150,8 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.writtenSamples = 0
 	r.InputStartTime = nil
 	r.OutputStartTime = nil
+	r.inputNextTime = time.Time{}
+	r.outputNextTime = time.Time{}
 
 	go r.recordLoop(sampleRate, r.done, r.closeComplete)
 
@@ -203,10 +208,12 @@ func (r *RecorderIO) RecordInput(frame *model.AudioFrame) {
 	if r.InputStartTime == nil {
 		r.InputStartTime = &now
 	}
+	receivedAt := nextRecordedFrameTime(now, r.inputNextTime)
+	r.inputNextTime = receivedAt.Add(audioFrameDuration(frame))
 	if r.timelineStart == nil {
 		r.timelineStart = &now
 	}
-	r.inFrames = append(r.inFrames, recordedAudioFrame{frame: frame, receivedAt: now})
+	r.inFrames = append(r.inFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
 }
 
 func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
@@ -221,10 +228,28 @@ func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
 	if r.OutputStartTime == nil {
 		r.OutputStartTime = &now
 	}
+	receivedAt := nextRecordedFrameTime(now, r.outputNextTime)
+	r.outputNextTime = receivedAt.Add(audioFrameDuration(frame))
 	if r.timelineStart == nil {
 		r.timelineStart = &now
 	}
-	r.outFrames = append(r.outFrames, recordedAudioFrame{frame: frame, receivedAt: now})
+	r.outFrames = append(r.outFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
+}
+
+func audioFrameDuration(frame *model.AudioFrame) time.Duration {
+	if frame == nil || frame.SampleRate == 0 {
+		return 0
+	}
+	return time.Duration(float64(time.Second) * float64(frame.SamplesPerChannel) / float64(frame.SampleRate))
+}
+
+func nextRecordedFrameTime(now, expected time.Time) time.Time {
+	if expected.IsZero() ||
+		now.After(expected.Add(recordedAudioContinuityTolerance)) ||
+		expected.After(now.Add(recordedAudioContinuityTolerance)) {
+		return now
+	}
+	return expected
 }
 
 func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeComplete chan<- struct{}) {
@@ -327,7 +352,7 @@ type normalizedRecordedFrame struct {
 func normalizeRecordedFrames(frames []recordedAudioFrame, sampleRate uint32, timelineStart time.Time) []normalizedRecordedFrame {
 	normalized := make([]normalizedRecordedFrame, 0, len(frames))
 	for _, recorded := range frames {
-		frame, err := audio.ResampleAudioFrame(recorded.frame, sampleRate)
+		frame, err := resampleRecordedAudioFrame(recorded.frame, sampleRate)
 		if err != nil {
 			logger.Logger.Warnw("Failed to resample recorded audio", err)
 			continue
@@ -356,6 +381,55 @@ func normalizeRecordedFrames(frames []recordedAudioFrame, sampleRate uint32, tim
 		})
 	}
 	return normalized
+}
+
+func resampleRecordedAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || outputRate == 0 || frame.SampleRate == outputRate {
+		return frame, nil
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 || len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("invalid 16-bit PCM audio frame")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{SampleRate: outputRate, NumChannels: frame.NumChannels, ParticipantID: frame.ParticipantID}, nil
+	}
+	outSamples := uint32((uint64(frame.SamplesPerChannel)*uint64(outputRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	channels := int(frame.NumChannels)
+	inputSamples := int(frame.SamplesPerChannel)
+	for outputIndex := 0; outputIndex < int(outSamples); outputIndex++ {
+		position := float64(outputIndex) * float64(frame.SampleRate) / float64(outputRate)
+		left := int(position)
+		if left >= inputSamples {
+			left = inputSamples - 1
+		}
+		right := left + 1
+		if right >= inputSamples {
+			right = left
+		}
+		fraction := position - float64(left)
+		for channel := 0; channel < channels; channel++ {
+			leftOffset := (left*channels + channel) * 2
+			rightOffset := (right*channels + channel) * 2
+			leftSample := int16(uint16(frame.Data[leftOffset]) | uint16(frame.Data[leftOffset+1])<<8)
+			rightSample := int16(uint16(frame.Data[rightOffset]) | uint16(frame.Data[rightOffset+1])<<8)
+			sample := int16(float64(leftSample) + (float64(rightSample)-float64(leftSample))*fraction)
+			outputOffset := (outputIndex*channels + channel) * 2
+			out[outputOffset] = byte(sample)
+			out[outputOffset+1] = byte(uint16(sample) >> 8)
+		}
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        outputRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func copyRecordedChannel(stereo []int16, frames []normalizedRecordedFrame, baseSample int64, channel int) {

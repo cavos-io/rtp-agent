@@ -2428,8 +2428,10 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	a.queueMu.Unlock()
 	if current == paused.handle && !paused.handle.IsDone() && controller != nil && controller.CanPauseAudioOutput() && a.Session.Options.ResumeFalseInterruption {
 		a.Session.UpdateAgentState(paused.agentState)
-		controller.ResumeAudioOutput()
 		resumed = true
+	}
+	if controller != nil && controller.CanPauseAudioOutput() {
+		controller.ResumeAudioOutput()
 	}
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
