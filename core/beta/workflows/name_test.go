@@ -2,11 +2,14 @@ package workflows
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestGetNameTaskUpdatesRequiredPartsWithoutConfirmation(t *testing.T) {
@@ -17,8 +20,9 @@ func TestGetNameTaskUpdatesRequiredPartsWithoutConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if out != "Name captured and task completed." {
-		t.Fatalf("Execute() output = %q, want completion message", out)
+	// Reference returns None after no-confirm completion, avoiding extra post-completion tool chatter.
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
 	}
 
 	select {
