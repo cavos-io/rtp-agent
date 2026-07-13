@@ -5554,3 +5554,74 @@ func (f *fakeRoomIORealtimeSession) PushVideo(*images.VideoFrame) error { return
 func (f *fakeRoomIORealtimeSession) CommitAudio() error { return nil }
 
 func (f *fakeRoomIORealtimeSession) ClearAudio() error { return nil }
+
+type blockingTextStream struct {
+	writeEntered chan struct{}
+	closed       chan struct{}
+	enterOnce    sync.Once
+	closeOnce    sync.Once
+}
+
+func newBlockingTextStream() *blockingTextStream {
+	return &blockingTextStream{
+		writeEntered: make(chan struct{}),
+		closed:       make(chan struct{}),
+	}
+}
+
+func (b *blockingTextStream) Write(string) {
+	b.enterOnce.Do(func() { close(b.writeEntered) })
+	<-b.closed
+}
+
+func (b *blockingTextStream) Close() {
+	b.closeOnce.Do(func() { close(b.closed) })
+}
+
+func TestRoomIOCloseAgentTextStreamDoesNotDeadlockDuringBlockedWrite(t *testing.T) {
+	writer := newBlockingTextStream()
+	rio := &RoomIO{
+		agentTextStreamOpener: func(lksdk.StreamTextOptions) roomIOTextStreamWriter {
+			return writer
+		},
+	}
+
+	opts := lksdk.StreamTextOptions{
+		Topic: RoomIOTranscriptionTopic,
+		Attributes: map[string]string{
+			RoomIOTranscriptionSegmentIDAttribute: "seg-1",
+			RoomIOTranscriptionFinalAttribute:     "false",
+		},
+	}
+
+	publishReturned := make(chan struct{})
+	go func() {
+		rio.publishAgentTranscriptionStream("hello", opts)
+		close(publishReturned)
+	}()
+
+	select {
+	case <-writer.writeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent transcription Write was never entered")
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		rio.closeAgentTextStream()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-closeReturned:
+	case <-time.After(3 * time.Second):
+		writer.Close()
+		t.Fatal("closeAgentTextStream deadlocked while an agent transcription write was in-flight")
+	}
+
+	select {
+	case <-publishReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("producer goroutine did not return after the stream was closed")
+	}
+}

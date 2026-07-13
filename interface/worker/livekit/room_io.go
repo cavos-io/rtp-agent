@@ -1000,10 +1000,9 @@ func (rio *RoomIO) publishAgentTranscriptionStream(text string, opts lksdk.Strea
 	final := opts.Attributes[RoomIOTranscriptionFinalAttribute] == "true"
 
 	rio.agentTextStreamMu.Lock()
-	defer rio.agentTextStreamMu.Unlock()
-
+	var staleWriter roomIOTextStreamWriter
 	if rio.agentTextStreamWriter != nil && rio.agentTextStreamSegmentID != segmentID {
-		rio.agentTextStreamWriter.Close()
+		staleWriter = rio.agentTextStreamWriter
 		rio.agentTextStreamWriter = nil
 		rio.agentTextStreamSegmentID = ""
 		rio.agentTextStreamHasContent = false
@@ -1012,6 +1011,10 @@ func (rio *RoomIO) publishAgentTranscriptionStream(text string, opts lksdk.Strea
 	if rio.agentTextStreamWriter == nil {
 		writer := rio.agentTextStreamOpener(opts)
 		if writer == nil {
+			rio.agentTextStreamMu.Unlock()
+			if staleWriter != nil {
+				staleWriter.Close()
+			}
 			return
 		}
 		rio.agentTextStreamWriter = writer
@@ -1019,20 +1022,28 @@ func (rio *RoomIO) publishAgentTranscriptionStream(text string, opts lksdk.Strea
 		rio.agentTextStreamHasContent = false
 	}
 
+	writer := rio.agentTextStreamWriter
+	shouldWrite := text != "" && (!final || !rio.agentTextStreamHasContent)
 	if !final {
 		if text != "" {
-			rio.agentTextStreamWriter.Write(text)
 			rio.agentTextStreamHasContent = true
 		}
-		return
+	} else {
+		rio.agentTextStreamWriter = nil
+		rio.agentTextStreamSegmentID = ""
+		rio.agentTextStreamHasContent = false
 	}
-	if !rio.agentTextStreamHasContent && text != "" {
-		rio.agentTextStreamWriter.Write(text)
+	rio.agentTextStreamMu.Unlock()
+
+	if staleWriter != nil {
+		staleWriter.Close()
 	}
-	rio.agentTextStreamWriter.Close()
-	rio.agentTextStreamWriter = nil
-	rio.agentTextStreamSegmentID = ""
-	rio.agentTextStreamHasContent = false
+	if shouldWrite {
+		writer.Write(text)
+	}
+	if final {
+		writer.Close()
+	}
 }
 
 func (rio *RoomIO) closeAgentTextStream() {
