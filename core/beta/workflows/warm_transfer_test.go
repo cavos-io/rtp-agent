@@ -2,7 +2,10 @@ package workflows
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
@@ -33,6 +37,77 @@ func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
 	}
 	if len(task.Tools) != 3 {
 		t.Fatalf("tools length = %d, want 3", len(task.Tools))
+	}
+}
+
+func TestNewWarmTransferTaskPreservesReferenceExtraTools(t *testing.T) {
+	opts := WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+	}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("Tools")
+	if !field.IsValid() {
+		t.Fatal("WarmTransferOptions.Tools missing; want reference tools constructor option")
+	}
+	field.Set(reflect.ValueOf([]llm.Tool{referenceWarmTransferExtraTool{id: "handoff_help"}}))
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if len(task.Agent.Tools) < 4 {
+		t.Fatalf("tools len = %d, want extra tool before warm-transfer control tools", len(task.Agent.Tools))
+	}
+	if got := task.Agent.Tools[0].Name(); got != "handoff_help" {
+		t.Fatalf("tools[0] = %q, want caller-provided tool preserved first", got)
+	}
+	if got := task.Agent.Tools[1].Name(); got != "connect_to_caller" {
+		t.Fatalf("tools[1] = %q, want connect_to_caller after caller tools", got)
+	}
+}
+
+func TestNewWarmTransferTaskSkipsEmptyConversationHistoryMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleUser})
+	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: ""}}})
+	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "Need help with billing"}}})
+
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", chatCtx, "")
+
+	if strings.Contains(task.Instructions, "Caller: \n") || strings.Contains(task.Instructions, "Assistant: \n") {
+		t.Fatalf("Instructions = %q, want empty chat messages omitted from conversation history", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Caller: Need help with billing\n") {
+		t.Fatalf("Instructions = %q, want non-empty caller history preserved", task.Instructions)
+	}
+}
+
+func TestNewWarmTransferTaskUsesReferenceHandoffPromptOrder(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "My claim was denied"}}})
+
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", chatCtx, "")
+
+	historyIndex := strings.Index(task.Instructions, "## Conversation history with caller")
+	callerIndex := strings.Index(task.Instructions, "Caller: My claim was denied\n")
+	endHistoryIndex := strings.Index(task.Instructions, "## End of conversation history with caller")
+	connectIndex := strings.Index(task.Instructions, "Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.")
+	summaryIndex := strings.Index(task.Instructions, "You are talking to the human agent now, start by giving them a summary of the conversation so far, and answer any questions they might have.")
+	if historyIndex < 0 || callerIndex < 0 || endHistoryIndex < 0 || connectIndex < 0 || summaryIndex < 0 {
+		t.Fatalf("Instructions = %q, want reference handoff prompt sections", task.Instructions)
+	}
+	if !(historyIndex < callerIndex && callerIndex < endHistoryIndex && endHistoryIndex < connectIndex && connectIndex < summaryIndex) {
+		t.Fatalf("handoff prompt order history=%d caller=%d end=%d connect=%d summary=%d, want history before connect before summary", historyIndex, callerIndex, endHistoryIndex, connectIndex, summaryIndex)
+	}
+}
+
+func TestNewWarmTransferTaskSeparatesExtraInstructions(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "Keep the summary under two sentences.")
+
+	want := "answer any questions they might have.\n\nKeep the summary under two sentences."
+	if !strings.Contains(task.Instructions, want) {
+		t.Fatalf("Instructions = %q, want extra instructions separated by blank line", task.Instructions)
 	}
 }
 
@@ -96,6 +171,147 @@ func TestNewWarmTransferTaskUsesExplicitSIPNumberOption(t *testing.T) {
 
 	if task.SipNumber != "+15550999" {
 		t.Fatalf("SipNumber = %q, want explicit option", task.SipNumber)
+	}
+}
+
+func TestNewWarmTransferTaskPreservesExplicitEmptySIPNumber(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_NUMBER", "+15550000")
+
+	opts := WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+		SipNumber:   "",
+	}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("SipNumberSet")
+	if !field.IsValid() {
+		t.Fatal("WarmTransferOptions.SipNumberSet missing; want reference explicit empty sip_number support")
+	}
+	field.SetBool(true)
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	if task.SipNumber != "" {
+		t.Fatalf("SipNumber = %q, want explicit empty option without env fallback", task.SipNumber)
+	}
+}
+
+func TestNewWarmTransferTaskPreservesExplicitEmptySIPTrunkID(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "trunk_env")
+
+	opts := WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "",
+	}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("TrunkIDSet")
+	if !field.IsValid() {
+		t.Fatal("WarmTransferOptions.TrunkIDSet missing; want reference explicit empty sip_trunk_id support")
+	}
+	field.SetBool(true)
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	if task.SipTrunkID != "" {
+		t.Fatalf("SipTrunkID = %q, want explicit empty option without env fallback", task.SipTrunkID)
+	}
+}
+
+func TestNewWarmTransferTaskUsesReferenceTargetPhoneNumberAlias(t *testing.T) {
+	opts := WarmTransferOptions{TrunkID: "trunk_123"}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("TargetPhoneNumber")
+	if !field.IsValid() {
+		t.Fatal("WarmTransferOptions.TargetPhoneNumber missing; want deprecated reference alias")
+	}
+	field.SetString("+15550100")
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	if task.TargetPhoneNumber != "+15550100" {
+		t.Fatalf("TargetPhoneNumber = %q, want deprecated alias value", task.TargetPhoneNumber)
+	}
+}
+
+func TestNewWarmTransferTaskUsesReferenceSIPRequestOptions(t *testing.T) {
+	opts := WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+	}
+	values := reflect.ValueOf(&opts).Elem()
+	for name, value := range map[string]any{
+		"SipHeaders":     map[string]string{"X-Trace": "trace-a"},
+		"Dtmf":           "ww1234#",
+		"RingingTimeout": 7 * time.Second,
+	} {
+		field := values.FieldByName(name)
+		if !field.IsValid() {
+			t.Fatalf("WarmTransferOptions.%s missing; want reference constructor option", name)
+		}
+		field.Set(reflect.ValueOf(value))
+	}
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if jobCtx.createSIPRequest == nil {
+		t.Fatal("OnEnter did not create SIP participant")
+	}
+	if jobCtx.createSIPRequest.Headers["X-Trace"] != "trace-a" {
+		t.Fatalf("CreateSIPParticipant Headers = %#v, want constructor headers", jobCtx.createSIPRequest.Headers)
+	}
+	if jobCtx.createSIPRequest.Dtmf != "ww1234#" {
+		t.Fatalf("CreateSIPParticipant Dtmf = %q, want constructor dtmf", jobCtx.createSIPRequest.Dtmf)
+	}
+	if jobCtx.createSIPRequest.RingingTimeout == nil || jobCtx.createSIPRequest.RingingTimeout.AsDuration() != 7*time.Second {
+		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want constructor timeout 7s", jobCtx.createSIPRequest.RingingTimeout)
+	}
+}
+
+func TestNewWarmTransferTaskPreservesExplicitZeroRingingTimeout(t *testing.T) {
+	opts := WarmTransferOptions{
+		TargetPhone:    "+15550100",
+		TrunkID:        "trunk_123",
+		RingingTimeout: 0,
+	}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("RingingTimeoutSet")
+	if !field.IsValid() {
+		t.Fatal("WarmTransferOptions.RingingTimeoutSet missing; want reference explicit zero ringing_timeout support")
+	}
+	field.SetBool(true)
+
+	task, err := NewWarmTransferTaskWithOptions(opts)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if jobCtx.createSIPRequest == nil {
+		t.Fatal("OnEnter did not create SIP participant")
+	}
+	if jobCtx.createSIPRequest.RingingTimeout == nil {
+		t.Fatal("CreateSIPParticipant RingingTimeout = nil, want explicit zero duration")
+	}
+	if got := jobCtx.createSIPRequest.RingingTimeout.AsDuration(); got != 0 {
+		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want explicit zero duration", got)
 	}
 }
 
@@ -186,8 +402,12 @@ func TestNewWarmTransferTaskRejectsMissingSIPConfig(t *testing.T) {
 func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
 	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
 
-	task.OnEnter()
 	if task.backgroundAudio == nil {
 		t.Fatal("backgroundAudio is nil after OnEnter")
 	}
@@ -217,6 +437,56 @@ func TestWarmTransferOnEnterSkipsBackgroundAudioWhenHoldAudioDisabled(t *testing
 
 	if task.backgroundAudio != nil {
 		t.Fatalf("backgroundAudio = %#v, want nil when hold audio is disabled", task.backgroundAudio)
+	}
+}
+
+func TestWarmTransferOnEnterStartsReferenceHoldAudio(t *testing.T) {
+	holdAudio := agent.AudioConfig{Source: "hold.wav", Volume: 0.5}
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+		HoldAudio:   holdAudio,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	player := &fakeWarmTransferBackgroundAudio{handle: &fakeWarmTransferHoldAudioHandle{}}
+	task.newBackgroundAudioPlayer = func(audio interface{}) warmTransferBackgroundAudio {
+		if !reflect.DeepEqual(audio, holdAudio) {
+			t.Fatalf("newBackgroundAudioPlayer audio = %#v, want hold audio", audio)
+		}
+		return player
+	}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	room := &lksdk.Room{}
+	session.Room = room
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if player.startRoom != room {
+		t.Fatalf("hold audio Start room = %#v, want caller room", player.startRoom)
+	}
+	if player.startSession != session {
+		t.Fatalf("hold audio Start session = %#v, want caller session", player.startSession)
+	}
+	if !reflect.DeepEqual(player.playAudio, holdAudio) {
+		t.Fatalf("hold audio Play audio = %#v, want hold audio", player.playAudio)
+	}
+	if !player.playLoop {
+		t.Fatal("hold audio Play loop = false, want true")
+	}
+	if task.holdAudioHandle != player.handle {
+		t.Fatalf("holdAudioHandle = %#v, want play handle", task.holdAudioHandle)
+	}
+
+	task.OnExit()
+	if !player.handle.stopped {
+		t.Fatal("hold audio handle stopped = false after exit")
+	}
+	if !player.closed {
+		t.Fatal("background audio closed = false after exit")
 	}
 }
 
@@ -263,6 +533,181 @@ func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
 	}
 	if jobCtx.createSIPRequest.RingingTimeout == nil || jobCtx.createSIPRequest.RingingTimeout.AsDuration() != 7*time.Second {
 		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want 7s", jobCtx.createSIPRequest.RingingTimeout)
+	}
+}
+
+func TestWarmTransferOnEnterReadiesHumanAgentForConnect(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if err := task.ConnectToCaller(); err != nil {
+		t.Fatalf("ConnectToCaller after answered dial returned error: %v", err)
+	}
+	if jobCtx.moveRequest == nil {
+		t.Fatal("ConnectToCaller did not move answered human participant")
+	}
+	if jobCtx.moveRequest.Room != "caller-room-human-agent" {
+		t.Fatalf("MoveParticipant room = %q, want caller-room-human-agent", jobCtx.moveRequest.Room)
+	}
+	if jobCtx.moveRequest.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipant identity = %q, want human-agent-sip", jobCtx.moveRequest.Identity)
+	}
+	if jobCtx.moveRequest.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipant destination = %q, want caller-room", jobCtx.moveRequest.DestinationRoom)
+	}
+}
+
+func TestWarmTransferOnEnterDialFailureCleansResources(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{
+		room:      &livekit.Room{Name: "caller-room"},
+		createErr: errors.New("sip unavailable"),
+	}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if _, err := task.WaitAny(context.Background()); err == nil {
+		t.Fatal("WaitAny() error = nil, want warm transfer ToolError")
+	} else {
+		var toolErr llm.ToolError
+		if !errors.As(err, &toolErr) {
+			t.Fatalf("WaitAny() error = %T %v, want ToolError", err, err)
+		}
+		if toolErr.Message != "could not dial human agent" {
+			t.Fatalf("ToolError.Message = %q, want reference dial failure", toolErr.Message)
+		}
+	}
+	if task.backgroundAudio != nil {
+		t.Fatalf("backgroundAudio = %#v, want cleared after failed dial", task.backgroundAudio)
+	}
+	if task.humanAgentSess != nil {
+		t.Fatalf("humanAgentSess = %#v, want cleared after failed dial", task.humanAgentSess)
+	}
+}
+
+func TestWarmTransferHumanAgentRoomCloseFailsAndRestoresCaller(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	player := &fakeWarmTransferBackgroundAudio{handle: &fakeWarmTransferHoldAudioHandle{}}
+	task.newBackgroundAudioPlayer = func(audio interface{}) warmTransferBackgroundAudio {
+		return player
+	}
+	humanSession := agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	task.humanAgentSess = humanSession
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Room = &lksdk.Room{}
+	audioOutput := &fakeWarmTransferAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if !session.InputAudioMuted() {
+		t.Fatal("caller input audio muted = false after OnEnter, want muted while human-agent room is active")
+	}
+
+	humanSession.EmitEvent(&agent.CloseEvent{Reason: agent.CloseReasonUserInitiated})
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := task.WaitAny(waitCtx); err == nil {
+		t.Fatal("WaitAny() error = nil, want room closed ToolError")
+	} else {
+		var toolErr llm.ToolError
+		if !errors.As(err, &toolErr) {
+			t.Fatalf("WaitAny() error = %T %v, want ToolError", err, err)
+		}
+		if toolErr.Message != "room closed: user_initiated" {
+			t.Fatalf("ToolError.Message = %q, want room closed reason", toolErr.Message)
+		}
+	}
+	if session.InputAudioMuted() {
+		t.Fatal("caller input audio muted = true after human-agent room close, want restored")
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after human-agent room close", audioOutput.resumeCount)
+	}
+	if !player.handle.stopped {
+		t.Fatal("hold audio stopped = false after human-agent room close")
+	}
+	if task.backgroundAudio != nil {
+		t.Fatalf("backgroundAudio = %#v, want cleared after human-agent room close", task.backgroundAudio)
+	}
+	if task.humanAgentReady {
+		t.Fatal("humanAgentReady = true after human-agent room close, want false")
+	}
+}
+
+func TestWarmTransferOnEnterMutesCallerInputAudioAndRestoresOnResult(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if !session.InputAudioMuted() {
+		t.Fatal("caller input audio muted = false after OnEnter, want true while warm transfer holds caller")
+	}
+
+	decline := &declineTransferTool{task: task}
+	if _, err := decline.Execute(context.Background(), `{"reason":"busy"}`); err != nil {
+		t.Fatalf("decline Execute error = %v", err)
+	}
+	if session.InputAudioMuted() {
+		t.Fatal("caller input audio muted = true after result, want restored")
+	}
+}
+
+func TestWarmTransferOnEnterPausesCallerAudioOutputAndRestoresOnResult(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	audioOutput := &fakeWarmTransferAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1 while warm transfer briefs human agent", audioOutput.pauseCount)
+	}
+
+	decline := &declineTransferTool{task: task}
+	if _, err := decline.Execute(context.Background(), `{"reason":"busy"}`); err != nil {
+		t.Fatalf("decline Execute error = %v", err)
+	}
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after warm transfer result", audioOutput.resumeCount)
+	}
+}
+
+func TestWarmTransferPreservesPreexistingCallerInputAudioMute(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetInputAudioMuted(true)
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	decline := &declineTransferTool{task: task}
+	if _, err := decline.Execute(context.Background(), `{"reason":"busy"}`); err != nil {
+		t.Fatalf("decline Execute error = %v", err)
+	}
+	if !session.InputAudioMuted() {
+		t.Fatal("caller input audio muted = false after result, want original muted state preserved")
 	}
 }
 
@@ -349,10 +794,104 @@ func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 	}
 }
 
+func TestConnectToCallerDeletesTemporaryHumanAgentRoom(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if err := task.ConnectToCaller(); err != nil {
+		t.Fatalf("ConnectToCaller returned error: %v", err)
+	}
+
+	if jobCtx.deleteRoomName != "caller-room-human-agent" {
+		t.Fatalf("DeleteRoom room = %q, want caller-room-human-agent", jobCtx.deleteRoomName)
+	}
+}
+
+func TestWarmTransferCallerParticipantDisconnectDeletesCallerRoomOnce(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if err := task.ConnectToCaller(); err != nil {
+		t.Fatalf("ConnectToCaller returned error: %v", err)
+	}
+	jobCtx.deleteRoomName = ""
+	jobCtx.deleteRoomCalls = 0
+
+	session.EmitEvent(&agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	session.EmitEvent(&agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+
+	waitForWarmTransferDeleteRoom(t, jobCtx, "caller-room")
+	if calls := warmTransferDeleteRoomCalls(jobCtx); calls != 1 {
+		t.Fatalf("DeleteRoom calls after caller-room disconnect = %d, want 1", calls)
+	}
+}
+
+func TestWarmTransferCallerParticipantDisconnectIgnoresNonDefaultKinds(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	if err := task.ConnectToCaller(); err != nil {
+		t.Fatalf("ConnectToCaller returned error: %v", err)
+	}
+	jobCtx.deleteRoomName = ""
+	jobCtx.deleteRoomCalls = 0
+
+	task.onCallerParticipantDisconnected("agent-a", livekit.ParticipantInfo_AGENT)
+
+	if jobCtx.deleteRoomName != "" {
+		t.Fatalf("DeleteRoom room = %q, want no caller-room delete for non-default participant kind", jobCtx.deleteRoomName)
+	}
+	if jobCtx.deleteRoomCalls != 0 {
+		t.Fatalf("DeleteRoom calls = %d, want 0 for non-default participant kind", jobCtx.deleteRoomCalls)
+	}
+}
+
+func TestConnectToCallerRequiresHumanAgentReady(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+	task.humanAgentReady = false
+	task.humanAgentRoom = ""
+	jobCtx.moveRequest = nil
+
+	err := task.ConnectToCaller()
+	if err == nil {
+		t.Fatal("ConnectToCaller() error = nil, want missing human-agent readiness error")
+	}
+	if jobCtx.moveRequest != nil {
+		t.Fatalf("MoveParticipant request = %#v, want no move before human-agent leg is ready", jobCtx.moveRequest)
+	}
+	if task.Done() {
+		t.Fatal("task Done() = true, want pending after premature connect request")
+	}
+}
+
 type fakeWarmTransferJobContext struct {
+	mu               sync.Mutex
 	room             *livekit.Room
 	moveRequest      *livekit.MoveParticipantRequest
+	deleteRoomName   string
+	deleteRoomCalls  int
 	createSIPRequest *livekit.CreateSIPParticipantRequest
+	createErr        error
 }
 
 func (f *fakeWarmTransferJobContext) RoomInfo() *livekit.Room {
@@ -368,9 +907,73 @@ func (f *fakeWarmTransferJobContext) MoveParticipant(_ context.Context, room str
 	return nil
 }
 
+func (f *fakeWarmTransferJobContext) DeleteRoom(_ context.Context, roomName string) (*livekit.DeleteRoomResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.deleteRoomName = roomName
+	f.deleteRoomCalls++
+	return &livekit.DeleteRoomResponse{}, nil
+}
+
 func (f *fakeWarmTransferJobContext) CreateSIPParticipant(_ context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
 	f.createSIPRequest = req
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	return &livekit.SIPParticipantInfo{}, nil
+}
+
+type fakeWarmTransferBackgroundAudio struct {
+	startRoom    *lksdk.Room
+	startSession *agent.AgentSession
+	playAudio    interface{}
+	playLoop     bool
+	handle       *fakeWarmTransferHoldAudioHandle
+	closed       bool
+}
+
+func (f *fakeWarmTransferBackgroundAudio) Start(room *lksdk.Room, session *agent.AgentSession) error {
+	f.startRoom = room
+	f.startSession = session
+	return nil
+}
+
+func (f *fakeWarmTransferBackgroundAudio) Play(audio interface{}, loop bool) warmTransferHoldAudioHandle {
+	f.playAudio = audio
+	f.playLoop = loop
+	return f.handle
+}
+
+func (f *fakeWarmTransferBackgroundAudio) Close() error {
+	f.closed = true
+	return nil
+}
+
+type fakeWarmTransferHoldAudioHandle struct {
+	stopped bool
+}
+
+func (f *fakeWarmTransferHoldAudioHandle) Stop() {
+	f.stopped = true
+}
+
+type fakeWarmTransferAudioOutputController struct {
+	canPause    bool
+	pauseCount  int
+	resumeCount int
+}
+
+func (f *fakeWarmTransferAudioOutputController) CanPauseAudioOutput() bool {
+	return f.canPause
+}
+
+func (f *fakeWarmTransferAudioOutputController) PauseAudioOutput() {
+	f.pauseCount++
+}
+
+func (f *fakeWarmTransferAudioOutputController) ResumeAudioOutput() {
+	f.resumeCount++
 }
 
 func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
@@ -388,8 +991,9 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if params := connect.Parameters(); params["type"] != "object" {
 		t.Fatalf("connect parameters = %#v, want object schema", params)
 	}
-	if out, err := connect.Execute(context.Background(), `{}`); err != nil || out != "Connected to caller." {
-		t.Fatalf("connect Execute = %q/%v, want connected output", out, err)
+	// Reference control tools return None after setting the task result.
+	if out, err := connect.Execute(context.Background(), `{}`); err != nil || out != "" {
+		t.Fatalf("connect Execute = %q/%v, want empty output", out, err)
 	}
 	if connectJobCtx.moveRequest == nil {
 		t.Fatal("connect Execute did not move participant")
@@ -407,8 +1011,20 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if params := decline.Parameters(); params["type"] != "object" {
 		t.Fatalf("decline parameters = %#v, want object schema", params)
 	}
-	if out, err := decline.Execute(context.Background(), `{"reason":"busy"}`); err != nil || out != "Transfer declined." {
-		t.Fatalf("decline Execute = %q/%v, want declined output", out, err)
+	declineProps, ok := decline.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("decline properties = %#v, want map", decline.Parameters()["properties"])
+	}
+	reasonSchema, ok := declineProps["reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("decline reason schema = %#v, want map", declineProps["reason"])
+	}
+	wantReasonDescription := "A short explanation of why the human agent declined to connect to the caller"
+	if got := reasonSchema["description"]; got != wantReasonDescription {
+		t.Fatalf("decline reason description = %#v, want %q", got, wantReasonDescription)
+	}
+	if out, err := decline.Execute(context.Background(), `{"reason":"busy"}`); err != nil || out != "" {
+		t.Fatalf("decline Execute = %q/%v, want empty output", out, err)
 	}
 	if _, err := declineTask.WaitAny(context.Background()); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("decline task error = %v, want busy reason", err)
@@ -429,8 +1045,8 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if params := voicemail.Parameters(); params["type"] != "object" {
 		t.Fatalf("voicemail parameters = %#v, want object schema", params)
 	}
-	if out, err := voicemail.Execute(context.Background(), `{}`); err != nil || out != "Voicemail detected." {
-		t.Fatalf("voicemail Execute = %q/%v, want voicemail output", out, err)
+	if out, err := voicemail.Execute(context.Background(), `{}`); err != nil || out != "" {
+		t.Fatalf("voicemail Execute = %q/%v, want empty output", out, err)
 	}
 	if _, err := voicemailTask.WaitAny(context.Background()); err == nil || !strings.Contains(err.Error(), "voicemail") {
 		t.Fatalf("voicemail task error = %v, want voicemail error", err)
@@ -448,4 +1064,57 @@ func newWarmTransferTaskForTest(t *testing.T, targetPhone string, trunkID string
 		t.Fatalf("NewWarmTransferTask() error = %v", err)
 	}
 	return task
+}
+
+func waitForWarmTransferDeleteRoom(t *testing.T, jobCtx *fakeWarmTransferJobContext, want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		jobCtx.mu.Lock()
+		got := jobCtx.deleteRoomName
+		jobCtx.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	jobCtx.mu.Lock()
+	got := jobCtx.deleteRoomName
+	jobCtx.mu.Unlock()
+	t.Fatalf("DeleteRoom room = %q, want %q", got, want)
+}
+
+func warmTransferDeleteRoomCalls(jobCtx *fakeWarmTransferJobContext) int {
+	jobCtx.mu.Lock()
+	defer jobCtx.mu.Unlock()
+
+	return jobCtx.deleteRoomCalls
+}
+
+type referenceWarmTransferExtraTool struct {
+	id string
+}
+
+func (t referenceWarmTransferExtraTool) ID() string {
+	return t.id
+}
+
+func (t referenceWarmTransferExtraTool) Name() string {
+	return t.id
+}
+
+func (t referenceWarmTransferExtraTool) Description() string {
+	return "reference warm-transfer extra tool"
+}
+
+func (t referenceWarmTransferExtraTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func (t referenceWarmTransferExtraTool) Execute(ctx context.Context, args string) (string, error) {
+	return "", nil
 }
