@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,13 @@ func TestTaskGroupOutOfScopeToolRejectsInvalidTargets(t *testing.T) {
 	var outErr *OutOfScopeError
 	if errors.As(err, &outErr) {
 		t.Fatalf("Execute() error = %T, want validation error before OutOfScopeError", err)
+	}
+	var toolErr llm.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("Execute() error = %T, want ToolError", err)
+	}
+	if toolErr.Message != "unable to regress, invalid task id missing" {
+		t.Fatalf("ToolError.Message = %q, want reference invalid-target message", toolErr.Message)
 	}
 }
 
@@ -75,6 +83,67 @@ func TestTaskGroupOutOfScopeToolParametersExposeVisitedTargetEnum(t *testing.T) 
 	}
 }
 
+func TestTaskGroupOutOfScopeToolParametersUseReferenceDescription(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.Add("first", "Collect first value", nil)
+	group.Add("second", "Collect second value", nil)
+	group.VisitedTasks["first"] = struct{}{}
+
+	tool := group.buildOutOfScopeTool("second")
+	if tool == nil {
+		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map", tool.Parameters()["properties"])
+	}
+	taskIDs, ok := properties["task_ids"].(map[string]any)
+	if !ok {
+		t.Fatalf("task_ids schema = %#v, want map", properties["task_ids"])
+	}
+	want := "The IDs of the tasks requested"
+	if got := taskIDs["description"]; got != want {
+		t.Fatalf("task_ids.description = %#v, want %q", got, want)
+	}
+}
+
+func TestTaskGroupOutOfScopeToolUsesReferenceDescription(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.Add("first", "Collect first value", nil)
+	group.Add("second", "Collect second value", nil)
+	group.VisitedTasks["first"] = struct{}{}
+
+	tool := group.buildOutOfScopeTool("second")
+	if tool == nil {
+		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
+	}
+
+	want := `Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. For example, if the user wants to change their email and there is a task with id "email_task" with a description of "Collect the user's email", return the id ("get_email_task").If the user requests to regress to multiple tasks, such as changing their phone number and email, return both task ids in the order they were requested.The following are the IDs and their corresponding task description. {"first":"Collect first value"}`
+	if got := tool.Description(); got != want {
+		t.Fatalf("Description = %q, want %q", got, want)
+	}
+}
+
+func TestTaskGroupOutOfScopeToolDescriptionPreservesRegisteredTaskOrder(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.Add("phone", "Collect phone number", nil)
+	group.Add("email", "Collect email address", nil)
+	group.Add("address", "Collect address", nil)
+	group.VisitedTasks["phone"] = struct{}{}
+	group.VisitedTasks["email"] = struct{}{}
+
+	tool := group.buildOutOfScopeTool("address")
+	if tool == nil {
+		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
+	}
+
+	wantSuffix := `The following are the IDs and their corresponding task description. {"phone":"Collect phone number","email":"Collect email address"}`
+	if got := tool.Description(); !strings.HasSuffix(got, wantSuffix) {
+		t.Fatalf("Description = %q, want suffix %q", got, wantSuffix)
+	}
+}
+
 func TestTaskGroupOutOfScopeToolCompletesActiveTaskWithVisitedTargets(t *testing.T) {
 	group := NewTaskGroup(false, false)
 	group.Add("first", "Collect first value", nil)
@@ -88,16 +157,41 @@ func TestTaskGroupOutOfScopeToolCompletesActiveTaskWithVisitedTargets(t *testing
 		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
 	}
 
-	if _, err := tool.Execute(context.Background(), `{"task_ids":["first"]}`); err != nil {
+	out, err := tool.Execute(context.Background(), `{"task_ids":["first"]}`)
+	if err != nil {
 		t.Fatalf("Execute() error = %v, want nil after completing active task", err)
 	}
-	_, err := activeTask.WaitAny(context.Background())
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output like reference out_of_scope", out)
+	}
+	_, err = activeTask.WaitAny(context.Background())
 	var outErr *OutOfScopeError
 	if !errors.As(err, &outErr) {
 		t.Fatalf("active task error = %T, want OutOfScopeError", err)
 	}
 	if len(outErr.TargetTaskIDs) != 1 || outErr.TargetTaskIDs[0] != "first" {
 		t.Fatalf("OutOfScopeError.TargetTaskIDs = %#v, want [first]", outErr.TargetTaskIDs)
+	}
+}
+
+func TestTaskGroupOutOfScopeToolNoopsWhenActiveTaskDone(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.Add("first", "Collect first value", nil)
+	group.Add("second", "Collect second value", nil)
+	group.VisitedTasks["first"] = struct{}{}
+	group.currentTask = newCompletedTask("second done")
+
+	tool := group.buildOutOfScopeTool("second")
+	if tool == nil {
+		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
+	}
+
+	out, err := tool.Execute(context.Background(), `{"task_ids":["first"]}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil when active task is already done", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty no-op output", out)
 	}
 }
 
@@ -117,6 +211,36 @@ func TestTaskGroupStartsChildTaskBeforeWaiting(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for task group to complete child task")
+	}
+}
+
+func TestTaskGroupAddReplacesDuplicateTaskID(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	firstRuns := 0
+	secondRuns := 0
+	group.Add("child", "Original child", func() agent.AgentInterface {
+		firstRuns++
+		return newCompletedTask("old")
+	})
+	group.Add("child", "Replacement child", func() agent.AgentInterface {
+		secondRuns++
+		return newCompletedTask("new")
+	})
+
+	group.OnEnter()
+
+	select {
+	case result := <-group.Result:
+		if firstRuns != 0 || secondRuns != 1 {
+			t.Fatalf("runs = first:%d second:%d, want replacement factory only once", firstRuns, secondRuns)
+		}
+		if result.TaskResults["child"] != "new" {
+			t.Fatalf("TaskResults[child] = %#v, want replacement result", result.TaskResults["child"])
+		}
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want replacement task result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group duplicate-id result")
 	}
 }
 
@@ -176,6 +300,38 @@ func TestTaskGroupReturnExceptionsRecordsErrorAndContinues(t *testing.T) {
 		t.Fatalf("group failed with %v, want error recorded in result", err)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for task group result")
+	}
+}
+
+func TestTaskGroupOnTaskCompletedReceivesReferenceEvent(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	child := newCompletedTask("child done")
+	var event TaskCompletedEvent
+	group.OnTaskCompletedEvent = func(ev TaskCompletedEvent) error {
+		event = ev
+		return nil
+	}
+	group.Add("child", "Completes", func() agent.AgentInterface {
+		return child
+	})
+
+	group.OnEnter()
+
+	select {
+	case <-group.Result:
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want completed result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+	if event.AgentTask != child {
+		t.Fatalf("TaskCompletedEvent.AgentTask = %#v, want child task", event.AgentTask)
+	}
+	if event.TaskID != "child" {
+		t.Fatalf("TaskCompletedEvent.TaskID = %q, want child", event.TaskID)
+	}
+	if event.Result != "child done" {
+		t.Fatalf("TaskCompletedEvent.Result = %#v, want child done", event.Result)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -13,6 +14,12 @@ import (
 
 type TaskGroupResult struct {
 	TaskResults map[string]any
+}
+
+type TaskCompletedEvent struct {
+	AgentTask agent.AgentInterface
+	TaskID    string
+	Result    any
 }
 
 type FactoryInfo struct {
@@ -31,11 +38,12 @@ func (e *OutOfScopeError) Error() string {
 
 type TaskGroup struct {
 	agent.AgentTask[*TaskGroupResult]
-	SummarizeChatCtx bool
-	ReturnExceptions bool
-	VisitedTasks     map[string]struct{}
-	RegisteredTasks  []FactoryInfo
-	OnTaskCompleted  func(taskID string, result any) error
+	SummarizeChatCtx     bool
+	ReturnExceptions     bool
+	VisitedTasks         map[string]struct{}
+	RegisteredTasks      []FactoryInfo
+	OnTaskCompleted      func(taskID string, result any) error
+	OnTaskCompletedEvent func(TaskCompletedEvent) error
 
 	currentTask agent.AgentInterface
 	mu          sync.Mutex
@@ -53,6 +61,16 @@ func NewTaskGroup(summarize bool, returnExceptions bool) *TaskGroup {
 }
 
 func (g *TaskGroup) Add(id, description string, factory func() agent.AgentInterface) *TaskGroup {
+	for i := range g.RegisteredTasks {
+		if g.RegisteredTasks[i].ID == id {
+			g.RegisteredTasks[i] = FactoryInfo{
+				ID:          id,
+				Description: description,
+				TaskFactory: factory,
+			}
+			return g
+		}
+	}
 	g.RegisteredTasks = append(g.RegisteredTasks, FactoryInfo{
 		ID:          id,
 		Description: description,
@@ -142,6 +160,20 @@ func (g *TaskGroup) runTasks() {
 					return
 				}
 			}
+			if g.OnTaskCompletedEvent != nil {
+				if err := g.OnTaskCompletedEvent(TaskCompletedEvent{
+					AgentTask: currentTask,
+					TaskID:    taskID,
+					Result:    result,
+				}); err != nil {
+					if g.ReturnExceptions {
+						results[taskID] = err
+						continue
+					}
+					g.Fail(err)
+					return
+				}
+			}
 		} else {
 			if activity != nil {
 				activity.Stop()
@@ -210,19 +242,37 @@ func (t *outOfScopeTool) Description() string {
 	t.group.mu.Lock()
 	defer t.group.mu.Unlock()
 
-	taskRepr := make(map[string]string)
+	reprJSON := t.referenceOrderedTaskDescriptionsJSON()
+
+	return "Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. " +
+		"For example, if the user wants to change their email and there is a task with id \"email_task\" with a description of \"Collect the user's email\", return the id (\"get_email_task\")." +
+		"If the user requests to regress to multiple tasks, such as changing their phone number and email, return both task ids in the order they were requested." +
+		fmt.Sprintf("The following are the IDs and their corresponding task description. %s", reprJSON)
+}
+
+func (t *outOfScopeTool) referenceOrderedTaskDescriptionsJSON() string {
+	var b strings.Builder
+	b.WriteByte('{')
+	wrote := false
 	for _, info := range t.group.RegisteredTasks {
-		if _, ok := t.group.VisitedTasks[info.ID]; ok && info.ID != t.activeTaskID {
-			taskRepr[info.ID] = info.Description
+		if _, ok := t.group.VisitedTasks[info.ID]; !ok || info.ID == t.activeTaskID {
+			continue
 		}
+		if wrote {
+			b.WriteByte(',')
+		}
+		writeJSONString(&b, info.ID)
+		b.WriteByte(':')
+		writeJSONString(&b, info.Description)
+		wrote = true
 	}
+	b.WriteByte('}')
+	return b.String()
+}
 
-	reprJSON, _ := json.Marshal(taskRepr)
-
-	return fmt.Sprintf(`Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. 
-For example, if the user wants to change their email and there is a task with id "email_task" with a description of "Collect the user's email", return the id ("get_email_task").
-If the user requests to regress to multiple tasks, such as changing their phone number and email, return both task ids in the order they were requested.
-The following are the IDs and their corresponding task description. %s`, string(reprJSON))
+func writeJSONString(b *strings.Builder, s string) {
+	encoded, _ := json.Marshal(s)
+	b.Write(encoded)
 }
 
 func (t *outOfScopeTool) Parameters() map[string]any {
@@ -243,8 +293,9 @@ func (t *outOfScopeTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"task_ids": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string", "enum": validTaskIDs},
+				"type":        "array",
+				"description": "The IDs of the tasks requested",
+				"items":       map[string]any{"type": "string", "enum": validTaskIDs},
 			},
 		},
 		"required": []string{"task_ids"},
@@ -269,9 +320,12 @@ func (t *outOfScopeTool) Execute(ctx context.Context, args string) (string, erro
 	if task, ok := currentTask.(interface {
 		Done() bool
 		Fail(error) error
-	}); ok && !task.Done() {
+	}); ok {
+		if task.Done() {
+			return "", nil
+		}
 		_ = task.Fail(&OutOfScopeError{TargetTaskIDs: params.TaskIDs})
-		return "Regressing to requested task.", nil
+		return "", nil
 	}
 
 	return "", &OutOfScopeError{TargetTaskIDs: params.TaskIDs}
@@ -283,13 +337,13 @@ func (t *outOfScopeTool) validateTaskIDs(taskIDs []string) error {
 
 	for _, taskID := range taskIDs {
 		if taskID == t.activeTaskID {
-			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+			return llm.NewToolError(fmt.Sprintf("unable to regress, invalid task id %s", taskID))
 		}
 		if _, visited := t.group.VisitedTasks[taskID]; !visited {
-			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+			return llm.NewToolError(fmt.Sprintf("unable to regress, invalid task id %s", taskID))
 		}
 		if !t.group.registeredTask(taskID) {
-			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+			return llm.NewToolError(fmt.Sprintf("unable to regress, invalid task id %s", taskID))
 		}
 	}
 	return nil

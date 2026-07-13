@@ -278,23 +278,24 @@ type AgentSession struct {
 	userState  UserState
 	agentState AgentState
 
-	mu             sync.Mutex
-	activity       *AgentActivity
-	started        bool
-	starting       bool
-	startedAt      *float64
-	startDone      chan struct{}
-	closing        bool
-	runCtx         context.Context
-	runCancel      context.CancelFunc
-	runState       *RunResult
-	onEnterDepth   int
-	userTurnClaims int
-	userTurnDone   chan struct{}
-	idleHolds      int
-	idleDone       chan struct{}
-	userAwayTimer  *time.Timer
-	userAwayGate   func() bool
+	mu                      sync.Mutex
+	activity                *AgentActivity
+	started                 bool
+	starting                bool
+	startedAt               *float64
+	startDone               chan struct{}
+	closing                 bool
+	runCtx                  context.Context
+	runCancel               context.CancelFunc
+	runState                *RunResult
+	onEnterDepth            int
+	userTurnClaims          int
+	userTurnDone            chan struct{}
+	idleHolds               int
+	idleDone                chan struct{}
+	inputAudioMuted         bool
+	userAwayTimer           *time.Timer
+	userAwayGate            func() bool
 	agentSpeakingStallTimer *time.Timer
 	aecWarmupTimer          *time.Timer
 	aecWarmupDone           bool
@@ -581,6 +582,24 @@ func (s *AgentSession) AudioPlaybackController() AudioPlaybackController {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.audioPlaybackController
+}
+
+func (s *AgentSession) SetInputAudioMuted(muted bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.inputAudioMuted = muted
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) InputAudioMuted() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputAudioMuted
 }
 
 // SetUserAwayTimerGate installs a runtime gate for user-away timer arming.
@@ -1007,6 +1026,20 @@ func (s *AgentSession) AgentStateChangedEvents() <-chan AgentStateChangedEvent {
 	return s.agentStateChangedEvents()
 }
 
+func (s *AgentSession) SubscribeAgentStateChangedEvents() (<-chan AgentStateChangedEvent, func()) {
+	ch := s.agentStateChangedEvents()
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, sub := range s.agentStateSubs {
+			if sub == ch {
+				s.agentStateSubs = append(s.agentStateSubs[:i], s.agentStateSubs[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
 func (s *AgentSession) agentStateChangedEvents() chan AgentStateChangedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1028,6 +1061,20 @@ func (s *AgentSession) agentStateChangedSubscribers() (chan AgentStateChangedEve
 
 func (s *AgentSession) UserStateChangedEvents() <-chan UserStateChangedEvent {
 	return s.userStateChangedEvents()
+}
+
+func (s *AgentSession) SubscribeUserStateChangedEvents() (<-chan UserStateChangedEvent, func()) {
+	ch := s.userStateChangedEvents()
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for i, sub := range s.userStateSubs {
+			if sub == ch {
+				s.userStateSubs = append(s.userStateSubs[:i], s.userStateSubs[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 func (s *AgentSession) userStateChangedEvents() chan UserStateChangedEvent {
@@ -2022,7 +2069,11 @@ func (s *AgentSession) shouldSilenceInputAudio() bool {
 	s.mu.Lock()
 	activity := s.activity
 	discard := s.Options.DiscardAudioIfUninterruptible
+	muted := s.inputAudioMuted
 	s.mu.Unlock()
+	if muted {
+		return true
+	}
 	return discard && activity.uninterruptibleSpeechActive()
 }
 
@@ -2054,6 +2105,30 @@ func (s *AgentSession) errorSubscribers() (chan ErrorEvent, bool, []chan ErrorEv
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
 	return s.sipDTMFEvents()
+}
+
+func (s *AgentSession) SubscribeSipDTMFEvents() (<-chan SipDTMFEvent, func()) {
+	ch := s.sipDTMFEvents()
+	return ch, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if ch == s.sipDTMFCh {
+			s.sipDTMFSubd = false
+			for {
+				select {
+				case <-s.sipDTMFCh:
+				default:
+					return
+				}
+			}
+		}
+		for i, sub := range s.sipDTMFSubs {
+			if sub == ch {
+				s.sipDTMFSubs = append(s.sipDTMFSubs[:i], s.sipDTMFSubs[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
