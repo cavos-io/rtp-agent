@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -91,5 +92,37 @@ func readTranscriptEvent(t *testing.T, syncer *TranscriptSynchronizer) string {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for transcript event")
 		return ""
+	}
+}
+
+func TestTranscriptSynchronizerPushTextUnblocksOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	syncer := &TranscriptSynchronizer{
+		ctx:    ctx,
+		cancel: cancel,
+		textCh: make(chan string, 1),
+	}
+
+	syncer.textCh <- "fill"
+
+	pushDone := make(chan struct{})
+	go func() {
+		syncer.PushText("overflow")
+		close(pushDone)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-pushDone:
+		t.Fatal("PushText did not block on the full channel; test cannot prove the fix")
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-pushDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("PushText stayed blocked after cancel — the send ignored done()")
 	}
 }

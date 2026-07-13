@@ -49,6 +49,13 @@ func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
 	return s
 }
 
+func (s *TranscriptSynchronizer) done() <-chan struct{} {
+	if s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Done()
+}
+
 func (s *TranscriptSynchronizer) PushText(text string) {
 	s.mu.Lock()
 	if s.closed || s.interrupted {
@@ -56,7 +63,10 @@ func (s *TranscriptSynchronizer) PushText(text string) {
 		return
 	}
 	s.mu.Unlock()
-	s.textCh <- text
+	select {
+	case s.textCh <- text:
+	case <-s.done():
+	}
 }
 
 func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
@@ -66,7 +76,10 @@ func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
 		return
 	}
 	s.mu.Unlock()
-	s.audioCh <- frame
+	select {
+	case s.audioCh <- frame:
+	case <-s.done():
+	}
 }
 
 func (s *TranscriptSynchronizer) EventCh() <-chan string {
@@ -85,7 +98,14 @@ func (s *TranscriptSynchronizer) Interrupt() {
 			s.textBuffer += text
 		default:
 			if s.textBuffer != "" {
-				s.eventCh <- s.textBuffer
+				select {
+				case s.eventCh <- s.textBuffer:
+				default:
+					select {
+					case s.eventCh <- s.textBuffer:
+					case <-s.done():
+					}
+				}
 				s.textBuffer = ""
 			}
 			return
@@ -139,7 +159,7 @@ func (s *TranscriptSynchronizer) run() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-s.done():
 			s.Interrupt()
 			return
 
@@ -221,7 +241,10 @@ func (s *TranscriptSynchronizer) run() {
 				s.textBuffer = remaining
 				s.mu.Unlock()
 
-				s.eventCh <- toEmit
+				select {
+				case s.eventCh <- toEmit:
+				case <-s.done():
+				}
 			} else {
 				s.mu.Unlock()
 			}
