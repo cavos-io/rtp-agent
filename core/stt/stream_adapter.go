@@ -225,7 +225,7 @@ func (w *streamAdapterWrapper) run() {
 
 		switch ev.Type {
 		case vad.VADEventStartOfSpeech:
-			w.eventCh <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
+			w.emitEvent(&SpeechEvent{Type: SpeechEventStartOfSpeech})
 
 			w.mu.Lock()
 			if len(ev.Frames) > 0 {
@@ -235,7 +235,7 @@ func (w *streamAdapterWrapper) run() {
 			w.mu.Unlock()
 
 		case vad.VADEventEndOfSpeech:
-			w.eventCh <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
+			w.emitEvent(&SpeechEvent{Type: SpeechEventEndOfSpeech})
 
 			w.mu.Lock()
 			var frames []*model.AudioFrame
@@ -252,18 +252,27 @@ func (w *streamAdapterWrapper) run() {
 			res, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
 			if err == nil && res != nil && len(res.Alternatives) > 0 && res.Alternatives[0].Text != "" {
 				w.mu.Lock()
-				if !w.closed {
-					w.eventCh <- &SpeechEvent{
+				closed := w.closed
+				w.mu.Unlock()
+				if !closed {
+					w.emitEvent(&SpeechEvent{
 						Type:         SpeechEventFinalTranscript,
 						Alternatives: []SpeechData{res.Alternatives[0]},
-					}
+					})
 				}
-				w.mu.Unlock()
 			} else if err != nil {
 				logger.Logger.Warnw("StreamAdapter STT Recognize failed", err)
 				w.sendErr(err)
 			}
 		}
+	}
+}
+
+func (w *streamAdapterWrapper) emitEvent(ev *SpeechEvent) {
+	select {
+	case w.eventCh <- ev:
+	case <-w.ctx.Done():
+	case <-w.doneCh:
 	}
 }
 
