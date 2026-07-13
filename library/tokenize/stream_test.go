@@ -239,3 +239,34 @@ func TestBufferedTokenStreamACloseDoesNotFlush(t *testing.T) {
 		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
+
+func TestBufferedTokenStreamPushUnblocksOnClose(t *testing.T) {
+	stream := NewBufferedTokenStream(strings.Fields, 1, 1)
+
+	text := strings.TrimSpace(strings.Repeat("word ", 150))
+
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- stream.PushText(text)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-pushDone:
+		t.Fatal("PushText did not block on the full event channel; test cannot prove the fix")
+	default:
+	}
+
+	if err := stream.AClose(); err != nil {
+		t.Fatalf("AClose returned error: %v", err)
+	}
+
+	select {
+	case err := <-pushDone:
+		if err != nil {
+			t.Fatalf("PushText returned error after AClose: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("PushText stayed blocked after AClose — signalAbort did not unblock the send")
+	}
+}

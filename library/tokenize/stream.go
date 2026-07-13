@@ -22,6 +22,9 @@ type BufferedTokenStream struct {
 	eventCh chan *TokenData
 	closed  bool
 	mu      sync.Mutex
+
+	abort     chan struct{}
+	abortOnce sync.Once
 }
 
 func NewBufferedTokenStream(fnc func(string) []string, minTokenLen, minCtxLen int) *BufferedTokenStream {
@@ -31,7 +34,12 @@ func NewBufferedTokenStream(fnc func(string) []string, minTokenLen, minCtxLen in
 		minCtxLen:        minCtxLen,
 		currentSegmentID: math.ShortUUID(""),
 		eventCh:          make(chan *TokenData, 100),
+		abort:            make(chan struct{}),
 	}
+}
+
+func (s *BufferedTokenStream) signalAbort() {
+	s.abortOnce.Do(func() { close(s.abort) })
 }
 
 func (s *BufferedTokenStream) PushText(text string) error {
@@ -61,9 +69,13 @@ func (s *BufferedTokenStream) PushText(text string) error {
 
 		s.outBuf += tok
 		if len(s.outBuf) >= s.minTokenLen {
-			s.eventCh <- &TokenData{
+			select {
+			case s.eventCh <- &TokenData{
 				SegmentID: s.currentSegmentID,
 				Token:     s.outBuf,
+			}:
+			case <-s.abort:
+				return nil
 			}
 			s.outBuf = ""
 		}
@@ -104,9 +116,12 @@ func (s *BufferedTokenStream) flushLocked() {
 		}
 
 		if s.outBuf != "" {
-			s.eventCh <- &TokenData{
+			select {
+			case s.eventCh <- &TokenData{
 				SegmentID: s.currentSegmentID,
 				Token:     s.outBuf,
+			}:
+			case <-s.abort:
 			}
 		}
 	}
@@ -136,6 +151,7 @@ func (s *BufferedTokenStream) EndInput() error {
 }
 
 func (s *BufferedTokenStream) AClose() error {
+	s.signalAbort()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
