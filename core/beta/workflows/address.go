@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -16,16 +17,23 @@ type GetAddressResult struct {
 }
 
 type GetAddressOptions struct {
+	AgentOptions
 	RequireConfirmation    bool
 	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
 	Instructions           *beta.InstructionParts
+	ChatContext            *llm.ChatContext
+	Tools                  []llm.Tool
 }
 
 type GetAddressTask struct {
 	agent.AgentTask[*GetAddressResult]
-	RequireConfirmation bool
-	currentAddress      string
-	addressConfirmed    bool
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	currentAddress         string
+	addressConfirmed       bool
 }
 
 const addressConfirmationInstruction = "Call `confirm_address` after the user confirmed the address is correct."
@@ -40,29 +48,37 @@ You will be handling addresses from any country. Expect that users will say addr
 - 'street_address': '5 RUE DE L'ANCIENNE COMÉDIE', 'unit_number': 'APP C4', 'locality': '75006 PARIS', 'country': 'FRANCE',
 - 'street_address': 'PLOT 10, NEHRU ROAD', 'unit_number': 'OFFICE 403, 4TH FLOOR', 'locality': 'VILE PARLE (E), MUMBAI MAHARASHTRA 400099', 'country': 'INDIA',
 Normalize common spoken patterns silently:
-- Convert words like 'dash' and 'apostrophe' into symbols: -, '.
-- Convert spelled out numbers like 'six' and 'seven' into numerals: 6, 7.
+- Convert words like 'dash' and 'apostrophe' into symbols: ` + "`-`, `'`." + `
+- Convert spelled out numbers like 'six' and 'seven' into numerals: ` + "`6`, `7`." + `
 - Recognize patterns where users speak their address field followed by spelling: e.g., 'guomao g u o m a o'.
 - Filter out filler words or hesitations.
 - Recognize when there may be accents on certain letters if explicitly said or common in the location specified. Be sure to verify the correct accents if existent.
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
+Avoid using bullet points and parenthese in any responses.
+Ask the user to confirm postal codes and spelled address parts without reading long values back.
 Call ` + "`update_address`" + ` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
 Don't invent new addresses, stick strictly to what the user said.
 `
 
-const addressInstructionsAfterConfirmation = `When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.
-Do not read the number and the suffix letters separately.
-Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.
-For example, read 90210 as 'nine zero two one zero.'
-Avoid using bullet points and parenthese in any responses.
-Spell out the address letter-by-letter when applicable, such as street names and provinces, especially when the user spells it out initially.
-If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country.
+const addressTextInstructionsBeforeConfirmation = addressPersona + `
+You will be handling addresses from any country.
+Expect users to type their address directly.
+If the address looks almost correct but has minor issues (e.g. missing country or postal code), prompt for clarification.
+Call ` + "`update_address`" + ` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
+Don't invent new addresses, stick strictly to what the user said.
+`
+
+const addressInstructionsAfterConfirmation = `If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 const AddressInstructions = addressInstructionsBeforeConfirmation + addressConfirmationInstruction + "\n" + addressInstructionsAfterConfirmation
 
 const addressInstructionsWithoutConfirmation = addressInstructionsBeforeConfirmation + addressInstructionsAfterConfirmation
+
+const addressTextInstructions = addressTextInstructionsBeforeConfirmation + addressConfirmationInstruction + "\n" + addressInstructionsAfterConfirmation
+
+const addressTextInstructionsWithoutConfirmation = addressTextInstructionsBeforeConfirmation + addressInstructionsAfterConfirmation
 
 func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
 	requireConfirmation := true
@@ -74,23 +90,65 @@ func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
 		instructions = addressInstructionsWithoutConfirmation
 	}
 	instructions = applyInstructionParts(instructions, addressPersona, opts.Instructions)
+	extraInstructions := opts.ExtraInstructions
+	if opts.Instructions != nil {
+		extraInstructions = ""
+	}
+	instructions = appendAddressExtraInstructions(instructions, extraInstructions)
+	textInstructions := addressTextVariantInstructions(opts.RequireConfirmationSet && opts.RequireConfirmation, opts.Instructions)
+	textInstructions = appendAddressExtraInstructions(textInstructions, extraInstructions)
 	t := &GetAddressTask{
-		AgentTask:           *agent.NewAgentTask[*GetAddressResult](instructions),
-		RequireConfirmation: requireConfirmation,
+		AgentTask:              *agent.NewAgentTask[*GetAddressResult](instructions),
+		RequireConfirmation:    requireConfirmation,
+		RequireConfirmationSet: opts.RequireConfirmationSet,
+		RequireExplicitAsk:     opts.RequireExplicitAsk,
+	}
+	t.InstructionVariants = llm.NewInstructions(instructions, textInstructions)
+	applyAgentOptions(&t.Agent, opts.AgentOptions)
+	if opts.ChatContext != nil {
+		t.ChatCtx = opts.ChatContext.Copy()
 	}
 
-	t.Agent.Tools = []llm.Tool{
+	t.Agent.Tools = append(append([]llm.Tool{}, opts.Tools...),
 		&updateAddressTool{task: t},
 		&declineAddressCaptureTool{task: t},
-	}
+	)
 
 	return t
+}
+
+func appendAddressExtraInstructions(instructions string, extraInstructions string) string {
+	if extra := strings.TrimSpace(extraInstructions); extra != "" {
+		return strings.TrimRight(instructions, "\n") + "\n" + extra
+	}
+	return instructions
+}
+
+func addressTextVariantInstructions(requireConfirmation bool, parts *beta.InstructionParts) string {
+	instructions := addressTextInstructions
+	if !requireConfirmation {
+		instructions = addressTextInstructionsWithoutConfirmation
+	}
+	return applyInstructionParts(instructions, addressPersona, parts)
+}
+
+func addressConfirmationRequired(ctx context.Context, requireConfirmation bool, set bool) bool {
+	if set {
+		return requireConfirmation
+	}
+	runCtx := agent.GetRunContext(ctx)
+	if runCtx == nil || runCtx.SpeechHandle == nil {
+		return true
+	}
+	return runCtx.SpeechHandle.InputDetails.Modality == "audio"
 }
 
 func (t *GetAddressTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), addressOnEnterPrompt())
+			_, _ = session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: addressOnEnterPrompt(),
+			})
 		}
 	}
 }
@@ -105,6 +163,12 @@ type updateAddressTool struct {
 
 func (t *updateAddressTool) ID() string   { return "update_address" }
 func (t *updateAddressTool) Name() string { return "update_address" }
+func (t *updateAddressTool) ToolFlags() llm.ToolFlag {
+	if t.task.RequireExplicitAsk {
+		return llm.ToolFlagIgnoreOnEnter
+	}
+	return llm.ToolFlagNone
+}
 func (t *updateAddressTool) Description() string {
 	return "Update the address provided by the user."
 }
@@ -144,18 +208,23 @@ func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, e
 		return "", err
 	}
 
-	addressFields := []string{params.StreetAddress}
-	if strings.TrimSpace(params.UnitNumber) != "" {
-		addressFields = append(addressFields, params.UnitNumber)
+	streetAddress := normalizeAddressField(params.StreetAddress)
+	unitNumber := normalizeAddressField(params.UnitNumber)
+	locality := normalizeAddressField(params.Locality)
+	country := normalizeAddressField(params.Country)
+
+	addressFields := []string{streetAddress}
+	if strings.TrimSpace(unitNumber) != "" {
+		addressFields = append(addressFields, unitNumber)
 	}
-	addressFields = append(addressFields, params.Locality, params.Country)
+	addressFields = append(addressFields, locality, country)
 	address := strings.Join(addressFields, " ")
 
 	t.task.currentAddress = address
 
-	if !t.task.RequireConfirmation {
+	if !addressConfirmationRequired(ctx, t.task.RequireConfirmation, t.task.RequireConfirmationSet) {
 		_ = t.task.Complete(&GetAddressResult{Address: address})
-		return "Address captured and task completed.", nil
+		return "", nil
 	}
 
 	t.task.setConfirmAddressTool(address)
