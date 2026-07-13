@@ -2035,6 +2035,7 @@ func workflowNameOptionsFromConfig(cfg AppConfig) (workflows.GetNameOptions, err
 		FirstName:              firstName,
 		MiddleName:             middleName,
 		LastName:               lastName,
+		NamePartsSet:           true,
 		NameFormat:             cfg.WorkflowNameFormat,
 		VerifySpelling:         cfg.WorkflowNameVerifySpelling,
 		RequireConfirmation:    cfg.WorkflowRequireConfirmation,
