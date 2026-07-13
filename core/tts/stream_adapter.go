@@ -171,6 +171,14 @@ func (w *streamAdapterWrapper) run() {
 		close(w.doneCh)
 	}()
 
+	go func() {
+		select {
+		case <-w.ctx.Done():
+			tokenizer.AClose()
+		case <-w.doneCh:
+		}
+	}()
+
 	// Stream text to tokenizer
 	helpers.Add(1)
 	go func() {
