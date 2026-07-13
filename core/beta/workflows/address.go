@@ -1326,7 +1326,7 @@ type confirmAddressTool struct {
 func (t *confirmAddressTool) ID() string   { return "confirm_address" }
 func (t *confirmAddressTool) Name() string { return "confirm_address" }
 func (t *confirmAddressTool) Description() string {
-	return "Call this tool when the user confirms that the address is correct."
+	return "Call after the user confirms the address is correct."
 }
 func (t *confirmAddressTool) Parameters() map[string]any {
 	return map[string]any{
@@ -1350,11 +1350,26 @@ func (t *confirmAddressTool) Execute(ctx context.Context, args string) (string, 
 
 	t.task.addressConfirmed = true
 	_ = t.task.Complete(&GetAddressResult{Address: t.address})
-	return "Address confirmed.", nil
+	return "", nil
 }
 
 func addressStaleConfirmationPrompt() string {
 	return "The address has changed since confirmation was requested, ask the user to confirm the updated address."
+}
+
+func addressFailureTarget(ctx context.Context, fallback *GetAddressTask) *GetAddressTask {
+	runCtx := agent.GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil {
+		return fallback
+	}
+	currentAgent, err := runCtx.Session.CurrentAgent()
+	if err != nil {
+		return fallback
+	}
+	if task, ok := currentAgent.(*GetAddressTask); ok {
+		return task
+	}
+	return fallback
 }
 
 type declineAddressCaptureTool struct {
@@ -1373,7 +1388,7 @@ func (t *declineAddressCaptureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"reason": map[string]any{"type": "string", "description": "A short explanation of why the user declined"},
+			"reason": map[string]any{"type": "string", "description": "A short explanation of why the user declined to provide the address"},
 		},
 		"required": []string{"reason"},
 	}
@@ -1387,6 +1402,6 @@ func (t *declineAddressCaptureTool) Execute(ctx context.Context, args string) (s
 		return "", err
 	}
 
-	_ = t.task.Fail(fmt.Errorf("couldn't get the address: %s", params.Reason))
-	return "Task failed.", nil
+	_ = addressFailureTarget(ctx, t.task).Fail(llm.NewToolError(fmt.Sprintf("couldn't get the address: %s", params.Reason)))
+	return "", nil
 }
