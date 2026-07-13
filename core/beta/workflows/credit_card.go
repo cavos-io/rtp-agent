@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -40,6 +42,39 @@ type GetCreditCardResult struct {
 	ExpirationDate string
 }
 
+type GetCardNumberOptions struct {
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	ChatContext            *llm.ChatContext
+}
+
+type GetSecurityCodeOptions struct {
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	ChatContext            *llm.ChatContext
+}
+
+type GetExpirationDateOptions struct {
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	ChatContext            *llm.ChatContext
+}
+
+type GetCreditCardOptions struct {
+	AgentOptions
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	ExtraInstructions      string
+	ChatContext            *llm.ChatContext
+	Tools                  []llm.Tool
+}
+
 type CardCaptureDeclinedError struct {
 	Reason string
 }
@@ -58,43 +93,62 @@ func (e *CardCollectionRestartError) Error() string {
 
 type GetCardNumberTask struct {
 	agent.AgentTask[*GetCardNumberResult]
-	RequireConfirmation bool
-	currentCardNumber   string
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	currentCardNumber      string
 }
 
 type GetSecurityCodeTask struct {
 	agent.AgentTask[*GetSecurityCodeResult]
-	RequireConfirmation bool
-	currentSecurityCode string
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	currentSecurityCode    string
 }
 
 type GetExpirationDateTask struct {
 	agent.AgentTask[*GetExpirationDateResult]
-	RequireConfirmation   bool
-	currentExpirationDate string
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	RequireExplicitAsk     bool
+	ExtraInstructions      string
+	currentExpirationDate  string
 }
 
 type GetCreditCardTask struct {
 	agent.AgentTask[*GetCreditCardResult]
-	RequireConfirmation bool
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+	ExtraInstructions      string
 }
 
 const CardNumberInstructions = `You are a single step in a broader process of collecting credit card information.
-You are solely responsible for collecting the card number.
+You are solely responsible for collecting the credit card number.
 Handle input as noisy voice transcription. Expect users to read the card number digit by digit.
-Normalize spoken digits silently: 'four' to 4, 'zero' or 'oh' to 0.
+Normalize spoken digits silently: 'four' → 4, 'zero' / 'oh' → 0.
 Filter out filler words or hesitations.
-If the user refuses to provide a number, call decline_card_capture().
-If the user wishes to start over the card collection process, call restart_card_collection().
+If the user refuses to provide a credit card number, call decline_card_capture().
+If the user wishes to start over the credit card collection process, call restart_card_collection().
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-Never repeat any sensitive information, such as the user's card number, back to the user.`
+Never repeat any sensitive information, such as the user's credit card number, back to the user.`
 
 const cardNumberConfirmationInstructions = "Call `confirm_card_number` once the user has repeated their card number."
+
+const cardNumberTextInstructions = `You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the credit card number.
+Handle input as typed text. Users may type the number with or without spaces or dashes (e.g. '4152 6374 8901 2345').
+If the user refuses to provide a credit card number, call decline_card_capture().
+If the user wishes to start over the credit card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's credit card number, back to the user.`
 
 const SecurityCodeInstructions = `You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card's security code.
 Handle input as noisy voice transcription. Expect users to read the security code digit by digit.
-Normalize spoken digits silently: 'four' to 4, 'zero' or 'oh' to 0.
+Normalize spoken digits silently: 'four' → 4, 'zero' / 'oh' → 0.
 Filter out filler words or hesitations.
 If the user refuses to provide a code, call decline_card_capture().
 If the user wishes to start over the card collection process, call restart_card_collection().
@@ -103,9 +157,17 @@ Never repeat any sensitive information, such as the user's security code, back t
 
 const securityCodeConfirmationInstructions = "Call `confirm_security_code` once the user has repeated their security code."
 
+const securityCodeTextInstructions = `You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card's security code.
+Handle input as typed text. Users will type the security code directly.
+If the user refuses to provide a code, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's security code, back to the user.`
+
 const ExpirationDateInstructions = `You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card's expiration date.
-Handle input as noisy voice transcription. Expect formats like April twenty five, oh four twenty five, four slash twenty five, or April 2025.
+Handle input as noisy voice transcription. Expect users to say the expiration date in formats like 'April twenty five', 'oh four twenty five', 'four slash twenty five', or 'April 2025'.
 Normalize spoken months and digits silently.
 Filter out filler words or hesitations.
 If the user refuses to provide a date, call decline_card_capture().
@@ -115,15 +177,47 @@ Never repeat any sensitive information, such as the user's expiration date, back
 
 const expirationDateConfirmationInstructions = "Call `confirm_expiration_date` once the user has repeated their expiration date."
 
-const CreditCardInstructions = `Collect the user's credit card information by running the cardholder name, card number, security code, and expiration date subtasks.
-Never repeat sensitive card details back to the user.`
+const expirationDateTextInstructions = `You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card's expiration date.
+Handle input as typed text. Expect users to type the expiration date in formats like '04/25', '04/2025', or 'April 2025'.
+If the user refuses to provide a date, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat any sensitive information, such as the user's expiration date, back to the user.`
+
+const CreditCardInstructions = "*none*"
+
+const cardholderNameExtraInstructions = "You are collecting the name on the credit card (the cardholder). " +
+	"When you ask the user to confirm a candidate name from earlier in the conversation, " +
+	"anchor the question to the card or cardholder so the user knows which name you mean - " +
+	"not just 'is it [name]?' in the abstract."
 
 func NewGetCardNumberTask(requireConfirmation ...bool) *GetCardNumberTask {
-	confirmationRequired := defaultCardConfirmation(requireConfirmation)
-	t := &GetCardNumberTask{
-		AgentTask:           *agent.NewAgentTask[*GetCardNumberResult](cardNumberInstructions(confirmationRequired)),
-		RequireConfirmation: confirmationRequired,
+	opts := GetCardNumberOptions{}
+	if len(requireConfirmation) > 0 {
+		opts.RequireConfirmation = requireConfirmation[0]
+		opts.RequireConfirmationSet = true
 	}
+	return NewGetCardNumberTaskWithOptions(opts)
+}
+
+func NewGetCardNumberTaskWithOptions(opts GetCardNumberOptions) *GetCardNumberTask {
+	confirmationRequired := defaultCardConfirmationOption(opts.RequireConfirmation, opts.RequireConfirmationSet)
+	instructions := cardNumberInstructions(confirmationRequired, opts.ExtraInstructions)
+	t := &GetCardNumberTask{
+		AgentTask:              *agent.NewAgentTask[*GetCardNumberResult](instructions),
+		RequireConfirmation:    confirmationRequired,
+		RequireConfirmationSet: opts.RequireConfirmationSet,
+		RequireExplicitAsk:     opts.RequireExplicitAsk,
+		ExtraInstructions:      opts.ExtraInstructions,
+	}
+	if opts.ChatContext != nil {
+		t.ChatCtx = opts.ChatContext.Copy()
+	}
+	t.InstructionVariants = llm.NewInstructions(
+		instructions,
+		cardNumberTextVariantInstructions(opts.RequireConfirmationSet && opts.RequireConfirmation, opts.ExtraInstructions),
+	)
 
 	t.Agent.Tools = []llm.Tool{
 		&recordCardNumberTool{task: t},
@@ -135,11 +229,31 @@ func NewGetCardNumberTask(requireConfirmation ...bool) *GetCardNumberTask {
 }
 
 func NewGetSecurityCodeTask(requireConfirmation ...bool) *GetSecurityCodeTask {
-	confirmationRequired := defaultCardConfirmation(requireConfirmation)
-	t := &GetSecurityCodeTask{
-		AgentTask:           *agent.NewAgentTask[*GetSecurityCodeResult](securityCodeInstructions(confirmationRequired)),
-		RequireConfirmation: confirmationRequired,
+	opts := GetSecurityCodeOptions{}
+	if len(requireConfirmation) > 0 {
+		opts.RequireConfirmation = requireConfirmation[0]
+		opts.RequireConfirmationSet = true
 	}
+	return NewGetSecurityCodeTaskWithOptions(opts)
+}
+
+func NewGetSecurityCodeTaskWithOptions(opts GetSecurityCodeOptions) *GetSecurityCodeTask {
+	confirmationRequired := defaultCardConfirmationOption(opts.RequireConfirmation, opts.RequireConfirmationSet)
+	instructions := securityCodeInstructions(confirmationRequired, opts.ExtraInstructions)
+	t := &GetSecurityCodeTask{
+		AgentTask:              *agent.NewAgentTask[*GetSecurityCodeResult](instructions),
+		RequireConfirmation:    confirmationRequired,
+		RequireConfirmationSet: opts.RequireConfirmationSet,
+		RequireExplicitAsk:     opts.RequireExplicitAsk,
+		ExtraInstructions:      opts.ExtraInstructions,
+	}
+	if opts.ChatContext != nil {
+		t.ChatCtx = opts.ChatContext.Copy()
+	}
+	t.InstructionVariants = llm.NewInstructions(
+		instructions,
+		securityCodeTextVariantInstructions(opts.RequireConfirmationSet && opts.RequireConfirmation, opts.ExtraInstructions),
+	)
 
 	t.Agent.Tools = []llm.Tool{
 		&updateSecurityCodeTool{task: t},
@@ -151,11 +265,31 @@ func NewGetSecurityCodeTask(requireConfirmation ...bool) *GetSecurityCodeTask {
 }
 
 func NewGetExpirationDateTask(requireConfirmation ...bool) *GetExpirationDateTask {
-	confirmationRequired := defaultCardConfirmation(requireConfirmation)
-	t := &GetExpirationDateTask{
-		AgentTask:           *agent.NewAgentTask[*GetExpirationDateResult](expirationDateInstructions(confirmationRequired)),
-		RequireConfirmation: confirmationRequired,
+	opts := GetExpirationDateOptions{}
+	if len(requireConfirmation) > 0 {
+		opts.RequireConfirmation = requireConfirmation[0]
+		opts.RequireConfirmationSet = true
 	}
+	return NewGetExpirationDateTaskWithOptions(opts)
+}
+
+func NewGetExpirationDateTaskWithOptions(opts GetExpirationDateOptions) *GetExpirationDateTask {
+	confirmationRequired := defaultCardConfirmationOption(opts.RequireConfirmation, opts.RequireConfirmationSet)
+	instructions := expirationDateInstructions(confirmationRequired, opts.ExtraInstructions)
+	t := &GetExpirationDateTask{
+		AgentTask:              *agent.NewAgentTask[*GetExpirationDateResult](instructions),
+		RequireConfirmation:    confirmationRequired,
+		RequireConfirmationSet: opts.RequireConfirmationSet,
+		RequireExplicitAsk:     opts.RequireExplicitAsk,
+		ExtraInstructions:      opts.ExtraInstructions,
+	}
+	if opts.ChatContext != nil {
+		t.ChatCtx = opts.ChatContext.Copy()
+	}
+	t.InstructionVariants = llm.NewInstructions(
+		instructions,
+		expirationDateTextVariantInstructions(opts.RequireConfirmationSet && opts.RequireConfirmation, opts.ExtraInstructions),
+	)
 
 	t.Agent.Tools = []llm.Tool{
 		&updateExpirationDateTool{task: t},
@@ -167,74 +301,145 @@ func NewGetExpirationDateTask(requireConfirmation ...bool) *GetExpirationDateTas
 }
 
 func NewGetCreditCardTask(requireConfirmation ...bool) *GetCreditCardTask {
-	return &GetCreditCardTask{
-		AgentTask:           *agent.NewAgentTask[*GetCreditCardResult](CreditCardInstructions),
-		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
+	opts := GetCreditCardOptions{}
+	if len(requireConfirmation) > 0 {
+		opts.RequireConfirmation = requireConfirmation[0]
+		opts.RequireConfirmationSet = true
 	}
+	return NewGetCreditCardTaskWithOptions(opts)
 }
 
-func defaultCardConfirmation(requireConfirmation []bool) bool {
-	if len(requireConfirmation) > 0 {
-		return requireConfirmation[0]
+func NewGetCreditCardTaskWithOptions(opts GetCreditCardOptions) *GetCreditCardTask {
+	t := &GetCreditCardTask{
+		AgentTask:              *agent.NewAgentTask[*GetCreditCardResult](CreditCardInstructions),
+		RequireConfirmation:    defaultCardConfirmationOption(opts.RequireConfirmation, opts.RequireConfirmationSet),
+		RequireConfirmationSet: opts.RequireConfirmationSet,
+		ExtraInstructions:      opts.ExtraInstructions,
+	}
+	if opts.ChatContext != nil {
+		t.ChatCtx = opts.ChatContext.Copy()
+	}
+	applyAgentOptions(&t.Agent, opts.AgentOptions)
+	t.Agent.Tools = append([]llm.Tool{}, opts.Tools...)
+	return t
+}
+
+func defaultCardConfirmationOption(requireConfirmation bool, set bool) bool {
+	if set {
+		return requireConfirmation
 	}
 	return true
 }
 
-func cardNumberInstructions(requireConfirmation bool) string {
-	if !requireConfirmation {
-		return CardNumberInstructions
+func cardConfirmationRequired(ctx context.Context, requireConfirmation bool, set bool) bool {
+	if set {
+		return requireConfirmation
 	}
-	return CardNumberInstructions + "\n" + cardNumberConfirmationInstructions
+	runCtx := agent.GetRunContext(ctx)
+	if runCtx == nil || runCtx.SpeechHandle == nil {
+		return true
+	}
+	return runCtx.SpeechHandle.InputDetails.Modality == "audio"
 }
 
-func securityCodeInstructions(requireConfirmation bool) string {
+func cardNumberInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := CardNumberInstructions
 	if !requireConfirmation {
-		return SecurityCodeInstructions
+		return appendCardExtraInstructions(instructions, extraInstructions)
 	}
-	return SecurityCodeInstructions + "\n" + securityCodeConfirmationInstructions
+	instructions += "\n" + cardNumberConfirmationInstructions
+	return appendCardExtraInstructions(instructions, extraInstructions)
 }
 
-func expirationDateInstructions(requireConfirmation bool) string {
-	if !requireConfirmation {
-		return ExpirationDateInstructions
+func cardNumberTextVariantInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := cardNumberTextInstructions
+	if requireConfirmation {
+		instructions += "\n" + cardNumberConfirmationInstructions
 	}
-	return ExpirationDateInstructions + "\n" + expirationDateConfirmationInstructions
+	return appendCardExtraInstructions(instructions, extraInstructions)
+}
+
+func securityCodeInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := SecurityCodeInstructions
+	if !requireConfirmation {
+		return appendCardExtraInstructions(instructions, extraInstructions)
+	}
+	instructions += "\n" + securityCodeConfirmationInstructions
+	return appendCardExtraInstructions(instructions, extraInstructions)
+}
+
+func securityCodeTextVariantInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := securityCodeTextInstructions
+	if requireConfirmation {
+		instructions += "\n" + securityCodeConfirmationInstructions
+	}
+	return appendCardExtraInstructions(instructions, extraInstructions)
+}
+
+func expirationDateInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := ExpirationDateInstructions
+	if !requireConfirmation {
+		return appendCardExtraInstructions(instructions, extraInstructions)
+	}
+	instructions += "\n" + expirationDateConfirmationInstructions
+	return appendCardExtraInstructions(instructions, extraInstructions)
+}
+
+func expirationDateTextVariantInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := expirationDateTextInstructions
+	if requireConfirmation {
+		instructions += "\n" + expirationDateConfirmationInstructions
+	}
+	return appendCardExtraInstructions(instructions, extraInstructions)
+}
+
+func appendCardExtraInstructions(instructions string, extraInstructions string) string {
+	if extra := strings.TrimSpace(extraInstructions); extra != "" {
+		return instructions + "\n" + extra
+	}
+	return instructions
 }
 
 func (t *GetCardNumberTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), cardNumberOnEnterPrompt())
+			_, _ = session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: cardNumberOnEnterPrompt(),
+			})
 		}
 	}
 }
 
 func cardNumberOnEnterPrompt() string {
-	return "Ask for the user's credit card number."
+	return "Get the user's credit card number. First scan the conversation - if a credit card number was already given (e.g. the user volunteered it before the task started), use it via update_card_number rather than re-asking. Only ask fresh when no credit card number is in the conversation yet."
 }
 
 func (t *GetSecurityCodeTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), securityCodeOnEnterPrompt())
+			_, _ = session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: securityCodeOnEnterPrompt(),
+			})
 		}
 	}
 }
 
 func securityCodeOnEnterPrompt() string {
-	return "Collect the user's card's security code."
+	return "Get the user's card security code. First scan the conversation - if a code was already given, use it via update_security_code rather than re-asking. Only ask fresh when no code is in the conversation yet."
 }
 
 func (t *GetExpirationDateTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), expirationDateOnEnterPrompt())
+			_, _ = session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: expirationDateOnEnterPrompt(),
+			})
 		}
 	}
 }
 
 func expirationDateOnEnterPrompt() string {
-	return "Collect the user's card's expiration date."
+	return "Get the user's card expiration date. First scan the conversation - if an expiration date was already given, use it via update_expiration_date rather than re-asking. Only ask fresh when no date is in the conversation yet."
 }
 
 func (t *GetCreditCardTask) OnEnter() {
@@ -275,25 +480,52 @@ func (t *GetCreditCardTask) runCreditCardCollection(ctx context.Context, buildGr
 
 func (t *GetCreditCardTask) buildTaskGroup() *TaskGroup {
 	group := NewTaskGroup(true, false)
+	if t.ChatCtx != nil {
+		group.ChatCtx = t.ChatCtx.Copy()
+	}
+	group.Add("card_number_task", "Collects the user's card number", func() agent.AgentInterface {
+		return NewGetCardNumberTaskWithOptions(GetCardNumberOptions{
+			RequireConfirmation:    t.RequireConfirmation,
+			RequireConfirmationSet: t.RequireConfirmationSet,
+			ExtraInstructions:      t.ExtraInstructions,
+			ChatContext:            t.ChatCtx,
+		})
+	})
+	group.Add("expiration_date_task", "Collects the card's expiration date", func() agent.AgentInterface {
+		return NewGetExpirationDateTaskWithOptions(GetExpirationDateOptions{
+			RequireConfirmation:    t.RequireConfirmation,
+			RequireConfirmationSet: t.RequireConfirmationSet,
+			ExtraInstructions:      t.ExtraInstructions,
+			ChatContext:            t.ChatCtx,
+		})
+	})
+	group.Add("security_code_task", "Collects the card's security code", func() agent.AgentInterface {
+		return NewGetSecurityCodeTaskWithOptions(GetSecurityCodeOptions{
+			RequireConfirmation:    t.RequireConfirmation,
+			RequireConfirmationSet: t.RequireConfirmationSet,
+			ExtraInstructions:      t.ExtraInstructions,
+			ChatContext:            t.ChatCtx,
+		})
+	})
 	group.Add("cardholder_name_task", "Collects the cardholder's full name", func() agent.AgentInterface {
 		return NewGetNameTask(GetNameOptions{
 			FirstName:              true,
 			LastName:               true,
-			ExtraInstructions:      "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+			ExtraInstructions:      cardholderNameExtraInstructionsWithExtra(t.ExtraInstructions),
 			RequireConfirmation:    t.RequireConfirmation,
-			RequireConfirmationSet: true,
+			RequireConfirmationSet: t.RequireConfirmationSet,
+			RequireExplicitAsk:     true,
+			ChatContext:            t.ChatCtx,
 		})
 	})
-	group.Add("card_number_task", "Collects the user's card number", func() agent.AgentInterface {
-		return NewGetCardNumberTask(t.RequireConfirmation)
-	})
-	group.Add("security_code_task", "Collects the card's security code", func() agent.AgentInterface {
-		return NewGetSecurityCodeTask(t.RequireConfirmation)
-	})
-	group.Add("expiration_date_task", "Collects the card's expiration date", func() agent.AgentInterface {
-		return NewGetExpirationDateTask(t.RequireConfirmation)
-	})
 	return group
+}
+
+func cardholderNameExtraInstructionsWithExtra(extraInstructions string) string {
+	if extra := strings.TrimSpace(extraInstructions); extra != "" {
+		return extra + "\n\n" + cardholderNameExtraInstructions
+	}
+	return cardholderNameExtraInstructions
 }
 
 func (t *GetCreditCardTask) completeCreditCardFromTaskResults(results map[string]any) error {
@@ -314,7 +546,7 @@ func (t *GetCreditCardTask) completeCreditCardFromTaskResults(results map[string
 		return fmt.Errorf("expiration_date_task result = %T, want *GetExpirationDateResult", results["expiration_date_task"])
 	}
 
-	cardholderName := strings.TrimSpace(strings.Join([]string{name.FirstName, name.MiddleName, name.LastName}, " "))
+	cardholderName := strings.TrimSpace(strings.Join([]string{name.FirstName, name.LastName}, " "))
 	for strings.Contains(cardholderName, "  ") {
 		cardholderName = strings.ReplaceAll(cardholderName, "  ", " ")
 	}
@@ -349,16 +581,22 @@ type recordCardNumberTool struct {
 	task *GetCardNumberTask
 }
 
-func (t *recordCardNumberTool) ID() string   { return "record_card_number" }
-func (t *recordCardNumberTool) Name() string { return "record_card_number" }
+func (t *recordCardNumberTool) ID() string   { return "update_card_number" }
+func (t *recordCardNumberTool) Name() string { return "update_card_number" }
+func (t *recordCardNumberTool) ToolFlags() llm.ToolFlag {
+	if t.task.RequireExplicitAsk {
+		return llm.ToolFlagIgnoreOnEnter
+	}
+	return llm.ToolFlagNone
+}
 func (t *recordCardNumberTool) Description() string {
-	return "Record the user's credit card number once the entire number has been given."
+	return "Call to record the user's card number. Only call once the entire number has been given, do not call in increments."
 }
 func (t *recordCardNumberTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"card_number": map[string]any{"type": "string", "description": "The credit card number with no dashes or spaces"},
+			"card_number": map[string]any{"type": "string", "description": "The credit card number as a string with no dashes or spaces"},
 		},
 		"required": []string{"card_number"},
 	}
@@ -372,7 +610,7 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 		return "", err
 	}
 
-	cardNumber := normalizeCardDigits(params.CardNumber)
+	cardNumber := normalizeCardDigits(stripSpokenCardNumberLengthLabel(params.CardNumber))
 	if len(cardNumber) < 13 || len(cardNumber) > 19 {
 		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
@@ -383,7 +621,7 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 	}
 
 	t.task.currentCardNumber = cardNumber
-	if !t.task.RequireConfirmation {
+	if !cardConfirmationRequired(ctx, t.task.RequireConfirmation, t.task.RequireConfirmationSet) {
 		if !validateCardNumberLuhn(cardNumber) {
 			if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 				_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
@@ -393,11 +631,11 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 			return "", nil
 		}
 		t.task.completeCardNumber(cardNumber)
-		return "Card number captured and task completed.", nil
+		return "", nil
 	}
 
 	t.task.setConfirmCardNumberTool(cardNumber)
-	return "The card number has been updated.\nAsk them to repeat the number, do not repeat the number back to them.", nil
+	return "The card number has been updated.\nAsk them to repeat the number, do not repeat the number back to them.\n", nil
 }
 
 func (t *GetCardNumberTask) setConfirmCardNumberTool(cardNumber string) {
@@ -418,14 +656,20 @@ type updateSecurityCodeTool struct {
 
 func (t *updateSecurityCodeTool) ID() string   { return "update_security_code" }
 func (t *updateSecurityCodeTool) Name() string { return "update_security_code" }
+func (t *updateSecurityCodeTool) ToolFlags() llm.ToolFlag {
+	if t.task.RequireExplicitAsk {
+		return llm.ToolFlagIgnoreOnEnter
+	}
+	return llm.ToolFlagNone
+}
 func (t *updateSecurityCodeTool) Description() string {
-	return "Update the card security code."
+	return "Call to update the card's security code."
 }
 func (t *updateSecurityCodeTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"security_code": map[string]any{"type": "string", "description": "The card security code, 3-4 digits and possibly with leading zeroes"},
+			"security_code": map[string]any{"type": "string", "description": "The card's security code (3-4 digits, may have leading zeros)."},
 		},
 		"required": []string{"security_code"},
 	}
@@ -439,7 +683,7 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 		return "", err
 	}
 
-	securityCode := strings.TrimSpace(params.SecurityCode)
+	securityCode := normalizeCardDigits(stripSpokenSecurityCodeLengthLabel(params.SecurityCode))
 	if !validSecurityCode(securityCode) {
 		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
@@ -450,13 +694,13 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 	}
 
 	t.task.currentSecurityCode = securityCode
-	if !t.task.RequireConfirmation {
+	if !cardConfirmationRequired(ctx, t.task.RequireConfirmation, t.task.RequireConfirmationSet) {
 		t.task.completeSecurityCode(securityCode)
-		return "Security code captured and task completed.", nil
+		return "", nil
 	}
 
 	t.task.setConfirmSecurityCodeTool(securityCode)
-	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.", nil
+	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat the code.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.\n", nil
 }
 
 func invalidSecurityCodePrompt() string {
@@ -481,50 +725,53 @@ type updateExpirationDateTool struct {
 
 func (t *updateExpirationDateTool) ID() string   { return "update_expiration_date" }
 func (t *updateExpirationDateTool) Name() string { return "update_expiration_date" }
+func (t *updateExpirationDateTool) ToolFlags() llm.ToolFlag {
+	if t.task.RequireExplicitAsk {
+		return llm.ToolFlagIgnoreOnEnter
+	}
+	return llm.ToolFlagNone
+}
 func (t *updateExpirationDateTool) Description() string {
-	return "Update the card expiration date."
+	return "Call to update the card's expiration date. Collect both the numerical month and year."
 }
 func (t *updateExpirationDateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"expiration_month": map[string]any{"type": "integer", "description": "The numerical expiration month, for example 4 for April"},
-			"expiration_year":  map[string]any{"type": "integer", "description": "The two-digit expiration year, for example 35 for 2035"},
+			"expiration_month": map[string]any{"type": "integer", "description": "The numerical expiration month of the card, example: '04' for April"},
+			"expiration_year":  map[string]any{"type": "integer", "description": "The numerical expiration year of the card shortened to the last two digits, for example, '35' for 2035"},
 		},
 		"required": []string{"expiration_month", "expiration_year"},
 	}
 }
 
 func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		ExpirationMonth int `json:"expiration_month"`
-		ExpirationYear  int `json:"expiration_year"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
+	month, year, err := parseExpirationDateArgs([]byte(args), "expiration_month", "expiration_year")
+	if err != nil {
 		return "", err
 	}
-	if params.ExpirationMonth < 1 || params.ExpirationMonth > 12 {
+	if month < 1 || month > 12 {
 		t.task.promptInvalidExpirationDate(invalidExpirationMonthPrompt())
 		return "", nil
 	}
-	if params.ExpirationYear < 0 || params.ExpirationYear > 99 {
+	if year < 0 || year > 99 {
 		t.task.promptInvalidExpirationDate(invalidExpirationYearPrompt())
 		return "", nil
 	}
-	if expirationDateExpired(params.ExpirationMonth, params.ExpirationYear, time.Now()) {
+	if expirationDateExpired(month, year, time.Now()) {
 		t.task.promptInvalidExpirationDate(expiredExpirationDatePrompt())
 		return "", nil
 	}
 
-	expirationDate := formatExpirationDate(params.ExpirationMonth, params.ExpirationYear)
+	expirationDate := formatExpirationDate(month, year)
 	t.task.currentExpirationDate = expirationDate
-	if !t.task.RequireConfirmation {
+	if !cardConfirmationRequired(ctx, t.task.RequireConfirmation, t.task.RequireConfirmationSet) {
 		t.task.completeExpirationDate(expirationDate)
-		return "Expiration date captured and task completed.", nil
+		return "", nil
 	}
 
-	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
-	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.", nil
+	t.task.setConfirmExpirationDateTool(month, year, expirationDate)
+	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat the expiration date.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.\n", nil
 }
 
 func (t *GetExpirationDateTask) promptInvalidExpirationDate(prompt string) {
@@ -572,13 +819,13 @@ type confirmCardNumberTool struct {
 func (t *confirmCardNumberTool) ID() string   { return "confirm_card_number" }
 func (t *confirmCardNumberTool) Name() string { return "confirm_card_number" }
 func (t *confirmCardNumberTool) Description() string {
-	return "Confirm the card number after the user repeats it."
+	return "Call after the user repeats their card number for confirmation."
 }
 func (t *confirmCardNumberTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"repeated_card_number": map[string]any{"type": "string", "description": "The card number repeated by the user"},
+			"repeated_card_number": map[string]any{"type": "string", "description": "The card number repeated by the user as a string"},
 		},
 		"required": []string{"repeated_card_number"},
 	}
@@ -591,7 +838,15 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return "", err
 	}
-	repeated := normalizeCardDigits(params.RepeatedCardNumber)
+	if t.cardNumber != t.task.currentCardNumber {
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: cardNumberStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
+	}
+	repeated := normalizeCardDigits(stripSpokenCardNumberLengthLabel(params.RepeatedCardNumber))
 	if repeated != t.cardNumber {
 		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
@@ -609,11 +864,15 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 		return "", nil
 	}
 	t.task.completeCardNumber(t.cardNumber)
-	return "Card number confirmed.", nil
+	return "", nil
 }
 
 func cardNumberMismatchPrompt() string {
 	return "The repeated card number does not match, ask the user to try again."
+}
+
+func cardNumberStaleConfirmationPrompt() string {
+	return "The card number has changed since confirmation was requested, ask the user to confirm the updated number."
 }
 
 func invalidCardNumberPrompt() string {
@@ -632,7 +891,7 @@ type confirmSecurityCodeTool struct {
 func (t *confirmSecurityCodeTool) ID() string   { return "confirm_security_code" }
 func (t *confirmSecurityCodeTool) Name() string { return "confirm_security_code" }
 func (t *confirmSecurityCodeTool) Description() string {
-	return "Confirm the security code after the user repeats it."
+	return "Call after the user repeats their security code for confirmation."
 }
 func (t *confirmSecurityCodeTool) Parameters() map[string]any {
 	return map[string]any{
@@ -651,7 +910,15 @@ func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (str
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(params.RepeatedSecurityCode) != t.securityCode {
+	if t.securityCode != t.task.currentSecurityCode {
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: securityCodeStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
+	}
+	if normalizeCardDigits(stripSpokenSecurityCodeLengthLabel(params.RepeatedSecurityCode)) != t.securityCode {
 		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
 				Instructions: securityCodeMismatchPrompt(),
@@ -660,11 +927,15 @@ func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (str
 		return "", nil
 	}
 	t.task.completeSecurityCode(t.securityCode)
-	return "Security code confirmed.", nil
+	return "", nil
 }
 
 func securityCodeMismatchPrompt() string {
 	return "The repeated security code does not match, ask the user to try again."
+}
+
+func securityCodeStaleConfirmationPrompt() string {
+	return "The security code has changed since confirmation was requested, ask the user to confirm the updated code."
 }
 
 type confirmExpirationDateTool struct {
@@ -677,7 +948,7 @@ type confirmExpirationDateTool struct {
 func (t *confirmExpirationDateTool) ID() string   { return "confirm_expiration_date" }
 func (t *confirmExpirationDateTool) Name() string { return "confirm_expiration_date" }
 func (t *confirmExpirationDateTool) Description() string {
-	return "Confirm the expiration date after the user repeats it."
+	return "Call after the user repeats their expiration date for confirmation."
 }
 func (t *confirmExpirationDateTool) Parameters() map[string]any {
 	return map[string]any{
@@ -691,14 +962,19 @@ func (t *confirmExpirationDateTool) Parameters() map[string]any {
 }
 
 func (t *confirmExpirationDateTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		RepeatedExpirationMonth int `json:"repeated_expiration_month"`
-		RepeatedExpirationYear  int `json:"repeated_expiration_year"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
+	month, year, err := parseExpirationDateArgs([]byte(args), "repeated_expiration_month", "repeated_expiration_year")
+	if err != nil {
 		return "", err
 	}
-	if params.RepeatedExpirationMonth != t.expirationMonth || params.RepeatedExpirationYear != t.expirationYear {
+	if t.expirationDate != t.task.currentExpirationDate {
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: expirationDateStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
+	}
+	if month != t.expirationMonth || year != t.expirationYear {
 		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
 			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
 				Instructions: expirationDateMismatchPrompt(),
@@ -707,15 +983,494 @@ func (t *confirmExpirationDateTool) Execute(ctx context.Context, args string) (s
 		return "", nil
 	}
 	t.task.completeExpirationDate(t.expirationDate)
-	return "Expiration date confirmed.", nil
+	return "", nil
 }
 
 func expirationDateMismatchPrompt() string {
 	return "The repeated expiration date does not match, ask the user to try again."
 }
 
+func expirationDateStaleConfirmationPrompt() string {
+	return "The expiration date has changed since confirmation was requested, ask the user to confirm the updated date."
+}
+
+func parseExpirationDateArgs(args []byte, monthKey string, yearKey string) (int, int, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(args, &params); err != nil {
+		return 0, 0, err
+	}
+	month, err := parseExpirationNumber(params[monthKey], true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s: %w", monthKey, err)
+	}
+	year, err := parseExpirationNumber(params[yearKey], false)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s: %w", yearKey, err)
+	}
+	return month, year, nil
+}
+
+func parseExpirationNumber(raw json.RawMessage, allowMonthName bool) (int, error) {
+	var number int
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number, nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, err
+	}
+	text = normalizeSpokenExpirationText(text)
+	if value, err := strconv.Atoi(text); err == nil {
+		return value, nil
+	}
+	if allowMonthName {
+		if value, ok := expirationMonthNames[text]; ok {
+			return value, nil
+		}
+	}
+	if !allowMonthName {
+		if value, ok := parseSpokenExpirationYearDigits(text); ok {
+			return value, nil
+		}
+	}
+	if value, ok := parseSpokenExpirationNumber(text); ok {
+		return value, nil
+	}
+	return 0, fmt.Errorf("invalid expiration number %q", text)
+}
+
+func parseSpokenExpirationYearDigits(text string) (int, bool) {
+	tokens := strings.Fields(strings.ReplaceAll(text, "-", " "))
+	if len(tokens) != 4 {
+		return 0, false
+	}
+	value := 0
+	for _, token := range tokens {
+		digit, ok := spokenDOBDigit(token)
+		if !ok {
+			return 0, false
+		}
+		value = value*10 + digit
+	}
+	if value >= 2000 && value < 2100 {
+		return value % 100, true
+	}
+	return 0, false
+}
+
+func normalizeSpokenExpirationText(text string) string {
+	parts := strings.Fields(strings.ToLower(strings.TrimSpace(text)))
+	if len(parts) == 0 {
+		return ""
+	}
+	parts = trimTrailingSpokenExpirationFiller(parts)
+	filtered := parts[:0]
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		part = strings.Trim(part, ".,!?;:")
+		if part == "" {
+			continue
+		}
+		if isSpokenExpirationSplitContractedLabel(part) && i+1 < len(parts) && strings.Trim(parts[i+1], ".,!?;:") == "s" {
+			i++
+			continue
+		}
+		if _, ok := spokenExpirationFillers[part]; ok {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, " ")
+}
+
+func isSpokenExpirationSplitContractedLabel(part string) bool {
+	switch part {
+	case "card", "date", "expiration", "month", "year":
+		return true
+	default:
+		return false
+	}
+}
+
+func trimTrailingSpokenExpirationFiller(parts []string) []string {
+	clean := func(part string) string {
+		return strings.Trim(part, ".,!?;:")
+	}
+	if trimmed := trimTrailingSpokenExpirationSignoffParts(parts, clean); len(trimmed) != len(parts) {
+		return trimmed
+	}
+	trailing := map[string]struct{}{
+		"done": {}, "ok": {}, "okay": {}, "please": {}, "thanks": {}, "thank": {}, "you": {},
+	}
+	if len(parts) >= 2 &&
+		clean(parts[len(parts)-1]) == "done" &&
+		clean(parts[len(parts)-2]) == "all" {
+		parts = parts[:len(parts)-2]
+	}
+	for len(parts) > 0 {
+		last := clean(parts[len(parts)-1])
+		if last == "you" && len(parts) >= 2 && clean(parts[len(parts)-2]) == "for" {
+			break
+		}
+		if _, ok := trailing[last]; !ok {
+			break
+		}
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) >= 5 &&
+		(clean(parts[len(parts)-5]) == "that's" || clean(parts[len(parts)-5]) == "thats") &&
+		(clean(parts[len(parts)-4]) == "it" || clean(parts[len(parts)-4]) == "all") &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 4 &&
+		(clean(parts[len(parts)-4]) == "that's" || clean(parts[len(parts)-4]) == "thats") &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-4]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "is" &&
+		(clean(parts[len(parts)-4]) == "it" || clean(parts[len(parts)-4]) == "all") &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 5 &&
+		clean(parts[len(parts)-5]) == "that" &&
+		clean(parts[len(parts)-4]) == "is" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 7 &&
+		clean(parts[len(parts)-7]) == "that" &&
+		clean(parts[len(parts)-6]) == "will" &&
+		clean(parts[len(parts)-5]) == "be" &&
+		(clean(parts[len(parts)-4]) == "it" || clean(parts[len(parts)-4]) == "all") &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-7]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "will" &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 6 &&
+		(clean(parts[len(parts)-6]) == "that'll" || clean(parts[len(parts)-6]) == "thatll") &&
+		clean(parts[len(parts)-5]) == "be" &&
+		(clean(parts[len(parts)-4]) == "it" || clean(parts[len(parts)-4]) == "all") &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 7 &&
+		clean(parts[len(parts)-7]) == "that" &&
+		clean(parts[len(parts)-6]) == "ll" &&
+		clean(parts[len(parts)-5]) == "be" &&
+		(clean(parts[len(parts)-4]) == "it" || clean(parts[len(parts)-4]) == "all") &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-7]
+	}
+	if len(parts) >= 3 &&
+		clean(parts[len(parts)-3]) == "for" &&
+		clean(parts[len(parts)-2]) == "the" &&
+		clean(parts[len(parts)-1]) == "day" {
+		return parts[:len(parts)-3]
+	}
+	if len(parts) >= 5 &&
+		(clean(parts[len(parts)-5]) == "that'll" || clean(parts[len(parts)-5]) == "thatll") &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "ll" &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 4 &&
+		(clean(parts[len(parts)-4]) == "that's" || clean(parts[len(parts)-4]) == "thats") &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		(clean(parts[len(parts)-1]) == "now" || clean(parts[len(parts)-1]) == "me" || clean(parts[len(parts)-1]) == "today") {
+		return parts[:len(parts)-4]
+	}
+	if len(parts) >= 5 &&
+		(clean(parts[len(parts)-5]) == "that'll" || clean(parts[len(parts)-5]) == "thatll") &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		(clean(parts[len(parts)-1]) == "now" || clean(parts[len(parts)-1]) == "me" || clean(parts[len(parts)-1]) == "today") {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "will" &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		(clean(parts[len(parts)-1]) == "now" || clean(parts[len(parts)-1]) == "me" || clean(parts[len(parts)-1]) == "today") {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 5 &&
+		clean(parts[len(parts)-5]) == "that" &&
+		clean(parts[len(parts)-4]) == "is" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		(clean(parts[len(parts)-1]) == "now" || clean(parts[len(parts)-1]) == "me" || clean(parts[len(parts)-1]) == "today") {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 2 &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-2]
+	}
+	if len(parts) >= 2 &&
+		clean(parts[len(parts)-1]) == "it" &&
+		(clean(parts[len(parts)-2]) == "that's" || clean(parts[len(parts)-2]) == "thats") {
+		return parts[:len(parts)-2]
+	}
+	if len(parts) >= 2 &&
+		clean(parts[len(parts)-1]) == "all" &&
+		(clean(parts[len(parts)-2]) == "that's" || clean(parts[len(parts)-2]) == "thats") {
+		return parts[:len(parts)-2]
+	}
+	if len(parts) >= 3 &&
+		(clean(parts[len(parts)-1]) == "it" || clean(parts[len(parts)-1]) == "all") &&
+		clean(parts[len(parts)-2]) == "is" &&
+		clean(parts[len(parts)-3]) == "that" {
+		return parts[:len(parts)-3]
+	}
+	if len(parts) >= 3 &&
+		(clean(parts[len(parts)-3]) == "that'll" || clean(parts[len(parts)-3]) == "thatll") &&
+		clean(parts[len(parts)-2]) == "be" &&
+		(clean(parts[len(parts)-1]) == "it" || clean(parts[len(parts)-1]) == "all") {
+		return parts[:len(parts)-3]
+	}
+	if len(parts) >= 4 &&
+		clean(parts[len(parts)-4]) == "that" &&
+		clean(parts[len(parts)-3]) == "will" &&
+		clean(parts[len(parts)-2]) == "be" &&
+		(clean(parts[len(parts)-1]) == "it" || clean(parts[len(parts)-1]) == "all") {
+		return parts[:len(parts)-4]
+	}
+	if len(parts) >= 4 &&
+		clean(parts[len(parts)-4]) == "that" &&
+		clean(parts[len(parts)-3]) == "ll" &&
+		clean(parts[len(parts)-2]) == "be" &&
+		(clean(parts[len(parts)-1]) == "it" || clean(parts[len(parts)-1]) == "all") {
+		return parts[:len(parts)-4]
+	}
+	return parts
+}
+
+func trimTrailingSpokenExpirationSignoffParts(parts []string, clean func(string) string) []string {
+	if len(parts) >= 5 &&
+		clean(parts[len(parts)-5]) == "that" &&
+		clean(parts[len(parts)-4]) == "is" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 5 &&
+		clean(parts[len(parts)-5]) == "that" &&
+		clean(parts[len(parts)-4]) == "s" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 4 &&
+		(clean(parts[len(parts)-4]) == "that's" || clean(parts[len(parts)-4]) == "thats") &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-4]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "will" &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 5 &&
+		(clean(parts[len(parts)-5]) == "that'll" || clean(parts[len(parts)-5]) == "thatll") &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-5]
+	}
+	if len(parts) >= 6 &&
+		clean(parts[len(parts)-6]) == "that" &&
+		clean(parts[len(parts)-5]) == "ll" &&
+		clean(parts[len(parts)-4]) == "be" &&
+		(clean(parts[len(parts)-3]) == "it" || clean(parts[len(parts)-3]) == "all") &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-6]
+	}
+	if len(parts) >= 2 &&
+		clean(parts[len(parts)-2]) == "for" &&
+		isCardDigitSignoffObject(clean(parts[len(parts)-1])) {
+		return parts[:len(parts)-2]
+	}
+	return parts
+}
+
+var expirationMonthNames = map[string]int{
+	"january": 1, "jan": 1,
+	"february": 2, "feb": 2,
+	"march": 3, "mar": 3,
+	"april": 4, "apr": 4,
+	"may":  5,
+	"june": 6, "jun": 6,
+	"july": 7, "jul": 7,
+	"august": 8, "aug": 8,
+	"september": 9, "sep": 9, "sept": 9,
+	"october": 10, "oct": 10,
+	"november": 11, "nov": 11,
+	"december": 12, "dec": 12,
+}
+
+var spokenExpirationFillers = map[string]struct{}{
+	"um": {}, "uh": {}, "ah": {}, "er": {}, "erm": {}, "like": {}, "actually": {}, "sorry": {},
+	"slash": {},
+	"card":  {},
+	"date":  {}, "expiration": {}, "expire": {}, "expires": {}, "expiry": {},
+	"month": {}, "year": {},
+	"card's": {}, "date's": {}, "expiration's": {}, "month's": {}, "year's": {},
+	"my": {}, "is": {}, "will": {}, "be": {},
+	"the":     {},
+	"through": {}, "thru": {}, "until": {}, "valid": {},
+	"end": {}, "good": {}, "of": {}, "in": {}, "on": {},
+}
+
+func parseSpokenExpirationNumber(text string) (int, bool) {
+	ones := map[string]int{
+		"zero": 0, "oh": 0, "o": 0, "owe": 0, "aught": 0, "ought": 0, "naught": 0, "nought": 0,
+		"one": 1, "won": 1, "two": 2, "to": 2, "too": 2, "three": 3, "tree": 3, "free": 3, "four": 4, "for": 4, "fore": 4, "five": 5,
+		"six": 6, "sex": 6, "seven": 7, "eight": 8, "nine": 9, "niner": 9,
+		"ate": 8, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+		"fourteen": 14, "fifteen": 15, "sixteen": 16,
+		"seventeen": 17, "eighteen": 18, "nineteen": 19,
+	}
+	tens := map[string]int{"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+	rawTokens := strings.Fields(strings.ReplaceAll(text, "-", " "))
+	tokens := rawTokens[:0]
+	for _, token := range rawTokens {
+		if token == "and" {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	if len(tokens) == 0 {
+		return 0, false
+	}
+	if len(tokens) == 1 {
+		if value, ok := ones[tokens[0]]; ok {
+			return value, true
+		}
+		if value, ok := tens[tokens[0]]; ok {
+			return value, true
+		}
+	}
+	if len(tokens) == 2 {
+		if tokens[0] == "single" {
+			if value, ok := ones[tokens[1]]; ok && value < 10 {
+				return value, true
+			}
+		}
+		if tokens[0] == "zero" || tokens[0] == "oh" || tokens[0] == "o" || tokens[0] == "owe" || tokens[0] == "aught" || tokens[0] == "ought" || tokens[0] == "naught" || tokens[0] == "nought" {
+			if value, ok := ones[tokens[1]]; ok && value < 10 {
+				return value, true
+			}
+		}
+		if left, ok := ones[tokens[0]]; ok && left < 10 {
+			if right, ok := ones[tokens[1]]; ok && right < 10 {
+				return left*10 + right, true
+			}
+		}
+		if value, ok := tens[tokens[0]]; ok {
+			if onesValue, ok := ones[tokens[1]]; ok && onesValue < 10 {
+				return value + onesValue, true
+			}
+		}
+		if tokens[0] == "twenty" {
+			if value, ok := tens[tokens[1]]; ok && value < 100 {
+				return value, true
+			}
+		}
+	}
+	if len(tokens) == 3 && tokens[0] == "twenty" && tokens[1] == "twenty" {
+		if onesValue, ok := ones[tokens[2]]; ok && onesValue < 10 {
+			return 20 + onesValue, true
+		}
+	}
+	if len(tokens) == 3 && tokens[0] == "twenty" {
+		if tensValue, ok := tens[tokens[1]]; ok && tensValue < 100 {
+			if onesValue, ok := ones[tokens[2]]; ok && onesValue < 10 {
+				return tensValue + onesValue, true
+			}
+		}
+	}
+	if len(tokens) >= 3 && tokens[0] == "two" && tokens[1] == "thousand" {
+		if value, ok := parseSpokenExpirationNumber(strings.Join(tokens[2:], " ")); ok && value < 100 {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
 type cardFailureTask interface {
 	Fail(error) error
+}
+
+func cardFailureTarget(ctx context.Context, fallback cardFailureTask) cardFailureTask {
+	runCtx := agent.GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil {
+		return fallback
+	}
+	currentAgent, err := runCtx.Session.CurrentAgent()
+	if err != nil {
+		return fallback
+	}
+	switch task := currentAgent.(type) {
+	case *GetCardNumberTask:
+		return task
+	case *GetSecurityCodeTask:
+		return task
+	case *GetExpirationDateTask:
+		return task
+	}
+	return fallback
 }
 
 type declineCardCaptureTool struct {
@@ -728,18 +1483,18 @@ func (t *declineCardCaptureTool) ToolFlags() llm.ToolFlag {
 	return llm.ToolFlagIgnoreOnEnter
 }
 func (t *declineCardCaptureTool) Description() string {
-	return "Handles the case when the user explicitly declines to provide card information."
+	return "Handles the case when the user explicitly declines to provide a detail for their card information."
 }
 func (t *declineCardCaptureTool) Parameters() map[string]any {
-	return cardReasonSchema()
+	return cardReasonSchema("A short explanation of why the user declined to provide card information")
 }
 func (t *declineCardCaptureTool) Execute(ctx context.Context, args string) (string, error) {
 	reason, err := decodeCardReason(args)
 	if err != nil {
 		return "", err
 	}
-	_ = t.task.Fail(&CardCaptureDeclinedError{Reason: reason})
-	return "Task failed.", nil
+	_ = cardFailureTarget(ctx, t.task).Fail(&CardCaptureDeclinedError{Reason: reason})
+	return "", nil
 }
 
 type restartCardCollectionTool struct {
@@ -752,25 +1507,25 @@ func (t *restartCardCollectionTool) ToolFlags() llm.ToolFlag {
 	return llm.ToolFlagIgnoreOnEnter
 }
 func (t *restartCardCollectionTool) Description() string {
-	return "Handles the case when the user wants to restart card information collection."
+	return "Handles the case when the user wishes to start over the card information collection process and validate a new card."
 }
 func (t *restartCardCollectionTool) Parameters() map[string]any {
-	return cardReasonSchema()
+	return cardReasonSchema("A short explanation of why the user wishes to start over")
 }
 func (t *restartCardCollectionTool) Execute(ctx context.Context, args string) (string, error) {
 	reason, err := decodeCardReason(args)
 	if err != nil {
 		return "", err
 	}
-	_ = t.task.Fail(&CardCollectionRestartError{Reason: reason})
-	return "Task failed.", nil
+	_ = cardFailureTarget(ctx, t.task).Fail(&CardCollectionRestartError{Reason: reason})
+	return "", nil
 }
 
-func cardReasonSchema() map[string]any {
+func cardReasonSchema(reasonDescription string) map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"reason": map[string]any{"type": "string", "description": "A short explanation"},
+			"reason": map[string]any{"type": "string", "description": reasonDescription},
 		},
 		"required": []string{"reason"},
 	}
@@ -787,13 +1542,515 @@ func decodeCardReason(args string) (string, error) {
 }
 
 func normalizeCardDigits(cardNumber string) string {
+	cardNumber = trimTrailingSpokenCardDigitSignoff(cardNumber)
+
+	digits := map[string]string{
+		"zero":   "0",
+		"oh":     "0",
+		"o":      "0",
+		"owe":    "0",
+		"aught":  "0",
+		"ought":  "0",
+		"naught": "0",
+		"nought": "0",
+		"one":    "1",
+		"won":    "1",
+		"two":    "2",
+		"to":     "2",
+		"too":    "2",
+		"three":  "3",
+		"tree":   "3",
+		"free":   "3",
+		"four":   "4",
+		"for":    "4",
+		"fore":   "4",
+		"five":   "5",
+		"six":    "6",
+		"sex":    "6",
+		"seven":  "7",
+		"eight":  "8",
+		"ate":    "8",
+		"nine":   "9",
+		"niner":  "9",
+	}
+	tens := map[string]string{
+		"twenty":  "2",
+		"thirty":  "3",
+		"forty":   "4",
+		"fifty":   "5",
+		"sixty":   "6",
+		"seventy": "7",
+		"eighty":  "8",
+		"ninety":  "9",
+	}
+	teens := map[string]string{
+		"ten":       "10",
+		"eleven":    "11",
+		"twelve":    "12",
+		"thirteen":  "13",
+		"fourteen":  "14",
+		"fifteen":   "15",
+		"sixteen":   "16",
+		"seventeen": "17",
+		"eighteen":  "18",
+		"nineteen":  "19",
+	}
+	fillers := map[string]struct{}{
+		"actually": {},
+		"ah":       {},
+		"and":      {},
+		"er":       {},
+		"hm":       {},
+		"hmm":      {},
+		"like":     {},
+		"sorry":    {},
+		"uh":       {},
+		"um":       {},
+	}
 	var b strings.Builder
-	for _, r := range cardNumber {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
+	var token strings.Builder
+	repeat := 1
+	pendingGroup := ""
+	pendingGroupRepeat := 1
+	pendingSingleHundred := false
+	pendingSingleHundredPrefix := ""
+	pendingSingleHundredRepeat := 1
+	pendingHundredZeroTail := false
+	pendingHundredZeroTailPrefix := ""
+	pendingHundredZeroTailRepeat := 1
+	lastWrittenDigit := ""
+	lastWrittenDigitRepeat := 1
+	writeDigit := func(digit string) {
+		pendingHundredZeroTail = false
+		pendingHundredZeroTailPrefix = ""
+		pendingHundredZeroTailRepeat = 1
+		lastWrittenDigit = digit
+		lastWrittenDigitRepeat = repeat
+		for range repeat {
+			b.WriteString(digit)
+		}
+		repeat = 1
+	}
+	flushPendingSingleHundred := func(asHundred bool) {
+		if !pendingSingleHundred {
+			return
+		}
+		if asHundred {
+			if pendingSingleHundredPrefix != "" {
+				for range pendingSingleHundredRepeat {
+					b.WriteString(pendingSingleHundredPrefix + "00")
+				}
+			} else {
+				b.WriteString("00")
+			}
+		}
+		pendingSingleHundred = false
+		pendingSingleHundredPrefix = ""
+		pendingSingleHundredRepeat = 1
+	}
+	flushPendingHundredZeroTail := func() {
+		if pendingHundredZeroTail {
+			for range pendingHundredZeroTailRepeat {
+				b.WriteString(pendingHundredZeroTailPrefix + "00")
+			}
+			pendingHundredZeroTail = false
+			pendingHundredZeroTailPrefix = ""
+			pendingHundredZeroTailRepeat = 1
 		}
 	}
+	writePendingHundredZeroTail := func(digit string) bool {
+		if !pendingHundredZeroTail {
+			return false
+		}
+		for range pendingHundredZeroTailRepeat {
+			b.WriteString(pendingHundredZeroTailPrefix + "0" + digit)
+		}
+		pendingHundredZeroTail = false
+		pendingHundredZeroTailPrefix = ""
+		pendingHundredZeroTailRepeat = 1
+		return true
+	}
+	flushPendingGroup := func() {
+		if pendingGroup == "" {
+			return
+		}
+		group := pendingGroup
+		if len(group) == 1 {
+			group += "0"
+		}
+		for range pendingGroupRepeat {
+			b.WriteString(group)
+		}
+		pendingGroup = ""
+		pendingGroupRepeat = 1
+	}
+	flush := func() {
+		if token.Len() == 0 {
+			return
+		}
+		switch word := token.String(); word {
+		case "double":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 2
+		case "triple":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 3
+		case "quadruple":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 4
+		default:
+			if digit, ok := digits[word]; ok {
+				if writePendingHundredZeroTail(digit) {
+					token.Reset()
+					return
+				}
+				if pendingGroup != "" {
+					if digit == "0" && len(pendingGroup) == 1 {
+						pendingGroup += "00"
+					} else {
+						pendingGroup += digit
+						flushPendingGroup()
+					}
+					token.Reset()
+					return
+				}
+				if pendingSingleHundred {
+					if pendingSingleHundredPrefix != "" {
+						if digit == "0" {
+							pendingHundredZeroTail = true
+							pendingHundredZeroTailPrefix = pendingSingleHundredPrefix
+							pendingHundredZeroTailRepeat = pendingSingleHundredRepeat
+							pendingSingleHundred = false
+							pendingSingleHundredPrefix = ""
+							pendingSingleHundredRepeat = 1
+							token.Reset()
+							return
+						}
+						for range pendingSingleHundredRepeat {
+							b.WriteString(pendingSingleHundredPrefix + "0" + digit)
+						}
+						pendingSingleHundred = false
+						pendingSingleHundredPrefix = ""
+						pendingSingleHundredRepeat = 1
+						token.Reset()
+						return
+					}
+					if digit == "0" {
+						pendingHundredZeroTail = true
+						pendingHundredZeroTailPrefix = ""
+						pendingHundredZeroTailRepeat = 1
+						pendingSingleHundred = false
+						token.Reset()
+						return
+					}
+					b.WriteString("0")
+					pendingSingleHundred = false
+				}
+				writeDigit(digit)
+			} else if tensDigit, ok := tens[word]; ok {
+				flushPendingHundredZeroTail()
+				if pendingSingleHundredPrefix != "" {
+					pendingGroup = pendingSingleHundredPrefix + tensDigit
+					pendingGroupRepeat = pendingSingleHundredRepeat
+					pendingSingleHundred = false
+					pendingSingleHundredPrefix = ""
+					pendingSingleHundredRepeat = 1
+					repeat = 1
+					token.Reset()
+					return
+				}
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				pendingGroup = tensDigit
+				pendingGroupRepeat = repeat
+				repeat = 1
+			} else if teenDigits, ok := teens[word]; ok {
+				flushPendingHundredZeroTail()
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				writeDigit(teenDigits)
+			} else if word == "hundred" && b.Len() > 0 {
+				flushPendingHundredZeroTail()
+				flushPendingGroup()
+				if lastWrittenDigitRepeat > 1 && lastWrittenDigit != "" {
+					suffix := strings.Repeat(lastWrittenDigit, lastWrittenDigitRepeat)
+					current := b.String()
+					if strings.HasSuffix(current, suffix) {
+						b.Reset()
+						b.WriteString(current[:len(current)-len(suffix)])
+						pendingSingleHundredPrefix = lastWrittenDigit
+						pendingSingleHundredRepeat = lastWrittenDigitRepeat
+					}
+				}
+				pendingSingleHundred = true
+			} else if _, ok := fillers[word]; ok {
+			} else {
+				flushPendingHundredZeroTail()
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				repeat = 1
+			}
+		}
+		token.Reset()
+	}
+	for _, r := range cardNumber {
+		switch {
+		case r >= '0' && r <= '9':
+			flush()
+			if writePendingHundredZeroTail(string(r)) {
+				break
+			}
+			if pendingSingleHundred {
+				if pendingSingleHundredPrefix != "" {
+					if r == '0' {
+						pendingHundredZeroTail = true
+						pendingHundredZeroTailPrefix = pendingSingleHundredPrefix
+						pendingHundredZeroTailRepeat = pendingSingleHundredRepeat
+						pendingSingleHundred = false
+						pendingSingleHundredPrefix = ""
+						pendingSingleHundredRepeat = 1
+						break
+					}
+					for range pendingSingleHundredRepeat {
+						b.WriteString(pendingSingleHundredPrefix + "0" + string(r))
+					}
+					pendingSingleHundred = false
+					pendingSingleHundredPrefix = ""
+					pendingSingleHundredRepeat = 1
+					break
+				}
+				if r == '0' {
+					pendingHundredZeroTail = true
+					pendingHundredZeroTailPrefix = ""
+					pendingHundredZeroTailRepeat = 1
+					pendingSingleHundred = false
+					break
+				}
+				b.WriteString("0")
+				pendingSingleHundred = false
+			}
+			writeDigit(string(r))
+		case unicode.IsLetter(r):
+			token.WriteRune(unicode.ToLower(r))
+		default:
+			flush()
+		}
+	}
+	flush()
+	flushPendingHundredZeroTail()
+	flushPendingSingleHundred(true)
+	flushPendingGroup()
 	return b.String()
+}
+
+func trimTrailingSpokenCardDigitSignoff(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if trim := trimTrailingSpokenCardDigitSignoffTokens(tokens); trim >= 0 {
+		return strings.Join(tokens[:trim], " ")
+	}
+	tokens = trimTrailingSpokenCardDigitSignoffFillers(tokens)
+	if trim := trimTrailingSpokenCardDigitSignoffTokens(tokens); trim >= 0 {
+		return strings.Join(tokens[:trim], " ")
+	}
+	return value
+}
+
+func trimTrailingSpokenCardDigitSignoffFillers(tokens []string) []string {
+	for len(tokens) > 0 {
+		if tokens[len(tokens)-1] == "you" && len(tokens) >= 2 && tokens[len(tokens)-2] == "for" {
+			break
+		}
+		if !isCardDigitSignoffFiller(tokens[len(tokens)-1]) {
+			break
+		}
+		tokens = tokens[:len(tokens)-1]
+	}
+	return tokens
+}
+
+func isCardDigitSignoffFiller(token string) bool {
+	switch token {
+	case "thanks", "thank", "you", "please", "ok", "okay":
+		return true
+	default:
+		return false
+	}
+}
+
+func trimTrailingSpokenCardDigitSignoffTokens(tokens []string) int {
+	if len(tokens) >= 7 {
+		suffix := tokens[len(tokens)-7:]
+		if suffix[0] == "that" && suffix[1] == "will" && suffix[2] == "be" && isCardDigitDoneToken(suffix[3]) && suffix[4] == "for" && suffix[5] == "the" && suffix[6] == "day" {
+			return len(tokens) - 7
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if (suffix[0] == "thatll" || suffix[0] == "that'll") && suffix[1] == "be" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 7 {
+		suffix := tokens[len(tokens)-7:]
+		if suffix[0] == "that" && suffix[1] == "ll" && suffix[2] == "be" && isCardDigitDoneToken(suffix[3]) && suffix[4] == "for" && suffix[5] == "the" && suffix[6] == "day" {
+			return len(tokens) - 7
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if suffix[0] == "that" && suffix[1] == "is" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if suffix[0] == "that" && suffix[1] == "s" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "thats" && isCardDigitDoneToken(suffix[1]) && suffix[2] == "for" && suffix[3] == "the" && suffix[4] == "day" {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "that" && suffix[1] == "is" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && isCardDigitSignoffObject(suffix[4]) {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "that" && suffix[1] == "s" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && isCardDigitSignoffObject(suffix[4]) {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 4 {
+		suffix := tokens[len(tokens)-4:]
+		if suffix[0] == "thats" && isCardDigitDoneToken(suffix[1]) && suffix[2] == "for" && isCardDigitSignoffObject(suffix[3]) {
+			return len(tokens) - 4
+		}
+	}
+	if len(tokens) >= 2 {
+		suffix := tokens[len(tokens)-2:]
+		if suffix[0] == "for" && isCardDigitSignoffObject(suffix[1]) {
+			return len(tokens) - 2
+		}
+	}
+	if len(tokens) >= 3 {
+		suffix := tokens[len(tokens)-3:]
+		if suffix[0] == "for" && suffix[1] == "the" && suffix[2] == "day" {
+			return len(tokens) - 3
+		}
+	}
+	return -1
+}
+
+func isCardDigitDoneToken(token string) bool {
+	switch token {
+	case "all", "it":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCardDigitSignoffObject(token string) bool {
+	switch token {
+	case "day", "me", "now", "today", "you":
+		return true
+	default:
+		return false
+	}
+}
+
+func stripSpokenSecurityCodeLengthLabel(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i] != "three" && tokens[i] != "four" && tokens[i] != "3" && tokens[i] != "4" {
+			continue
+		}
+		next := i + 1
+		for next < len(tokens) && isCardDigitFiller(tokens[next]) {
+			next++
+		}
+		if next >= len(tokens) || (tokens[next] != "digit" && tokens[next] != "digits") {
+			continue
+		}
+		drop := next + 1
+		if len(tokens) > drop && tokens[drop] == "security" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "code" {
+			drop++
+		}
+		if len(tokens) > drop {
+			return strings.Join(tokens[drop:], " ")
+		}
+	}
+	return value
+}
+
+func stripSpokenCardNumberLengthLabel(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for i := 0; i+1 < len(tokens); i++ {
+		if !spokenCardNumberLengthToken(tokens[i]) {
+			continue
+		}
+		next := i + 1
+		for next < len(tokens) && isCardDigitFiller(tokens[next]) {
+			next++
+		}
+		if next >= len(tokens) || (tokens[next] != "digit" && tokens[next] != "digits") {
+			continue
+		}
+		drop := next + 1
+		if len(tokens) > drop && tokens[drop] == "credit" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "card" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "number" {
+			drop++
+		}
+		if len(tokens) > drop {
+			return strings.Join(tokens[drop:], " ")
+		}
+	}
+	return value
+}
+
+func isCardDigitFiller(token string) bool {
+	switch strings.Trim(token, ".,!?;:") {
+	case "actually", "ah", "er", "hm", "hmm", "like", "sorry", "uh", "um":
+		return true
+	default:
+		return false
+	}
+}
+
+func spokenCardNumberLengthToken(token string) bool {
+	switch token {
+	case "13", "14", "15", "16", "17", "18", "19",
+		"thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen":
+		return true
+	default:
+		return false
+	}
 }
 
 func validSecurityCode(securityCode string) bool {
