@@ -1542,13 +1542,515 @@ func decodeCardReason(args string) (string, error) {
 }
 
 func normalizeCardDigits(cardNumber string) string {
+	cardNumber = trimTrailingSpokenCardDigitSignoff(cardNumber)
+
+	digits := map[string]string{
+		"zero":   "0",
+		"oh":     "0",
+		"o":      "0",
+		"owe":    "0",
+		"aught":  "0",
+		"ought":  "0",
+		"naught": "0",
+		"nought": "0",
+		"one":    "1",
+		"won":    "1",
+		"two":    "2",
+		"to":     "2",
+		"too":    "2",
+		"three":  "3",
+		"tree":   "3",
+		"free":   "3",
+		"four":   "4",
+		"for":    "4",
+		"fore":   "4",
+		"five":   "5",
+		"six":    "6",
+		"sex":    "6",
+		"seven":  "7",
+		"eight":  "8",
+		"ate":    "8",
+		"nine":   "9",
+		"niner":  "9",
+	}
+	tens := map[string]string{
+		"twenty":  "2",
+		"thirty":  "3",
+		"forty":   "4",
+		"fifty":   "5",
+		"sixty":   "6",
+		"seventy": "7",
+		"eighty":  "8",
+		"ninety":  "9",
+	}
+	teens := map[string]string{
+		"ten":       "10",
+		"eleven":    "11",
+		"twelve":    "12",
+		"thirteen":  "13",
+		"fourteen":  "14",
+		"fifteen":   "15",
+		"sixteen":   "16",
+		"seventeen": "17",
+		"eighteen":  "18",
+		"nineteen":  "19",
+	}
+	fillers := map[string]struct{}{
+		"actually": {},
+		"ah":       {},
+		"and":      {},
+		"er":       {},
+		"hm":       {},
+		"hmm":      {},
+		"like":     {},
+		"sorry":    {},
+		"uh":       {},
+		"um":       {},
+	}
 	var b strings.Builder
-	for _, r := range cardNumber {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
+	var token strings.Builder
+	repeat := 1
+	pendingGroup := ""
+	pendingGroupRepeat := 1
+	pendingSingleHundred := false
+	pendingSingleHundredPrefix := ""
+	pendingSingleHundredRepeat := 1
+	pendingHundredZeroTail := false
+	pendingHundredZeroTailPrefix := ""
+	pendingHundredZeroTailRepeat := 1
+	lastWrittenDigit := ""
+	lastWrittenDigitRepeat := 1
+	writeDigit := func(digit string) {
+		pendingHundredZeroTail = false
+		pendingHundredZeroTailPrefix = ""
+		pendingHundredZeroTailRepeat = 1
+		lastWrittenDigit = digit
+		lastWrittenDigitRepeat = repeat
+		for range repeat {
+			b.WriteString(digit)
+		}
+		repeat = 1
+	}
+	flushPendingSingleHundred := func(asHundred bool) {
+		if !pendingSingleHundred {
+			return
+		}
+		if asHundred {
+			if pendingSingleHundredPrefix != "" {
+				for range pendingSingleHundredRepeat {
+					b.WriteString(pendingSingleHundredPrefix + "00")
+				}
+			} else {
+				b.WriteString("00")
+			}
+		}
+		pendingSingleHundred = false
+		pendingSingleHundredPrefix = ""
+		pendingSingleHundredRepeat = 1
+	}
+	flushPendingHundredZeroTail := func() {
+		if pendingHundredZeroTail {
+			for range pendingHundredZeroTailRepeat {
+				b.WriteString(pendingHundredZeroTailPrefix + "00")
+			}
+			pendingHundredZeroTail = false
+			pendingHundredZeroTailPrefix = ""
+			pendingHundredZeroTailRepeat = 1
 		}
 	}
+	writePendingHundredZeroTail := func(digit string) bool {
+		if !pendingHundredZeroTail {
+			return false
+		}
+		for range pendingHundredZeroTailRepeat {
+			b.WriteString(pendingHundredZeroTailPrefix + "0" + digit)
+		}
+		pendingHundredZeroTail = false
+		pendingHundredZeroTailPrefix = ""
+		pendingHundredZeroTailRepeat = 1
+		return true
+	}
+	flushPendingGroup := func() {
+		if pendingGroup == "" {
+			return
+		}
+		group := pendingGroup
+		if len(group) == 1 {
+			group += "0"
+		}
+		for range pendingGroupRepeat {
+			b.WriteString(group)
+		}
+		pendingGroup = ""
+		pendingGroupRepeat = 1
+	}
+	flush := func() {
+		if token.Len() == 0 {
+			return
+		}
+		switch word := token.String(); word {
+		case "double":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 2
+		case "triple":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 3
+		case "quadruple":
+			flushPendingHundredZeroTail()
+			flushPendingSingleHundred(false)
+			flushPendingGroup()
+			repeat = 4
+		default:
+			if digit, ok := digits[word]; ok {
+				if writePendingHundredZeroTail(digit) {
+					token.Reset()
+					return
+				}
+				if pendingGroup != "" {
+					if digit == "0" && len(pendingGroup) == 1 {
+						pendingGroup += "00"
+					} else {
+						pendingGroup += digit
+						flushPendingGroup()
+					}
+					token.Reset()
+					return
+				}
+				if pendingSingleHundred {
+					if pendingSingleHundredPrefix != "" {
+						if digit == "0" {
+							pendingHundredZeroTail = true
+							pendingHundredZeroTailPrefix = pendingSingleHundredPrefix
+							pendingHundredZeroTailRepeat = pendingSingleHundredRepeat
+							pendingSingleHundred = false
+							pendingSingleHundredPrefix = ""
+							pendingSingleHundredRepeat = 1
+							token.Reset()
+							return
+						}
+						for range pendingSingleHundredRepeat {
+							b.WriteString(pendingSingleHundredPrefix + "0" + digit)
+						}
+						pendingSingleHundred = false
+						pendingSingleHundredPrefix = ""
+						pendingSingleHundredRepeat = 1
+						token.Reset()
+						return
+					}
+					if digit == "0" {
+						pendingHundredZeroTail = true
+						pendingHundredZeroTailPrefix = ""
+						pendingHundredZeroTailRepeat = 1
+						pendingSingleHundred = false
+						token.Reset()
+						return
+					}
+					b.WriteString("0")
+					pendingSingleHundred = false
+				}
+				writeDigit(digit)
+			} else if tensDigit, ok := tens[word]; ok {
+				flushPendingHundredZeroTail()
+				if pendingSingleHundredPrefix != "" {
+					pendingGroup = pendingSingleHundredPrefix + tensDigit
+					pendingGroupRepeat = pendingSingleHundredRepeat
+					pendingSingleHundred = false
+					pendingSingleHundredPrefix = ""
+					pendingSingleHundredRepeat = 1
+					repeat = 1
+					token.Reset()
+					return
+				}
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				pendingGroup = tensDigit
+				pendingGroupRepeat = repeat
+				repeat = 1
+			} else if teenDigits, ok := teens[word]; ok {
+				flushPendingHundredZeroTail()
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				writeDigit(teenDigits)
+			} else if word == "hundred" && b.Len() > 0 {
+				flushPendingHundredZeroTail()
+				flushPendingGroup()
+				if lastWrittenDigitRepeat > 1 && lastWrittenDigit != "" {
+					suffix := strings.Repeat(lastWrittenDigit, lastWrittenDigitRepeat)
+					current := b.String()
+					if strings.HasSuffix(current, suffix) {
+						b.Reset()
+						b.WriteString(current[:len(current)-len(suffix)])
+						pendingSingleHundredPrefix = lastWrittenDigit
+						pendingSingleHundredRepeat = lastWrittenDigitRepeat
+					}
+				}
+				pendingSingleHundred = true
+			} else if _, ok := fillers[word]; ok {
+			} else {
+				flushPendingHundredZeroTail()
+				flushPendingSingleHundred(false)
+				flushPendingGroup()
+				repeat = 1
+			}
+		}
+		token.Reset()
+	}
+	for _, r := range cardNumber {
+		switch {
+		case r >= '0' && r <= '9':
+			flush()
+			if writePendingHundredZeroTail(string(r)) {
+				break
+			}
+			if pendingSingleHundred {
+				if pendingSingleHundredPrefix != "" {
+					if r == '0' {
+						pendingHundredZeroTail = true
+						pendingHundredZeroTailPrefix = pendingSingleHundredPrefix
+						pendingHundredZeroTailRepeat = pendingSingleHundredRepeat
+						pendingSingleHundred = false
+						pendingSingleHundredPrefix = ""
+						pendingSingleHundredRepeat = 1
+						break
+					}
+					for range pendingSingleHundredRepeat {
+						b.WriteString(pendingSingleHundredPrefix + "0" + string(r))
+					}
+					pendingSingleHundred = false
+					pendingSingleHundredPrefix = ""
+					pendingSingleHundredRepeat = 1
+					break
+				}
+				if r == '0' {
+					pendingHundredZeroTail = true
+					pendingHundredZeroTailPrefix = ""
+					pendingHundredZeroTailRepeat = 1
+					pendingSingleHundred = false
+					break
+				}
+				b.WriteString("0")
+				pendingSingleHundred = false
+			}
+			writeDigit(string(r))
+		case unicode.IsLetter(r):
+			token.WriteRune(unicode.ToLower(r))
+		default:
+			flush()
+		}
+	}
+	flush()
+	flushPendingHundredZeroTail()
+	flushPendingSingleHundred(true)
+	flushPendingGroup()
 	return b.String()
+}
+
+func trimTrailingSpokenCardDigitSignoff(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if trim := trimTrailingSpokenCardDigitSignoffTokens(tokens); trim >= 0 {
+		return strings.Join(tokens[:trim], " ")
+	}
+	tokens = trimTrailingSpokenCardDigitSignoffFillers(tokens)
+	if trim := trimTrailingSpokenCardDigitSignoffTokens(tokens); trim >= 0 {
+		return strings.Join(tokens[:trim], " ")
+	}
+	return value
+}
+
+func trimTrailingSpokenCardDigitSignoffFillers(tokens []string) []string {
+	for len(tokens) > 0 {
+		if tokens[len(tokens)-1] == "you" && len(tokens) >= 2 && tokens[len(tokens)-2] == "for" {
+			break
+		}
+		if !isCardDigitSignoffFiller(tokens[len(tokens)-1]) {
+			break
+		}
+		tokens = tokens[:len(tokens)-1]
+	}
+	return tokens
+}
+
+func isCardDigitSignoffFiller(token string) bool {
+	switch token {
+	case "thanks", "thank", "you", "please", "ok", "okay":
+		return true
+	default:
+		return false
+	}
+}
+
+func trimTrailingSpokenCardDigitSignoffTokens(tokens []string) int {
+	if len(tokens) >= 7 {
+		suffix := tokens[len(tokens)-7:]
+		if suffix[0] == "that" && suffix[1] == "will" && suffix[2] == "be" && isCardDigitDoneToken(suffix[3]) && suffix[4] == "for" && suffix[5] == "the" && suffix[6] == "day" {
+			return len(tokens) - 7
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if (suffix[0] == "thatll" || suffix[0] == "that'll") && suffix[1] == "be" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 7 {
+		suffix := tokens[len(tokens)-7:]
+		if suffix[0] == "that" && suffix[1] == "ll" && suffix[2] == "be" && isCardDigitDoneToken(suffix[3]) && suffix[4] == "for" && suffix[5] == "the" && suffix[6] == "day" {
+			return len(tokens) - 7
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if suffix[0] == "that" && suffix[1] == "is" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 6 {
+		suffix := tokens[len(tokens)-6:]
+		if suffix[0] == "that" && suffix[1] == "s" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && suffix[4] == "the" && suffix[5] == "day" {
+			return len(tokens) - 6
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "thats" && isCardDigitDoneToken(suffix[1]) && suffix[2] == "for" && suffix[3] == "the" && suffix[4] == "day" {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "that" && suffix[1] == "is" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && isCardDigitSignoffObject(suffix[4]) {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 5 {
+		suffix := tokens[len(tokens)-5:]
+		if suffix[0] == "that" && suffix[1] == "s" && isCardDigitDoneToken(suffix[2]) && suffix[3] == "for" && isCardDigitSignoffObject(suffix[4]) {
+			return len(tokens) - 5
+		}
+	}
+	if len(tokens) >= 4 {
+		suffix := tokens[len(tokens)-4:]
+		if suffix[0] == "thats" && isCardDigitDoneToken(suffix[1]) && suffix[2] == "for" && isCardDigitSignoffObject(suffix[3]) {
+			return len(tokens) - 4
+		}
+	}
+	if len(tokens) >= 2 {
+		suffix := tokens[len(tokens)-2:]
+		if suffix[0] == "for" && isCardDigitSignoffObject(suffix[1]) {
+			return len(tokens) - 2
+		}
+	}
+	if len(tokens) >= 3 {
+		suffix := tokens[len(tokens)-3:]
+		if suffix[0] == "for" && suffix[1] == "the" && suffix[2] == "day" {
+			return len(tokens) - 3
+		}
+	}
+	return -1
+}
+
+func isCardDigitDoneToken(token string) bool {
+	switch token {
+	case "all", "it":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCardDigitSignoffObject(token string) bool {
+	switch token {
+	case "day", "me", "now", "today", "you":
+		return true
+	default:
+		return false
+	}
+}
+
+func stripSpokenSecurityCodeLengthLabel(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i] != "three" && tokens[i] != "four" && tokens[i] != "3" && tokens[i] != "4" {
+			continue
+		}
+		next := i + 1
+		for next < len(tokens) && isCardDigitFiller(tokens[next]) {
+			next++
+		}
+		if next >= len(tokens) || (tokens[next] != "digit" && tokens[next] != "digits") {
+			continue
+		}
+		drop := next + 1
+		if len(tokens) > drop && tokens[drop] == "security" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "code" {
+			drop++
+		}
+		if len(tokens) > drop {
+			return strings.Join(tokens[drop:], " ")
+		}
+	}
+	return value
+}
+
+func stripSpokenCardNumberLengthLabel(value string) string {
+	tokens := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for i := 0; i+1 < len(tokens); i++ {
+		if !spokenCardNumberLengthToken(tokens[i]) {
+			continue
+		}
+		next := i + 1
+		for next < len(tokens) && isCardDigitFiller(tokens[next]) {
+			next++
+		}
+		if next >= len(tokens) || (tokens[next] != "digit" && tokens[next] != "digits") {
+			continue
+		}
+		drop := next + 1
+		if len(tokens) > drop && tokens[drop] == "credit" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "card" {
+			drop++
+		}
+		if len(tokens) > drop && tokens[drop] == "number" {
+			drop++
+		}
+		if len(tokens) > drop {
+			return strings.Join(tokens[drop:], " ")
+		}
+	}
+	return value
+}
+
+func isCardDigitFiller(token string) bool {
+	switch strings.Trim(token, ".,!?;:") {
+	case "actually", "ah", "er", "hm", "hmm", "like", "sorry", "uh", "um":
+		return true
+	default:
+		return false
+	}
+}
+
+func spokenCardNumberLengthToken(token string) bool {
+	switch token {
+	case "13", "14", "15", "16", "17", "18", "19",
+		"thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen":
+		return true
+	default:
+		return false
+	}
 }
 
 func validSecurityCode(securityCode string) bool {

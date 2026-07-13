@@ -3,12 +3,14 @@ package workflows
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
@@ -19,8 +21,9 @@ func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if out != "Card number captured and task completed." {
-		t.Fatalf("Execute() output = %q, want completion message", out)
+	// Reference returns None after no-confirm completion, avoiding extra sensitive-flow tool chatter.
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
 	}
 
 	select {
@@ -36,78 +39,214 @@ func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
 	}
 }
 
-func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
+func TestCreditCardSubtaskInstructionsPreserveReferenceModalityVariants(t *testing.T) {
+	tests := []struct {
+		name         string
+		variants     *llm.Instructions
+		audioWant    string
+		textWant     string
+		staleText    string
+		defaultStale string
+	}{
+		{
+			name:         "card number",
+			variants:     NewGetCardNumberTask().InstructionVariants,
+			audioWant:    "Handle input as noisy voice transcription. Expect users to read the card number digit by digit.",
+			textWant:     "Handle input as typed text. Users may type the number with or without spaces or dashes",
+			staleText:    "Normalize spoken digits silently",
+			defaultStale: "Call `confirm_card_number` once the user has repeated their card number.",
+		},
+		{
+			name:         "security code",
+			variants:     NewGetSecurityCodeTask().InstructionVariants,
+			audioWant:    "Handle input as noisy voice transcription. Expect users to read the security code digit by digit.",
+			textWant:     "Handle input as typed text. Users will type the security code directly.",
+			staleText:    "Normalize spoken digits silently",
+			defaultStale: "Call `confirm_security_code` once the user has repeated their security code.",
+		},
+		{
+			name:         "expiration date",
+			variants:     NewGetExpirationDateTask().InstructionVariants,
+			audioWant:    "Handle input as noisy voice transcription. Expect users to say the expiration date in formats like",
+			textWant:     "Handle input as typed text. Expect users to type the expiration date in formats like '04/25', '04/2025', or 'April 2025'.",
+			staleText:    "Normalize spoken months and digits silently.",
+			defaultStale: "Call `confirm_expiration_date` once the user has repeated their expiration date.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.variants == nil {
+				t.Fatal("InstructionVariants = nil, want reference audio/text instruction variants")
+			}
+			audio := tt.variants.AsModality("audio").String()
+			text := tt.variants.AsModality("text").String()
+			if !strings.Contains(audio, tt.audioWant) {
+				t.Fatalf("audio instructions = %q, want %q", audio, tt.audioWant)
+			}
+			if !strings.Contains(audio, tt.defaultStale) {
+				t.Fatalf("audio instructions = %q, want default confirmation guidance %q", audio, tt.defaultStale)
+			}
+			if !strings.Contains(text, tt.textWant) {
+				t.Fatalf("text instructions = %q, want %q", text, tt.textWant)
+			}
+			for _, stale := range []string{tt.staleText, tt.defaultStale} {
+				if strings.Contains(text, stale) {
+					t.Fatalf("text instructions = %q, want no stale audio/default confirmation guidance %q", text, stale)
+				}
+			}
+		})
+	}
+}
+
+func TestGetCardNumberTaskNormalizesSpokenDigits(t *testing.T) {
 	task := NewGetCardNumberTask(false)
-	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
-	session.Assistant = &fakeDtmfSessionAssistant{}
-	speechEvents := session.SpeechCreatedEvents()
 	tool := &recordCardNumberTool{task: task}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := session.Start(ctx); err != nil {
-		t.Fatalf("Start error = %v", err)
-	}
-	defer session.Stop(context.Background())
-
-	select {
-	case <-speechEvents:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for card-number on-enter prompt")
-	}
-
-	if _, err := tool.Execute(context.Background(), `{"card_number":"4111111111111112"}`); err != nil {
-		t.Fatalf("Execute() error = %v, want nil after prompting for invalid card", err)
-	}
-
-	select {
-	case ev := <-speechEvents:
-		if ev.Source != "generate_reply" {
-			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
-		}
-		if ev.SpeechHandle == nil {
-			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-card reply handle")
-		}
-		want := "The card number is not valid, ask the user if they made a mistake or to provide another card."
-		if ev.SpeechHandle.Generation.Instructions == nil {
-			t.Fatal("invalid-card instructions = nil, want invalid-card prompt")
-		}
-		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
-			t.Fatalf("invalid-card instructions = %q, want %q", got, want)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for invalid-card prompt")
+	_, err := tool.Execute(context.Background(), `{"card_number":"four one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken digits accepted", err)
 	}
 
 	select {
 	case result := <-task.Result:
-		t.Fatalf("task completed with %#v, want no completion for invalid card", result)
+		if result.CardNumber != "4111111111111111" {
+			t.Fatalf("CardNumber = %q, want spoken digits normalized", result.CardNumber)
+		}
 	default:
+		t.Fatal("task did not complete after spoken card number")
 	}
 }
 
-func TestGetCardNumberTaskRejectsInvalidLengthWithPrompt(t *testing.T) {
-	task := NewGetCardNumberTask()
-	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
-	session.Assistant = &fakeDtmfSessionAssistant{}
-	speechEvents := session.SpeechCreatedEvents()
+func TestGetCardNumberTaskFiltersSpokenNumberLengthLabel(t *testing.T) {
+	task := NewGetCardNumberTask(false)
 	tool := &recordCardNumberTool{task: task}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := session.Start(ctx); err != nil {
-		t.Fatalf("Start error = %v", err)
+	_, err := tool.Execute(context.Background(), `{"card_number":"sixteen digit card number four one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken card-number length label accepted", err)
 	}
-	defer session.Stop(context.Background())
 
 	select {
-	case <-speechEvents:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for card-number on-enter prompt")
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want spoken card-number length label filtered", result)
+		}
+	default:
+		t.Fatal("task did not complete after spoken card-number length label")
+	}
+}
+
+func TestGetCardNumberTaskFiltersFillerInSpokenNumberLengthLabel(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"card_number":"sixteen uh digit card number four one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want filler in spoken card-number length label accepted", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), `{"card_number":"4111"}`); err != nil {
-		t.Fatalf("Execute() error = %v, want nil after prompting for invalid length", err)
+	select {
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want filler in spoken card-number length label filtered", result)
+		}
+	default:
+		t.Fatal("task did not complete after filler in spoken card-number length label")
+	}
+}
+
+func TestGetCardNumberTaskFiltersLikeFillerInSpokenNumberLengthLabel(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"card_number":"sixteen like digit card number four one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want like filler in spoken card-number length label accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want like filler in spoken card-number length label filtered", result)
+		}
+	default:
+		t.Fatal("task did not complete after like filler in spoken card-number length label")
+	}
+}
+
+func TestGetCardNumberTaskFiltersPreambleBeforeSpokenNumberLengthLabel(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"card_number":"my card number is sixteen digit card number four one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want preamble plus spoken card-number length label accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want preamble and spoken card-number length label filtered", result)
+		}
+	default:
+		t.Fatal("task did not complete after preamble plus spoken card-number length label")
+	}
+}
+
+func TestGetCardNumberTaskNormalizesNoisySTTDigitHomophones(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"card_number":"for one one one one one one one one one one one one one one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want noisy STT digit homophones accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want noisy STT digit homophones normalized to Visa 4111111111111111", result)
+		}
+	default:
+		t.Fatal("task did not complete after noisy STT card number")
+	}
+}
+
+func TestGetCardNumberTaskFiltersTrailingForMeSignoff(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"card_number":"four one one one one one one one one one one one one one one one that is all for me"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing for-me sign-off accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want trailing for-me sign-off filtered", result)
+		}
+	default:
+		t.Fatal("task did not complete after trailing for-me sign-off")
+	}
+}
+
+func TestGetCardNumberTaskFiltersTrailingContractionForMeSignoff(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &recordCardNumberTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"card_number":"four one one one one one one one one one one one one one one one that's all for me"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing contraction sign-off accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
 	}
 
 	select {
