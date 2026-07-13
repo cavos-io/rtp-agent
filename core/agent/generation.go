@@ -134,13 +134,25 @@ func performLLMInference(
 				}
 				if chunk.Delta.Content != "" {
 					data.GeneratedText += chunk.Delta.Content
-					data.TextCh <- chunk.Delta.Content
+					select {
+					case data.TextCh <- chunk.Delta.Content:
+					case <-ctx.Done():
+						return
+					}
 					if data.TextEventCh != nil {
-						data.TextEventCh <- LLMTextEvent{Text: chunk.Delta.Content}
+						select {
+						case data.TextEventCh <- LLMTextEvent{Text: chunk.Delta.Content}:
+						case <-ctx.Done():
+							return
+						}
 					}
 				}
 				if chunk.Delta.Flush && data.TextEventCh != nil {
-					data.TextEventCh <- LLMTextEvent{Flush: true}
+					select {
+					case data.TextEventCh <- LLMTextEvent{Flush: true}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
 					if fc.Type != "function" {
@@ -149,7 +161,11 @@ func performLLMInference(
 					f := fc
 					f.ID = fmt.Sprintf("%s/fnc_%d", data.ID, len(data.GeneratedFunctions))
 					data.GeneratedFunctions = append(data.GeneratedFunctions, f)
-					data.FunctionCh <- &f
+					select {
+					case data.FunctionCh <- &f:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}

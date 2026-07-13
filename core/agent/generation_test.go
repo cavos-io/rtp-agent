@@ -2780,3 +2780,34 @@ func drainAudioFrames(ch <-chan *model.AudioFrame) []*model.AudioFrame {
 	}
 	return frames
 }
+
+func TestPerformLLMInferenceStopsStreamingOnCancel(t *testing.T) {
+	chunks := make([]*llm.ChatChunk, 200)
+	for i := range chunks {
+		chunks[i] = &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: "x"}}
+	}
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: chunks}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	data, err := PerformLLMInference(ctx, l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference returned error: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-data.Done:
+		t.Fatal("generation finished without a consumer; test cannot prove the fix")
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-data.Done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("generation stayed blocked after cancel — a streaming send ignored ctx.Done()")
+	}
+}
