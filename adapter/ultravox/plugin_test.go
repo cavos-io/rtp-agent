@@ -26,7 +26,7 @@ func TestUltravoxPluginMetadataMatchesReference(t *testing.T) {
 		{
 			name: "version",
 			got:  PluginVersion,
-			want: "1.5.19.rc1",
+			want: "v0.1.7",
 		},
 		{
 			name: "package",
