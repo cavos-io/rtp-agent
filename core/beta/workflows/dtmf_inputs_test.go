@@ -2,6 +2,8 @@ package workflows
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestRecordInputsToolRejectsInvalidDtmfEvents(t *testing.T) {
