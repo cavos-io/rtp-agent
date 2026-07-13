@@ -167,6 +167,14 @@ func (w *streamAdapterWrapper) run() {
 
 	tokenizer := newRetainFormatSentenceStream("en")
 
+	go func() {
+		select {
+		case <-w.ctx.Done():
+			tokenizer.AClose()
+		case <-w.doneCh:
+		}
+	}()
+
 	// Stream text to tokenizer
 	go func() {
 		for {
@@ -218,6 +226,13 @@ func (w *streamAdapterWrapper) run() {
 	}
 	w.flushSegmentPending(true)
 	w.markDone(nil)
+}
+
+func (w *streamAdapterWrapper) emitAudio(audio *SynthesizedAudio) {
+	select {
+	case w.eventCh <- audio:
+	case <-w.ctx.Done():
+	}
 }
 
 func (w *streamAdapterWrapper) flushCompletedSegments() {
@@ -336,7 +351,7 @@ func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
 	if isFinal {
 		w.emitSegmentMetrics(audio)
 	}
-	w.eventCh <- audio
+	w.emitAudio(audio)
 }
 
 func (w *streamAdapterWrapper) sendFinalMarker(segmentID string) {
@@ -368,7 +383,7 @@ func (w *streamAdapterWrapper) sendFinalMarker(segmentID string) {
 		IsFinal:   true,
 	}
 	w.emitSegmentMetrics(audio)
-	w.eventCh <- audio
+	w.emitAudio(audio)
 }
 
 func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, text string, segmentID string, isFinal bool, includeTranscript bool) {
@@ -384,7 +399,7 @@ func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, tex
 	if isFinal {
 		w.emitSegmentMetrics(audio)
 	}
-	w.eventCh <- audio
+	w.emitAudio(audio)
 }
 
 func (w *streamAdapterWrapper) observeSegmentAudio(audio *SynthesizedAudio, text string) {
@@ -497,7 +512,10 @@ func (w *streamAdapterWrapper) PushText(text string) error {
 		return nil
 	}
 	w.started = true
-	w.inputCh <- streamAdapterInput{text: text}
+	select {
+	case w.inputCh <- streamAdapterInput{text: text}:
+	case <-w.ctx.Done():
+	}
 	return nil
 }
 
@@ -510,7 +528,10 @@ func (w *streamAdapterWrapper) Flush() error {
 	if w.inputDone {
 		return nil
 	}
-	w.inputCh <- streamAdapterInput{flush: true}
+	select {
+	case w.inputCh <- streamAdapterInput{flush: true}:
+	case <-w.ctx.Done():
+	}
 	return nil
 }
 
@@ -529,6 +550,7 @@ func (w *streamAdapterWrapper) EndInput() error {
 }
 
 func (w *streamAdapterWrapper) Close() error {
+	w.cancel()
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -536,7 +558,6 @@ func (w *streamAdapterWrapper) Close() error {
 	}
 	w.closed = true
 	active := w.active
-	w.cancel()
 	if !w.inputDone {
 		w.inputDone = true
 		close(w.inputCh)
