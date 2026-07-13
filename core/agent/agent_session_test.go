@@ -7360,3 +7360,37 @@ func (c *closeableSessionTool) Close() error {
 	c.closeCalls++
 	return c.closeErr
 }
+
+func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
+	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	_ = s.AgentOutputTranscribedEvents()
+
+	emitDone := make(chan struct{})
+	go func() {
+		defer close(emitDone)
+		for i := 0; i < 50; i++ {
+			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: "hello",
+				IsFinal:    true,
+			})
+		}
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-emitDone:
+		t.Fatal("emitter did not block on the full subscriber channel; test cannot prove the fix")
+	default:
+	}
+
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	select {
+	case <-emitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("EmitAgentOutputTranscribed stayed blocked after Stop() — teardown did not unblock the subscriber send")
+	}
+}

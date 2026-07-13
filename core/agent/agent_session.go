@@ -358,6 +358,9 @@ type AgentSession struct {
 	closeChSubscribed    bool
 	closeSubs            []chan CloseEvent
 
+	teardownCh   chan struct{}
+	teardownOnce sync.Once
+
 	llmErrorCount int
 	ttsErrorCount int
 }
@@ -759,6 +762,28 @@ func (s *AgentSession) clearEventListenersLocked() {
 	s.eventListeners = nil
 }
 
+func (s *AgentSession) signalTeardown() {
+	s.teardownOnce.Do(func() {
+		if s.teardownCh != nil {
+			close(s.teardownCh)
+		}
+	})
+}
+
+func sendToSubscribers[T any](subscribers []chan T, ev T, done <-chan struct{}) {
+	for _, ch := range subscribers {
+		select {
+		case ch <- ev:
+		default:
+			select {
+			case ch <- ev:
+			case <-done:
+				return
+			}
+		}
+	}
+}
+
 func (s *AgentSession) recordEvent(ev Event) {
 	if ev == nil {
 		return
@@ -850,9 +875,7 @@ func (s *AgentSession) emitAgentStateChangedEvent(ev *AgentStateChangedEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- *ev
-	}
+	sendToSubscribers(subscribers, *ev, s.teardownCh)
 }
 
 func (s *AgentSession) emitUserStateChangedEvent(ev *UserStateChangedEvent) {
@@ -870,9 +893,7 @@ func (s *AgentSession) emitUserStateChangedEvent(ev *UserStateChangedEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- *ev
-	}
+	sendToSubscribers(subscribers, *ev, s.teardownCh)
 }
 
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
@@ -1126,6 +1147,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		sessionUsageCh:      make(chan SessionUsageUpdatedEvent, 10),
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
+		teardownCh:          make(chan struct{}),
 	}
 	session.Timeline = NewEventTimeline(session)
 	if opts.VideoSampler != nil {
@@ -1327,7 +1349,15 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	s.recordEvent(&ev)
 	for _, ch := range s.userInputTranscribedSubscribers() {
 		if ev.IsFinal {
-			ch <- ev
+			select {
+			case ch <- ev:
+			default:
+				select {
+				case ch <- ev:
+				case <-s.teardownCh:
+					return
+				}
+			}
 		} else {
 			select {
 			case ch <- ev:
@@ -1364,7 +1394,15 @@ func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent
 	s.recordEvent(&ev)
 	for _, ch := range s.agentOutputTranscribedSubscribers() {
 		if ev.IsFinal {
-			ch <- ev
+			select {
+			case ch <- ev:
+			default:
+				select {
+				case ch <- ev:
+				case <-s.teardownCh:
+					return
+				}
+			}
 		} else {
 			select {
 			case ch <- ev:
@@ -1441,9 +1479,7 @@ func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
@@ -1490,9 +1526,7 @@ func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) agentFalseInterruptionEvents() chan AgentFalseInterruptionEvent {
@@ -1547,9 +1581,7 @@ func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 	if activity != nil {
 		activity.OnUserTurnExceeded(ev)
 	}
@@ -1603,9 +1635,7 @@ func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) overlappingSpeechEvents() chan OverlappingSpeechEvent {
@@ -1663,9 +1693,7 @@ func (s *AgentSession) emitConversationItemAddedEvent(ev *ConversationItemAddedE
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- *ev
-	}
+	sendToSubscribers(subscribers, *ev, s.teardownCh)
 }
 
 func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedEvent {
@@ -1782,9 +1810,7 @@ func (s *AgentSession) emitFunctionToolsExecutedEvent(ev *FunctionToolsExecutedE
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- *ev
-	}
+	sendToSubscribers(subscribers, *ev, s.teardownCh)
 }
 
 func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedEvent {
@@ -1843,9 +1869,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
 	}
@@ -1868,9 +1892,7 @@ func (s *AgentSession) emitMetricsCollectedEvent(ev *MetricsCollectedEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- *ev
-	}
+	sendToSubscribers(subscribers, *ev, s.teardownCh)
 }
 
 func (s *AgentSession) Usage() telemetry.UsageSummary {
@@ -1931,9 +1953,7 @@ func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent {
@@ -1980,9 +2000,7 @@ func (s *AgentSession) EmitError(ev ErrorEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 	s.closeOnUnrecoverableError(ev.Error)
 }
 
@@ -2141,9 +2159,7 @@ func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
@@ -2586,9 +2602,7 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) UpdateUserState(state UserState) {
@@ -2633,9 +2647,7 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		default:
 		}
 	}
-	for _, ch := range subscribers {
-		ch <- ev
-	}
+	sendToSubscribers(subscribers, ev, s.teardownCh)
 }
 
 func (s *AgentSession) updateUserAwayTimer() {
@@ -3212,6 +3224,7 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 }
 
 func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
+	s.signalTeardown()
 	s.mu.Lock()
 	if !s.started {
 		s.clearEventListenersLocked()
