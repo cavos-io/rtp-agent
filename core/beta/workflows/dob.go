@@ -499,8 +499,620 @@ func dobMissingDatePrompt() string {
 	return "No date of birth was provided yet, ask the user to provide it."
 }
 
+func parseDOBArgs(args []byte) (int, int, int, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(args, &params); err != nil {
+		return 0, 0, 0, err
+	}
+	year, err := parseDOBYear(params["year"])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("year: %w", err)
+	}
+	month, err := parseDOBMonth(params["month"])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("month: %w", err)
+	}
+	day, err := parseDOBDay(params["day"])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("day: %w", err)
+	}
+	return year, month, day, nil
+}
+
+func parseDOBMonth(raw json.RawMessage) (int, error) {
+	var number int
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number, nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, err
+	}
+	text = cleanSpokenDOBText(text)
+	if value, err := strconv.Atoi(text); err == nil {
+		return value, nil
+	}
+	if value, ok := expirationMonthNames[text]; ok {
+		return value, nil
+	}
+	if value, ok := parseSpokenExpirationNumber(text); ok {
+		return value, nil
+	}
+	return 0, fmt.Errorf("invalid birth month %q", text)
+}
+
+func parseDOBYear(raw json.RawMessage) (int, error) {
+	var number int
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return normalizeDOBYear(number), nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, err
+	}
+	text = cleanSpokenDOBText(text)
+	if value, err := strconv.Atoi(text); err == nil {
+		return normalizeDOBYear(value), nil
+	}
+	rawTokens := strings.Fields(strings.ReplaceAll(text, "-", " "))
+	tokens := rawTokens[:0]
+	for _, token := range rawTokens {
+		if token == "and" {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+	if value, ok := parseSpokenDOBDigitSequence(tokens); ok {
+		return normalizeDOBYear(value), nil
+	}
+	if len(tokens) == 2 && tokens[0] == "nineteen" {
+		if value, ok := parseSpokenExpirationNumber(tokens[1]); ok {
+			return 1900 + value, nil
+		}
+	}
+	if len(tokens) == 3 && tokens[0] == "nineteen" && isSpokenDOBZeroMarker(tokens[1]) {
+		if value, ok := parseSpokenExpirationNumber(tokens[2]); ok && value < 10 {
+			return 1900 + value, nil
+		}
+	}
+	if len(tokens) >= 2 && tokens[0] == "nineteen" && tokens[1] == "hundred" {
+		if len(tokens) == 2 {
+			return 1900, nil
+		}
+		if value, ok := parseSpokenExpirationNumber(strings.Join(tokens[2:], " ")); ok && value < 100 {
+			return 1900 + value, nil
+		}
+	}
+	if len(tokens) >= 2 && tokens[0] == "two" && tokens[1] == "thousand" {
+		if len(tokens) == 2 {
+			return 2000, nil
+		}
+		if value, ok := parseSpokenExpirationNumber(strings.Join(tokens[2:], " ")); ok && value < 100 {
+			return 2000 + value, nil
+		}
+	}
+	if len(tokens) == 3 && tokens[0] == "twenty" && isSpokenDOBZeroMarker(tokens[1]) {
+		if value, ok := parseSpokenExpirationNumber(tokens[2]); ok && value < 10 {
+			return 2000 + value, nil
+		}
+	}
+	if value, ok := parseSpokenExpirationNumber(text); ok {
+		return normalizeDOBYear(value), nil
+	}
+	return 0, fmt.Errorf("invalid birth year %q", text)
+}
+
+func parseSpokenDOBDigitSequence(tokens []string) (int, bool) {
+	if len(tokens) < 3 || len(tokens) > 4 {
+		return 0, false
+	}
+	value := 0
+	for _, token := range tokens {
+		digit, ok := spokenDOBDigit(token)
+		if !ok {
+			return 0, false
+		}
+		value = value*10 + digit
+	}
+	return value, true
+}
+
+func spokenDOBDigit(token string) (int, bool) {
+	switch token {
+	case "zero", "oh", "o", "owe", "aught", "ought", "naught", "nought":
+		return 0, true
+	case "one", "won":
+		return 1, true
+	case "two", "to", "too":
+		return 2, true
+	case "three", "tree", "free":
+		return 3, true
+	case "four", "for", "fore":
+		return 4, true
+	case "five":
+		return 5, true
+	case "six", "sex":
+		return 6, true
+	case "seven":
+		return 7, true
+	case "eight", "ate":
+		return 8, true
+	case "nine", "niner":
+		return 9, true
+	default:
+		return 0, false
+	}
+}
+
+func isSpokenDOBZeroMarker(token string) bool {
+	switch token {
+	case "oh", "o", "owe", "zero", "aught", "ought", "naught", "nought":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeDOBYear(year int) int {
+	if year >= 0 && year <= 99 {
+		currentYear := time.Now().Year()
+		candidate := 2000 + year
+		if candidate <= currentYear {
+			return candidate
+		}
+		return 1900 + year
+	}
+	return year
+}
+
+func parseDOBDay(raw json.RawMessage) (int, error) {
+	var number int
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number, nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, err
+	}
+	text = cleanSpokenDOBText(text)
+	if value, err := strconv.Atoi(text); err == nil {
+		return value, nil
+	}
+	if value, ok := parseOrdinalSuffixDay(text); ok {
+		return value, nil
+	}
+	if value, ok := parseSplitOrdinalSuffixDay(text); ok {
+		return value, nil
+	}
+	if value, ok := dobOrdinals[text]; ok {
+		return value, nil
+	}
+	if value, ok := parseSpokenExpirationNumber(text); ok {
+		return value, nil
+	}
+	return 0, fmt.Errorf("invalid birth day %q", text)
+}
+
+func parseOrdinalSuffixDay(text string) (int, bool) {
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if strings.HasSuffix(text, suffix) {
+			value, err := strconv.Atoi(strings.TrimSuffix(text, suffix))
+			if err == nil {
+				return value, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func parseSplitOrdinalSuffixDay(text string) (int, bool) {
+	tokens := strings.Fields(text)
+	if len(tokens) < 2 {
+		return 0, false
+	}
+	suffix := tokens[len(tokens)-1]
+	if suffix != "st" && suffix != "nd" && suffix != "rd" && suffix != "th" {
+		return 0, false
+	}
+	base := strings.Join(tokens[:len(tokens)-1], " ")
+	if value, err := strconv.Atoi(base); err == nil {
+		return value, true
+	}
+	if value, ok := parseSpokenExpirationNumber(base); ok {
+		return value, true
+	}
+	return 0, false
+}
+
+func cleanSpokenDOBText(text string) string {
+	fillers := map[string]struct{}{"um": {}, "uh": {}, "er": {}, "ah": {}, "hmm": {}, "like": {}, "actually": {}, "sorry": {}, "i": {}, "was": {}, "at": {}, "in": {}, "the": {}, "of": {}, "born": {}, "on": {}, "slash": {}, "forward": {}, "backslash": {}, "dash": {}, "hyphen": {}}
+	tokens := strings.Fields(strings.ToLower(strings.TrimSpace(text)))
+	tokens = trimSpokenDOBPreamble(tokens)
+	tokens = trimTrailingSpokenDOBFiller(tokens)
+	out := tokens[:0]
+	for _, token := range tokens {
+		token = strings.Trim(token, ".,!?;:/\\-")
+		if token == "" {
+			continue
+		}
+		if _, ok := fillers[token]; ok {
+			continue
+		}
+		out = append(out, token)
+	}
+	return strings.Join(out, " ")
+}
+
+func trimTrailingSpokenDOBFiller(tokens []string) []string {
+	clean := func(token string) string {
+		return strings.Trim(token, ".,!?;:")
+	}
+	if trimmed := trimTrailingSpokenDOBSignoffParts(tokens, clean); len(trimmed) != len(tokens) {
+		return trimmed
+	}
+	trailing := map[string]struct{}{
+		"done": {}, "ok": {}, "okay": {}, "please": {}, "thanks": {}, "thank": {}, "you": {},
+	}
+	if len(tokens) >= 2 &&
+		clean(tokens[len(tokens)-1]) == "done" &&
+		clean(tokens[len(tokens)-2]) == "all" {
+		tokens = tokens[:len(tokens)-2]
+	}
+	for len(tokens) > 0 {
+		last := clean(tokens[len(tokens)-1])
+		if last == "you" && len(tokens) >= 2 && clean(tokens[len(tokens)-2]) == "for" {
+			break
+		}
+		if _, ok := trailing[last]; !ok {
+			break
+		}
+		tokens = tokens[:len(tokens)-1]
+	}
+	if len(tokens) >= 4 &&
+		(clean(tokens[len(tokens)-4]) == "that's" || clean(tokens[len(tokens)-4]) == "thats") &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		(clean(tokens[len(tokens)-1]) == "now" || clean(tokens[len(tokens)-1]) == "me" || clean(tokens[len(tokens)-1]) == "today" || clean(tokens[len(tokens)-1]) == "day") {
+		return tokens[:len(tokens)-4]
+	}
+	if len(tokens) >= 5 &&
+		(clean(tokens[len(tokens)-5]) == "that's" || clean(tokens[len(tokens)-5]) == "thats") &&
+		(clean(tokens[len(tokens)-4]) == "it" || clean(tokens[len(tokens)-4]) == "all") &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-5]
+	}
+	if len(tokens) >= 5 &&
+		clean(tokens[len(tokens)-5]) == "that" &&
+		clean(tokens[len(tokens)-4]) == "is" &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		(clean(tokens[len(tokens)-1]) == "now" || clean(tokens[len(tokens)-1]) == "me" || clean(tokens[len(tokens)-1]) == "today" || clean(tokens[len(tokens)-1]) == "day") {
+		return tokens[:len(tokens)-5]
+	}
+	if len(tokens) >= 6 &&
+		clean(tokens[len(tokens)-6]) == "that" &&
+		clean(tokens[len(tokens)-5]) == "is" &&
+		(clean(tokens[len(tokens)-4]) == "it" || clean(tokens[len(tokens)-4]) == "all") &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-6]
+	}
+	if len(tokens) >= 7 &&
+		clean(tokens[len(tokens)-7]) == "that" &&
+		clean(tokens[len(tokens)-6]) == "will" &&
+		clean(tokens[len(tokens)-5]) == "be" &&
+		(clean(tokens[len(tokens)-4]) == "it" || clean(tokens[len(tokens)-4]) == "all") &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-7]
+	}
+	if len(tokens) >= 6 &&
+		(clean(tokens[len(tokens)-6]) == "that'll" || clean(tokens[len(tokens)-6]) == "thatll") &&
+		clean(tokens[len(tokens)-5]) == "be" &&
+		(clean(tokens[len(tokens)-4]) == "it" || clean(tokens[len(tokens)-4]) == "all") &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-6]
+	}
+	if len(tokens) >= 7 &&
+		clean(tokens[len(tokens)-7]) == "that" &&
+		clean(tokens[len(tokens)-6]) == "ll" &&
+		clean(tokens[len(tokens)-5]) == "be" &&
+		(clean(tokens[len(tokens)-4]) == "it" || clean(tokens[len(tokens)-4]) == "all") &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-7]
+	}
+	if len(tokens) >= 5 &&
+		(clean(tokens[len(tokens)-5]) == "that'll" || clean(tokens[len(tokens)-5]) == "thatll") &&
+		clean(tokens[len(tokens)-4]) == "be" &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-5]
+	}
+	if len(tokens) >= 6 &&
+		clean(tokens[len(tokens)-6]) == "that" &&
+		clean(tokens[len(tokens)-5]) == "ll" &&
+		clean(tokens[len(tokens)-4]) == "be" &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-6]
+	}
+	if len(tokens) >= 2 &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-2]
+	}
+	if len(tokens) >= 3 &&
+		clean(tokens[len(tokens)-3]) == "for" &&
+		clean(tokens[len(tokens)-2]) == "the" &&
+		clean(tokens[len(tokens)-1]) == "day" {
+		return tokens[:len(tokens)-3]
+	}
+	if len(tokens) >= 2 &&
+		clean(tokens[len(tokens)-1]) == "it" &&
+		(clean(tokens[len(tokens)-2]) == "that's" || clean(tokens[len(tokens)-2]) == "thats") {
+		return tokens[:len(tokens)-2]
+	}
+	if len(tokens) >= 2 &&
+		clean(tokens[len(tokens)-1]) == "all" &&
+		(clean(tokens[len(tokens)-2]) == "that's" || clean(tokens[len(tokens)-2]) == "thats") {
+		return tokens[:len(tokens)-2]
+	}
+	if len(tokens) >= 3 &&
+		(clean(tokens[len(tokens)-1]) == "it" || clean(tokens[len(tokens)-1]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "is" &&
+		clean(tokens[len(tokens)-3]) == "that" {
+		return tokens[:len(tokens)-3]
+	}
+	if len(tokens) >= 3 &&
+		(clean(tokens[len(tokens)-3]) == "that'll" || clean(tokens[len(tokens)-3]) == "thatll") &&
+		clean(tokens[len(tokens)-2]) == "be" &&
+		(clean(tokens[len(tokens)-1]) == "it" || clean(tokens[len(tokens)-1]) == "all") {
+		return tokens[:len(tokens)-3]
+	}
+	if len(tokens) >= 4 &&
+		clean(tokens[len(tokens)-4]) == "that" &&
+		clean(tokens[len(tokens)-3]) == "will" &&
+		clean(tokens[len(tokens)-2]) == "be" &&
+		(clean(tokens[len(tokens)-1]) == "it" || clean(tokens[len(tokens)-1]) == "all") {
+		return tokens[:len(tokens)-4]
+	}
+	if len(tokens) >= 4 &&
+		clean(tokens[len(tokens)-4]) == "that" &&
+		clean(tokens[len(tokens)-3]) == "ll" &&
+		clean(tokens[len(tokens)-2]) == "be" &&
+		(clean(tokens[len(tokens)-1]) == "it" || clean(tokens[len(tokens)-1]) == "all") {
+		return tokens[:len(tokens)-4]
+	}
+	return tokens
+}
+
+func trimTrailingSpokenDOBSignoffParts(tokens []string, clean func(string) string) []string {
+	if len(tokens) >= 5 &&
+		clean(tokens[len(tokens)-5]) == "that" &&
+		clean(tokens[len(tokens)-4]) == "is" &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-5]
+	}
+	if len(tokens) >= 5 &&
+		clean(tokens[len(tokens)-5]) == "that" &&
+		clean(tokens[len(tokens)-4]) == "s" &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-5]
+	}
+	if len(tokens) >= 4 &&
+		(clean(tokens[len(tokens)-4]) == "that's" || clean(tokens[len(tokens)-4]) == "thats") &&
+		(clean(tokens[len(tokens)-3]) == "it" || clean(tokens[len(tokens)-3]) == "all") &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-4]
+	}
+	if len(tokens) >= 2 &&
+		clean(tokens[len(tokens)-2]) == "for" &&
+		isSpokenDOBSignoffObject(clean(tokens[len(tokens)-1])) {
+		return tokens[:len(tokens)-2]
+	}
+	return tokens
+}
+
+func isSpokenDOBSignoffObject(token string) bool {
+	switch token {
+	case "me", "now", "today", "day", "you":
+		return true
+	default:
+		return false
+	}
+}
+
+func trimSpokenDOBPreamble(tokens []string) []string {
+	clean := func(token string) string {
+		return strings.Trim(token, ".,!?;:")
+	}
+	hasPrefix := func(prefix ...string) bool {
+		if len(tokens) < len(prefix) {
+			return false
+		}
+		for i, want := range prefix {
+			if clean(tokens[i]) != want {
+				return false
+			}
+		}
+		return true
+	}
+	willBePrefixes := [][]string{
+		{"the", "birthday", "will", "be"},
+		{"my", "birthday", "will", "be"},
+		{"birthday", "will", "be"},
+		{"the", "birth", "day", "will", "be"},
+		{"my", "birth", "day", "will", "be"},
+		{"birth", "day", "will", "be"},
+		{"the", "date", "of", "birth", "will", "be"},
+		{"my", "date", "of", "birth", "will", "be"},
+		{"date", "of", "birth", "will", "be"},
+		{"the", "birth", "date", "will", "be"},
+		{"my", "birth", "date", "will", "be"},
+		{"birth", "date", "will", "be"},
+		{"the", "birthdate", "will", "be"},
+		{"my", "birthdate", "will", "be"},
+		{"birthdate", "will", "be"},
+		{"my", "dob", "will", "be"},
+		{"dob", "will", "be"},
+		{"the", "year", "will", "be"},
+		{"year", "will", "be"},
+		{"the", "month", "will", "be"},
+		{"month", "will", "be"},
+		{"the", "day", "will", "be"},
+		{"day", "will", "be"},
+		{"the", "time", "of", "birth", "will", "be"},
+		{"my", "time", "of", "birth", "will", "be"},
+		{"time", "of", "birth", "will", "be"},
+		{"the", "birth", "time", "will", "be"},
+		{"birth", "time", "will", "be"},
+		{"the", "time", "will", "be"},
+		{"my", "time", "will", "be"},
+		{"time", "will", "be"},
+	}
+	for _, prefix := range willBePrefixes {
+		if hasPrefix(prefix...) {
+			return tokens[len(prefix):]
+		}
+	}
+	switch {
+	case hasPrefix("birthday's"):
+		return tokens[1:]
+	case hasPrefix("birthday", "s"):
+		return tokens[2:]
+	case hasPrefix("birth", "day", "s"):
+		return tokens[3:]
+	case hasPrefix("birthdate's"):
+		return tokens[1:]
+	case hasPrefix("birthdate", "s"):
+		return tokens[2:]
+	case hasPrefix("dob's"):
+		return tokens[1:]
+	case hasPrefix("dob", "s"):
+		return tokens[2:]
+	case hasPrefix("d", "o", "b", "is"):
+		return tokens[4:]
+	case hasPrefix("d", "o", "b", "s"):
+		return tokens[4:]
+	case hasPrefix("dee", "oh", "bee", "is"):
+		return tokens[4:]
+	case hasPrefix("dee", "oh", "bee", "s"):
+		return tokens[4:]
+	case hasPrefix("the", "birthday", "is"):
+		return tokens[3:]
+	case hasPrefix("my", "birthday", "is"):
+		return tokens[3:]
+	case hasPrefix("birthday", "is"):
+		return tokens[2:]
+	case hasPrefix("the", "birth", "day", "is"):
+		return tokens[4:]
+	case hasPrefix("my", "birth", "day", "is"):
+		return tokens[4:]
+	case hasPrefix("birth", "day", "is"):
+		return tokens[3:]
+	case hasPrefix("the", "date", "of", "birth", "is"):
+		return tokens[5:]
+	case hasPrefix("my", "date", "of", "birth", "is"):
+		return tokens[5:]
+	case hasPrefix("date", "of", "birth", "is"):
+		return tokens[4:]
+	case hasPrefix("the", "birth", "date", "is"):
+		return tokens[4:]
+	case hasPrefix("my", "birth", "date", "is"):
+		return tokens[4:]
+	case hasPrefix("birth", "date", "is"):
+		return tokens[3:]
+	case hasPrefix("the", "birthdate", "is"):
+		return tokens[3:]
+	case hasPrefix("my", "birthdate", "is"):
+		return tokens[3:]
+	case hasPrefix("birthdate", "is"):
+		return tokens[2:]
+	case hasPrefix("my", "dob", "is"):
+		return tokens[3:]
+	case hasPrefix("dob", "is"):
+		return tokens[2:]
+	case hasPrefix("the", "year", "is"):
+		return tokens[3:]
+	case hasPrefix("year", "is"):
+		return tokens[2:]
+	case hasPrefix("the", "month", "is"):
+		return tokens[3:]
+	case hasPrefix("month", "is"):
+		return tokens[2:]
+	case hasPrefix("the", "day", "is"):
+		return tokens[3:]
+	case hasPrefix("day", "is"):
+		return tokens[2:]
+	case hasPrefix("the", "time", "of", "birth", "is"):
+		return tokens[5:]
+	case hasPrefix("my", "time", "of", "birth", "is"):
+		return tokens[5:]
+	case hasPrefix("time", "of", "birth", "is"):
+		return tokens[4:]
+	case hasPrefix("the", "birth", "time", "is"):
+		return tokens[4:]
+	case hasPrefix("birth", "time", "is"):
+		return tokens[3:]
+	case hasPrefix("the", "time", "is"):
+		return tokens[3:]
+	case hasPrefix("my", "time", "is"):
+		return tokens[3:]
+	case hasPrefix("time", "is"):
+		return tokens[2:]
+	default:
+		return tokens
+	}
+}
+
+var dobOrdinals = map[string]int{
+	"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+	"sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+	"eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14,
+	"fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+	"nineteenth": 19, "twentieth": 20, "twenty first": 21, "twenty-first": 21,
+	"twenty second": 22, "twenty-second": 22, "twenty third": 23, "twenty-third": 23,
+	"twenty fourth": 24, "twenty-fourth": 24, "twenty fifth": 25, "twenty-fifth": 25,
+	"twenty sixth": 26, "twenty-sixth": 26, "twenty seventh": 27, "twenty-seventh": 27,
+	"twenty eighth": 28, "twenty-eighth": 28, "twenty ninth": 29, "twenty-ninth": 29,
+	"thirtieth": 30, "thirty first": 31, "thirty-first": 31,
+}
+
 type declineDOBCaptureTool struct {
 	task *GetDOBTask
+}
+
+func dobFailureTarget(ctx context.Context, fallback *GetDOBTask) *GetDOBTask {
+	runCtx := agent.GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil {
+		return fallback
+	}
+	currentAgent, err := runCtx.Session.CurrentAgent()
+	if err != nil {
+		return fallback
+	}
+	if task, ok := currentAgent.(*GetDOBTask); ok {
+		return task
+	}
+	return fallback
 }
 
 func (t *declineDOBCaptureTool) ID() string   { return "decline_dob_capture" }
@@ -515,7 +1127,7 @@ func (t *declineDOBCaptureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"reason": map[string]any{"type": "string", "description": "A short explanation of why the user declined"},
+			"reason": map[string]any{"type": "string", "description": "A short explanation of why the user declined to provide the date of birth"},
 		},
 		"required": []string{"reason"},
 	}
@@ -528,15 +1140,21 @@ func (t *declineDOBCaptureTool) Execute(ctx context.Context, args string) (strin
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return "", err
 	}
-	_ = t.task.Fail(llm.NewToolError(fmt.Sprintf("couldn't get the date of birth: %s", params.Reason)))
-	return "Task failed.", nil
+	_ = dobFailureTarget(ctx, t.task).Fail(llm.NewToolError(fmt.Sprintf("couldn't get the date of birth: %s", params.Reason)))
+	return "", nil
 }
 
 func buildDOB(year int, month int, day int) (time.Time, error) {
-	dob := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-	if dob.Year() != year || int(dob.Month()) != month || dob.Day() != day {
-		return time.Time{}, llm.NewToolError(fmt.Sprintf("Invalid date: year=%d month=%d day=%d", year, month, day))
+	if year < 1 || year > 9999 {
+		return time.Time{}, llm.NewToolError(fmt.Sprintf("Invalid date: year %d is out of range", year))
 	}
+	if month < 1 || month > 12 {
+		return time.Time{}, llm.NewToolError("Invalid date: month must be in 1..12")
+	}
+	if day < 1 || day > daysInMonth(year, time.Month(month)) {
+		return time.Time{}, llm.NewToolError("Invalid date: day is out of range for month")
+	}
+	dob := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 	today := time.Now()
 	if dob.After(time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)) {
 		return time.Time{}, llm.NewToolError(fmt.Sprintf("Invalid date of birth: %s is in the future. Date of birth cannot be a future date.", dob.Format("January 02, 2006")))
@@ -544,9 +1162,16 @@ func buildDOB(year int, month int, day int) (time.Time, error) {
 	return dob, nil
 }
 
+func daysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
 func buildDOBTime(hour int, minute int) (time.Time, error) {
-	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-		return time.Time{}, llm.NewToolError(fmt.Sprintf("Invalid time: hour=%d minute=%d", hour, minute))
+	if hour < 0 || hour > 23 {
+		return time.Time{}, llm.NewToolError("Invalid time: hour must be in 0..23")
+	}
+	if minute < 0 || minute > 59 {
+		return time.Time{}, llm.NewToolError("Invalid time: minute must be in 0..59")
 	}
 	return time.Date(0, time.January, 1, hour, minute, 0, 0, time.UTC), nil
 }
