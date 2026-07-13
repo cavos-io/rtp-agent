@@ -1065,3 +1065,56 @@ func newWarmTransferTaskForTest(t *testing.T, targetPhone string, trunkID string
 	}
 	return task
 }
+
+func waitForWarmTransferDeleteRoom(t *testing.T, jobCtx *fakeWarmTransferJobContext, want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		jobCtx.mu.Lock()
+		got := jobCtx.deleteRoomName
+		jobCtx.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	jobCtx.mu.Lock()
+	got := jobCtx.deleteRoomName
+	jobCtx.mu.Unlock()
+	t.Fatalf("DeleteRoom room = %q, want %q", got, want)
+}
+
+func warmTransferDeleteRoomCalls(jobCtx *fakeWarmTransferJobContext) int {
+	jobCtx.mu.Lock()
+	defer jobCtx.mu.Unlock()
+
+	return jobCtx.deleteRoomCalls
+}
+
+type referenceWarmTransferExtraTool struct {
+	id string
+}
+
+func (t referenceWarmTransferExtraTool) ID() string {
+	return t.id
+}
+
+func (t referenceWarmTransferExtraTool) Name() string {
+	return t.id
+}
+
+func (t referenceWarmTransferExtraTool) Description() string {
+	return "reference warm-transfer extra tool"
+}
+
+func (t referenceWarmTransferExtraTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func (t referenceWarmTransferExtraTool) Execute(ctx context.Context, args string) (string, error) {
+	return "", nil
+}
