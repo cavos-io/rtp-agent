@@ -2268,6 +2268,33 @@ func TestNewAgentSessionPreservesExplicitFalseDiscardAudioIfUninterruptible(t *t
 	}
 }
 
+func TestAgentSessionInputAudioMuteControlsSilenceGate(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	if session.InputAudioMuted() {
+		t.Fatal("InputAudioMuted() = true for new session, want false")
+	}
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true for new session, want false")
+	}
+
+	session.SetInputAudioMuted(true)
+	if !session.InputAudioMuted() {
+		t.Fatal("InputAudioMuted() = false after SetInputAudioMuted(true)")
+	}
+	if !session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = false while input audio is muted")
+	}
+
+	session.SetInputAudioMuted(false)
+	if session.InputAudioMuted() {
+		t.Fatal("InputAudioMuted() = true after SetInputAudioMuted(false)")
+	}
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true after clearing input audio mute")
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroMaxToolSteps(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		MaxToolSteps:    0,
