@@ -962,6 +962,118 @@ func TestGetCreditCardTaskBuildsReferenceSubtasks(t *testing.T) {
 	}
 }
 
+func TestGetCreditCardTaskCardholderKeepsDefaultConfirmationModality(t *testing.T) {
+	task := NewGetCreditCardTask()
+	group := task.buildTaskGroup()
+
+	for _, info := range group.RegisteredTasks {
+		if info.ID != "cardholder_name_task" {
+			continue
+		}
+		nameTask, ok := info.TaskFactory().(*GetNameTask)
+		if !ok {
+			t.Fatalf("cardholder task = %T, want *GetNameTask", info.TaskFactory())
+		}
+		if nameTask.RequireConfirmationSet {
+			t.Fatalf("cardholder RequireConfirmationSet = true, want reference omitted confirmation to stay modality-aware")
+		}
+		return
+	}
+	t.Fatal("cardholder_name_task not registered")
+}
+
+func TestGetCreditCardTaskBuildsTaskGroupWithParentChatContext(t *testing.T) {
+	task := NewGetCreditCardTask()
+	task.ChatCtx.Append(&llm.ChatMessage{
+		ID:      "prior-card-detail",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "The cardholder is Ada Lovelace."}},
+	})
+
+	group := task.buildTaskGroup()
+	if group.ChatCtx == nil {
+		t.Fatal("group ChatCtx = nil, want parent context copy")
+	}
+	if group.ChatCtx == task.ChatCtx {
+		t.Fatal("group ChatCtx aliases parent, want copy")
+	}
+	if group.ChatCtx.GetByID("prior-card-detail") == nil {
+		t.Fatalf("group ChatCtx items = %#v, want prior parent chat item", group.ChatCtx.Items)
+	}
+	for _, info := range group.RegisteredTasks {
+		child := info.TaskFactory()
+		if child.GetAgent().ChatCtx.GetByID("prior-card-detail") == nil {
+			t.Fatalf("%s child ChatCtx items = %#v, want prior parent chat item", info.ID, child.GetAgent().ChatCtx.Items)
+		}
+	}
+}
+
+func TestGetCreditCardTaskOptionsSeedReferenceChatContext(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:      "prior-cardholder",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "The cardholder should be Ada Lovelace."}},
+	})
+	opts := GetCreditCardOptions{}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("ChatContext")
+	if !field.IsValid() {
+		t.Fatal("GetCreditCardOptions.ChatContext missing; want reference chat_ctx constructor option")
+	}
+	field.Set(reflect.ValueOf(chatCtx))
+
+	task := NewGetCreditCardTaskWithOptions(opts)
+
+	if task.ChatCtx == nil {
+		t.Fatal("task ChatCtx = nil, want constructor chat context copy")
+	}
+	if task.ChatCtx == chatCtx {
+		t.Fatal("task ChatCtx aliases constructor context, want reference-style copy")
+	}
+	if task.ChatCtx.GetByID("prior-cardholder") == nil {
+		t.Fatalf("task ChatCtx items = %#v, want constructor chat item", task.ChatCtx.Items)
+	}
+	group := task.buildTaskGroup()
+	if group.ChatCtx.GetByID("prior-cardholder") == nil {
+		t.Fatalf("group ChatCtx items = %#v, want constructor chat item passed to TaskGroup", group.ChatCtx.Items)
+	}
+}
+
+func TestGetCreditCardTaskPreservesReferenceExtraTools(t *testing.T) {
+	opts := GetCreditCardOptions{}
+	field := reflect.ValueOf(&opts).Elem().FieldByName("Tools")
+	if !field.IsValid() {
+		t.Fatal("GetCreditCardOptions.Tools missing; want reference tools constructor option")
+	}
+	field.Set(reflect.ValueOf([]llm.Tool{referenceCreditCardExtraTool{id: "card_help"}}))
+
+	task := NewGetCreditCardTaskWithOptions(opts)
+
+	if len(task.Agent.Tools) != 1 {
+		t.Fatalf("tools len = %d, want caller-provided aggregate tool preserved", len(task.Agent.Tools))
+	}
+	if got := task.Agent.Tools[0].Name(); got != "card_help" {
+		t.Fatalf("tools[0] = %q, want caller-provided tool preserved", got)
+	}
+}
+
+func TestGetCreditCardTaskPropagatesExtraInstructionsToSubtasks(t *testing.T) {
+	extra := "Ask whether this is the card the caller wants saved on file."
+	task := NewGetCreditCardTaskWithOptions(GetCreditCardOptions{
+		RequireConfirmation:    true,
+		RequireConfirmationSet: true,
+		ExtraInstructions:      extra,
+	})
+
+	group := task.buildTaskGroup()
+	for _, info := range group.RegisteredTasks {
+		child := info.TaskFactory()
+		if !strings.Contains(child.GetAgent().Instructions, extra) {
+			t.Fatalf("%s instructions = %q, want extra guidance %q", info.ID, child.GetAgent().Instructions, extra)
+		}
+	}
+}
+
 func TestGetCreditCardTaskRestartsCollectionOnRestartError(t *testing.T) {
 	task := NewGetCreditCardTask(false)
 	attempts := 0
@@ -1001,14 +1113,119 @@ func TestGetCreditCardTaskRestartsCollectionOnRestartError(t *testing.T) {
 	}
 }
 
+func TestCreditCardSubtaskOnEnterPromptsUseInstructions(t *testing.T) {
+	cases := []struct {
+		name string
+		task agent.AgentInterface
+		want string
+	}{
+		{
+			name: "card number",
+			task: NewGetCardNumberTask(),
+			want: cardNumberOnEnterPrompt(),
+		},
+		{
+			name: "security code",
+			task: NewGetSecurityCodeTask(),
+			want: securityCodeOnEnterPrompt(),
+		},
+		{
+			name: "expiration date",
+			task: NewGetExpirationDateTask(),
+			want: expirationDateOnEnterPrompt(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := agent.NewAgentSession(tc.task, nil, agent.AgentSessionOptions{})
+			session.Assistant = &fakeDtmfSessionAssistant{}
+			speechEvents := session.SpeechCreatedEvents()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := session.Start(ctx); err != nil {
+				t.Fatalf("Start error = %v", err)
+			}
+			defer session.Stop(context.Background())
+
+			select {
+			case ev := <-speechEvents:
+				if ev.SpeechHandle == nil {
+					t.Fatal("SpeechCreated SpeechHandle = nil, want on-enter reply handle")
+				}
+				if ev.SpeechHandle.Generation.UserMessage != nil {
+					t.Fatalf("on-enter UserMessage = %#v, want nil for instruction-backed prompt", ev.SpeechHandle.Generation.UserMessage)
+				}
+				if ev.SpeechHandle.Generation.Instructions == nil {
+					t.Fatal("on-enter instructions = nil, want reference prompt")
+				}
+				if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != tc.want {
+					t.Fatalf("on-enter instructions = %q, want %q", got, tc.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for card subtask on-enter prompt")
+			}
+		})
+	}
+}
+
+func TestDeclineCardCaptureToolUsesReferenceSchema(t *testing.T) {
+	tool := &declineCardCaptureTool{task: NewGetCardNumberTask(false)}
+
+	wantDescription := "Handles the case when the user explicitly declines to provide a detail for their card information."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("decline_card_capture description = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map", tool.Parameters()["properties"])
+	}
+	reason, ok := properties["reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("reason schema = %#v, want map", properties["reason"])
+	}
+	wantParam := "A short explanation of why the user declined to provide card information"
+	if got := reason["description"]; got != wantParam {
+		t.Fatalf("reason description = %#v, want %q", got, wantParam)
+	}
+}
+
+func TestRestartCardCollectionToolUsesReferenceSchema(t *testing.T) {
+	tool := &restartCardCollectionTool{task: NewGetCardNumberTask(false)}
+
+	wantDescription := "Handles the case when the user wishes to start over the card information collection process and validate a new card."
+	if got := tool.Description(); got != wantDescription {
+		t.Fatalf("restart_card_collection description = %q, want %q", got, wantDescription)
+	}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map", tool.Parameters()["properties"])
+	}
+	reason, ok := properties["reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("reason schema = %#v, want map", properties["reason"])
+	}
+	wantParam := "A short explanation of why the user wishes to start over"
+	if got := reason["description"]; got != wantParam {
+		t.Fatalf("reason description = %#v, want %q", got, wantParam)
+	}
+}
+
 func TestDeclineCardCaptureToolFailsWithTypedReason(t *testing.T) {
 	task := NewGetCardNumberTask(false)
 	tool := &declineCardCaptureTool{task: task}
 
-	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {
+	out, err := tool.Execute(context.Background(), `{"reason":"user refused"}`)
+	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	_, err := task.WaitAny(context.Background())
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after decline", out)
+	}
+	_, err = task.WaitAny(context.Background())
 	var declined *CardCaptureDeclinedError
 	if !errors.As(err, &declined) {
 		t.Fatalf("WaitAny() error = %T %v, want CardCaptureDeclinedError", err, err)
@@ -1018,20 +1235,164 @@ func TestDeclineCardCaptureToolFailsWithTypedReason(t *testing.T) {
 	}
 }
 
+func TestDeclineCardCaptureToolUsesRunContextCurrentAgent(t *testing.T) {
+	staleTask := NewGetCardNumberTask(false)
+	currentTask := NewGetSecurityCodeTask(false)
+	session := agent.NewAgentSession(currentTask, nil, agent.AgentSessionOptions{})
+	ctx := agent.WithRunContext(context.Background(), agent.NewRunContext(session, nil, nil))
+	tool := &declineCardCaptureTool{task: staleTask}
+
+	out, err := tool.Execute(ctx, `{"reason":"user refused current field"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after decline", out)
+	}
+
+	select {
+	case err := <-currentTask.Err:
+		var declined *CardCaptureDeclinedError
+		if !errors.As(err, &declined) {
+			t.Fatalf("current task error = %T %v, want CardCaptureDeclinedError", err, err)
+		}
+		if declined.Reason != "user refused current field" {
+			t.Fatalf("Reason = %q, want user refused current field", declined.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("current task did not fail after decline_card_capture")
+	}
+
+	select {
+	case err := <-staleTask.Err:
+		t.Fatalf("stale task failed with %v, want decline routed to current agent", err)
+	default:
+	}
+}
+
+func TestDeclineCardCaptureToolDoesNotFailDifferentCurrentAgent(t *testing.T) {
+	staleTask := NewGetCardNumberTask(false)
+	currentTask := NewGetEmailTask(GetEmailOptions{})
+	session := agent.NewAgentSession(currentTask, nil, agent.AgentSessionOptions{})
+	ctx := agent.WithRunContext(context.Background(), agent.NewRunContext(session, nil, nil))
+	tool := &declineCardCaptureTool{task: staleTask}
+
+	out, err := tool.Execute(ctx, `{"reason":"late stale card decline"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after decline", out)
+	}
+
+	select {
+	case err := <-currentTask.Err:
+		t.Fatalf("current email task failed with %v, want stale card decline ignored for different current agent", err)
+	default:
+	}
+
+	select {
+	case err := <-staleTask.Err:
+		var declined *CardCaptureDeclinedError
+		if !errors.As(err, &declined) {
+			t.Fatalf("stale task error = %T %v, want CardCaptureDeclinedError", err, err)
+		}
+		if declined.Reason != "late stale card decline" {
+			t.Fatalf("Reason = %q, want late stale card decline", declined.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale card task did not fail after decline_card_capture")
+	}
+}
+
 func TestRestartCardCollectionToolFailsWithTypedReason(t *testing.T) {
 	task := NewGetCardNumberTask(false)
 	tool := &restartCardCollectionTool{task: task}
 
-	if _, err := tool.Execute(context.Background(), `{"reason":"wrong card"}`); err != nil {
+	out, err := tool.Execute(context.Background(), `{"reason":"wrong card"}`)
+	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	_, err := task.WaitAny(context.Background())
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after restart", out)
+	}
+	_, err = task.WaitAny(context.Background())
 	var restart *CardCollectionRestartError
 	if !errors.As(err, &restart) {
 		t.Fatalf("WaitAny() error = %T %v, want CardCollectionRestartError", err, err)
 	}
 	if restart.Reason != "wrong card" {
 		t.Fatalf("Reason = %q, want wrong card", restart.Reason)
+	}
+}
+
+func TestRestartCardCollectionToolUsesRunContextCurrentAgent(t *testing.T) {
+	staleTask := NewGetCardNumberTask(false)
+	currentTask := NewGetSecurityCodeTask(false)
+	session := agent.NewAgentSession(currentTask, nil, agent.AgentSessionOptions{})
+	ctx := agent.WithRunContext(context.Background(), agent.NewRunContext(session, nil, nil))
+	tool := &restartCardCollectionTool{task: staleTask}
+
+	out, err := tool.Execute(ctx, `{"reason":"wrong current field"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after restart", out)
+	}
+
+	select {
+	case err := <-currentTask.Err:
+		var restart *CardCollectionRestartError
+		if !errors.As(err, &restart) {
+			t.Fatalf("current task error = %T %v, want CardCollectionRestartError", err, err)
+		}
+		if restart.Reason != "wrong current field" {
+			t.Fatalf("Reason = %q, want wrong current field", restart.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("current task did not fail after restart_card_collection")
+	}
+
+	select {
+	case err := <-staleTask.Err:
+		t.Fatalf("stale task failed with %v, want restart routed to current agent", err)
+	default:
+	}
+}
+
+func TestRestartCardCollectionToolDoesNotFailDifferentCurrentAgent(t *testing.T) {
+	staleTask := NewGetCardNumberTask(false)
+	currentTask := NewGetEmailTask(GetEmailOptions{})
+	session := agent.NewAgentSession(currentTask, nil, agent.AgentSessionOptions{})
+	ctx := agent.WithRunContext(context.Background(), agent.NewRunContext(session, nil, nil))
+	tool := &restartCardCollectionTool{task: staleTask}
+
+	out, err := tool.Execute(ctx, `{"reason":"late stale card restart"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after restart", out)
+	}
+
+	select {
+	case err := <-currentTask.Err:
+		t.Fatalf("current email task failed with %v, want stale card restart ignored for different current agent", err)
+	default:
+	}
+
+	select {
+	case err := <-staleTask.Err:
+		var restart *CardCollectionRestartError
+		if !errors.As(err, &restart) {
+			t.Fatalf("stale task error = %T %v, want CardCollectionRestartError", err, err)
+		}
+		if restart.Reason != "late stale card restart" {
+			t.Fatalf("Reason = %q, want late stale card restart", restart.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale card task did not fail after restart_card_collection")
 	}
 }
 
@@ -1044,4 +1405,31 @@ func twoDigit(n int) string {
 		return "0" + strconv.Itoa(n)
 	}
 	return strconv.Itoa(n)
+}
+
+type referenceCreditCardExtraTool struct {
+	id string
+}
+
+func (t referenceCreditCardExtraTool) ID() string {
+	return t.id
+}
+
+func (t referenceCreditCardExtraTool) Name() string {
+	return t.id
+}
+
+func (t referenceCreditCardExtraTool) Description() string {
+	return "reference credit-card extra tool"
+}
+
+func (t referenceCreditCardExtraTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+
+func (t referenceCreditCardExtraTool) Execute(ctx context.Context, args string) (string, error) {
+	return "", nil
 }
