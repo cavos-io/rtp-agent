@@ -2374,6 +2374,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 		startDone = make(chan struct{})
 		s.starting = true
+		s.teardownCh = make(chan struct{})
+		s.teardownOnce = sync.Once{}
 		startedAt := float64(time.Now().UnixNano()) / 1e9
 		s.startedAt = &startedAt
 		s.startDone = startDone

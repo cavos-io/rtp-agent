@@ -7394,3 +7394,57 @@ func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
 		t.Fatal("EmitAgentOutputTranscribed stayed blocked after Stop() — teardown did not unblock the subscriber send")
 	}
 }
+
+func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	sub := s.AgentOutputTranscribedEvents()
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("restart Start: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	emitDone := make(chan struct{})
+	go func() {
+		defer close(emitDone)
+		for i := 0; i < 50; i++ {
+			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: "hello",
+				IsFinal:    true,
+			})
+		}
+	}()
+
+	select {
+	case <-emitDone:
+		t.Fatal("emitter finished without blocking on the full subscriber channel after restart — teardownCh was not reset, so final events are being dropped")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-sub:
+			case <-emitDone:
+				return
+			}
+		}
+	}()
+	<-emitDone
+	<-drainDone
+}
