@@ -440,10 +440,6 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	}
 }
 
-type finalizableRecognizeStream interface {
-	Finalize() error
-}
-
 func (va *PipelineAgent) finalizeActiveSTTStream() {
 	if va == nil {
 		return
@@ -452,11 +448,10 @@ func (va *PipelineAgent) finalizeActiveSTTStream() {
 	stream := va.sttStream
 	sttObj := va.stt
 	va.mu.Unlock()
-	finalizer, ok := stream.(finalizableRecognizeStream)
-	if !ok {
+	if stream == nil {
 		return
 	}
-	if err := finalizer.Finalize(); err != nil && !isSpeechStreamShutdownError(err) {
+	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
 		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
 		label := "stt"
 		if sttObj != nil {
@@ -513,6 +508,7 @@ func (va *PipelineAgent) onVADStall() {
 
 	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
+	va.finalizeActiveSTTStream()
 	if session != nil && session.activity != nil {
 		session.activity.OnEndOfSpeech(nil)
 		return
@@ -807,6 +803,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		if err == nil && !speech.IsInterrupted() {
 			playoutOK = va.waitForAssistantPlayout(ctx, session, speech)
 		}
+		markTTSGenerationStoppedSpeaking(ttsGen)
 		canCommit := (!speech.IsInterrupted() && err == nil && playoutOK) || (speech.IsInterrupted() && ttsGen != nil && ttsGen.ForwardedAudio)
 		if canCommit {
 			forwardedText := speech.Generation.Text
@@ -816,6 +813,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
 				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
+				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(speech.Generation.AssistantMessage.Metrics, ttsGen)
 				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
@@ -1063,6 +1061,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		va.emitLLMMetrics(session, genData)
 
 		playoutOK := va.waitForAssistantPlayout(ctx, session, opts.SpeechHandle)
+		markTTSGenerationStoppedSpeaking(ttsGen)
 		forwardedText := genData.GeneratedText
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
@@ -1102,6 +1101,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if ttsGen != nil && ttsGen.TTFB > 0 {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
 			}
+			metrics = addAssistantSpeechMetrics(metrics, ttsGen)
 			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
@@ -1952,6 +1952,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		ttsGen.ForwardedAudio = true
 		if !startedSpeaking {
+			ttsGen.StartedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
 			session.UpdateAgentState(AgentStateSpeaking)
 			startedSpeaking = true
 		}
@@ -1962,6 +1963,25 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			return ttsGen, nil
 		}
 	}
+}
+
+func markTTSGenerationStoppedSpeaking(ttsGen *TTSGenerationData) {
+	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt != 0 {
+		return
+	}
+	ttsGen.StoppedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
+}
+
+func addAssistantSpeechMetrics(metrics map[string]any, ttsGen *TTSGenerationData) map[string]any {
+	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt == 0 {
+		return metrics
+	}
+	if metrics == nil {
+		metrics = make(map[string]any)
+	}
+	metrics["started_speaking_at"] = ttsGen.StartedSpeakingAt
+	metrics["stopped_speaking_at"] = ttsGen.StoppedSpeakingAt
+	return metrics
 }
 
 func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {

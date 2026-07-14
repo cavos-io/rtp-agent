@@ -109,6 +109,7 @@ func UploadSessionReport(
 			h := make(textproto.MIMEHeader)
 			h.Set("Content-Disposition", `form-data; name="chat_history"; filename="chat_history.json"`)
 			h.Set("Content-Type", "application/json")
+			h.Set("Content-Length", strconv.Itoa(len(chatJSON)))
 			part, err := w.CreatePart(h)
 			if err == nil {
 				part.Write(chatJSON)
@@ -125,6 +126,7 @@ func UploadSessionReport(
 			h := make(textproto.MIMEHeader)
 			h.Set("Content-Disposition", `form-data; name="audio"; filename="recording.ogg"`)
 			h.Set("Content-Type", "audio/ogg")
+			h.Set("Content-Length", strconv.Itoa(len(audioData)))
 			part, err := w.CreatePart(h)
 			if err == nil {
 				part.Write(audioData)
@@ -200,14 +202,20 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
-		for _, item := range report.ChatHistory.Items {
+		history := report.ChatHistory.ToDict(llm.ChatContextDictOptions{
+			IncludeTimestamp: true,
+		})
+
+		items, _ := history["items"].([]map[string]any)
+		for _, item := range items {
+			createdAt := unixSecondsToTime(item["created_at"].(float64))
 			attrs := map[string]interface{}{
-				"chat.item": chatItemReportDict(item),
+				"chat.item": item,
 			}
-			if functionCallOutput, ok := item.(*llm.FunctionCallOutput); ok && functionCallOutput.IsError {
-				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(item.GetCreatedAt()))
+			if item["type"] == "function_call_output" && item["is_error"] == true {
+				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(createdAt))
 			} else {
-				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, item.GetCreatedAt())
+				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, createdAt)
 			}
 		}
 	}

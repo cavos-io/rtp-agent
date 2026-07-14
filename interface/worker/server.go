@@ -1977,6 +1977,10 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 
 	jobCtx.Shutdown("")
 	s.uploadJobSessionReport(jobCtx)
+	err := jobCtx.onCleanUp()
+	if err != nil {
+		logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+	}
 	return true
 }
 

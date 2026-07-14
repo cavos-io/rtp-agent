@@ -706,6 +706,33 @@ func TestRoomIOAudioOutputWaitsForSubscriptionBeforeCapture(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioIgnoresStaleGateAfterConfirmedSubscription(t *testing.T) {
+	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
+	rio := &RoomIO{
+		audioTrack:      newRoomIOTestAudioTrack(t),
+		encoder:         encoder,
+		audioSubscribed: make(chan struct{}),
+		audioOutputDiagnostics: RoomIOAudioOutputDiagnostics{
+			TrackSubscribed: true,
+		},
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := rio.PublishAudio(ctx, frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	if len(encoder.calls) != 1 {
+		t.Fatalf("encoder calls = %d, want 1 without re-waiting on stale subscription gate", len(encoder.calls))
+	}
+}
+
 func TestRoomIOPublishAudioPendingWaiterSurvivesAudioStart(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	rio := NewRoomIO(nil, session, RoomOptions{})

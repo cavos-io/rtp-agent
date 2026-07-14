@@ -23,8 +23,8 @@ type RecorderIO struct {
 	closed   bool
 	stopping bool
 
-	inFrames  []*model.AudioFrame
-	outFrames []*model.AudioFrame
+	inFrames  []recordedAudioFrame
+	outFrames []recordedAudioFrame
 
 	oggWriter *oggwriter.OggWriter
 	encoder   *opus.Encoder
@@ -36,15 +36,28 @@ type RecorderIO struct {
 
 	InputStartTime  *time.Time
 	OutputStartTime *time.Time
+	inputNextTime   time.Time
+	outputNextTime  time.Time
 
 	sequenceNumber uint16
 	timestamp      uint32
+	timelineStart  *time.Time
+	writtenSamples int64
+	now            func() time.Time
 }
+
+type recordedAudioFrame struct {
+	frame      *model.AudioFrame
+	receivedAt time.Time
+}
+
+const recordedAudioContinuityTolerance = 500 * time.Millisecond
 
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	return &RecorderIO{
 		Session: session,
 		done:    make(chan struct{}),
+		now:     time.Now,
 	}
 }
 
@@ -131,6 +144,14 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.closed = false
 	r.stopping = false
 	r.started = true
+	r.sequenceNumber = 0
+	r.timestamp = 0
+	r.timelineStart = nil
+	r.writtenSamples = 0
+	r.InputStartTime = nil
+	r.OutputStartTime = nil
+	r.inputNextTime = time.Time{}
+	r.outputNextTime = time.Time{}
 
 	go r.recordLoop(sampleRate, r.done, r.closeComplete)
 
@@ -183,11 +204,16 @@ func (r *RecorderIO) RecordInput(frame *model.AudioFrame) {
 		return
 	}
 
+	now := r.now()
 	if r.InputStartTime == nil {
-		now := time.Now()
 		r.InputStartTime = &now
 	}
-	r.inFrames = append(r.inFrames, frame)
+	receivedAt := nextRecordedFrameTime(now, r.inputNextTime)
+	r.inputNextTime = receivedAt.Add(audioFrameDuration(frame))
+	if r.timelineStart == nil {
+		r.timelineStart = &now
+	}
+	r.inFrames = append(r.inFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
 }
 
 func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
@@ -198,11 +224,32 @@ func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
 		return
 	}
 
+	now := r.now()
 	if r.OutputStartTime == nil {
-		now := time.Now()
 		r.OutputStartTime = &now
 	}
-	r.outFrames = append(r.outFrames, frame)
+	receivedAt := nextRecordedFrameTime(now, r.outputNextTime)
+	r.outputNextTime = receivedAt.Add(audioFrameDuration(frame))
+	if r.timelineStart == nil {
+		r.timelineStart = &now
+	}
+	r.outFrames = append(r.outFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
+}
+
+func audioFrameDuration(frame *model.AudioFrame) time.Duration {
+	if frame == nil || frame.SampleRate == 0 {
+		return 0
+	}
+	return time.Duration(float64(time.Second) * float64(frame.SamplesPerChannel) / float64(frame.SampleRate))
+}
+
+func nextRecordedFrameTime(now, expected time.Time) time.Time {
+	if expected.IsZero() ||
+		now.After(expected.Add(recordedAudioContinuityTolerance)) ||
+		expected.After(now.Add(recordedAudioContinuityTolerance)) {
+		return now
+	}
+	return expected
 }
 
 func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeComplete chan<- struct{}) {
@@ -213,87 +260,56 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 	for {
 		select {
 		case <-done:
-			r.flush(sampleRate)
+			r.flush(sampleRate, r.now())
 			r.oggWriter.Close()
 			return
 		case <-ticker.C:
-			r.flush(sampleRate)
+			r.flush(sampleRate, r.now())
 		}
 	}
 }
 
-func (r *RecorderIO) flush(sampleRate int) {
+func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	r.mu.Lock()
 	inFrames := r.inFrames
 	outFrames := r.outFrames
+	timelineStart := r.timelineStart
+	startSample := r.writtenSamples
 	r.inFrames = nil
 	r.outFrames = nil
 	r.mu.Unlock()
 
-	if len(inFrames) == 0 && len(outFrames) == 0 {
+	if timelineStart == nil {
 		return
 	}
 
-	// Calculate total samples
-	var inSamples, outSamples int
-	for _, f := range inFrames {
-		inSamples += int(f.SamplesPerChannel)
+	endSample := int64(endTime.Sub(*timelineStart).Seconds() * float64(sampleRate))
+	in := normalizeRecordedFrames(inFrames, uint32(sampleRate), *timelineStart)
+	out := normalizeRecordedFrames(outFrames, uint32(sampleRate), *timelineStart)
+	for _, frames := range [][]normalizedRecordedFrame{in, out} {
+		for _, f := range frames {
+			if frameEnd := f.startSample + int64(len(f.samples)); frameEnd > endSample {
+				endSample = frameEnd
+			}
+		}
 	}
-	for _, f := range outFrames {
-		outSamples += int(f.SamplesPerChannel)
-	}
-
-	maxSamples := inSamples
-	if outSamples > maxSamples {
-		maxSamples = outSamples
-	}
-
-	if maxSamples == 0 {
+	if endSample <= startSample {
 		return
 	}
 
-	// Create stereo buffer (interleaved: left, right, left, right...)
-	stereoBuf := make([]int16, maxSamples*2)
-
-	// Mix input to left channel (0, 2, 4...)
-	inPos := 0
-	for _, f := range inFrames {
-		// Assuming 16-bit PCM Mono
-		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			if inPos < maxSamples {
-				idx := i * 2
-				if idx+1 < len(f.Data) {
-					sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-					stereoBuf[inPos*2] = sample
-					inPos++
-				}
-			}
-		}
-	}
-
-	// Mix output to right channel (1, 3, 5...)
-	outPos := 0
-	for _, f := range outFrames {
-		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			if outPos < maxSamples {
-				idx := i * 2
-				if idx+1 < len(f.Data) {
-					sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-					stereoBuf[outPos*2+1] = sample
-					outPos++
-				}
-			}
-		}
-	}
+	stereoBuf := make([]int16, (endSample-startSample)*2)
+	copyRecordedChannel(stereoBuf, in, startSample, 0)
+	copyRecordedChannel(stereoBuf, out, startSample, 1)
 
 	// Encode to Opus in chunks of 20ms (e.g. 960 samples per channel at 48kHz)
 	chunkSamples := sampleRate / 50
 	opusBuf := make([]byte, 4000)
 
-	for i := 0; i < maxSamples; i += chunkSamples {
+	encodedSamples := 0
+	for i := 0; i < len(stereoBuf)/2; i += chunkSamples {
 		end := i + chunkSamples
-		if end > maxSamples {
-			break // pad with silence or ignore tail for simplicity
+		if end > len(stereoBuf)/2 {
+			break
 		}
 
 		chunk := stereoBuf[i*2 : end*2]
@@ -316,9 +332,120 @@ func (r *RecorderIO) flush(sampleRate int) {
 
 		r.sequenceNumber++
 		r.timestamp += uint32(chunkSamples)
+		encodedSamples += chunkSamples
 
 		if err := r.oggWriter.WriteRTP(pkt); err != nil {
 			logger.Logger.Errorw("Failed to write to ogg", err)
+		}
+	}
+
+	r.mu.Lock()
+	r.writtenSamples = startSample + int64(encodedSamples)
+	r.mu.Unlock()
+}
+
+type normalizedRecordedFrame struct {
+	startSample int64
+	samples     []int16
+}
+
+func normalizeRecordedFrames(frames []recordedAudioFrame, sampleRate uint32, timelineStart time.Time) []normalizedRecordedFrame {
+	normalized := make([]normalizedRecordedFrame, 0, len(frames))
+	for _, recorded := range frames {
+		frame, err := resampleRecordedAudioFrame(recorded.frame, sampleRate)
+		if err != nil {
+			logger.Logger.Warnw("Failed to resample recorded audio", err)
+			continue
+		}
+		if frame == nil || frame.NumChannels == 0 {
+			continue
+		}
+
+		samples := make([]int16, frame.SamplesPerChannel)
+		channels := int(frame.NumChannels)
+		for i := range samples {
+			var sum int64
+			for channel := 0; channel < channels; channel++ {
+				offset := (i*channels + channel) * 2
+				if offset+1 >= len(frame.Data) {
+					break
+				}
+				sum += int64(int16(frame.Data[offset]) | int16(frame.Data[offset+1])<<8)
+			}
+			samples[i] = int16(sum / int64(channels))
+		}
+
+		normalized = append(normalized, normalizedRecordedFrame{
+			startSample: int64(recorded.receivedAt.Sub(timelineStart).Seconds() * float64(sampleRate)),
+			samples:     samples,
+		})
+	}
+	return normalized
+}
+
+func resampleRecordedAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || outputRate == 0 || frame.SampleRate == outputRate {
+		return frame, nil
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 || len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("invalid 16-bit PCM audio frame")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{SampleRate: outputRate, NumChannels: frame.NumChannels, ParticipantID: frame.ParticipantID}, nil
+	}
+	outSamples := uint32((uint64(frame.SamplesPerChannel)*uint64(outputRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	channels := int(frame.NumChannels)
+	inputSamples := int(frame.SamplesPerChannel)
+	for outputIndex := 0; outputIndex < int(outSamples); outputIndex++ {
+		position := float64(outputIndex) * float64(frame.SampleRate) / float64(outputRate)
+		left := int(position)
+		if left >= inputSamples {
+			left = inputSamples - 1
+		}
+		right := left + 1
+		if right >= inputSamples {
+			right = left
+		}
+		fraction := position - float64(left)
+		for channel := 0; channel < channels; channel++ {
+			leftOffset := (left*channels + channel) * 2
+			rightOffset := (right*channels + channel) * 2
+			leftSample := int16(uint16(frame.Data[leftOffset]) | uint16(frame.Data[leftOffset+1])<<8)
+			rightSample := int16(uint16(frame.Data[rightOffset]) | uint16(frame.Data[rightOffset+1])<<8)
+			sample := int16(float64(leftSample) + (float64(rightSample)-float64(leftSample))*fraction)
+			outputOffset := (outputIndex*channels + channel) * 2
+			out[outputOffset] = byte(sample)
+			out[outputOffset+1] = byte(uint16(sample) >> 8)
+		}
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        outputRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
+func copyRecordedChannel(stereo []int16, frames []normalizedRecordedFrame, baseSample int64, channel int) {
+	for _, frame := range frames {
+		start := frame.startSample - baseSample
+		sourceStart := int64(0)
+		if start < 0 {
+			sourceStart = -start
+			start = 0
+		}
+		for i := sourceStart; i < int64(len(frame.samples)); i++ {
+			destination := (start+i-sourceStart)*2 + int64(channel)
+			if destination < 0 || destination >= int64(len(stereo)) {
+				break
+			}
+			stereo[destination] = frame.samples[i]
 		}
 	}
 }

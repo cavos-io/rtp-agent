@@ -167,6 +167,14 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageTTSMetrics(t *testing.T) 
 	if got, ok := msg.Metrics["tts_node_ttfb"].(float64); !ok || got <= 0 {
 		t.Fatalf("assistant Metrics[tts_node_ttfb] = %#v, want positive first audio latency", msg.Metrics["tts_node_ttfb"])
 	}
+	started, ok := msg.Metrics["started_speaking_at"].(float64)
+	if !ok || started <= 0 {
+		t.Fatalf("assistant Metrics[started_speaking_at] = %#v, want positive Unix timestamp", msg.Metrics["started_speaking_at"])
+	}
+	stopped, ok := msg.Metrics["stopped_speaking_at"].(float64)
+	if !ok || stopped < started {
+		t.Fatalf("assistant Metrics[stopped_speaking_at] = %#v, want timestamp at or after %v", msg.Metrics["stopped_speaking_at"], started)
+	}
 	assertAssistantMetricMetadata(t, msg.Metrics, "llm_metadata", "test-llm", "test-llm-provider")
 	assertAssistantMetricMetadata(t, msg.Metrics, "tts_metadata", "test-voice", "test-tts-provider")
 }
@@ -2393,8 +2401,23 @@ func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
 		events: []*vad.VADEvent{{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5}},
 	})
 
-	if sttStream.finalizeCount != 1 {
-		t.Fatalf("STT stream Finalize calls = %d, want 1 after VAD end-of-speech", sttStream.finalizeCount)
+	if sttStream.flushCount != 1 {
+		t.Fatalf("STT stream Flush calls = %d, want 1 after VAD end-of-speech", sttStream.flushCount)
+	}
+}
+
+func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
+	sttStream := &fakePipelineRecognizeStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
+	pipeline.session = session
+	pipeline.sttStream = sttStream
+	pipeline.vadSpeechStarted = true
+
+	pipeline.onVADStall()
+
+	if sttStream.flushCount != 1 {
+		t.Fatalf("STT stream Flush calls = %d, want 1 after synthetic VAD end-of-speech", sttStream.flushCount)
 	}
 }
 
@@ -6867,8 +6890,6 @@ type fakePipelineRecognizeStream struct {
 	startTimeSet       bool
 	timingSeededCh     chan struct{}
 	timingSeededOnce   sync.Once
-	finalizeCount      int
-	finalizeErr        error
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -6889,11 +6910,6 @@ func (f *fakePipelineRecognizeStream) Close() error {
 		f.closeOnce.Do(func() { close(f.closedCh) })
 	}
 	return f.closeErr
-}
-
-func (f *fakePipelineRecognizeStream) Finalize() error {
-	f.finalizeCount++
-	return f.finalizeErr
 }
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
