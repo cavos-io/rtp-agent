@@ -7402,6 +7402,7 @@ func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
 	agent.STT = &fakePipelineSTT{}
 	agent.VAD = &fakePipelineVAD{}
 	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+	s.Assistant = &fakeSessionAssistant{}
 
 	sub := s.AgentOutputTranscribedEvents()
 
@@ -7447,4 +7448,50 @@ func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
 	}()
 	<-emitDone
 	<-drainDone
+}
+
+type closeTrackingAudioTurnDetector struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
+	return 0, nil
+}
+
+func (d *closeTrackingAudioTurnDetector) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	return nil
+}
+
+func (d *closeTrackingAudioTurnDetector) isClosed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closed
+}
+
+func TestAgentSessionStopClosesCloseableAudioTurnDetector(t *testing.T) {
+	detector := &closeTrackingAudioTurnDetector{}
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.AudioTurnDetector = detector
+
+	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+	s.Assistant = &fakeSessionAssistant{}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	if !detector.isClosed() {
+		t.Fatal("Stop() did not close the closeable AudioTurnDetector — a per-session detector holding a grpc/http resource would leak it (teardown has no path to Close it)")
+	}
 }
