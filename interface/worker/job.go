@@ -213,6 +213,7 @@ type JobContext struct {
 	workerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
+	tempDirectory          string
 	sessionDirectory       string
 	logContextFields       map[string]any
 	recordingInitialized   bool
@@ -240,7 +241,11 @@ type JobContext struct {
 
 func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobContext {
 	report, tagger := livekitNewJobContextSessionReport(job)
-	return &JobContext{
+	tmpDir, err := os.MkdirTemp("", job.GetId())
+	if err != nil {
+		logger.Logger.Errorw("failed to create temporary directory", err)
+	}
+	jobContext := &JobContext{
 		Job:              job,
 		url:              url,
 		apiKey:           apiKey,
@@ -250,8 +255,11 @@ func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobCo
 		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
 		shutdownDone:     make(chan struct{}),
 		entrypointDone:   make(chan struct{}),
+		tempDirectory:    tmpDir,
+		sessionDirectory: tmpDir,
 		logContextFields: livekitJobContextLogFields(job),
 	}
+	return jobContext
 }
 
 func (c *JobContext) Tagger() *agent.Tagger {
@@ -881,4 +889,8 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 		return nil
 	}
 	return livekitJobContextTransferSIPParticipantByParticipant(ctx, c.API().SIP, c.Job, participant, transferTo, playDialtones...)
+}
+
+func (c *JobContext) onCleanUp() error {
+	return os.RemoveAll(c.tempDirectory)
 }

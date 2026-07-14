@@ -743,6 +743,34 @@ func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityFalseInterruptionReleasesOutputWhenSpeechCannotResume(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	paused := NewSpeechHandle(true, DefaultInputDetails())
+	activity.pausedSpeech = &pausedSpeechInfo{handle: paused, agentState: AgentStateSpeaking}
+	paused.MarkDone()
+
+	activity.resumeFalseInterruption()
+
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 after completed paused speech", audioOutput.resumeCount)
+	}
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		if ev.Resumed {
+			t.Fatal("AgentFalseInterruptionEvent.Resumed = true, want false for completed speech")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive cleanup event")
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}

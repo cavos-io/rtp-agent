@@ -6,4 +6,4 @@ cd "$REPO_ROOT"
 REPO_TEMP_ENV_FORCE=1
 source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
-exec go-arch-lint "$@"
+exec go tool go-arch-lint "$@"
