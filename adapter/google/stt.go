@@ -588,7 +588,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
-	stream, err := client.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
+	stream, err := client.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
@@ -646,7 +646,7 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 	if recognizer == "" {
 		return nil, googleSTTStartupError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 	}
-	stream, err := clientV2.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
+	stream, err := clientV2.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
