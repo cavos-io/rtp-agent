@@ -1224,7 +1224,7 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTStreamAppliesReferenceStartupTimeout(t *testing.T) {
+func TestGoogleSTTStreamDoesNotApplyCallTimeout(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	client := &fakeGoogleSpeechClient{stream: streamClient}
 	provider := newGoogleSTTWithClient(client)
@@ -1235,12 +1235,12 @@ func TestGoogleSTTStreamAppliesReferenceStartupTimeout(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != googleSTTRequestTimeout {
-		t.Fatalf("streaming recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
+	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != 0 {
+		t.Fatalf("streaming recognize timeout = %v, want 0 (no call-scoped timeout on streaming)", got)
 	}
 }
 
-func TestGoogleSTTStreamV2AppliesReferenceStartupTimeout(t *testing.T) {
+func TestGoogleSTTStreamV2DoesNotApplyCallTimeout(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
 	client := &fakeGoogleV2SpeechClient{stream: streamClient}
 	provider := newGoogleSTTWithV2Client(client, WithGoogleSTTProject("voice-project"), WithGoogleSTTModel("chirp_3"))
@@ -1251,8 +1251,8 @@ func TestGoogleSTTStreamV2AppliesReferenceStartupTimeout(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != googleSTTRequestTimeout {
-		t.Fatalf("v2 streaming recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
+	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != 0 {
+		t.Fatalf("v2 streaming recognize timeout = %v, want 0 (no call-scoped timeout on streaming)", got)
 	}
 }
 
