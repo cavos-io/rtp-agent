@@ -15673,7 +15673,7 @@ func TestRunSessionStartsAudioRecorderForRecordedJob(t *testing.T) {
 	if jobCtx.Report.AudioRecordingPath == nil {
 		t.Fatal("AudioRecordingPath = nil, want recorder output path")
 	}
-	if got, want := *jobCtx.Report.AudioRecordingPath, filepath.Join(sessionDir, "audio.ogg"); got != want {
+	if got, want := *jobCtx.Report.AudioRecordingPath, filepath.Join(sessionDir, workerlivekit.RecordingFileName); got != want {
 		t.Fatalf("AudioRecordingPath = %q, want %q", got, want)
 	}
 }

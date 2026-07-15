@@ -10,9 +10,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/hraban/opus"
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
 type RecorderIO struct {
@@ -26,8 +23,7 @@ type RecorderIO struct {
 	inFrames  []recordedAudioFrame
 	outFrames []recordedAudioFrame
 
-	oggWriter *oggwriter.OggWriter
-	encoder   *opus.Encoder
+	writer recordingWriter
 
 	done          chan struct{}
 	closeComplete chan struct{}
@@ -39,7 +35,6 @@ type RecorderIO struct {
 	inputNextTime   time.Time
 	outputNextTime  time.Time
 
-	sequenceNumber uint16
 	timestamp      uint32
 	timelineStart  *time.Time
 	writtenSamples int64
@@ -125,26 +120,18 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 		return fmt.Errorf("failed to create directory for recording: %w", err)
 	}
 
-	writer, err := oggwriter.New(outputPath, uint32(sampleRate), 2)
+	writer, err := newRecordingWriter(outputPath, sampleRate)
 	if err != nil {
-		return fmt.Errorf("failed to create ogg writer: %w", err)
+		return err
 	}
 
-	encoder, err := opus.NewEncoder(sampleRate, 2, opus.AppAudio)
-	if err != nil {
-		writer.Close()
-		return fmt.Errorf("failed to create opus encoder: %w", err)
-	}
-
-	r.oggWriter = writer
-	r.encoder = encoder
+	r.writer = writer
 	r.outPath = outputPath
 	r.done = make(chan struct{})
 	r.closeComplete = make(chan struct{})
 	r.closed = false
 	r.stopping = false
 	r.started = true
-	r.sequenceNumber = 0
 	r.timestamp = 0
 	r.timelineStart = nil
 	r.writtenSamples = 0
@@ -261,7 +248,9 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 		select {
 		case <-done:
 			r.flush(sampleRate, r.now())
-			r.oggWriter.Close()
+			if err := r.writer.Close(); err != nil {
+				logger.Logger.Errorw("Failed to close recording writer", err)
+			}
 			return
 		case <-ticker.C:
 			r.flush(sampleRate, r.now())
@@ -301,46 +290,14 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	copyRecordedChannel(stereoBuf, in, startSample, 0)
 	copyRecordedChannel(stereoBuf, out, startSample, 1)
 
-	// Encode to Opus in chunks of 20ms (e.g. 960 samples per channel at 48kHz)
-	chunkSamples := sampleRate / 50
-	opusBuf := make([]byte, 4000)
-
-	encodedSamples := 0
-	for i := 0; i < len(stereoBuf)/2; i += chunkSamples {
-		end := i + chunkSamples
-		if end > len(stereoBuf)/2 {
-			break
-		}
-
-		chunk := stereoBuf[i*2 : end*2]
-		n, err := r.encoder.Encode(chunk, opusBuf)
-		if err != nil {
-			logger.Logger.Errorw("Failed to encode opus", err)
-			continue
-		}
-
-		// Write to ogg
-		pkt := &rtp.Packet{
-			Header: rtp.Header{
-				Version:        2,
-				PayloadType:    111,
-				SequenceNumber: r.sequenceNumber,
-				Timestamp:      r.timestamp,
-			},
-			Payload: opusBuf[:n],
-		}
-
-		r.sequenceNumber++
-		r.timestamp += uint32(chunkSamples)
-		encodedSamples += chunkSamples
-
-		if err := r.oggWriter.WriteRTP(pkt); err != nil {
-			logger.Logger.Errorw("Failed to write to ogg", err)
-		}
+	writtenSamples, err := r.writer.WritePCM(stereoBuf)
+	if err != nil {
+		logger.Logger.Errorw("Failed to write recording audio", err)
 	}
 
 	r.mu.Lock()
-	r.writtenSamples = startSample + int64(encodedSamples)
+	r.writtenSamples = startSample + int64(writtenSamples)
+	r.timestamp += uint32(writtenSamples)
 	r.mu.Unlock()
 }
 

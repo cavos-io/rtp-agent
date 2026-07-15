@@ -121,7 +121,7 @@ func main() {
 			}
 
 			if jobContext.Report.RecordingOptions.Audio && jobContext.SessionDirectory() != "" {
-				err := roomIO.Recorder.Start(filepath.Join(jobContext.SessionDirectory(), "audio.ogg"), 48000)
+				err := roomIO.Recorder.Start(filepath.Join(jobContext.SessionDirectory(), livekitWorker.RecordingFileName), 48000)
 				if err != nil {
 					logger.Logger.Errorw("failed to start audio recorder", err)
 					return err
