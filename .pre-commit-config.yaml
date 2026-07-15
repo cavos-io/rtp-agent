@@ -15,6 +15,13 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: go-test-ffmpeg
+        name: go test ffmpeg recorder
+        entry: scripts/go-test-ffmpeg.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: go-build
         name: go build
         entry: scripts/go-build-all.sh

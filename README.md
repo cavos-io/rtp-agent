@@ -85,6 +85,14 @@ Run the worker:
 go run ./cmd/main.go start
 ```
 
+Build with in-process FFmpeg recording to write browser-playable MP4/AAC instead of Ogg/Opus:
+
+```bash
+go build -tags ffmpeg ./examples/starter
+```
+
+The `ffmpeg` build tag requires CGO plus the `libavcodec`, `libavformat`, `libavutil`, and `libswresample` development libraries. The repository Nix shell provides them. It links the native libraries directly and does not execute an external `ffmpeg` command. LiveKit session-report upload is disabled in this build because that upload contract requires Ogg audio; local session reports remain available.
+
 Development mode with autoreload:
 
 ```bash

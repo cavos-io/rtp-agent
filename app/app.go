@@ -2418,7 +2418,7 @@ func (a *App) startAudioRecorder(ctx *worker.JobContext, roomIO *workerlivekit.R
 	if !ctx.Report.RecordingOptions.Audio || ctx.SessionDirectory() == "" {
 		return nil
 	}
-	return roomIO.Recorder.Start(filepath.Join(ctx.SessionDirectory(), "audio.ogg"), 48000)
+	return roomIO.Recorder.Start(filepath.Join(ctx.SessionDirectory(), workerlivekit.RecordingFileName), 48000)
 }
 
 func (a *App) populateRecorderSessionReport(ctx *worker.JobContext) {
