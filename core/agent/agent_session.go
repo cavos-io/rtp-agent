@@ -2460,11 +2460,6 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.closing = false
 	s.runCtx = runCtx
 	s.runCancel = runCancel
-	if s.startDone == startDone {
-		s.starting = false
-		close(startDone)
-		s.startDone = nil
-	}
 	s.mu.Unlock()
 
 	activity.Start()
@@ -2481,6 +2476,13 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 
 	s.UpdateAgentState(AgentStateListening)
+	s.mu.Lock()
+	if s.startDone == startDone {
+		s.starting = false
+		close(startDone)
+		s.startDone = nil
+	}
+	s.mu.Unlock()
 
 	if runState != nil {
 		if err := runState.Wait(ctx); err != nil {
@@ -3226,13 +3228,25 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 }
 
 func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
-	s.signalTeardown()
-	s.mu.Lock()
-	if !s.started {
-		s.clearEventListenersLocked()
-		s.mu.Unlock()
-		return nil
+	for {
+		s.mu.Lock()
+		if s.starting {
+			done := s.startDone
+			s.mu.Unlock()
+			if done != nil {
+				<-done
+			}
+			continue
+		}
+		if !s.started {
+			s.signalTeardown()
+			s.clearEventListenersLocked()
+			s.mu.Unlock()
+			return nil
+		}
+		break
 	}
+	s.signalTeardown()
 
 	activity := s.activity
 	ivrActivity := s.ivrActivity
