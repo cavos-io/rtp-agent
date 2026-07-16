@@ -7395,6 +7395,61 @@ func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
 	}
 }
 
+func TestLosslessPrimaryEventEmitUnblocksOnStop(t *testing.T) {
+	tests := []struct {
+		name      string
+		subscribe func(*AgentSession)
+		emit      func(*AgentSession)
+	}{
+		{"speech_created", func(s *AgentSession) { fillChannel(s.speechCreatedEvents(), SpeechCreatedEvent{}) }, func(s *AgentSession) { s.EmitSpeechCreated(SpeechCreatedEvent{Source: "say"}) }},
+		{"agent_false_interruption", func(s *AgentSession) { fillChannel(s.agentFalseInterruptionEvents(), AgentFalseInterruptionEvent{}) }, func(s *AgentSession) { s.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true}) }},
+		{"user_turn_exceeded", func(s *AgentSession) { fillChannel(s.userTurnExceededEvents(), UserTurnExceededEvent{}) }, func(s *AgentSession) { s.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "too long"}) }},
+		{"overlapping_speech", func(s *AgentSession) { fillChannel(s.overlappingSpeechEvents(), OverlappingSpeechEvent{}) }, func(s *AgentSession) { s.EmitOverlappingSpeech(OverlappingSpeechEvent{IsInterruption: true}) }},
+		{"conversation_item_added", func(s *AgentSession) { fillChannel(s.conversationItemAddedEvents(), ConversationItemAddedEvent{}) }, func(s *AgentSession) {
+			s.EmitConversationItemAdded(&llm.ChatMessage{ID: "blocked", Role: llm.ChatRoleUser})
+		}},
+		{"function_tools_executed", func(s *AgentSession) { fillChannel(s.functionToolsExecutedEvents(), FunctionToolsExecutedEvent{}) }, func(s *AgentSession) { s.EmitFunctionToolsExecuted(FunctionToolsExecutedEvent{}) }},
+		{"metrics_collected", func(s *AgentSession) { fillChannel(s.metricsCollectedEvents(), MetricsCollectedEvent{}) }, func(s *AgentSession) { s.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "blocked"}) }},
+		{"session_usage_updated", func(s *AgentSession) { fillChannel(s.sessionUsageUpdatedEvents(), SessionUsageUpdatedEvent{}) }, func(s *AgentSession) { s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{}) }},
+		{"error", func(s *AgentSession) { fillChannel(s.errorEvents(), ErrorEvent{}) }, func(s *AgentSession) { s.EmitError(ErrorEvent{Error: errors.New("blocked")}) }},
+		{"sip_dtmf", func(s *AgentSession) { fillChannel(s.sipDTMFEvents(), SipDTMFEvent{}) }, func(s *AgentSession) { s.EmitSipDTMF(SipDTMFEvent{Digit: "1"}) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			tt.subscribe(s)
+
+			emitDone := make(chan struct{})
+			go func() {
+				defer close(emitDone)
+				tt.emit(s)
+			}()
+
+			select {
+			case <-emitDone:
+				t.Fatal("emit returned while subscribed lossless channel was full")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			if err := s.Stop(context.Background()); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			select {
+			case <-emitDone:
+			case <-testTimeout():
+				t.Fatal("emit stayed blocked after Stop")
+			}
+		})
+	}
+}
+
+func fillChannel[T any](ch chan T, value T) {
+	for i := 0; i < cap(ch); i++ {
+		ch <- value
+	}
+}
+
 func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TTS = &fakePipelineTTS{}
