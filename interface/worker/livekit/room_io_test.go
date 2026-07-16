@@ -5555,31 +5555,84 @@ func (f *fakeRoomIORealtimeSession) CommitAudio() error { return nil }
 
 func (f *fakeRoomIORealtimeSession) ClearAudio() error { return nil }
 
-type blockingTextStream struct {
+type gatedTextStream struct {
+	closed          bool
+	wroteAfterClose atomic.Bool
+
 	writeEntered chan struct{}
-	closed       chan struct{}
+	release      chan struct{}
 	enterOnce    sync.Once
-	closeOnce    sync.Once
 }
 
-func newBlockingTextStream() *blockingTextStream {
-	return &blockingTextStream{
+func newGatedTextStream() *gatedTextStream {
+	return &gatedTextStream{
 		writeEntered: make(chan struct{}),
-		closed:       make(chan struct{}),
+		release:      make(chan struct{}),
 	}
 }
 
-func (b *blockingTextStream) Write(string) {
-	b.enterOnce.Do(func() { close(b.writeEntered) })
-	<-b.closed
+func (w *gatedTextStream) Write(string) {
+	w.enterOnce.Do(func() { close(w.writeEntered) })
+	<-w.release
+	if w.closed {
+		w.wroteAfterClose.Store(true)
+	}
 }
 
-func (b *blockingTextStream) Close() {
-	b.closeOnce.Do(func() { close(b.closed) })
-}
+func (w *gatedTextStream) Close() { w.closed = true }
+
+func (w *gatedTextStream) releaseWrite() { close(w.release) }
 
 func TestRoomIOCloseAgentTextStreamDoesNotDeadlockDuringBlockedWrite(t *testing.T) {
-	writer := newBlockingTextStream()
+	writer := newGatedTextStream()
+	rio := &RoomIO{
+		agentTextStreamOpener: func(lksdk.StreamTextOptions) roomIOTextStreamWriter {
+			return writer
+		},
+	}
+	opts := lksdk.StreamTextOptions{
+		Topic: RoomIOTranscriptionTopic,
+		Attributes: map[string]string{
+			RoomIOTranscriptionSegmentIDAttribute: "seg-1",
+			RoomIOTranscriptionFinalAttribute:     "false",
+		},
+	}
+
+	publishReturned := make(chan struct{})
+	go func() {
+		rio.publishAgentTranscriptionStream("hello", opts)
+		close(publishReturned)
+	}()
+
+	select {
+	case <-writer.writeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent transcription Write was never entered")
+	}
+
+	mutexFree := make(chan struct{})
+	go func() {
+		rio.agentTextStreamMu.Lock()
+		rio.agentTextStreamMu.Unlock()
+		close(mutexFree)
+	}()
+	select {
+	case <-mutexFree:
+	case <-time.After(2 * time.Second):
+		writer.releaseWrite()
+		t.Fatal("agentTextStreamMu held during an in-flight write: RoomIO would deadlock on close")
+	}
+
+	writer.releaseWrite()
+	select {
+	case <-publishReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("producer goroutine did not return after the write was released")
+	}
+}
+
+func TestRoomIOAgentTranscriptionWriteNeverLandsOnClosedStream(t *testing.T) {
+	writer := newGatedTextStream()
 	rio := &RoomIO{
 		agentTextStreamOpener: func(lksdk.StreamTextOptions) roomIOTextStreamWriter {
 			return writer
@@ -5612,16 +5665,22 @@ func TestRoomIOCloseAgentTextStreamDoesNotDeadlockDuringBlockedWrite(t *testing.
 		close(closeReturned)
 	}()
 
-	select {
-	case <-closeReturned:
-	case <-time.After(3 * time.Second):
-		writer.Close()
-		t.Fatal("closeAgentTextStream deadlocked while an agent transcription write was in-flight")
+	writer.releaseWrite()
+
+	for _, done := range []struct {
+		ch    chan struct{}
+		label string
+	}{{publishReturned, "publish"}, {closeReturned, "close"}} {
+		select {
+		case <-done.ch:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s goroutine did not return", done.label)
+		}
 	}
 
-	select {
-	case <-publishReturned:
-	case <-time.After(2 * time.Second):
-		t.Fatal("producer goroutine did not return after the stream was closed")
+	if writer.wroteAfterClose.Load() {
+		t.Fatal("agent transcription delta reached the wire AFTER the stream was closed " +
+			"(publishAgentTranscriptionStream let closeAgentTextStream tear the writer " +
+			"down underneath an in-flight write)")
 	}
 }
