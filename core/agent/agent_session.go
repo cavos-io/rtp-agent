@@ -279,11 +279,10 @@ type AgentSession struct {
 	agentState AgentState
 
 	mu                      sync.Mutex
+	lifecycleGate           chan struct{}
 	activity                *AgentActivity
 	started                 bool
-	starting                bool
 	startedAt               *float64
-	startDone               chan struct{}
 	closing                 bool
 	runCtx                  context.Context
 	runCancel               context.CancelFunc
@@ -1147,6 +1146,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		sessionUsageCh:      make(chan SessionUsageUpdatedEvent, 10),
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
+		lifecycleGate:       make(chan struct{}, 1),
 		teardownCh:          make(chan struct{}),
 	}
 	session.Timeline = NewEventTimeline(session)
@@ -2351,36 +2351,53 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	return err
 }
 
-func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) (*RunResult, error) {
-	var startDone chan struct{}
-	for {
-		s.mu.Lock()
-		if s.started {
-			s.mu.Unlock()
-			return nil, nil
-		}
-		if s.starting {
-			done := s.startDone
-			s.mu.Unlock()
-			if done != nil {
-				<-done
-			}
-			continue
-		}
-		if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
-			s.mu.Unlock()
-			return nil, ErrAgentSessionNestedRun
-		}
-
-		startDone = make(chan struct{})
-		s.starting = true
-		s.teardownCh = make(chan struct{})
-		s.teardownOnce = sync.Once{}
-		startedAt := float64(time.Now().UnixNano()) / 1e9
-		s.startedAt = &startedAt
-		s.startDone = startDone
-		break
+func (s *AgentSession) acquireLifecycle(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	s.mu.Lock()
+	if s.lifecycleGate == nil {
+		s.lifecycleGate = make(chan struct{}, 1)
+	}
+	gate := s.lifecycleGate
+	s.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *AgentSession) releaseLifecycle() {
+	<-s.lifecycleGate
+}
+
+func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) (*RunResult, error) {
+	if err := s.acquireLifecycle(ctx); err != nil {
+		return nil, err
+	}
+	lifecycleHeld := true
+	defer func() {
+		if lifecycleHeld {
+			s.releaseLifecycle()
+		}
+	}()
+
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		return nil, nil
+	}
+	if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
+		s.mu.Unlock()
+		return nil, ErrAgentSessionNestedRun
+	}
+
+	s.teardownCh = make(chan struct{})
+	s.teardownOnce = sync.Once{}
+	startedAt := float64(time.Now().UnixNano()) / 1e9
+	s.startedAt = &startedAt
 
 	if s.VAD == nil {
 		s.VAD = vad.NewSimpleVAD(0.05)
@@ -2404,7 +2421,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
 		s.clearRunStateIfCurrent(runState)
-		s.clearStartingIfCurrent(startDone)
+		s.mu.Lock()
+		s.signalTeardown()
+		s.mu.Unlock()
 		return nil, err
 	}
 
@@ -2413,7 +2432,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
 			s.clearRunStateIfCurrent(runState)
-			s.clearStartingIfCurrent(startDone)
+			s.mu.Lock()
+			s.signalTeardown()
+			s.mu.Unlock()
 			return nil, err
 		}
 	}
@@ -2432,7 +2453,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 				_ = backgroundAudio.Close()
 			}
 			s.clearRunStateIfCurrent(runState)
-			s.clearStartingIfCurrent(startDone)
+			s.mu.Lock()
+			s.signalTeardown()
+			s.mu.Unlock()
 			return nil, err
 		}
 	}
@@ -2446,7 +2469,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 			_ = backgroundAudio.Close()
 		}
 		s.clearRunStateIfCurrent(runState)
-		s.clearStartingIfCurrent(startDone)
+		s.mu.Lock()
+		s.signalTeardown()
+		s.mu.Unlock()
 		return nil, err
 	}
 
@@ -2476,13 +2501,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 
 	s.UpdateAgentState(AgentStateListening)
-	s.mu.Lock()
-	if s.startDone == startDone {
-		s.starting = false
-		close(startDone)
-		s.startDone = nil
-	}
-	s.mu.Unlock()
+	s.releaseLifecycle()
+	lifecycleHeld = false
 
 	if runState != nil {
 		if err := runState.Wait(ctx); err != nil {
@@ -2501,19 +2521,6 @@ func (s *AgentSession) clearRunStateIfCurrent(runState *RunResult) {
 	s.mu.Lock()
 	if s.runState == runState {
 		s.runState = nil
-	}
-	s.mu.Unlock()
-}
-
-func (s *AgentSession) clearStartingIfCurrent(startDone chan struct{}) {
-	if startDone == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.startDone == startDone {
-		s.starting = false
-		close(startDone)
-		s.startDone = nil
 	}
 	s.mu.Unlock()
 }
@@ -3228,23 +3235,17 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 }
 
 func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
-	for {
-		s.mu.Lock()
-		if s.starting {
-			done := s.startDone
-			s.mu.Unlock()
-			if done != nil {
-				<-done
-			}
-			continue
-		}
-		if !s.started {
-			s.signalTeardown()
-			s.clearEventListenersLocked()
-			s.mu.Unlock()
-			return nil
-		}
-		break
+	if err := s.acquireLifecycle(ctx); err != nil {
+		return err
+	}
+	defer s.releaseLifecycle()
+
+	s.mu.Lock()
+	if !s.started {
+		s.signalTeardown()
+		s.clearEventListenersLocked()
+		s.mu.Unlock()
+		return nil
 	}
 	s.signalTeardown()
 
