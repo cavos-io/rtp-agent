@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,6 +534,44 @@ func TestRunRunningJobEntrypointLifecycleReportsPanicAsError(t *testing.T) {
 		if !seen {
 			t.Fatalf("events = %#v, missing %q", events, event)
 		}
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleMarksDoneBeforeReportingResult(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(ev string) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+
+	err := workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+		Context:    context.Background(),
+		Entrypoint: func() error { panic("boom") },
+		MarkDone:   func() { record("done") },
+		OnPanic:    func(any) { record("panic") },
+		OnError:    func(error) { record("error") },
+		Finish:     func() bool { record("finish"); return true },
+	})
+	if err == nil {
+		t.Fatalf("RunRunningJobEntrypointLifecycle error = nil, want panic error")
+	}
+
+	indexOf := func(target string) int {
+		for i, ev := range events {
+			if ev == target {
+				return i
+			}
+		}
+		return -1
+	}
+	done, onErr, finish := indexOf("done"), indexOf("error"), indexOf("finish")
+	if done < 0 || onErr < 0 || finish < 0 {
+		t.Fatalf("events = %#v, want done/error/finish all present", events)
+	}
+	if done > onErr || done > finish {
+		t.Fatalf("events = %#v, want MarkDone(done) ordered before OnError(error) and Finish(finish)", events)
 	}
 }
 
