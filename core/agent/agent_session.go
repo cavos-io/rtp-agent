@@ -2498,9 +2498,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		go s.reportUsageLoop(runCtx)
 	}
 
-	s.UpdateAgentState(AgentStateListening)
 	s.releaseLifecycle()
 	lifecycleHeld = false
+	s.UpdateAgentState(AgentStateListening)
 
 	if runState != nil {
 		if err := runState.Wait(ctx); err != nil {

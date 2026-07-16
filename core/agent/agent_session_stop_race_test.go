@@ -173,3 +173,55 @@ func TestStopDuringStartWaitsThenTearsDown(t *testing.T) {
 		t.Fatal("session still started after Stop raced with Start (Stop should win)")
 	}
 }
+
+func TestStopUnblocksListeningStateNotificationDuringStart(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+	s.Assistant = &fakeSessionAssistant{}
+
+	stateEvents := s.agentStateChangedEvents()
+	for range cap(stateEvents) {
+		stateEvents <- AgentStateChangedEvent{}
+	}
+
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.Start(context.Background()) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mu.Lock()
+		started := s.started
+		s.mu.Unlock()
+		if started {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session never reached the started state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- s.Stop(context.Background()) }()
+
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop blocked behind the listening-state notification")
+	}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start remained blocked after Stop signaled teardown")
+	}
+}
