@@ -316,14 +316,16 @@ func RunRunningJobEntrypointLifecycle(opts RunningJobEntrypointLifecycleOptions)
 			finishJobEntrypoint(opts.Finish)
 			return err
 		}
-		select {
-		case <-opts.ShutdownDone:
-		case <-ctx.Done():
-			if opts.Shutdown != nil {
-				opts.Shutdown("")
+		if opts.ShutdownDone != nil {
+			select {
+			case <-opts.ShutdownDone:
+			case <-ctx.Done():
+				if opts.Shutdown != nil {
+					opts.Shutdown("")
+				}
+				finishJobEntrypoint(opts.Finish)
+				return ctx.Err()
 			}
-			finishJobEntrypoint(opts.Finish)
-			return ctx.Err()
 		}
 		finishJobEntrypoint(opts.Finish)
 		return nil

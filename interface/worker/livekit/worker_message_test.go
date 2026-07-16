@@ -575,6 +575,33 @@ func TestRunRunningJobEntrypointLifecycleMarksDoneBeforeReportingResult(t *testi
 	}
 }
 
+func TestRunRunningJobEntrypointLifecycleDoesNotHangWithoutShutdownDone(t *testing.T) {
+	var finished bool
+	done := make(chan error, 1)
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context:    context.Background(),
+			Entrypoint: func() error { return nil },
+			Finish: func() bool {
+				finished = true
+				return true
+			},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("lifecycle error = %v, want nil for a successful entrypoint with no ShutdownDone", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle hung on a nil ShutdownDone after a successful entrypoint")
+	}
+	if !finished {
+		t.Fatal("Finish was not called on the no-ShutdownDone success path")
+	}
+}
+
 func TestMigrateJobMessageCarriesJobIDs(t *testing.T) {
 	jobIDs := []string{"job-a", "job-b"}
 	msg := workerlivekit.MigrateJobMessage(jobIDs)
