@@ -354,4 +354,3 @@ git log --oneline origin/haikal/fix/memory-leak..HEAD
 ```
 
 Expected: clean worktree and focused commits.
-
