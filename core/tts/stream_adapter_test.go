@@ -969,6 +969,25 @@ func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterSynthesisErrorStopsInputForwarder(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	synthErr := errors.New("synthesize failed")
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := nextStreamAdapterError(stream); !errors.Is(err, synthErr) {
+		t.Fatalf("Next error = %v, want %v", err, synthErr)
+	}
+}
+
 func TestStreamAdapterReportsNilChunkedStream(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{nilChunked: true}).Stream(context.Background())
 	if err != nil {

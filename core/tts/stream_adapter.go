@@ -162,21 +162,19 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 }
 
 func (w *streamAdapterWrapper) run() {
-	defer close(w.doneCh)
-	defer close(w.eventCh)
-
 	tokenizer := newRetainFormatSentenceStream("en")
-
-	go func() {
-		select {
-		case <-w.ctx.Done():
-			tokenizer.AClose()
-		case <-w.doneCh:
-		}
+	var helpers sync.WaitGroup
+	defer func() {
+		w.cancel()
+		helpers.Wait()
+		close(w.eventCh)
+		close(w.doneCh)
 	}()
 
 	// Stream text to tokenizer
+	helpers.Add(1)
 	go func() {
+		defer helpers.Done()
 		for {
 			select {
 			case <-w.ctx.Done():
