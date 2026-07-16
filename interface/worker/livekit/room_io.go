@@ -975,27 +975,33 @@ func (w roomIOSDKTextStreamWriter) Close() {
 }
 
 type roomIOGuardedTextWriter struct {
-	mu     sync.Mutex
-	inner  roomIOTextStreamWriter
-	closed bool
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	inner   roomIOTextStreamWriter
+	closed  bool
 }
 
 func (w *roomIOGuardedTextWriter) Write(text string) {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return
 	}
+	w.mu.Unlock()
 	w.inner.Write(text)
 }
 
 func (w *roomIOGuardedTextWriter) Close() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return
 	}
 	w.closed = true
+	w.mu.Unlock()
 	w.inner.Close()
 }
 
