@@ -16804,10 +16804,32 @@ func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
 	return nil
 }
 
-type fakeAppAudioTurnDetector struct{}
+type fakeAppAudioTurnDetector struct {
+	closeCalls int
+}
 
 func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
 	return 0.9, nil
+}
+
+func (f *fakeAppAudioTurnDetector) Close() error {
+	f.closeCalls++
+	return nil
+}
+
+func TestAppCloseClosesAudioTurnDetectorOnce(t *testing.T) {
+	detector := &fakeAppAudioTurnDetector{}
+	a := &App{Agent: &agent.Agent{AudioTurnDetector: detector}}
+
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if detector.closeCalls != 1 {
+		t.Fatalf("AudioTurnDetector Close calls = %d, want 1", detector.closeCalls)
+	}
 }
 
 func chdirAppTest(t *testing.T, dir string) {

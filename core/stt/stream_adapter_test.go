@@ -1191,3 +1191,36 @@ func nextStreamAdapterSTTError(stream RecognizeStream) error {
 		return context.DeadlineExceeded
 	}
 }
+
+func TestStreamAdapterWrapperEmitEventUnblocksOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &streamAdapterWrapper{
+		ctx:     ctx,
+		cancel:  cancel,
+		eventCh: make(chan *SpeechEvent, 1),
+		doneCh:  make(chan struct{}),
+	}
+
+	w.eventCh <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
+
+	emitDone := make(chan struct{})
+	go func() {
+		w.emitEvent(&SpeechEvent{Type: SpeechEventEndOfSpeech})
+		close(emitDone)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-emitDone:
+		t.Fatal("emitEvent did not block on the full channel; test cannot prove the fix")
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-emitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("emitEvent stayed blocked after cancel — the send ignored ctx.Done()")
+	}
+}

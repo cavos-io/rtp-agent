@@ -999,6 +999,8 @@ type App struct {
 	RoomOptions     workerlivekit.RoomOptions
 	Config          AppConfig
 	telemetryLogs   bool
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 type EvaluationSummary struct {
@@ -1827,12 +1829,22 @@ func (a *App) Close(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
-	a.closeMCPServers()
-	if a.telemetryLogs {
-		a.telemetryLogs = false
-		return appShutdownLoggerProvider(ctx)
-	}
-	return nil
+	a.closeOnce.Do(func() {
+		a.closeMCPServers()
+		var detectorErr error
+		if a.Agent != nil {
+			if closer, ok := a.Agent.AudioTurnDetector.(interface{ Close() error }); ok {
+				detectorErr = closer.Close()
+			}
+		}
+		var telemetryErr error
+		if a.telemetryLogs {
+			a.telemetryLogs = false
+			telemetryErr = appShutdownLoggerProvider(ctx)
+		}
+		a.closeErr = errors.Join(detectorErr, telemetryErr)
+	})
+	return a.closeErr
 }
 
 func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (*EvaluationSummary, error) {

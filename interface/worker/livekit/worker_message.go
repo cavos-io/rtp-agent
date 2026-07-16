@@ -290,20 +290,21 @@ func RunRunningJobEntrypointLifecycle(opts RunningJobEntrypointLifecycleOptions)
 		opts.MarkStarted()
 	}
 	go func() {
-		defer func() {
-			if opts.MarkDone != nil {
-				opts.MarkDone()
-			}
-		}()
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				if opts.OnPanic != nil {
-					opts.OnPanic(recovered)
+		err := func() (err error) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					if opts.OnPanic != nil {
+						opts.OnPanic(recovered)
+					}
+					err = fmt.Errorf("running job entrypoint panicked: %v", recovered)
 				}
-				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
-			}
+			}()
+			return runJobEntrypointFunc(opts.Entrypoint)
 		}()
-		doneCh <- runJobEntrypointFunc(opts.Entrypoint)
+		if opts.MarkDone != nil {
+			opts.MarkDone()
+		}
+		doneCh <- err
 	}()
 
 	select {
@@ -315,14 +316,16 @@ func RunRunningJobEntrypointLifecycle(opts RunningJobEntrypointLifecycleOptions)
 			finishJobEntrypoint(opts.Finish)
 			return err
 		}
-		select {
-		case <-opts.ShutdownDone:
-		case <-ctx.Done():
-			if opts.Shutdown != nil {
-				opts.Shutdown("")
+		if opts.ShutdownDone != nil {
+			select {
+			case <-opts.ShutdownDone:
+			case <-ctx.Done():
+				if opts.Shutdown != nil {
+					opts.Shutdown("")
+				}
+				finishJobEntrypoint(opts.Finish)
+				return ctx.Err()
 			}
-			finishJobEntrypoint(opts.Finish)
-			return ctx.Err()
 		}
 		finishJobEntrypoint(opts.Finish)
 		return nil

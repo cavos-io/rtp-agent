@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.uber.org/goleak"
 )
 
 const streamAdapterTestTimeout = 5 * time.Second
@@ -967,6 +969,25 @@ func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterSynthesisErrorStopsInputForwarder(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	synthErr := errors.New("synthesize failed")
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := nextStreamAdapterError(stream); !errors.Is(err, synthErr) {
+		t.Fatalf("Next error = %v, want %v", err, synthErr)
+	}
+}
+
 func TestStreamAdapterReportsNilChunkedStream(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{nilChunked: true}).Stream(context.Background())
 	if err != nil {
@@ -1560,4 +1581,60 @@ func (s *oneFrameThenBlockingChunkedStream) Close() error {
 		close(s.closeCh)
 	})
 	return nil
+}
+
+func manyFrames(n int) []*SynthesizedAudio {
+	frames := make([]*SynthesizedAudio, n)
+	for i := range frames {
+		frames[i] = &SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              make([]byte, 2),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+		}
+	}
+	return frames
+}
+
+func TestStreamAdapterCloseWhileSpeakingDoesNotDeadlockOrLeak(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	base := runtime.NumGoroutine()
+
+	adapter := NewStreamAdapter(&fakeStreamAdapterTTS{events: manyFrames(400)})
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if err := stream.PushText("This is a sufficiently long sentence to tokenize. "); err != nil {
+		t.Fatalf("PushText: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() { done <- stream.Close() }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		buf := make([]byte, 1<<16)
+		n := runtime.Stack(buf, true)
+		t.Fatalf("Close() deadlocked (did not return within 3s)\n%s", buf[:n])
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > base && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		runtime.GC()
+	}
+	if leaked := runtime.NumGoroutine() - base; leaked > 0 {
+		t.Errorf("leaked %d goroutines after Close() while speaking (base=%d, now=%d)",
+			leaked, base, runtime.NumGoroutine())
+	}
 }
