@@ -7506,28 +7506,33 @@ func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
 }
 
 type closeTrackingAudioTurnDetector struct {
-	mu     sync.Mutex
-	closed bool
+	mu         sync.Mutex
+	closeCalls int
 }
 
 func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closeCalls > 0 {
+		return 0, errors.New("audio turn detector is closed")
+	}
 	return 0, nil
 }
 
 func (d *closeTrackingAudioTurnDetector) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.closed = true
+	d.closeCalls++
 	return nil
 }
 
 func (d *closeTrackingAudioTurnDetector) isClosed() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.closed
+	return d.closeCalls > 0
 }
 
-func TestAgentSessionStopClosesCloseableAudioTurnDetector(t *testing.T) {
+func TestAgentSessionRestartKeepsAudioTurnDetectorOpen(t *testing.T) {
 	detector := &closeTrackingAudioTurnDetector{}
 	agent := NewAgent("test")
 	agent.TTS = &fakePipelineTTS{}
@@ -7545,8 +7550,13 @@ func TestAgentSessionStopClosesCloseableAudioTurnDetector(t *testing.T) {
 	if err := s.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-
-	if !detector.isClosed() {
-		t.Fatal("Stop() did not close the closeable AudioTurnDetector — a per-session detector holding a grpc/http resource would leak it (teardown has no path to Close it)")
+	if _, err := detector.PredictEndOfTurnAudio(context.Background(), nil); err != nil {
+		t.Fatalf("PredictEndOfTurnAudio after Stop: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if detector.isClosed() {
+		t.Fatal("session stop closed the application-owned AudioTurnDetector")
 	}
 }

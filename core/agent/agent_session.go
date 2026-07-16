@@ -3251,10 +3251,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	ivrActivity := s.ivrActivity
 	assistant := s.Assistant
 	var avatar AvatarProvider
-	var audioTurnDetector AudioTurnDetector
 	if s.Agent != nil && s.Agent.GetAgent() != nil {
 		avatar = s.Agent.GetAgent().Avatar
-		audioTurnDetector = s.Agent.GetAgent().AudioTurnDetector
 	}
 	s.activity = nil
 	s.ivrActivity = nil
@@ -3327,11 +3325,6 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		}
 	}
 	if closer, ok := avatar.(closeableAvatarProvider); ok {
-		if err := closer.Close(); err != nil && stopErr == nil {
-			stopErr = err
-		}
-	}
-	if closer, ok := audioTurnDetector.(interface{ Close() error }); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {
 			stopErr = err
 		}
