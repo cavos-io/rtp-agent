@@ -975,10 +975,11 @@ func (w roomIOSDKTextStreamWriter) Close() {
 }
 
 type roomIOGuardedTextWriter struct {
-	mu      sync.Mutex
-	writeMu sync.Mutex
-	inner   roomIOTextStreamWriter
-	closed  bool
+	mu        sync.Mutex
+	writeMu   sync.Mutex
+	inner     roomIOTextStreamWriter
+	closed    bool
+	closeDone chan struct{}
 }
 
 func (w *roomIOGuardedTextWriter) Write(text string) {
@@ -996,13 +997,22 @@ func (w *roomIOGuardedTextWriter) Write(text string) {
 
 func (w *roomIOGuardedTextWriter) Close() {
 	w.mu.Lock()
+	if w.closeDone == nil {
+		w.closeDone = make(chan struct{})
+	}
+	closeDone := w.closeDone
 	if w.closed {
 		w.mu.Unlock()
+		<-closeDone
 		return
 	}
 	w.closed = true
 	w.mu.Unlock()
+
 	w.inner.Close()
+	w.writeMu.Lock()
+	close(closeDone)
+	w.writeMu.Unlock()
 }
 
 func (rio *RoomIO) openRoomTextStream(opts lksdk.StreamTextOptions) roomIOTextStreamWriter {

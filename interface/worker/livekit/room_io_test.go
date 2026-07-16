@@ -5601,6 +5601,63 @@ func (w *gatedTextStream) Close() {
 
 func (w *gatedTextStream) releaseWrite() { w.releaseOnce.Do(func() { close(w.release) }) }
 
+type nonCancellingGatedTextStream struct {
+	writeEntered chan struct{}
+	releaseWrite chan struct{}
+	writeDone    chan struct{}
+}
+
+func newNonCancellingGatedTextStream() *nonCancellingGatedTextStream {
+	return &nonCancellingGatedTextStream{
+		writeEntered: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+		writeDone:    make(chan struct{}),
+	}
+}
+
+func (w *nonCancellingGatedTextStream) Write(string) {
+	close(w.writeEntered)
+	<-w.releaseWrite
+	close(w.writeDone)
+}
+
+func (*nonCancellingGatedTextStream) Close() {}
+
+func TestRoomIOGuardedTextWriterCloseWaitsForNonCancellingWrite(t *testing.T) {
+	inner := newNonCancellingGatedTextStream()
+	writer := &roomIOGuardedTextWriter{inner: inner}
+
+	go writer.Write("hello")
+	<-inner.writeEntered
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		writer.Close()
+		close(closeDone)
+	}()
+	<-closeStarted
+
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while an admitted inner Write was still running")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(inner.releaseWrite)
+	select {
+	case <-inner.writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("inner Write did not finish after release")
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the admitted Write finished")
+	}
+}
+
 func TestRoomIOCloseAgentTextStreamCancelsBlockedWrite(t *testing.T) {
 	writer := newGatedTextStream()
 	rio := &RoomIO{
