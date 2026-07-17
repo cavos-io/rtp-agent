@@ -1493,6 +1493,13 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	return rio.waitForAudioSubscription(ctx)
 }
 
+func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
+	if rio == nil || rio.Recorder == nil {
+		return nil
+	}
+	return rio.Recorder.Start(outputPath, sampleRate)
+}
+
 func (rio *RoomIO) setAudioOutputTrack(track *lksdk.LocalTrack, trackID string, publication *lksdk.LocalTrackPublication) {
 	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()
