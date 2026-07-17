@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -418,12 +419,16 @@ type StartSessionOptions struct {
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
 	SessionContext context.Context
+	SkipRecorder   bool
+	AfterConnect   func(ctx context.Context) error
+	OnRoomIO       func(roomIO *RoomIO)
 }
 
 type jobSessionRoomIO interface {
 	WithCallback(*RoomCallback) *RoomCallback
 	AttachRoom(*SDKRoom)
 	Start(context.Context) error
+	StartRecorder(outputPath string, sampleRate int) error
 	Close() error
 }
 
@@ -508,8 +513,10 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 
 	var roomIO jobSessionRoomIO
+	var createdRoomIO *RoomIO
 	if c.Room == nil {
-		roomIO = livekitNewRoomIO(nil, session, roomOptions)
+		createdRoomIO = livekitNewRoomIO(nil, session, roomOptions)
+		roomIO = createdRoomIO
 		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
 		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
@@ -521,7 +528,11 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	if c.Room != nil {
 		session.Room = c.Room
 		if roomIO == nil {
-			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+			createdRoomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+			roomIO = createdRoomIO
+		}
+		if opts.OnRoomIO != nil && createdRoomIO != nil {
+			opts.OnRoomIO(createdRoomIO)
 		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
@@ -529,10 +540,21 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}); err != nil {
 			logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
 		}
+		if !opts.SkipRecorder && c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+				return err
+			}
+		}
 		if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
 			if err := roomIO.Start(ctx); err != nil {
 				return err
 			}
+		}
+	}
+
+	if opts.AfterConnect != nil {
+		if err := opts.AfterConnect(ctx); err != nil {
+			return err
 		}
 	}
 
