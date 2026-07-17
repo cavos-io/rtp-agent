@@ -587,6 +587,9 @@ type StartSessionOptions struct {
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
 	SessionContext context.Context
+	SkipRecorder   bool
+	AfterConnect   func(ctx context.Context) error
+	OnRoomIO       func(roomIO *RoomIO)
 }
 
 type SessionRoomIO interface {
@@ -795,6 +798,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}
 
 		var roomIO SessionRoomIO
+		var createdRoomIO *RoomIO
 		if c.roomNeedsConnect() {
 			// RoomIO must be registered before the join, so that no track event can
 			// fire before it is listening. PrepareRoom only allocates; the join is
@@ -803,7 +807,8 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			// Registration order mirrors the previous WithCallback composition: the
 			// caller's handlers run before RoomIO's.
 			c.AddRoomCallback(opts.RoomCallback)
-			roomIO = livekitNewRoomIO(nil, session, roomOptions)
+			createdRoomIO = livekitNewRoomIO(nil, session, roomOptions)
+			roomIO = createdRoomIO
 			if tracer, ok := roomIO.(interface{ SetTraceContext(context.Context) }); ok {
 				tracer.SetTraceContext(ctx)
 			}
@@ -821,14 +826,18 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		if c.Room != nil {
 			session.Room = c.Room
 			if roomIO == nil {
-				roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+				createdRoomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+				roomIO = createdRoomIO
 				if tracer, ok := roomIO.(interface{ SetTraceContext(context.Context) }); ok {
 					tracer.SetTraceContext(ctx)
 				}
 				c.AddRoomCallback(roomIO.GetCallback())
 				roomIO.ReconcileParticipants()
 			}
-			if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+			if opts.OnRoomIO != nil && createdRoomIO != nil {
+				opts.OnRoomIO(createdRoomIO)
+			}
+			if !opts.SkipRecorder && c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
 				if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
 					return err
 				}
@@ -849,6 +858,11 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}
 
 		c.SetPrimaryRoomIO(roomIO)
+		if opts.AfterConnect != nil {
+			if err := opts.AfterConnect(ctx); err != nil {
+				return err
+			}
+		}
 		return nil
 
 	}
