@@ -27,8 +27,10 @@ import (
 )
 
 const (
-	googleSTTMaxSessionDuration = 240 * time.Second
-	googleSTTRequestTimeout     = 10 * time.Second
+	googleSTTMaxSessionDuration      = 240 * time.Second
+	googleSTTRequestTimeout          = 10 * time.Second
+	googleSTTMaxTransientRestarts    = 5
+	googleSTTTransientRestartBackoff = 200 * time.Millisecond
 )
 
 type GoogleSTT struct {
@@ -1246,6 +1248,7 @@ type googleSTTStream struct {
 	timingMu                    sync.Mutex
 	startTimeOffset             float64
 	startTime                   float64
+	transientRestarts           int
 }
 
 type googleSTTInputAudioNormalizer struct {
@@ -1445,6 +1448,17 @@ func (s *googleSTTStream) readLoopV1() bool {
 					err = restartErr
 				}
 			}
+			if googleSTTStatusTransient(err) && s.markTransientRestart() {
+				time.Sleep(googleSTTTransientRestartBackoff)
+				restarted, restartErr := s.restartStreamWithError(stream)
+				if restarted {
+					lastUsageEventTime = 0
+					continue
+				}
+				if restartErr != nil {
+					err = restartErr
+				}
+			}
 			if s.isClosed() {
 				s.terminate()
 				return false
@@ -1474,6 +1488,9 @@ func (s *googleSTTStream) readLoopV1() bool {
 				data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset())
 				if !ok {
 					continue
+				}
+				if eventType == stt.SpeechEventFinalTranscript {
+					s.resetTransientRestarts()
 				}
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
@@ -1543,6 +1560,17 @@ func (s *googleSTTStream) readLoopV2() bool {
 					err = restartErr
 				}
 			}
+			if googleSTTStatusTransient(err) && s.markTransientRestart() {
+				time.Sleep(googleSTTTransientRestartBackoff)
+				restarted, restartErr := s.restartStreamV2WithError(stream)
+				if restarted {
+					lastUsageEventTime = 0
+					continue
+				}
+				if restartErr != nil {
+					err = restartErr
+				}
+			}
 			if s.isClosed() {
 				s.terminate()
 				return false
@@ -1572,6 +1600,9 @@ func (s *googleSTTStream) readLoopV2() bool {
 				data, eventType, ok := googleSpeechDataFromStreamingResultsV2(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset())
 				if !ok {
 					continue
+				}
+				if eventType == stt.SpeechEventFinalTranscript {
+					s.resetTransientRestarts()
 				}
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
@@ -1634,6 +1665,25 @@ func (s *googleSTTStream) shouldRestartAfterConflict(err error) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return !s.closed && !s.inputClosed
+}
+
+func (s *googleSTTStream) markTransientRestart() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputClosed {
+		return false
+	}
+	if s.transientRestarts >= googleSTTMaxTransientRestarts {
+		return false
+	}
+	s.transientRestarts++
+	return true
+}
+
+func (s *googleSTTStream) resetTransientRestarts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transientRestarts = 0
 }
 
 func (s *googleSTTStream) shouldRestartAfterMaxSession(stream speechpb.Speech_StreamingRecognizeClient) bool {
@@ -1853,6 +1903,15 @@ func googleSTTStatusRetryable(code codes.Code) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func googleSTTStatusTransient(err error) bool {
+	switch status.Code(err) {
+	case codes.Internal, codes.Unavailable, codes.Aborted, codes.ResourceExhausted, codes.DeadlineExceeded, codes.OutOfRange:
+		return true
+	default:
+		return false
 	}
 }
 
