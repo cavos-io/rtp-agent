@@ -674,6 +674,14 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 		resultCh <- v2SetupResult{stream: stream}
 	}()
 
+	drainAbortedSetup := func() {
+		go func() {
+			if res := <-resultCh; res.stream != nil {
+				_ = res.stream.CloseSend()
+			}
+		}()
+	}
+
 	select {
 	case res := <-resultCh:
 		if res.err != nil {
@@ -681,8 +689,10 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 		}
 		return res.stream, nil
 	case <-ctx.Done():
+		drainAbortedSetup()
 		return nil, googleSTTStartupError(ctx.Err())
 	case <-time.After(googleSTTRequestTimeout):
+		drainAbortedSetup()
 		return nil, googleSTTStartupError(fmt.Errorf("google STT v2 stream setup timed out after %s (model %q, location %q)", googleSTTRequestTimeout, s.model, s.location))
 	}
 }
