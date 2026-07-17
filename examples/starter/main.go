@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"os"
-	"path/filepath"
 
 	livekitAdapter "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
@@ -12,7 +11,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli"
 	"github.com/cavos-io/rtp-agent/interface/worker"
-	livekitWorker "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	_ "github.com/joho/godotenv/autoload"
 	protologger "github.com/livekit/protocol/logger"
@@ -100,47 +98,15 @@ func main() {
 	server := worker.NewAgentServer(config.WorkerOptions)
 	err = server.RTCSession(
 		func(jobContext *worker.JobContext) error {
-			session := agent.NewAgentSession(baseAgent, jobContext.Room, agent.AgentSessionOptions{})
-			jobContext.SetPrimarySession(session)
-			session.SetJobContext(jobContext)
-
-			roomIO := livekitWorker.NewRoomIO(nil, session, livekitWorker.RoomOptions{})
-			room := jobContext.NewRoom(roomIO.GetCallback())
-			if err := jobContext.ConnectPreparedRoom(context.Background(), room); err != nil {
-				_ = roomIO.Close()
-				logger.Logger.Errorw("failed to connect to room", err)
-				return err
-			}
-			roomIO.AttachRoom(jobContext.Room)
-
-			if err := jobContext.AddShutdownCallback(func() {
-				_ = session.Stop(context.Background())
-				_ = roomIO.Close()
-			}); err != nil {
-				logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
-			}
-
-			if jobContext.Report.RecordingOptions.Audio && jobContext.SessionDirectory() != "" {
-				err := roomIO.Recorder.Start(filepath.Join(jobContext.SessionDirectory(), livekitWorker.RecordingFileName), 48000)
-				if err != nil {
-					logger.Logger.Errorw("failed to start audio recorder", err)
-					return err
-				}
-			}
-			if jobContext.Room.LocalParticipant != nil && jobContext.Room.ConnectionState() == lksdk.ConnectionStateConnected {
-				if err := roomIO.Start(context.Background()); err != nil {
-					return err
-				}
-			}
-
 			ctx := context.Background()
-			err := session.Start(ctx)
-			if err != nil {
-				logger.Logger.Errorw(err.Error(), err)
+
+			session := agent.NewAgentSession(baseAgent, jobContext.Room, agent.AgentSessionOptions{})
+			if err := jobContext.StartSession(ctx, session); err != nil {
+				logger.Logger.Errorw("failed to start session", err)
 				return err
 			}
 
-			_, err = session.GenerateReplyWithOptions(ctx, agent.GenerateReplyOptions{
+			_, err := session.GenerateReplyWithOptions(ctx, agent.GenerateReplyOptions{
 				Instructions: "Greet the user in a helpful and friendly manner",
 			})
 			if err != nil {
