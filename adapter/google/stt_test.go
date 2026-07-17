@@ -3697,6 +3697,23 @@ func TestGoogleSTTStreamReturnsAPIStatusErrorForClientStatusError(t *testing.T) 
 	}
 }
 
+func TestGoogleSTTStreamTreatsOutOfRangeAsRetryable(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: status.Error(codes.OutOfRange, "stream duration exceeded")})
+
+	_, err := provider.Stream(context.Background(), "")
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Stream error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.OutOfRange) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.OutOfRange)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for out-of-range stream duration disconnect")
+	}
+}
+
 func TestGoogleSTTStreamReturnsAPIStatusErrorForConfigSendFailure(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{sendErrOnConfig: status.Error(codes.PermissionDenied, "permission denied")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
