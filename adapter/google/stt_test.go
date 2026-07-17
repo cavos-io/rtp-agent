@@ -4108,6 +4108,76 @@ func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
 	close(restartedRecv)
 }
 
+func TestGoogleSTTStreamTransientRestartBudgetResets(t *testing.T) {
+	s := &googleSTTStream{}
+	for i := 0; i < googleSTTMaxTransientRestarts; i++ {
+		if !s.markTransientRestart() {
+			t.Fatalf("markTransientRestart attempt %d = false, want true", i+1)
+		}
+	}
+	if s.markTransientRestart() {
+		t.Fatal("markTransientRestart past budget = true, want false")
+	}
+	s.resetTransientRestarts()
+	if !s.markTransientRestart() {
+		t.Fatal("markTransientRestart after reset = false, want true")
+	}
+}
+
+func TestGoogleSTTStreamResetsTransientRestartBudgetOnFinalTranscript(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: recvBlock,
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{
+				Results: []*speechpb.StreamingRecognitionResult{{
+					IsFinal:      true,
+					LanguageCode: "en-US",
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "hello",
+						Confidence: 0.92,
+						Words: []*speechpb.WordInfo{{
+							Word:       "hello",
+							StartTime:  durationpb.New(100 * time.Millisecond),
+							EndTime:    durationpb.New(300 * time.Millisecond),
+							Confidence: 0.92,
+						}},
+					}},
+				}},
+			},
+		},
+	}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{streamClient},
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.transientRestarts = googleSTTMaxTransientRestarts
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	event, err := stream.Next()
+	if err != nil || event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event = (%#v, %v), want final transcript", event, err)
+	}
+
+	googleStream.mu.Lock()
+	got := googleStream.transientRestarts
+	googleStream.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("transientRestarts = %d after recovery, want 0", got)
+	}
+	close(recvBlock)
+}
+
 func TestGoogleSTTStreamReportsReferenceMaxSessionReconnectError(t *testing.T) {
 	firstStream := &fakeGoogleStreamingRecognizeClient{responses: []*speechpb.StreamingRecognizeResponse{
 		{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
