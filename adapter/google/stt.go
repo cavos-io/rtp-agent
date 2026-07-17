@@ -646,21 +646,43 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 	if recognizer == "" {
 		return nil, googleSTTStartupError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 	}
-	stream, err := clientV2.StreamingRecognize(ctx)
-	if err != nil {
-		return nil, googleSTTStartupError(err)
-	}
-	err = stream.Send(&speechv2pb.StreamingRecognizeRequest{
+	configReq := &speechv2pb.StreamingRecognizeRequest{
 		Recognizer: recognizer,
 		StreamingRequest: &speechv2pb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: googleStreamingRecognitionConfigV2(s, language, includeAlternativeLanguages),
 		},
-	})
-	if err != nil {
-		_ = stream.CloseSend()
-		return nil, googleSTTStartupError(err)
 	}
-	return stream, nil
+
+	type v2SetupResult struct {
+		stream speechv2pb.Speech_StreamingRecognizeClient
+		err    error
+	}
+	resultCh := make(chan v2SetupResult, 1)
+	go func() {
+		stream, err := clientV2.StreamingRecognize(ctx)
+		if err != nil {
+			resultCh <- v2SetupResult{err: err}
+			return
+		}
+		if err := stream.Send(configReq); err != nil {
+			_ = stream.CloseSend()
+			resultCh <- v2SetupResult{err: err}
+			return
+		}
+		resultCh <- v2SetupResult{stream: stream}
+	}()
+
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return nil, googleSTTStartupError(res.err)
+		}
+		return res.stream, nil
+	case <-ctx.Done():
+		return nil, googleSTTStartupError(ctx.Err())
+	case <-time.After(googleSTTRequestTimeout):
+		return nil, googleSTTStartupError(fmt.Errorf("google STT v2 stream setup timed out after %s (model %q, location %q)", googleSTTRequestTimeout, s.model, s.location))
+	}
 }
 
 func (s *GoogleSTT) ensureClientV2(ctx context.Context) (googleSpeechV2Client, error) {
