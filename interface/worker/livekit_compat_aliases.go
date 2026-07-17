@@ -104,6 +104,10 @@ type ConnectOptions = workerlivekit.ConnectOptions
 
 type RoomOptions = workerlivekit.RoomOptions
 
+type RoomIO = workerlivekit.RoomIO
+
+const RecordingFileName = workerlivekit.RecordingFileName
+
 type Job = workerlivekit.Job
 
 type SDKRoom = workerlivekit.SDKRoom
