@@ -2,6 +2,6 @@ package mistralai
 
 const (
 	PluginTitle   = "rtp-agent.plugins.mistralai"
-	PluginVersion = "v0.4.0"
+	PluginVersion = "v0.4.1"
 	PluginPackage = "rtp-agent.plugins.mistralai"
 )
