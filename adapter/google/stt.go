@@ -1470,6 +1470,10 @@ func (s *googleSTTStream) readLoopV1() bool {
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamWithError(stream)
 				if restarted {
+					if speechStarted {
+						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+						speechStarted = false
+					}
 					lastUsageEventTime = 0
 					continue
 				}
@@ -1586,6 +1590,10 @@ func (s *googleSTTStream) readLoopV2() bool {
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamV2WithError(stream)
 				if restarted {
+					if speechStarted {
+						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+						speechStarted = false
+					}
 					lastUsageEventTime = 0
 					continue
 				}

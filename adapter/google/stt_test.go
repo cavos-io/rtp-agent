@@ -1357,6 +1357,33 @@ func TestGoogleSTTStreamClosesUtteranceOnTransientReconnect(t *testing.T) {
 	googleSTTAssertUtteranceClosedBeforeRestart(t, seen, 2, "the reconnect")
 }
 
+func TestGoogleSTTStreamClosesUtteranceOnConflictReconnect(t *testing.T) {
+	first := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		},
+		recvErr: status.Error(codes.AlreadyExists, "stream conflict"),
+	}
+	second := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		},
+		recvBlock: make(chan struct{}),
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{
+		streams: []speechpb.Speech_StreamingRecognizeClient{first, second},
+	})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	seen := googleSTTCollectEventTypes(stream, 3, 3*time.Second)
+	googleSTTAssertUtteranceClosedBeforeRestart(t, seen, 2, "the conflict restart")
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
