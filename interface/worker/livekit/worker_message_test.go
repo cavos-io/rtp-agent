@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,6 +534,71 @@ func TestRunRunningJobEntrypointLifecycleReportsPanicAsError(t *testing.T) {
 		if !seen {
 			t.Fatalf("events = %#v, missing %q", events, event)
 		}
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleMarksDoneBeforeReportingResult(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	record := func(ev string) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+
+	err := workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+		Context:    context.Background(),
+		Entrypoint: func() error { panic("boom") },
+		MarkDone:   func() { record("done") },
+		OnPanic:    func(any) { record("panic") },
+		OnError:    func(error) { record("error") },
+		Finish:     func() bool { record("finish"); return true },
+	})
+	if err == nil {
+		t.Fatalf("RunRunningJobEntrypointLifecycle error = nil, want panic error")
+	}
+
+	indexOf := func(target string) int {
+		for i, ev := range events {
+			if ev == target {
+				return i
+			}
+		}
+		return -1
+	}
+	done, onErr, finish := indexOf("done"), indexOf("error"), indexOf("finish")
+	if done < 0 || onErr < 0 || finish < 0 {
+		t.Fatalf("events = %#v, want done/error/finish all present", events)
+	}
+	if done > onErr || done > finish {
+		t.Fatalf("events = %#v, want MarkDone(done) ordered before OnError(error) and Finish(finish)", events)
+	}
+}
+
+func TestRunRunningJobEntrypointLifecycleDoesNotHangWithoutShutdownDone(t *testing.T) {
+	var finished bool
+	done := make(chan error, 1)
+	go func() {
+		done <- workerlivekit.RunRunningJobEntrypointLifecycle(workerlivekit.RunningJobEntrypointLifecycleOptions{
+			Context:    context.Background(),
+			Entrypoint: func() error { return nil },
+			Finish: func() bool {
+				finished = true
+				return true
+			},
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("lifecycle error = %v, want nil for a successful entrypoint with no ShutdownDone", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle hung on a nil ShutdownDone after a successful entrypoint")
+	}
+	if !finished {
+		t.Fatal("Finish was not called on the no-ShutdownDone success path")
 	}
 }
 

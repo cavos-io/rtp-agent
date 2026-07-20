@@ -676,7 +676,7 @@ func filterDtmfPhraseTokens(tokens []string) []string {
 		if token == "number" && i+1 < len(tokens) && isDtmfDigitInput(tokens[i+1]) {
 			continue
 		}
-		if token == "number" && i+1 < len(tokens) && isDtmfFiller(tokens[i+1]) {
+		if token == "number" && i+1 < len(tokens) && isDtmfFiller(tokens[i+1]) && normalizeDtmfToken(tokens[i+1]) != "key" {
 			continue
 		}
 		if token == "to" && i+1 < len(tokens) && isDtmfFiller(tokens[i+1]) {

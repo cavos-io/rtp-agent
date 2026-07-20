@@ -35,6 +35,1393 @@ func TestGetDOBTaskRecordsPastDateWithoutConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskNormalizesSpokenDateArguments(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken DOB arguments accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesSingleSpokenDay(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"January","day":"single five"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken single-digit DOB day accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-05" {
+			t.Fatalf("DateOfBirth = %q, want single-spoken DOB day normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after single-spoken DOB day")
+	}
+}
+
+func TestGetDOBTaskNormalizesSpokenDigitPairDay(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"January","day":"one one"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want digit-pair DOB day accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-11" {
+			t.Fatalf("DateOfBirth = %q, want digit-pair DOB day normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after digit-pair DOB day")
+	}
+}
+
+func TestGetDOBTaskNormalizesSpokenDigitYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"one nine nine zero","month":"zero one","day":"one five"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want digit-by-digit spoken DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want digit-by-digit spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after digit-by-digit spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesSpokenDigitOweYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"one nine nine owe","month":"zero one","day":"one five"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want owe digit-by-digit DOB year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want owe digit-by-digit DOB year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after owe digit-by-digit DOB year")
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenDateFieldLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		year  string
+		month string
+		day   string
+	}{
+		{name: "bare labels", year: "year is nineteen ninety", month: "month is January", day: "day is fifteenth"},
+		{name: "article labels", year: "the year is nineteen ninety", month: "the month is January", day: "the day is fifteenth"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+			tool := &updateDOBTool{task: task}
+
+			out, err := tool.Execute(context.Background(), fmt.Sprintf(`{"year":%q,"month":%q,"day":%q}`, tc.year, tc.month, tc.day))
+			if err != nil {
+				t.Fatalf("Execute() error = %v, want spoken DOB field labels accepted", err)
+			}
+			if out != "" {
+				t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+			}
+
+			select {
+			case result := <-task.Result:
+				if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+					t.Fatalf("DateOfBirth = %q, want field-label DOB normalized", got)
+				}
+			default:
+				t.Fatal("task did not complete after field-label spoken DOB")
+			}
+		})
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenDateConnectors(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"of January","day":"the fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken DOB connectors accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want connector-spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after connector-spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenDateSeparators(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"January slash","day":"fifteenth slash"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken DOB separators accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want separator-spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after separator-spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersBornOnSpokenPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"born on January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want born-on spoken DOB preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want born-on preamble DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after born-on spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersWasBornOnSpokenPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"I was born on January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want was-born-on spoken DOB preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want was-born-on preamble DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after was-born-on spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenOhSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen oh five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-oh spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-oh spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-oh spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenAughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen aught five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-aught spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-aught spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-aught spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenNaughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen naught five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-naught spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-naught spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-naught spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenNoughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen nought five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-nought spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-nought spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-nought spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenOughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ought five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-ought spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-ought spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-ought spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenOweSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen owe five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-owe spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1905-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-owe spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-owe spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesNineteenHundredSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen hundred ninety","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nineteen-hundred spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want nineteen-hundred spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after nineteen-hundred spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwoThousandSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"two thousand five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want two-thousand spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2005-01-15" {
+			t.Fatalf("DateOfBirth = %q, want two-thousand spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after two-thousand spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwoThousandAndSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"two thousand and five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want two-thousand-and spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2005-01-15" {
+			t.Fatalf("DateOfBirth = %q, want two-thousand-and spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after two-thousand-and spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwoThousandNinerSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"two thousand niner","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want two-thousand-niner spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2009-01-15" {
+			t.Fatalf("DateOfBirth = %q, want two-thousand-niner spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after two-thousand-niner spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwoThousandAughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"two thousand aught five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want two-thousand-aught spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2005-01-15" {
+			t.Fatalf("DateOfBirth = %q, want two-thousand-aught spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after two-thousand-aught spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwentyOhSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty oh five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want twenty-oh spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2005-01-15" {
+			t.Fatalf("DateOfBirth = %q, want twenty-oh spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after twenty-oh spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwentyAughtSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty aught five","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want twenty-aught spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2005-01-15" {
+			t.Fatalf("DateOfBirth = %q, want twenty-aught spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after twenty-aught spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesFutureTwoDigitSpokenYearToPastCentury(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty nine","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want future two-digit spoken year normalized to prior century", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		got := result.DateOfBirth.Format("2006-01-02")
+		if got != "1929-01-15" {
+			t.Fatalf("DateOfBirth = %q, want future two-digit spoken year normalized to 1929-01-15", got)
+		}
+	default:
+		t.Fatal("task did not complete after future two-digit spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesTwoThousandCompoundSpokenYear(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"two thousand twenty one","month":"January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want two-thousand compound spoken year accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2021-01-15" {
+			t.Fatalf("DateOfBirth = %q, want two-thousand compound spoken year normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after two-thousand compound spoken DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesWonHomophone(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty won","month":"January","day":"won"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want won homophone accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2021-01-01" {
+			t.Fatalf("DateOfBirth = %q, want won homophone normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after won-homophone DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesSixHomophone(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"one nine sex five","month":"January","day":"sixth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want six homophone accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1965-01-06" {
+			t.Fatalf("DateOfBirth = %q, want six homophone normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after six-homophone DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersBirthdatePreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"birthdate is March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want birthdate preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want birthdate preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after birthdate-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersContractedBirthdatePreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"birthdate's March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want contracted birthdate preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want contracted birthdate preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after contracted birthdate-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSplitContractedBirthdatePreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"birthdate s March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want split contracted birthdate preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want split contracted birthdate preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after split contracted birthdate-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSpelledDOBPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"d o b is March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spelled DOB preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		got := result.DateOfBirth.Format("2006-01-02")
+		if got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want spelled DOB preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after spelled-DOB preamble")
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenDOBLetterAliasPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"dee oh bee is March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken DOB letter-alias preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		got := result.DateOfBirth.Format("2006-01-02")
+		if got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want spoken DOB letter-alias preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after spoken-DOB letter-alias preamble")
+	}
+}
+
+func TestGetDOBTaskFiltersSplitBirthdayPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"twenty three","month":"my birth day is March","day":"tree"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want split birthday preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		got := result.DateOfBirth.Format("2006-01-02")
+		if got != "2023-03-03" {
+			t.Fatalf("DateOfBirth = %q, want split birthday preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after split-birthday preamble")
+	}
+}
+
+func TestGetDOBTaskNormalizesOrdinalSuffixDay(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"90","month":"Jan","day":"15th"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want ordinal suffix day accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want ordinal suffix DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after ordinal suffix DOB")
+	}
+}
+
+func TestGetDOBTaskNormalizesSplitOrdinalSuffixDay(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"January","day":"fifteen th"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want split ordinal suffix day accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want split ordinal suffix DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after split ordinal suffix DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"um ninety","month":"uh Jan","day":"ah 15th"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken filler accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after filler-spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersLikeSpokenFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"like January","day":"like fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want like filler accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want like-filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after like-filler spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersActuallySpokenFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"actually January","day":"actually fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want correction filler accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want correction-filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after correction-filler spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSorrySpokenFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"sorry January","day":"sorry fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want apology filler accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want apology-filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after apology-filler spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSpokenDatePreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"my birthday is January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want spoken date preamble accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want preamble-spoken DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after preamble-spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersArticleBirthdayPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"the birthday is January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want article birthday preamble accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want article birthday preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after article-birthday-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersWillBeBirthdayPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"my birthday will be January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want will-be birthday preamble accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want will-be birthday preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after will-be birthday preamble")
+	}
+}
+
+func TestGetDOBTaskFiltersArticleDateOfBirthPreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"the date of birth is January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want article date-of-birth preamble accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want article date-of-birth preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after article-date-of-birth-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersBirthDatePreamble(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"year":"nineteen ninety","month":"my birth date is January","day":"fifteenth"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want birth-date preamble accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want birth-date preamble normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after birth-date-preamble DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersPunctuatedSpokenFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"year":"um, ninety","month":"uh, Jan","day":"ah, 15th."}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want punctuated filler DOB accepted", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want punctuated filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after punctuated filler-spoken DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that's it","month":"January please","day":"fifteenth that's all"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing sign-off filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing-signoff DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersExpandedTrailingSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that is it","month":"January please","day":"fifteenth that is all"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want expanded trailing sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want expanded trailing sign-off filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after expanded-trailing-signoff DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersThatWillBeAllSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that'll be all","month":"January that'll be it","day":"fifteenth that'll be all"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want that'll-be trailing sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want that'll-be trailing sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after that'll-be trailing sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersExpandedThatWillBeAllSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that will be all","month":"January that will be it","day":"fifteenth that will be all"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want expanded that-will-be trailing sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want expanded that-will-be trailing sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after expanded that-will-be trailing sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersSplitThatllShortSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that ll be all","month":"January that ll be it","day":"fifteenth that ll be all"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want split contracted trailing sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want split contracted trailing sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after split contracted trailing sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersDoneSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety done","month":"January done","day":"fifteenth done"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want done sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want done sign-off filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after done-signoff DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersAllDoneSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety all done","month":"January all done","day":"fifteenth all done"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want all-done sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want all-done sign-off filler DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after all-done-signoff DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingForNowThanksSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that's it for now thanks","month":"January please","day":"fifteenth that's all for now thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing for-now-thanks sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing for-now-thanks sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing for-now-thanks sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingForTodayThanksSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that's it for today thanks","month":"January please","day":"fifteenth that's all for today thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing for-today-thanks sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing for-today-thanks sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing for-today-thanks sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingForYouSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that's all for you","month":"January please","day":"fifteenth that's it for you"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing for-you sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing for-you sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing for-you sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingShortForYouSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety for you thanks","month":"January please","day":"fifteenth for you thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing short for-you sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing short for-you sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing short for-you sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingShortForTodaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety for today thanks","month":"January please","day":"fifteenth for today thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing short for-today sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing short for-today sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing short for-today sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingShortForTheDaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety for the day thanks","month":"January please","day":"fifteenth for the day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing short for-the-day sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing short for-the-day sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing short for-the-day sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingForTheDayThanksSignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that's it for the day thanks","month":"January please","day":"fifteenth that's all for the day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want trailing for-the-day-thanks sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want trailing for-the-day-thanks sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after trailing for-the-day-thanks sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingExpandedThatWillBeAllForTheDaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that will be all for the day thanks","month":"January that will be it for the day thanks","day":"fifteenth that will be all for the day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want expanded that-will-be for-the-day sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want expanded that-will-be for-the-day sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after expanded that-will-be for-the-day sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingThatllBeAllForTheDaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that'll be all for the day thanks","month":"January that'll be it for the day thanks","day":"fifteenth that'll be all for the day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want contracted that'll-be for-the-day sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want contracted that'll-be for-the-day sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after contracted that'll-be for-the-day sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingThatllBeAllForDaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that'll be all for day thanks","month":"January that'll be it for day thanks","day":"fifteenth that'll be all for day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want contracted that'll-be for-day sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want contracted that'll-be for-day sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after contracted that'll-be for-day sign-off DOB")
+	}
+}
+
+func TestGetDOBTaskFiltersTrailingSplitThatllBeAllForDaySignoffFiller(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
+	tool := &updateDOBTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"year":"nineteen ninety that ll be all for day thanks","month":"January that ll be it for day thanks","day":"fifteenth that ll be all for day thanks"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want split contracted that'll-be for-day sign-off filler DOB accepted", err)
+	}
+	if out != "" {
+		t.Fatalf("Execute() output = %q, want empty output after no-confirm completion", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if got := result.DateOfBirth.Format("2006-01-02"); got != "1990-01-15" {
+			t.Fatalf("DateOfBirth = %q, want split contracted that'll-be for-day sign-off DOB normalized", got)
+		}
+	default:
+		t.Fatal("task did not complete after split contracted that'll-be for-day sign-off DOB")
+	}
+}
+
 func TestGetDOBTaskRejectsInvalidOrFutureDate(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &updateDOBTool{task: task}

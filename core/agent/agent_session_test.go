@@ -7360,3 +7360,203 @@ func (c *closeableSessionTool) Close() error {
 	c.closeCalls++
 	return c.closeErr
 }
+
+func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
+	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	_ = s.AgentOutputTranscribedEvents()
+
+	emitDone := make(chan struct{})
+	go func() {
+		defer close(emitDone)
+		for i := 0; i < 50; i++ {
+			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: "hello",
+				IsFinal:    true,
+			})
+		}
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-emitDone:
+		t.Fatal("emitter did not block on the full subscriber channel; test cannot prove the fix")
+	default:
+	}
+
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	select {
+	case <-emitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("EmitAgentOutputTranscribed stayed blocked after Stop() — teardown did not unblock the subscriber send")
+	}
+}
+
+func TestLosslessPrimaryEventEmitUnblocksOnStop(t *testing.T) {
+	tests := []struct {
+		name      string
+		subscribe func(*AgentSession)
+		emit      func(*AgentSession)
+	}{
+		{"speech_created", func(s *AgentSession) { fillChannel(s.speechCreatedEvents(), SpeechCreatedEvent{}) }, func(s *AgentSession) { s.EmitSpeechCreated(SpeechCreatedEvent{Source: "say"}) }},
+		{"agent_false_interruption", func(s *AgentSession) { fillChannel(s.agentFalseInterruptionEvents(), AgentFalseInterruptionEvent{}) }, func(s *AgentSession) { s.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true}) }},
+		{"user_turn_exceeded", func(s *AgentSession) { fillChannel(s.userTurnExceededEvents(), UserTurnExceededEvent{}) }, func(s *AgentSession) { s.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "too long"}) }},
+		{"overlapping_speech", func(s *AgentSession) { fillChannel(s.overlappingSpeechEvents(), OverlappingSpeechEvent{}) }, func(s *AgentSession) { s.EmitOverlappingSpeech(OverlappingSpeechEvent{IsInterruption: true}) }},
+		{"conversation_item_added", func(s *AgentSession) { fillChannel(s.conversationItemAddedEvents(), ConversationItemAddedEvent{}) }, func(s *AgentSession) {
+			s.EmitConversationItemAdded(&llm.ChatMessage{ID: "blocked", Role: llm.ChatRoleUser})
+		}},
+		{"function_tools_executed", func(s *AgentSession) { fillChannel(s.functionToolsExecutedEvents(), FunctionToolsExecutedEvent{}) }, func(s *AgentSession) { s.EmitFunctionToolsExecuted(FunctionToolsExecutedEvent{}) }},
+		{"metrics_collected", func(s *AgentSession) { fillChannel(s.metricsCollectedEvents(), MetricsCollectedEvent{}) }, func(s *AgentSession) { s.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "blocked"}) }},
+		{"session_usage_updated", func(s *AgentSession) { fillChannel(s.sessionUsageUpdatedEvents(), SessionUsageUpdatedEvent{}) }, func(s *AgentSession) { s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{}) }},
+		{"error", func(s *AgentSession) { fillChannel(s.errorEvents(), ErrorEvent{}) }, func(s *AgentSession) { s.EmitError(ErrorEvent{Error: errors.New("blocked")}) }},
+		{"sip_dtmf", func(s *AgentSession) { fillChannel(s.sipDTMFEvents(), SipDTMFEvent{}) }, func(s *AgentSession) { s.EmitSipDTMF(SipDTMFEvent{Digit: "1"}) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			tt.subscribe(s)
+
+			emitDone := make(chan struct{})
+			go func() {
+				defer close(emitDone)
+				tt.emit(s)
+			}()
+
+			select {
+			case <-emitDone:
+				t.Fatal("emit returned while subscribed lossless channel was full")
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			if err := s.Stop(context.Background()); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			select {
+			case <-emitDone:
+			case <-testTimeout():
+				t.Fatal("emit stayed blocked after Stop")
+			}
+		})
+	}
+}
+
+func fillChannel[T any](ch chan T, value T) {
+	for i := 0; i < cap(ch); i++ {
+		ch <- value
+	}
+}
+
+func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+	s.Assistant = &fakeSessionAssistant{}
+
+	sub := s.AgentOutputTranscribedEvents()
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop: %v", err)
+	}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("restart Start: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	emitDone := make(chan struct{})
+	go func() {
+		defer close(emitDone)
+		for i := 0; i < 50; i++ {
+			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: "hello",
+				IsFinal:    true,
+			})
+		}
+	}()
+
+	select {
+	case <-emitDone:
+		t.Fatal("emitter finished without blocking on the full subscriber channel after restart — teardownCh was not reset, so final events are being dropped")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-sub:
+			case <-emitDone:
+				return
+			}
+		}
+	}()
+	<-emitDone
+	<-drainDone
+}
+
+type closeTrackingAudioTurnDetector struct {
+	mu         sync.Mutex
+	closeCalls int
+}
+
+func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closeCalls > 0 {
+		return 0, errors.New("audio turn detector is closed")
+	}
+	return 0, nil
+}
+
+func (d *closeTrackingAudioTurnDetector) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closeCalls++
+	return nil
+}
+
+func (d *closeTrackingAudioTurnDetector) isClosed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closeCalls > 0
+}
+
+func TestAgentSessionRestartKeepsAudioTurnDetectorOpen(t *testing.T) {
+	detector := &closeTrackingAudioTurnDetector{}
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.AudioTurnDetector = detector
+
+	s := NewAgentSession(agent, nil, AgentSessionOptions{})
+	s.Assistant = &fakeSessionAssistant{}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := detector.PredictEndOfTurnAudio(context.Background(), nil); err != nil {
+		t.Fatalf("PredictEndOfTurnAudio after Stop: %v", err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if detector.isClosed() {
+		t.Fatal("session stop closed the application-owned AudioTurnDetector")
+	}
+}
