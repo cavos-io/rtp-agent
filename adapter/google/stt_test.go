@@ -1591,6 +1591,23 @@ func TestGoogleSTTStreamCountsFramesShedWhenReconnectBacklogOverflows(t *testing
 	}
 }
 
+func TestGoogleSTTStreamBackoffEscalatesOnlyForRateLimit(t *testing.T) {
+	s := &googleSTTStream{}
+	for i := 0; i < googleSTTMaxTransientRestarts; i++ {
+		s.markTransientRestart()
+	}
+
+	drop := s.transientRestartBackoff(status.Error(codes.Unavailable, "connection drop"))
+	rateLimited := s.transientRestartBackoff(status.Error(codes.ResourceExhausted, "quota exceeded"))
+
+	if drop > 2*googleSTTTransientRestartBackoff {
+		t.Fatalf("connection-drop backoff = %s, want it to stay near the flat base %s", drop, googleSTTTransientRestartBackoff)
+	}
+	if rateLimited <= drop {
+		t.Fatalf("rate-limit backoff = %s, want it to exceed the connection-drop backoff %s", rateLimited, drop)
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }

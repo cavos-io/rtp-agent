@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -28,11 +29,12 @@ import (
 )
 
 const (
-	googleSTTMaxSessionDuration       = 240 * time.Second
-	googleSTTRequestTimeout           = 10 * time.Second
-	googleSTTMaxTransientRestarts     = 5
-	googleSTTTransientRestartBackoff  = 200 * time.Millisecond
-	googleSTTMaxRestartBufferedFrames = 2000
+	googleSTTMaxSessionDuration         = 240 * time.Second
+	googleSTTRequestTimeout             = 10 * time.Second
+	googleSTTMaxTransientRestarts       = 5
+	googleSTTTransientRestartBackoff    = 200 * time.Millisecond
+	googleSTTMaxRestartBufferedFrames   = 2000
+	googleSTTMaxTransientRestartBackoff = 2 * time.Second
 )
 
 type GoogleSTT struct {
@@ -1490,7 +1492,7 @@ func (s *googleSTTStream) readLoopV1() bool {
 					err = restartErr
 				}
 			} else if googleSTTStatusTransient(err) && s.markTransientRestart() {
-				proceed := s.waitBeforeRestart(googleSTTTransientRestartBackoff)
+				proceed := s.waitBeforeRestart(s.transientRestartBackoff(err))
 				var restarted bool
 				var restartErr error
 				if proceed {
@@ -1620,7 +1622,7 @@ func (s *googleSTTStream) readLoopV2() bool {
 					err = restartErr
 				}
 			} else if googleSTTStatusTransient(err) && s.markTransientRestart() {
-				proceed := s.waitBeforeRestart(googleSTTTransientRestartBackoff)
+				proceed := s.waitBeforeRestart(s.transientRestartBackoff(err))
 				var restarted bool
 				var restartErr error
 				if proceed {
@@ -1824,6 +1826,31 @@ func (s *googleSTTStream) endTransientRestart() {
 			"frames_dropped_session_total", total,
 			"reconnects_this_session", reconnects)
 	}
+}
+
+func (s *googleSTTStream) transientRestartBackoff(err error) time.Duration {
+	if !googleSTTStatusRateLimited(err) {
+		return googleSTTJitteredBackoff(googleSTTTransientRestartBackoff)
+	}
+	s.mu.Lock()
+	attempt := s.transientRestarts
+	s.mu.Unlock()
+	if attempt < 1 {
+		attempt = 1
+	}
+	backoff := googleSTTTransientRestartBackoff << (attempt - 1)
+	if backoff > googleSTTMaxTransientRestartBackoff {
+		backoff = googleSTTMaxTransientRestartBackoff
+	}
+	return googleSTTJitteredBackoff(backoff)
+}
+
+func googleSTTJitteredBackoff(d time.Duration) time.Duration {
+	return d - d/4 + time.Duration(rand.Int63n(int64(d)/2+1))
+}
+
+func googleSTTStatusRateLimited(err error) bool {
+	return status.Code(err) == codes.ResourceExhausted
 }
 
 func (s *googleSTTStream) waitBeforeRestart(d time.Duration) bool {
