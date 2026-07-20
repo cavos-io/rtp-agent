@@ -1285,6 +1285,7 @@ type googleSTTStream struct {
 	startTime                   float64
 	transientRestarts           int
 	totalTransientRestarts      int
+	internalErr                 error
 	restarting                  bool
 	restartBuffer               []*model.AudioFrame
 	framesDroppedDuringRestart  int
@@ -1520,6 +1521,9 @@ func (s *googleSTTStream) readLoopV1() bool {
 				}
 			}
 			if s.isClosed() {
+				if err != io.EOF {
+					s.recordInternalError(googleSTTStreamError(err))
+				}
 				s.terminate()
 				return false
 			}
@@ -1650,6 +1654,9 @@ func (s *googleSTTStream) readLoopV2() bool {
 				}
 			}
 			if s.isClosed() {
+				if err != io.EOF {
+					s.recordInternalError(googleSTTStreamError(err))
+				}
 				s.terminate()
 				return false
 			}
@@ -2471,14 +2478,17 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 			if googleSTTSendFailureDefersToReadLoop(err) {
 				return googleSTTStreamError(err)
 			}
+			mapped := googleSTTStreamError(err)
 			s.mu.Lock()
 			if !s.closed {
 				s.closed = true
+				s.recordInternalErrorLocked(mapped)
 				_ = streamV2.CloseSend()
 				s.unregister()
 			}
 			s.mu.Unlock()
-			return googleSTTStreamError(err)
+			s.signalDone()
+			return mapped
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -2505,14 +2515,17 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 		if googleSTTSendFailureDefersToReadLoop(err) {
 			return googleSTTStreamError(err)
 		}
+		mapped := googleSTTStreamError(err)
 		s.mu.Lock()
 		if !s.closed {
 			s.closed = true
+			s.recordInternalErrorLocked(mapped)
 			_ = stream.CloseSend()
 			s.unregister()
 		}
 		s.mu.Unlock()
-		return googleSTTStreamError(err)
+		s.signalDone()
+		return mapped
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2599,6 +2612,29 @@ func (s *googleSTTStream) Close() error {
 	return nil
 }
 
+func (s *googleSTTStream) recordInternalError(err error) {
+	s.mu.Lock()
+	s.recordInternalErrorLocked(err)
+	s.mu.Unlock()
+}
+
+func (s *googleSTTStream) recordInternalErrorLocked(err error) {
+	if err == nil || errors.Is(err, io.EOF) {
+		return
+	}
+	if !s.callerClosedInput && s.internalErr == nil {
+		s.internalErr = err
+	}
+}
+
+func (s *googleSTTStream) takeInternalError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.internalErr
+	s.internalErr = nil
+	return err
+}
+
 func (s *googleSTTStream) callerClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2617,6 +2653,9 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 			if event, ok := s.nextQueuedEvent(); ok {
 				return event, nil
 			}
+		}
+		if err := s.takeInternalError(); err != nil {
+			return nil, err
 		}
 		return nil, io.EOF
 	}

@@ -1608,6 +1608,52 @@ func TestGoogleSTTStreamBackoffEscalatesOnlyForRateLimit(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamNextSurfacesInternalCloseCause(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock:          make(chan struct{}),
+		sendErrAfterConfig: status.Error(codes.PermissionDenied, "credentials revoked"),
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(googleSTTTestAudioFrame()); err == nil {
+		t.Fatal("PushFrame error = nil, want send failure")
+	}
+
+	_, err = stream.Next()
+	if errors.Is(err, io.EOF) {
+		t.Fatal("Next error = io.EOF, want the underlying cause of the internal close")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.PermissionDenied) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+	}
+}
+
+func TestGoogleSTTStreamNextReturnsEOFAfterCallerClose(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF after caller Close", err)
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
