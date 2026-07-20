@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/app"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/cli"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	livekitWorker "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -89,13 +90,10 @@ func main() {
 		livekitAdapter.WithTTSVoice(config.TTSVoice),
 	)
 
-	// To add tools, call rtpApp.Agent.UpdateTools.
-	// Here's an example that adds a simple weather tool.
-	// You also have to import github.com/cavos-io/rtp-agent/core/llm at the top of this file.
-	//err = baseAgent.UpdateTools(context.Background(), []llm.Tool{&lookupWeather{}})
-	//if err != nil {
-	//	logger.Logger.Errorw("failed to update tools", err)
-	//}
+	if err = baseAgent.UpdateTools(context.Background(), []llm.Tool{&lookupWeather{}}); err != nil {
+		logger.Logger.Errorw("failed to update tools", err)
+		os.Exit(1)
+	}
 
 	server := worker.NewAgentServer(config.WorkerOptions)
 	err = server.RTCSession(
@@ -121,7 +119,7 @@ func main() {
 			}
 
 			if jobContext.Report.RecordingOptions.Audio && jobContext.SessionDirectory() != "" {
-				err := roomIO.Recorder.Start(filepath.Join(jobContext.SessionDirectory(), "audio.ogg"), 48000)
+				err := roomIO.Recorder.Start(filepath.Join(jobContext.SessionDirectory(), livekitWorker.RecordingFileName), 48000)
 				if err != nil {
 					logger.Logger.Errorw("failed to start audio recorder", err)
 					return err

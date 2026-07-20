@@ -82,8 +82,6 @@ var newLocalProcPool = func(maxProcesses int, executorType workeripc.ExecutorTyp
 
 var assignmentTimeout = 7500 * time.Millisecond
 
-var uploadSessionReport = agent.UploadSessionReport
-
 const workerStatusUpdateInterval = 2500 * time.Millisecond
 const WorkerProtocolVersion = 1
 
