@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -193,6 +194,55 @@ func TestConnectionPoolPrewarmCreatesReusableConnection(t *testing.T) {
 	}
 	if conn != 1 || !pool.LastConnectionReused {
 		t.Fatalf("Get() after prewarm conn=%d reused=%v, want conn=1 reused=true", conn, pool.LastConnectionReused)
+	}
+}
+
+func TestConnectionPoolGetWaitsForPrewarmInProgress(t *testing.T) {
+	var connectCalls atomic.Int32
+	connectStarted := make(chan struct{})
+	secondConnectStarted := make(chan struct{})
+	releaseConnect := make(chan struct{})
+	pool := NewConnectionPool(ConnectionPoolOptions[int]{
+		ConnectTimeout: time.Second,
+		Connect: func(context.Context) (int, error) {
+			call := connectCalls.Add(1)
+			if call == 1 {
+				close(connectStarted)
+			} else if call == 2 {
+				close(secondConnectStarted)
+			}
+			<-releaseConnect
+			return int(call), nil
+		},
+	})
+
+	pool.Prewarm(context.Background())
+	<-connectStarted
+
+	result := make(chan int, 1)
+	errs := make(chan error, 1)
+	go func() {
+		conn, err := pool.Get(context.Background(), time.Second)
+		result <- conn
+		errs <- err
+	}()
+
+	select {
+	case <-secondConnectStarted:
+		close(releaseConnect)
+		t.Fatal("Get started a second connection while prewarm was in progress")
+	case <-time.After(100 * time.Millisecond):
+		close(releaseConnect)
+	}
+
+	if err := <-errs; err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if conn := <-result; conn != 1 {
+		t.Fatalf("Get() conn = %d, want prewarmed conn 1", conn)
+	}
+	if calls := connectCalls.Load(); calls != 1 {
+		t.Fatalf("Connect calls = %d, want 1", calls)
 	}
 }
 

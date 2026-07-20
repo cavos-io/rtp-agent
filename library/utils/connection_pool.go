@@ -45,35 +45,49 @@ func NewConnectionPool[T comparable](opts ConnectionPoolOptions[T]) *ConnectionP
 }
 
 func (p *ConnectionPool[T]) Get(ctx context.Context, timeout time.Duration) (T, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	var zero T
-	p.drainToCloseLocked(ctx)
+	for {
+		p.mu.Lock()
+		p.drainToCloseLocked(ctx)
 
-	now := time.Now()
-	for conn := range p.available {
-		delete(p.available, conn)
-		connectedAt := p.connections[conn]
-		if p.opts.MaxSessionDuration == 0 || now.Sub(connectedAt) <= p.opts.MaxSessionDuration {
-			if p.opts.MarkRefreshedOnGet {
-				p.connections[conn] = now
+		now := time.Now()
+		for conn := range p.available {
+			delete(p.available, conn)
+			connectedAt := p.connections[conn]
+			if p.opts.MaxSessionDuration == 0 || now.Sub(connectedAt) <= p.opts.MaxSessionDuration {
+				if p.opts.MarkRefreshedOnGet {
+					p.connections[conn] = now
+				}
+				p.LastAcquireTime = 0
+				p.LastConnectionReused = true
+				p.mu.Unlock()
+				return conn, nil
 			}
-			p.LastAcquireTime = 0
-			p.LastConnectionReused = true
-			return conn, nil
+			p.removeLocked(conn)
 		}
-		p.removeLocked(conn)
-	}
 
-	start := time.Now()
-	conn, err := p.connectLocked(ctx, timeout)
-	if err != nil {
-		return zero, err
+		if p.prewarming && p.prewarmDone != nil {
+			prewarmDone := p.prewarmDone
+			p.mu.Unlock()
+			select {
+			case <-prewarmDone:
+				continue
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
+		}
+
+		start := time.Now()
+		conn, err := p.connectLocked(ctx, timeout)
+		if err != nil {
+			p.mu.Unlock()
+			return zero, err
+		}
+		p.LastAcquireTime = time.Since(start)
+		p.LastConnectionReused = false
+		p.mu.Unlock()
+		return conn, nil
 	}
-	p.LastAcquireTime = time.Since(start)
-	p.LastConnectionReused = false
-	return conn, nil
 }
 
 func (p *ConnectionPool[T]) WithConnection(ctx context.Context, timeout time.Duration, fn func(T) error) error {
