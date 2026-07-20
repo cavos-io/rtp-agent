@@ -1989,7 +1989,7 @@ func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, o
 		if err == nil {
 			continue
 		}
-		f.finishRecovery(index, errors.Is(err, io.EOF))
+		f.finishRecovery(index, errors.Is(err, io.EOF) || isClientClosedStatus(err))
 		return
 	}
 }
