@@ -30,7 +30,7 @@
 - Test: `core/beta/workflows/dtmf_inputs_test.go`
 
 **Interfaces:**
-- Consumes: Ultravox reference version `1.5.19.rc1`; `parseDtmfInputs([]string)`.
+- Consumes: Ultravox reference version `v0.1.8`; `parseDtmfInputs([]string)`.
 - Produces: matching plugin metadata; split phrase `number key` normalizes to `#`.
 
 - [ ] **Step 1: Verify RED**
@@ -45,7 +45,7 @@ Expected: version-prefix failure and incomplete DTMF result.
 - [ ] **Step 2: Align Ultravox production and test metadata**
 
 ```go
-PluginVersion = "1.5.19.rc1"
+PluginVersion = "v0.1.8"
 ```
 
 - [ ] **Step 3: Preserve `number key` before generic filler removal**
