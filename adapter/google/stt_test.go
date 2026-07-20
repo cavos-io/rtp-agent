@@ -1382,13 +1382,15 @@ func TestGoogleSTTStreamDownmixesStereoInputLikeReference(t *testing.T) {
 }
 
 func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "en-US")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer close(recvBlock)
 	defer stream.Close()
 
 	frame := &model.AudioFrame{
@@ -1415,7 +1417,9 @@ func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 }
 
 func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testing.T) {
+	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: recvBlock,
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{{
 				IsFinal: true,
@@ -1431,6 +1435,7 @@ func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testin
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer close(recvBlock)
 	defer stream.Close()
 
 	if err := stream.PushFrame(&model.AudioFrame{
