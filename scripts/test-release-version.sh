@@ -20,7 +20,7 @@ NEW_VERSION="$(make_version 9 8 7)"
 
 bash -n "$SCRIPT"
 
-mkdir -p "$WORKDIR/repo/adapter/example" "$WORKDIR/repo/adapter/respeecher" "$WORKDIR/repo/app"
+mkdir -p "$WORKDIR/repo/adapter/example" "$WORKDIR/repo/adapter/respeecher" "$WORKDIR/repo/adapter/upstream" "$WORKDIR/repo/app"
 cd "$WORKDIR/repo"
 git init -q
 git config user.email "release-test@example.com"
@@ -48,6 +48,12 @@ func TestExamplePluginVersion(t *testing.T) {
 }
 GO
 
+cat > adapter/upstream/plugin.go <<'GO'
+package upstream
+
+const PluginVersion = "1.5.19.rc1"
+GO
+
 cat > adapter/respeecher/tts.go <<GO
 package respeecher
 
@@ -69,19 +75,18 @@ GO
 
 git add .
 git commit -q -m "seed release fixture"
+test_checksum="$(sha256sum adapter/example/example_test.go | cut -d' ' -f1)"
 
 make -f "$MAKEFILE" release VERSION="$NEW_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release.out" 2>"$WORKDIR/release.err"
 
 grep -q "PluginVersion = \"$NEW_VERSION\"" adapter/example/plugin.go
-grep -q "want reference version $NEW_VERSION" adapter/example/example_test.go
-grep -q "respeecherAPIVersion = \"$NEW_VERSION\"" adapter/respeecher/tts.go
-grep -q "registeredVersion := \"$NEW_VERSION\"" app/app_test.go
-
-if rg -q "$OLD_VERSION" .; then
-	echo "release script left old version references behind" >&2
-	rg -n "$OLD_VERSION" . >&2
+if [ "$(sha256sum adapter/example/example_test.go | cut -d' ' -f1)" != "$test_checksum" ]; then
+	echo "release script rewrote a test file" >&2
 	exit 1
 fi
+grep -q 'PluginVersion = "1.5.19.rc1"' adapter/upstream/plugin.go
+grep -q "respeecherAPIVersion = \"$NEW_VERSION\"" adapter/respeecher/tts.go
+grep -q "registeredVersion := \"$OLD_VERSION\"" app/app_test.go
 
 if [ -n "$(git status --porcelain)" ]; then
 	echo "release script left the worktree dirty" >&2
@@ -102,18 +107,18 @@ if [ "$tag_target" != "$head_commit" ]; then
 	exit 1
 fi
 
-if [ "$(git cat-file -t "$NEW_VERSION")" != "tag" ]; then
-	echo "release tag must be annotated" >&2
+if [ "$(git cat-file -t "$NEW_VERSION")" != "commit" ]; then
+	echo "release tag must be lightweight" >&2
 	exit 1
 fi
 
-tag_object="$(git rev-parse "$NEW_VERSION^{tag}")"
+tag_target_before="$(git rev-parse "$NEW_VERSION^{commit}")"
 if make -f "$MAKEFILE" release VERSION="$NEW_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release-existing-tag.out" 2>"$WORKDIR/release-existing-tag.err"; then
 	echo "release script unexpectedly overwrote an existing tag" >&2
 	exit 1
 fi
 grep -q "tag already exists: $NEW_VERSION" "$WORKDIR/release-existing-tag.err"
-if [ "$(git rev-parse "$NEW_VERSION^{tag}")" != "$tag_object" ]; then
-	echo "release script replaced an existing tag object" >&2
+if [ "$(git rev-parse "$NEW_VERSION^{commit}")" != "$tag_target_before" ]; then
+	echo "release script replaced an existing tag target" >&2
 	exit 1
 fi

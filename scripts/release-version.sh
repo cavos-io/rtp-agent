@@ -30,7 +30,7 @@ mapfile -t old_versions < <(
   {
     git grep -h -E '^[[:space:]]*PluginVersion[[:space:]]*=' -- '*.go' ':!refs/**' 2>/dev/null || true
     git grep -h -E '^[[:space:]]*(respeecherAPIVersion|inworldPluginVersion|smallestAIPluginVersion)[[:space:]]*=' -- '*.go' ':!refs/**' 2>/dev/null || true
-  } | sed -E 's/.*"([^"]+)".*/\1/' | sort -u
+  } | sed -E 's/.*"([^"]+)".*/\1/' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u
 )
 
 if [ "${#old_versions[@]}" -eq 0 ]; then
@@ -44,6 +44,7 @@ mapfile -t files < <(
     'app/**/*.go' \
     'app/*.go' \
     'docs/**/*.md' \
+    ':!**/*_test.go' \
     ':!refs/**'
 )
 
@@ -77,6 +78,6 @@ rm -f /tmp/rtp-agent-release-version-leftovers.$$
 
 git add "${files[@]}"
 git commit -m "chore(release): $version"
-git tag -a "$version" -m "Release $version"
+git tag "$version"
 
-echo "Created release commit and annotated tag $version"
+echo "Created release commit and lightweight tag $version"

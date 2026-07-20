@@ -263,7 +263,7 @@ func TestSpeechmaticsTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if query.Get("sm-app") == "" {
 		t.Fatal("sm-app query parameter is empty")
 	}
-	assertSpeechmaticsTTSQuery(t, query, "sm-sdk", "livekit-plugins-v0.4.0")
+	assertSpeechmaticsTTSQuery(t, query, "sm-sdk", speechmaticsTTSSDKVersion())
 	assertSpeechmaticsTTSQuery(t, query, "sm-app", "livekit/0.2.8")
 
 	var payload map[string]string
@@ -2015,6 +2015,10 @@ func assertSpeechmaticsTTSQuery(t *testing.T, query url.Values, key string, want
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
+}
+
+func speechmaticsTTSSDKVersion() string {
+	return "livekit-plugins-" + PluginVersion
 }
 
 type chunkedReader struct {
