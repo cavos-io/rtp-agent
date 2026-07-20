@@ -1481,6 +1481,10 @@ func (s *googleSTTStream) readLoopV1() bool {
 				time.Sleep(googleSTTTransientRestartBackoff)
 				restarted, restartErr := s.restartStreamWithError(stream)
 				if restarted {
+					if speechStarted {
+						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+						speechStarted = false
+					}
 					lastUsageEventTime = 0
 					continue
 				}
@@ -1593,6 +1597,10 @@ func (s *googleSTTStream) readLoopV2() bool {
 				time.Sleep(googleSTTTransientRestartBackoff)
 				restarted, restartErr := s.restartStreamV2WithError(stream)
 				if restarted {
+					if speechStarted {
+						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+						speechStarted = false
+					}
 					lastUsageEventTime = 0
 					continue
 				}

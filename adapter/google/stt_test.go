@@ -1256,6 +1256,107 @@ func TestGoogleSTTStreamV2DoesNotApplyCallTimeout(t *testing.T) {
 	}
 }
 
+func googleSTTInterimResponse(text string) *speechpb.StreamingRecognizeResponse {
+	return &speechpb.StreamingRecognizeResponse{
+		Results: []*speechpb.StreamingRecognitionResult{{
+			IsFinal:      false,
+			LanguageCode: "en-US",
+			Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+				Transcript: text,
+				Confidence: 0.9,
+				Words: []*speechpb.WordInfo{{
+					Word:       text,
+					StartTime:  durationpb.New(0),
+					EndTime:    durationpb.New(time.Second),
+					Confidence: 0.9,
+				}},
+			}},
+		}},
+	}
+}
+
+func googleSTTCollectEventTypes(stream stt.RecognizeStream, want int, timeout time.Duration) []stt.SpeechEventType {
+	events := make(chan stt.SpeechEventType, want)
+	go func() {
+		defer close(events)
+		for i := 0; i < want; i++ {
+			event, err := stream.Next()
+			if err != nil || event == nil {
+				return
+			}
+			events <- event.Type
+		}
+	}()
+
+	var seen []stt.SpeechEventType
+	deadline := time.After(timeout)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return seen
+			}
+			seen = append(seen, event)
+		case <-deadline:
+			return seen
+		}
+	}
+}
+
+func googleSTTAssertUtteranceClosedBeforeRestart(t *testing.T, seen []stt.SpeechEventType, wantStarts int, context string) {
+	t.Helper()
+	starts := 0
+	for i, event := range seen {
+		if event != stt.SpeechEventStartOfSpeech {
+			continue
+		}
+		starts++
+		if starts < 2 {
+			continue
+		}
+		closed := false
+		for _, prior := range seen[:i] {
+			if prior == stt.SpeechEventEndOfSpeech {
+				closed = true
+			}
+		}
+		if !closed {
+			t.Fatalf("second StartOfSpeech at index %d with no EndOfSpeech before it: %v", i, seen)
+		}
+	}
+	if starts < wantStarts {
+		t.Fatalf("event sequence %v, want %s to open a second utterance", seen, context)
+	}
+}
+
+func TestGoogleSTTStreamClosesUtteranceOnTransientReconnect(t *testing.T) {
+	first := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+			googleSTTInterimResponse("hello wor"),
+		},
+		recvErr: status.Error(codes.Unavailable, "drop mid-utterance"),
+	}
+	second := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		},
+		recvBlock: make(chan struct{}),
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{
+		streams: []speechpb.Speech_StreamingRecognizeClient{first, second},
+	})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	seen := googleSTTCollectEventTypes(stream, 4, 3*time.Second)
+	googleSTTAssertUtteranceClosedBeforeRestart(t, seen, 2, "the reconnect")
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
