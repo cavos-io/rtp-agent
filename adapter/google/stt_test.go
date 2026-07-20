@@ -4132,13 +4132,18 @@ func TestGoogleSTTStreamClosesAfterAudioSendFailure(t *testing.T) {
 }
 
 func TestGoogleSTTStreamPushFrameReturnsAPIStatusErrorForAudioSendFailure(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{sendErrAfterConfig: status.Error(codes.Unavailable, "unavailable")}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock:          recvBlock,
+		sendErrAfterConfig: status.Error(codes.Unavailable, "unavailable"),
+	}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "en-US")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer close(recvBlock)
 
 	err = stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
 
