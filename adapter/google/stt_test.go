@@ -4574,6 +4574,21 @@ func TestGoogleSTTStreamTransientRestartBudgetResets(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamStopsReconnectingPastLifetimeBudget(t *testing.T) {
+	s := &googleSTTStream{}
+	reconnects := 0
+	for reconnects < googleSTTMaxLifetimeTransientRestarts {
+		if !s.markTransientRestart() {
+			t.Fatalf("markTransientRestart stopped at %d, want the lifetime budget of %d", reconnects, googleSTTMaxLifetimeTransientRestarts)
+		}
+		reconnects++
+		s.resetTransientRestarts()
+	}
+	if s.markTransientRestart() {
+		t.Fatalf("markTransientRestart past the lifetime budget = true, want false after %d reconnects", reconnects)
+	}
+}
+
 func TestGoogleSTTStreamResetsTransientRestartBudgetOnFinalTranscript(t *testing.T) {
 	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleStreamingRecognizeClient{

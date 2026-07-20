@@ -29,12 +29,13 @@ import (
 )
 
 const (
-	googleSTTMaxSessionDuration         = 240 * time.Second
-	googleSTTRequestTimeout             = 10 * time.Second
-	googleSTTMaxTransientRestarts       = 5
-	googleSTTTransientRestartBackoff    = 200 * time.Millisecond
-	googleSTTMaxRestartBufferedFrames   = 2000
-	googleSTTMaxTransientRestartBackoff = 2 * time.Second
+	googleSTTMaxSessionDuration           = 240 * time.Second
+	googleSTTRequestTimeout               = 10 * time.Second
+	googleSTTMaxTransientRestarts         = 5
+	googleSTTTransientRestartBackoff      = 200 * time.Millisecond
+	googleSTTMaxRestartBufferedFrames     = 2000
+	googleSTTMaxTransientRestartBackoff   = 2 * time.Second
+	googleSTTMaxLifetimeTransientRestarts = 50
 )
 
 type GoogleSTT struct {
@@ -1283,6 +1284,7 @@ type googleSTTStream struct {
 	startTimeOffset             float64
 	startTime                   float64
 	transientRestarts           int
+	totalTransientRestarts      int
 	restarting                  bool
 	restartBuffer               []*model.AudioFrame
 	framesDroppedDuringRestart  int
@@ -1752,7 +1754,11 @@ func (s *googleSTTStream) markTransientRestart() bool {
 	if s.transientRestarts >= googleSTTMaxTransientRestarts {
 		return false
 	}
+	if s.totalTransientRestarts >= googleSTTMaxLifetimeTransientRestarts {
+		return false
+	}
 	s.transientRestarts++
+	s.totalTransientRestarts++
 	s.restarting = true
 	s.framesDroppedAtRestartStart = s.framesDroppedDuringRestart
 	return true
@@ -1818,7 +1824,7 @@ func (s *googleSTTStream) endTransientRestart() {
 	}
 	dropped := s.framesDroppedDuringRestart - s.framesDroppedAtRestartStart
 	total := s.framesDroppedDuringRestart
-	reconnects := s.transientRestarts
+	reconnects := s.totalTransientRestarts
 	s.mu.Unlock()
 	if dropped > 0 {
 		logger.Logger.Warnw("google stt dropped audio while reconnecting", nil,
