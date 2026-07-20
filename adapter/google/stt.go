@@ -66,6 +66,7 @@ type GoogleSTT struct {
 	adaptationV2           *speechv2pb.SpeechAdaptation
 	denoiserConfig         *speechv2pb.DenoiserConfig
 	alternativeLanguages   []string
+	streamSetupTimeout     time.Duration
 }
 
 type googleSpeechClient interface {
@@ -659,9 +660,16 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 		stream speechv2pb.Speech_StreamingRecognizeClient
 		err    error
 	}
+	setupCtx, cancelSetup := context.WithCancel(ctx)
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			cancelSetup()
+		}
+	}()
 	resultCh := make(chan v2SetupResult, 1)
 	go func() {
-		stream, err := clientV2.StreamingRecognize(ctx)
+		stream, err := clientV2.StreamingRecognize(setupCtx)
 		if err != nil {
 			resultCh <- v2SetupResult{err: err}
 			return
@@ -682,19 +690,30 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 		}()
 	}
 
+	setupTimeout := s.setupTimeout()
 	select {
 	case res := <-resultCh:
 		if res.err != nil {
 			return nil, googleSTTStartupError(res.err)
 		}
+		handedOff = true
 		return res.stream, nil
 	case <-ctx.Done():
 		drainAbortedSetup()
 		return nil, googleSTTStartupError(ctx.Err())
-	case <-time.After(googleSTTRequestTimeout):
+	case <-time.After(setupTimeout):
 		drainAbortedSetup()
-		return nil, googleSTTStartupError(fmt.Errorf("google STT v2 stream setup timed out after %s (model %q, location %q)", googleSTTRequestTimeout, s.model, s.location))
+		return nil, googleSTTStartupError(fmt.Errorf("google STT v2 stream setup timed out after %s (model %q, location %q)", setupTimeout, s.model, s.location))
 	}
+}
+
+func (s *GoogleSTT) setupTimeout() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streamSetupTimeout > 0 {
+		return s.streamSetupTimeout
+	}
+	return googleSTTRequestTimeout
 }
 
 func (s *GoogleSTT) ensureClientV2(ctx context.Context) (googleSpeechV2Client, error) {

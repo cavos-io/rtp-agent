@@ -1256,6 +1256,28 @@ func TestGoogleSTTStreamV2DoesNotApplyCallTimeout(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamV2SetupTimeoutReleasesAbandonedCall(t *testing.T) {
+	released := make(chan error, 1)
+	client := &fakeGoogleV2SpeechClient{blockedStreamCtxDone: released}
+	provider := newGoogleSTTWithV2Client(client, WithGoogleSTTProject("voice-project"), WithGoogleSTTModel("chirp_3"))
+	provider.streamSetupTimeout = 20 * time.Millisecond
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err == nil {
+		stream.Close()
+		t.Fatal("Stream succeeded, want a setup timeout error")
+	}
+
+	select {
+	case ctxErr := <-released:
+		if !errors.Is(ctxErr, context.Canceled) {
+			t.Fatalf("abandoned setup released with %v, want context.Canceled", ctxErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("abandoned StreamingRecognize never returned; the setup context was not cancelled")
+	}
+}
+
 func TestGoogleSTTStreamPreservesReferenceEmptyProviderLanguage(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -4703,9 +4725,10 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 }
 
 type fakeGoogleV2SpeechClient struct {
-	streams           []speechv2pb.Speech_StreamingRecognizeClient
-	stream            speechv2pb.Speech_StreamingRecognizeClient
-	streamCallCh      chan int
+	streams              []speechv2pb.Speech_StreamingRecognizeClient
+	stream               speechv2pb.Speech_StreamingRecognizeClient
+	streamCallCh         chan int
+	blockedStreamCtxDone chan error
 	streamCalls       int
 	streamErr         error
 	streamingOpts     []gax.CallOption
@@ -4721,6 +4744,11 @@ func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts 
 	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
+	}
+	if c.blockedStreamCtxDone != nil {
+		<-ctx.Done()
+		c.blockedStreamCtxDone <- ctx.Err()
+		return nil, ctx.Err()
 	}
 	if len(c.streams) > 0 {
 		stream := c.streams[0]
