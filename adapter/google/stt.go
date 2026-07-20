@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -27,10 +28,11 @@ import (
 )
 
 const (
-	googleSTTMaxSessionDuration      = 240 * time.Second
-	googleSTTRequestTimeout          = 10 * time.Second
-	googleSTTMaxTransientRestarts    = 5
-	googleSTTTransientRestartBackoff = 200 * time.Millisecond
+	googleSTTMaxSessionDuration       = 240 * time.Second
+	googleSTTRequestTimeout           = 10 * time.Second
+	googleSTTMaxTransientRestarts     = 5
+	googleSTTTransientRestartBackoff  = 200 * time.Millisecond
+	googleSTTMaxRestartBufferedFrames = 2000
 )
 
 type GoogleSTT struct {
@@ -1282,6 +1284,7 @@ type googleSTTStream struct {
 	restarting                  bool
 	restartBuffer               []*model.AudioFrame
 	framesDroppedDuringRestart  int
+	framesDroppedAtRestartStart int
 	done                        chan struct{}
 	doneOnce                    sync.Once
 }
@@ -1749,6 +1752,7 @@ func (s *googleSTTStream) markTransientRestart() bool {
 	}
 	s.transientRestarts++
 	s.restarting = true
+	s.framesDroppedAtRestartStart = s.framesDroppedDuringRestart
 	return true
 }
 
@@ -1757,6 +1761,10 @@ func (s *googleSTTStream) bufferFrameDuringRestart(frame *model.AudioFrame) bool
 	defer s.mu.Unlock()
 	if !s.restarting {
 		return false
+	}
+	if len(s.restartBuffer) >= googleSTTMaxRestartBufferedFrames {
+		s.restartBuffer = s.restartBuffer[1:]
+		s.framesDroppedDuringRestart++
 	}
 	buffered := *frame
 	buffered.Data = bytes.Clone(frame.Data)
@@ -1801,11 +1809,20 @@ func (s *googleSTTStream) replayBufferedFrames() error {
 
 func (s *googleSTTStream) endTransientRestart() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.restarting = false
 	if leftover := len(s.restartBuffer); leftover > 0 {
 		s.framesDroppedDuringRestart += leftover
 		s.restartBuffer = nil
+	}
+	dropped := s.framesDroppedDuringRestart - s.framesDroppedAtRestartStart
+	total := s.framesDroppedDuringRestart
+	reconnects := s.transientRestarts
+	s.mu.Unlock()
+	if dropped > 0 {
+		logger.Logger.Warnw("google stt dropped audio while reconnecting", nil,
+			"frames_dropped", dropped,
+			"frames_dropped_session_total", total,
+			"reconnects_this_session", reconnects)
 	}
 }
 

@@ -1549,6 +1549,48 @@ func TestGoogleSTTStreamBuffersDuringReconnectEvenWhenDeadStreamAcceptsSends(t *
 	}
 }
 
+func TestGoogleSTTStreamCountsFramesShedWhenReconnectBacklogOverflows(t *testing.T) {
+	first := &fakeGoogleStreamingRecognizeClient{
+		recvErr:            status.Error(codes.Unavailable, "transient drop"),
+		sendErrAfterConfig: status.Error(codes.Unavailable, "broken stream"),
+	}
+	second := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{first, second},
+		streamCallCh: make(chan int, 4),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	gs := stream.(*googleSTTStream)
+	if !waitForGoogleRestarting(t, gs) {
+		t.Fatal("reconnect never started")
+	}
+	const overflow = 25
+	for i := 0; i < googleSTTMaxRestartBufferedFrames+overflow; i++ {
+		if err := stream.PushFrame(googleSTTTestAudioFrame()); err != nil {
+			t.Fatalf("PushFrame %d during reconnect returned error: %v", i, err)
+		}
+	}
+
+	gs.mu.Lock()
+	dropped := gs.framesDroppedDuringRestart
+	buffered := len(gs.restartBuffer)
+	gs.mu.Unlock()
+	if buffered > googleSTTMaxRestartBufferedFrames {
+		t.Fatalf("backlog = %d frames, want it capped at %d", buffered, googleSTTMaxRestartBufferedFrames)
+	}
+	if dropped == 0 {
+		t.Fatal("framesDroppedDuringRestart = 0, want the audio shed past the cap to be counted")
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
