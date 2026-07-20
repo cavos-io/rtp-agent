@@ -2407,6 +2407,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 	s.mu.Unlock()
 
 	if streamV2 != nil {
+		if s.bufferFrameDuringRestart(frame) {
+			return nil
+		}
 		if err := streamV2.Send(&speechv2pb.StreamingRecognizeRequest{
 			StreamingRequest: &speechv2pb.StreamingRecognizeRequest_Audio{
 				Audio: bytes.Clone(frame.Data),
@@ -2436,6 +2439,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 			return io.ErrClosedPipe
 		}
 		s.audioPushed = true
+		return nil
+	}
+	if s.bufferFrameDuringRestart(frame) {
 		return nil
 	}
 	if err := stream.Send(&speechpb.StreamingRecognizeRequest{

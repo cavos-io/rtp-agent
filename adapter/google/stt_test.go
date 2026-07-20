@@ -1502,6 +1502,53 @@ func TestGoogleSTTStreamReplaysAudioBufferedDuringReconnect(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamBuffersDuringReconnectEvenWhenDeadStreamAcceptsSends(t *testing.T) {
+	first := &fakeGoogleStreamingRecognizeClient{
+		recvErr: status.Error(codes.Unavailable, "transient drop"),
+	}
+	second := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{first, second},
+		streamCallCh: make(chan int, 4),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	gs := stream.(*googleSTTStream)
+	if !waitForGoogleRestarting(t, gs) {
+		t.Fatal("reconnect never started")
+	}
+	const pushed = 10
+	for i := 0; i < pushed; i++ {
+		if err := stream.PushFrame(googleSTTTestAudioFrame()); err != nil {
+			t.Fatalf("PushFrame %d during reconnect returned error: %v", i, err)
+		}
+	}
+
+	select {
+	case <-client.streamCallCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no reconnect after transient drop")
+	}
+	waitForGoogleRestartSettled(t, gs)
+
+	delivered := 0
+	for _, r := range second.sent {
+		if len(r.GetAudioContent()) > 0 {
+			delivered++
+		}
+	}
+	if delivered != pushed {
+		t.Fatalf("replacement stream received %d audio frames, want %d: audio written to the dropped stream is never recognized", delivered, pushed)
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
