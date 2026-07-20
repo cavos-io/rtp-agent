@@ -6,7 +6,7 @@ import (
 )
 
 func TestUltravoxPluginMetadataMatchesReference(t *testing.T) {
-	const referencePluginVersion = "1.5.19.rc1"
+	const referencePluginVersion = "v0.4.0"
 
 	if strings.HasPrefix(PluginVersion, "v") {
 		t.Fatalf("PluginVersion = %q, want raw reference __version__ without v prefix", PluginVersion)

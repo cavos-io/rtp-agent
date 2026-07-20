@@ -9858,7 +9858,7 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	if streamURL.Scheme != "wss" || streamURL.Host != "eu2.rt.speechmatics.com" || streamURL.Path != "/v2" {
 		t.Fatalf("stream URL = %q, want reference default realtime endpoint", streamURL.String())
 	}
-	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.1.7")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.4.0")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.example/v2/"))
@@ -9872,7 +9872,7 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.example" || streamURL.Path != "/v2/" {
 		t.Fatalf("stream URL = %q, want reference custom base URL path", streamURL.String())
 	}
-	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.1.7")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.4.0")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 }
 
@@ -9923,7 +9923,7 @@ func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.env" || streamURL.Path != "/v2/" {
 		t.Fatalf("stream URL = %q, want environment realtime URL", streamURL.String())
 	}
-	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.1.7")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.4.0")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 
 	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.explicit/v2/"))
@@ -9937,7 +9937,7 @@ func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
 	if streamURL.Scheme != "wss" || streamURL.Host != "speechmatics.explicit" || streamURL.Path != "/v2/" {
 		t.Fatalf("stream URL = %q, want explicit realtime URL", streamURL.String())
 	}
-	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.1.7")
+	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-app", "livekit/v0.4.0")
 	assertSpeechmaticsSTTQuery(t, streamURL.Query(), "sm-voice-sdk", "0.2.8")
 }
 

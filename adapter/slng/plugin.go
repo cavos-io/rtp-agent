@@ -2,6 +2,6 @@ package slng
 
 const (
 	PluginTitle   = "rtp-agent.plugins.slng"
-	PluginVersion = "v0.1.7"
+	PluginVersion = "v0.4.0"
 	PluginPackage = "rtp-agent.plugins.slng"
 )
