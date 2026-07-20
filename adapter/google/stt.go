@@ -559,6 +559,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		minConfidence:               s.minConfidence,
 		events:                      make(chan *stt.SpeechEvent, 10),
 		errCh:                       make(chan error, 1),
+		done:                        make(chan struct{}),
 	}
 	if googleSTTUsesV2(s.model) {
 		stream, err := s.newStreamingRecognizeStreamV2(ctx, language, !explicitLanguage)
@@ -1278,6 +1279,11 @@ type googleSTTStream struct {
 	startTimeOffset             float64
 	startTime                   float64
 	transientRestarts           int
+	restarting                  bool
+	restartBuffer               []*model.AudioFrame
+	framesDroppedDuringRestart  int
+	done                        chan struct{}
+	doneOnce                    sync.Once
 }
 
 type googleSTTInputAudioNormalizer struct {
@@ -1480,10 +1486,20 @@ func (s *googleSTTStream) readLoopV1() bool {
 				if restartErr != nil {
 					err = restartErr
 				}
-			}
-			if googleSTTStatusTransient(err) && s.markTransientRestart() {
-				time.Sleep(googleSTTTransientRestartBackoff)
-				restarted, restartErr := s.restartStreamWithError(stream)
+			} else if googleSTTStatusTransient(err) && s.markTransientRestart() {
+				proceed := s.waitBeforeRestart(googleSTTTransientRestartBackoff)
+				var restarted bool
+				var restartErr error
+				if proceed {
+					restarted, restartErr = s.restartStreamWithError(stream)
+				}
+				if restarted {
+					if replayErr := s.replayBufferedFrames(); replayErr != nil {
+						restarted = false
+						restartErr = replayErr
+					}
+				}
+				s.endTransientRestart()
 				if restarted {
 					if speechStarted {
 						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
@@ -1600,10 +1616,20 @@ func (s *googleSTTStream) readLoopV2() bool {
 				if restartErr != nil {
 					err = restartErr
 				}
-			}
-			if googleSTTStatusTransient(err) && s.markTransientRestart() {
-				time.Sleep(googleSTTTransientRestartBackoff)
-				restarted, restartErr := s.restartStreamV2WithError(stream)
+			} else if googleSTTStatusTransient(err) && s.markTransientRestart() {
+				proceed := s.waitBeforeRestart(googleSTTTransientRestartBackoff)
+				var restarted bool
+				var restartErr error
+				if proceed {
+					restarted, restartErr = s.restartStreamV2WithError(stream)
+				}
+				if restarted {
+					if replayErr := s.replayBufferedFrames(); replayErr != nil {
+						restarted = false
+						restartErr = replayErr
+					}
+				}
+				s.endTransientRestart()
 				if restarted {
 					if speechStarted {
 						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
@@ -1722,7 +1748,89 @@ func (s *googleSTTStream) markTransientRestart() bool {
 		return false
 	}
 	s.transientRestarts++
+	s.restarting = true
 	return true
+}
+
+func (s *googleSTTStream) bufferFrameDuringRestart(frame *model.AudioFrame) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.restarting {
+		return false
+	}
+	buffered := *frame
+	buffered.Data = bytes.Clone(frame.Data)
+	s.restartBuffer = append(s.restartBuffer, &buffered)
+	return true
+}
+
+func (s *googleSTTStream) replayBufferedFrames() error {
+	for {
+		s.mu.Lock()
+		if len(s.restartBuffer) == 0 {
+			s.restarting = false
+			s.mu.Unlock()
+			return nil
+		}
+		batch := s.restartBuffer
+		s.restartBuffer = nil
+		streamV2 := s.streamV2
+		stream := s.stream
+		s.mu.Unlock()
+
+		for _, frame := range batch {
+			var err error
+			switch {
+			case streamV2 != nil:
+				err = streamV2.Send(&speechv2pb.StreamingRecognizeRequest{
+					StreamingRequest: &speechv2pb.StreamingRecognizeRequest_Audio{Audio: frame.Data},
+				})
+			case stream != nil:
+				err = stream.Send(&speechpb.StreamingRecognizeRequest{
+					StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{AudioContent: frame.Data},
+				})
+			default:
+				err = io.ErrClosedPipe
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (s *googleSTTStream) endTransientRestart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restarting = false
+	if leftover := len(s.restartBuffer); leftover > 0 {
+		s.framesDroppedDuringRestart += leftover
+		s.restartBuffer = nil
+	}
+}
+
+func (s *googleSTTStream) waitBeforeRestart(d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	var ctxDone <-chan struct{}
+	if s.ctx != nil {
+		ctxDone = s.ctx.Done()
+	}
+	select {
+	case <-timer.C:
+		return true
+	case <-s.done:
+		return false
+	case <-ctxDone:
+		return false
+	}
+}
+
+func (s *googleSTTStream) signalDone() {
+	if s.done == nil {
+		return
+	}
+	s.doneOnce.Do(func() { close(s.done) })
 }
 
 func (s *googleSTTStream) resetTransientRestarts() {
@@ -1873,6 +1981,7 @@ func (s *googleSTTStream) failWithError(err error) {
 }
 
 func (s *googleSTTStream) terminate() {
+	s.signalDone()
 	s.mu.Lock()
 	if s.inputClosed {
 		s.mu.Unlock()
@@ -2303,6 +2412,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 				Audio: bytes.Clone(frame.Data),
 			},
 		}); err != nil {
+			if s.bufferFrameDuringRestart(frame) {
+				return nil
+			}
 			if googleSTTSendFailureDefersToReadLoop(err) {
 				return googleSTTStreamError(err)
 			}
@@ -2331,6 +2443,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 			AudioContent: bytes.Clone(frame.Data),
 		},
 	}); err != nil {
+		if s.bufferFrameDuringRestart(frame) {
+			return nil
+		}
 		if googleSTTSendFailureDefersToReadLoop(err) {
 			return googleSTTStreamError(err)
 		}
@@ -2419,6 +2534,7 @@ func (s *googleSTTStream) Close() error {
 	stream := s.stream
 	s.unregister()
 	s.mu.Unlock()
+	s.signalDone()
 	if streamV2 != nil {
 		_ = streamV2.CloseSend()
 	} else if stream != nil {

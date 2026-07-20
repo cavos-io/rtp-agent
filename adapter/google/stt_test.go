@@ -1412,6 +1412,96 @@ func TestGoogleSTTStreamNextDrainsQueuedEventsAfterClose(t *testing.T) {
 	}
 }
 
+func waitForGoogleRestarting(t *testing.T, gs *googleSTTStream) bool {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		gs.mu.Lock()
+		restarting := gs.restarting
+		gs.mu.Unlock()
+		if restarting {
+			return true
+		}
+		select {
+		case <-deadline:
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func waitForGoogleRestartSettled(t *testing.T, gs *googleSTTStream) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		gs.mu.Lock()
+		restarting, pending := gs.restarting, len(gs.restartBuffer)
+		gs.mu.Unlock()
+		if !restarting && pending == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("replay never settled: restarting=%v pending=%d", restarting, pending)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestGoogleSTTStreamReplaysAudioBufferedDuringReconnect(t *testing.T) {
+	first := &fakeGoogleStreamingRecognizeClient{
+		recvErr:            status.Error(codes.Unavailable, "transient drop"),
+		sendErrAfterConfig: status.Error(codes.Unavailable, "broken stream"),
+	}
+	second := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{first, second},
+		streamCallCh: make(chan int, 4),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	gs := stream.(*googleSTTStream)
+	if !waitForGoogleRestarting(t, gs) {
+		t.Fatal("reconnect never started")
+	}
+	const pushed = 10
+	for i := 0; i < pushed; i++ {
+		if err := stream.PushFrame(googleSTTTestAudioFrame()); err != nil {
+			t.Fatalf("PushFrame %d during reconnect returned error: %v", i, err)
+		}
+	}
+
+	select {
+	case <-client.streamCallCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no reconnect after transient drop")
+	}
+	waitForGoogleRestartSettled(t, gs)
+
+	delivered := 0
+	for _, r := range second.sent {
+		if len(r.GetAudioContent()) > 0 {
+			delivered++
+		}
+	}
+	gs.mu.Lock()
+	dropped := gs.framesDroppedDuringRestart
+	gs.mu.Unlock()
+	if delivered != pushed {
+		t.Fatalf("replacement stream received %d audio frames, want the %d buffered during the reconnect (dropped=%d)", delivered, pushed, dropped)
+	}
+	if dropped != 0 {
+		t.Fatalf("framesDroppedDuringRestart = %d, want 0 once frames are buffered and replayed", dropped)
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
@@ -4934,14 +5024,14 @@ type fakeGoogleV2SpeechClient struct {
 	stream               speechv2pb.Speech_StreamingRecognizeClient
 	streamCallCh         chan int
 	blockedStreamCtxDone chan error
-	streamCalls       int
-	streamErr         error
-	streamingOpts     []gax.CallOption
-	recognizeRequest  *speechv2pb.RecognizeRequest
-	recognizeCalls    int
-	recognizeOpts     []gax.CallOption
-	recognizeResponse *speechv2pb.RecognizeResponse
-	recognizeErr      error
+	streamCalls          int
+	streamErr            error
+	streamingOpts        []gax.CallOption
+	recognizeRequest     *speechv2pb.RecognizeRequest
+	recognizeCalls       int
+	recognizeOpts        []gax.CallOption
+	recognizeResponse    *speechv2pb.RecognizeResponse
+	recognizeErr         error
 }
 
 func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error) {
