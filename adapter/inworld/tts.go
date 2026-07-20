@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	inworldPluginVersion                     = "v0.1.7"
+	inworldPluginVersion                     = "v0.4.0"
 	inworldUserAgent                         = "livekit-agents-py/" + inworldPluginVersion
 	defaultInworldBaseURL                    = "https://api.inworld.ai/"
 	defaultInworldWebsocketURL               = "wss://api.inworld.ai/"
