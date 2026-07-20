@@ -20,8 +20,8 @@ func TestWebConfigDefaultsMatchBasicAgentExample(t *testing.T) {
 
 	cfg := webConfigFromEnv()
 
-	if cfg.ListenAddr != ":8003" {
-		t.Fatalf("ListenAddr = %q, want :8003", cfg.ListenAddr)
+	if cfg.ListenAddr != "127.0.0.1:8003" {
+		t.Fatalf("ListenAddr = %q, want loopback-only default", cfg.ListenAddr)
 	}
 	if cfg.AgentName != "example-agent" {
 		t.Fatalf("AgentName = %q, want default basic agent name", cfg.AgentName)
@@ -42,7 +42,8 @@ func TestCreateRoomAndDispatchCreatesRoomDispatchesAgentAndReturnsToken(t *testi
 		UserName:     "Browser User",
 	}, service)
 
-	req := httptest.NewRequest(http.MethodPost, "/create-room-and-dispatch", nil)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8003/create-room-and-dispatch", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:8003")
 	rec := httptest.NewRecorder()
 
 	server.handleCreateRoomAndDispatch(rec, req)
@@ -84,7 +85,8 @@ func TestCreateRoomAndDispatchRejectsMissingCredentials(t *testing.T) {
 		AgentName:  "kelly-agent",
 	}, &fakeLiveKitWebService{})
 
-	req := httptest.NewRequest(http.MethodPost, "/create-room-and-dispatch", nil)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8003/create-room-and-dispatch", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:8003")
 	rec := httptest.NewRecorder()
 
 	server.handleCreateRoomAndDispatch(rec, req)
@@ -94,6 +96,35 @@ func TestCreateRoomAndDispatchRejectsMissingCredentials(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "LIVEKIT_API_SECRET") {
 		t.Fatalf("body = %q, want missing secret message", rec.Body.String())
+	}
+}
+
+func TestCreateRoomAndDispatchRejectsCrossOriginRequest(t *testing.T) {
+	service := &fakeLiveKitWebService{}
+	server := newWebServer(webConfig{}, service)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8003/create-room-and-dispatch", nil)
+	req.Header.Set("Origin", "https://attacker.example")
+	rec := httptest.NewRecorder()
+
+	server.handleCreateRoomAndDispatch(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if len(service.createdRooms) != 0 {
+		t.Fatalf("createdRooms = %#v, want no side effects", service.createdRooms)
+	}
+}
+
+func TestValidateWebListenAddrRequiresExplicitRemoteOptIn(t *testing.T) {
+	if err := validateWebListenAddr("0.0.0.0:8003", false); err == nil {
+		t.Fatal("validateWebListenAddr() error = nil, want remote binding rejection")
+	}
+	if err := validateWebListenAddr("0.0.0.0:8003", true); err != nil {
+		t.Fatalf("validateWebListenAddr() with opt-in error = %v", err)
+	}
+	if err := validateWebListenAddr("127.0.0.1:8003", false); err != nil {
+		t.Fatalf("validateWebListenAddr() loopback error = %v", err)
 	}
 }
 
@@ -110,7 +141,8 @@ func TestIndexServesLiveKitBrowserClientAndControls(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"livekit-client",
+		"livekit-client@",
+		"integrity=\"sha384-",
 		"Start Test",
 		"/create-room-and-dispatch",
 		"setMicrophoneEnabled(true)",

@@ -19,6 +19,7 @@ type RecorderIO struct {
 	started  bool
 	closed   bool
 	stopping bool
+	err      error
 
 	inFrames  []recordedAudioFrame
 	outFrames []recordedAudioFrame
@@ -135,6 +136,7 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.timestamp = 0
 	r.timelineStart = nil
 	r.writtenSamples = 0
+	r.err = nil
 	r.InputStartTime = nil
 	r.OutputStartTime = nil
 	r.inputNextTime = time.Time{}
@@ -154,7 +156,7 @@ func (r *RecorderIO) Stop() error {
 		if stopping && closeComplete != nil {
 			<-closeComplete
 		}
-		return nil
+		return r.recordingError()
 	}
 	if r.closed {
 		closeComplete := r.closeComplete
@@ -162,7 +164,7 @@ func (r *RecorderIO) Stop() error {
 		if closeComplete != nil {
 			<-closeComplete
 		}
-		return nil
+		return r.recordingError()
 	}
 	done := r.done
 	closeComplete := r.closeComplete
@@ -179,15 +181,16 @@ func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
 	r.started = false
 	r.stopping = false
+	err := r.err
 	r.mu.Unlock()
-	return nil
+	return err
 }
 
 func (r *RecorderIO) RecordInput(frame *model.AudioFrame) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if !r.started || r.closed {
+	if !r.started || r.closed || r.err != nil {
 		return
 	}
 
@@ -207,7 +210,7 @@ func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if !r.started || r.closed {
+	if !r.started || r.closed || r.err != nil {
 		return
 	}
 
@@ -250,6 +253,7 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 			r.flush(sampleRate, r.now())
 			if err := r.writer.Close(); err != nil {
 				logger.Logger.Errorw("Failed to close recording writer", err)
+				r.setRecordingError(fmt.Errorf("close recording writer: %w", err))
 			}
 			return
 		case <-ticker.C:
@@ -260,6 +264,12 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 
 func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	r.mu.Lock()
+	if r.err != nil {
+		r.inFrames = nil
+		r.outFrames = nil
+		r.mu.Unlock()
+		return
+	}
 	inFrames := r.inFrames
 	outFrames := r.outFrames
 	timelineStart := r.timelineStart
@@ -293,12 +303,30 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	writtenSamples, err := r.writer.WritePCM(stereoBuf)
 	if err != nil {
 		logger.Logger.Errorw("Failed to write recording audio", err)
+		r.setRecordingError(fmt.Errorf("write recording audio: %w", err))
 	}
 
 	r.mu.Lock()
 	r.writtenSamples = startSample + int64(writtenSamples)
 	r.timestamp += uint32(writtenSamples)
 	r.mu.Unlock()
+}
+
+func (r *RecorderIO) setRecordingError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.err == nil {
+		r.err = err
+	}
+	r.mu.Unlock()
+}
+
+func (r *RecorderIO) recordingError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
 }
 
 type normalizedRecordedFrame struct {

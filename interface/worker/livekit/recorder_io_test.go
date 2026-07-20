@@ -1,6 +1,7 @@
 package livekit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,14 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
+
+type failingRecordingWriter struct {
+	writeErr error
+	closeErr error
+}
+
+func (w *failingRecordingWriter) WritePCM([]int16) (int, error) { return 0, w.writeErr }
+func (w *failingRecordingWriter) Close() error                  { return w.closeErr }
 
 func TestRecorderIORecordingStartedAtReturnsNilBeforeAudio(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
@@ -148,6 +157,40 @@ func TestRecorderIOStopFlushesAndClosesOutput(t *testing.T) {
 		t.Fatal("recording size after Stop() = 0, want flushed and closed output")
 	}
 }
+
+func TestRecorderIOStopReturnsWriteFailure(t *testing.T) {
+	wantErr := errors.New("disk full")
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.writer = &failingRecordingWriter{writeErr: wantErr}
+	recorder.started = true
+	recorder.closeComplete = make(chan struct{})
+	recorder.timelineStart = timePointer(time.Unix(100, 0))
+	recorder.now = func() time.Time { return time.Unix(101, 0) }
+	recorder.inFrames = []recordedAudioFrame{{
+		frame:      &model.AudioFrame{Data: make([]byte, 2), SampleRate: 1, NumChannels: 1, SamplesPerChannel: 1},
+		receivedAt: time.Unix(100, 0),
+	}}
+	go recorder.recordLoop(1, recorder.done, recorder.closeComplete)
+
+	if err := recorder.Stop(); !errors.Is(err, wantErr) {
+		t.Fatalf("Stop() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestRecorderIOStopReturnsCloseFailure(t *testing.T) {
+	wantErr := errors.New("mux close failed")
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.writer = &failingRecordingWriter{closeErr: wantErr}
+	recorder.started = true
+	recorder.closeComplete = make(chan struct{})
+	go recorder.recordLoop(1, recorder.done, recorder.closeComplete)
+
+	if err := recorder.Stop(); !errors.Is(err, wantErr) {
+		t.Fatalf("Stop() error = %v, want %v", err, wantErr)
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
 
 func TestRecorderIOResamplesFramesToRecordingRate(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})

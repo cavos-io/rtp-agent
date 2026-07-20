@@ -9,7 +9,9 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,7 +26,7 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
-const defaultWebListenAddr = ":8003"
+const defaultWebListenAddr = "127.0.0.1:8003"
 
 type webConfig struct {
 	ListenAddr   string
@@ -34,6 +36,7 @@ type webConfig struct {
 	AgentName    string
 	UserIdentity string
 	UserName     string
+	AllowRemote  bool
 }
 
 type createRoomResponse struct {
@@ -82,6 +85,7 @@ func webConfigFromEnv() webConfig {
 		AgentName:    getenvDefault("LIVEKIT_AGENT_NAME", "example-agent"),
 		UserIdentity: getenvDefault("BASIC_AGENT_WEBUI_USER_IDENTITY", "web-user"),
 		UserName:     getenvDefault("BASIC_AGENT_WEBUI_USER_NAME", "Test User"),
+		AllowRemote:  strings.EqualFold(getenvDefault("BASIC_AGENT_WEBUI_ALLOW_REMOTE", "false"), "true"),
 	}
 	return cfg
 }
@@ -125,6 +129,10 @@ func (s *webServer) handleCreateRoomAndDispatch(w http.ResponseWriter, r *http.R
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-origin request forbidden", http.StatusForbidden)
+		return
+	}
 	if err := s.validateDispatchConfig(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -155,6 +163,34 @@ func (s *webServer) handleCreateRoomAndDispatch(w http.ResponseWriter, r *http.R
 		URL:      s.cfg.LiveKitURL,
 		Token:    token,
 	})
+}
+
+func sameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return strings.EqualFold(parsed.Scheme, scheme) && strings.EqualFold(parsed.Host, r.Host)
+}
+
+func validateWebListenAddr(addr string, allowRemote bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid HTTP listen address %q: %w", addr, err)
+	}
+	if allowRemote || strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("refusing non-loopback HTTP listen address %q without -allow-remote", addr)
+	}
+	return nil
 }
 
 func (s *webServer) validateDispatchConfig() error {
@@ -199,6 +235,9 @@ func randomHex(bytesLen int) string {
 }
 
 func run(ctx context.Context, cfg webConfig) error {
+	if err := validateWebListenAddr(cfg.ListenAddr, cfg.AllowRemote); err != nil {
+		return err
+	}
 	appCfg := basicagent.ConfigFromEnv()
 	appCfg.WorkerOptions.AgentName = cfg.AgentName
 	appCfg.WorkerOptions.WSURL = cfg.LiveKitURL
@@ -264,6 +303,7 @@ func main() {
 	fs.StringVar(&cfg.APIKey, "api-key", cfg.APIKey, "LiveKit API key")
 	fs.StringVar(&cfg.APISecret, "api-secret", cfg.APISecret, "LiveKit API secret")
 	fs.StringVar(&cfg.AgentName, "agent-name", cfg.AgentName, "LiveKit agent name to dispatch")
+	fs.BoolVar(&cfg.AllowRemote, "allow-remote", cfg.AllowRemote, "allow the unauthenticated example UI to bind beyond loopback")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: basic_agent_webui [options]")
 		fs.PrintDefaults()
@@ -435,7 +475,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
     </section>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.6/dist/livekit-client.umd.min.js" integrity="sha384-q3RIS2hdqSUUJyfKjLY7XL13pdapMLYRnU1QFufByuw2/zfHdFrffgVB7teCt2Vk" crossorigin="anonymous"></script>
   <script>
     let room = null;
     const connectButton = document.getElementById('connect');
