@@ -1654,6 +1654,57 @@ func TestGoogleSTTStreamNextReturnsEOFAfterCallerClose(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamNextSurfacesInternalCloseCauseWhileParked(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		},
+		recvBlock:          recvBlock,
+		sendErrAfterConfig: status.Error(codes.PermissionDenied, "credentials revoked"),
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	firstDone := make(chan error, 1)
+	res := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		firstDone <- err
+		_, err = stream.Next()
+		res <- err
+	}()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Next returned error: %v, want the sentinel event", err)
+	}
+
+	if err := stream.PushFrame(googleSTTTestAudioFrame()); err == nil {
+		t.Fatal("PushFrame error = nil, want send failure")
+	}
+	close(recvBlock)
+
+	select {
+	case err := <-res:
+		if errors.Is(err, io.EOF) {
+			t.Fatal("parked Next error = io.EOF, want the underlying cause of the internal close")
+		}
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("parked Next error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != int(codes.PermissionDenied) {
+			t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("parked Next never returned")
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }

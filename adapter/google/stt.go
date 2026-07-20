@@ -2677,8 +2677,11 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 			case err := <-s.errCh:
 				return nil, err
 			default:
-				return nil, io.EOF
 			}
+			if err := s.takeInternalError(); err != nil {
+				return nil, err
+			}
+			return nil, io.EOF
 		}
 		return event, nil
 	case err := <-s.errCh:
