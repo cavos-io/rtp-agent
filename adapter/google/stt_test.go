@@ -1256,6 +1256,55 @@ func TestGoogleSTTStreamV2DoesNotApplyCallTimeout(t *testing.T) {
 	}
 }
 
+func googleSTTTestAudioFrame() *model.AudioFrame {
+	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
+}
+
+func TestGoogleSTTStreamSurvivesTransientDropWhileAudioInFlight(t *testing.T) {
+	failing := &fakeGoogleStreamingRecognizeClient{
+		recvErr:            status.Error(codes.Unavailable, "transient drop"),
+		sendErrAfterConfig: io.EOF,
+	}
+	replacement := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{failing, replacement},
+		streamCallCh: make(chan int, 4),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	deadline := time.After(3 * time.Second)
+	pushing := make(chan struct{})
+	go func() {
+		defer close(pushing)
+		for i := 0; i < 20; i++ {
+			_ = stream.PushFrame(googleSTTTestAudioFrame())
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-client.streamCallCh:
+	case <-deadline:
+		t.Fatal("no reconnect after transient drop while audio was in flight")
+	}
+	<-pushing
+
+	gs := stream.(*googleSTTStream)
+	gs.mu.Lock()
+	closed := gs.closed
+	gs.mu.Unlock()
+	if closed {
+		t.Fatal("stream closed after transient drop; reconnect was defeated by in-flight audio")
+	}
+}
+
 func TestGoogleSTTStreamV2SetupTimeoutReleasesAbandonedCall(t *testing.T) {
 	released := make(chan error, 1)
 	client := &fakeGoogleV2SpeechClient{blockedStreamCtxDone: released}
@@ -3810,8 +3859,8 @@ func TestGoogleSTTStreamPushFrameReturnsAPIStatusErrorForAudioSendFailure(t *tes
 	if !statusErr.Retryable {
 		t.Fatal("status retryable = false, want true for unavailable")
 	}
-	if !streamClient.closed {
-		t.Fatal("stream client closed = false after send failure")
+	if streamClient.closed {
+		t.Fatal("stream client closed = true after a transient send failure, want the read loop to own teardown")
 	}
 }
 

@@ -1935,6 +1935,10 @@ func googleSTTStatusRetryable(code codes.Code) bool {
 	}
 }
 
+func googleSTTSendFailureDefersToReadLoop(err error) bool {
+	return errors.Is(err, io.EOF) || googleSTTStatusTransient(err)
+}
+
 func googleSTTStatusTransient(err error) bool {
 	switch status.Code(err) {
 	case codes.Internal, codes.Unavailable, codes.Aborted, codes.ResourceExhausted, codes.DeadlineExceeded, codes.OutOfRange:
@@ -2283,6 +2287,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 				Audio: bytes.Clone(frame.Data),
 			},
 		}); err != nil {
+			if googleSTTSendFailureDefersToReadLoop(err) {
+				return googleSTTStreamError(err)
+			}
 			s.mu.Lock()
 			if !s.closed {
 				s.closed = true
@@ -2308,6 +2315,9 @@ func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 			AudioContent: bytes.Clone(frame.Data),
 		},
 	}); err != nil {
+		if googleSTTSendFailureDefersToReadLoop(err) {
+			return googleSTTStreamError(err)
+		}
 		s.mu.Lock()
 		if !s.closed {
 			s.closed = true
