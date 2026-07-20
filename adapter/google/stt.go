@@ -2427,6 +2427,12 @@ func (s *googleSTTStream) Close() error {
 	return nil
 }
 
+func (s *googleSTTStream) callerClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.callerClosedInput
+}
+
 func (s *googleSTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2435,6 +2441,11 @@ func (s *googleSTTStream) isClosed() bool {
 
 func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		if !s.callerClosed() {
+			if event, ok := s.nextQueuedEvent(); ok {
+				return event, nil
+			}
+		}
 		return nil, io.EOF
 	}
 	if s.pendingErr != nil {

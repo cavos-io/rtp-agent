@@ -1384,6 +1384,34 @@ func TestGoogleSTTStreamClosesUtteranceOnConflictReconnect(t *testing.T) {
 	googleSTTAssertUtteranceClosedBeforeRestart(t, seen, 2, "the conflict restart")
 }
 
+func TestGoogleSTTStreamNextDrainsQueuedEventsAfterClose(t *testing.T) {
+	s := &googleSTTStream{
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+	s.events <- &stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "last words"}},
+	}
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+
+	event, err := s.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v, want the transcript queued before the close", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want the queued final transcript", event)
+	}
+	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "last words" {
+		t.Fatalf("Next transcript = %#v, want last words", event.Alternatives)
+	}
+	if _, err := s.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after the queue drained = %v, want io.EOF", err)
+	}
+}
+
 func googleSTTTestAudioFrame() *model.AudioFrame {
 	return &model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
 }
