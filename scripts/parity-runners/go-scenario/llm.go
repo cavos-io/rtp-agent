@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -135,6 +137,7 @@ func runLLMAPIConnectOptions(input json.RawMessage) (any, error) {
 func runLLMAPIErrors(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -346,6 +349,7 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 func runLLMFallback(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
 		return nil, err
@@ -354,6 +358,38 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 		payload.Action = "provider_error_not_forwarded"
 	}
 	switch payload.Action {
+	case "validation":
+		mode := payload.Mode
+		if mode == "" {
+			mode = "empty"
+		}
+		errorClass := ""
+		message := ""
+		switch mode {
+		case "empty":
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						errorClass = "error"
+						message = fmt.Sprint(recovered)
+					}
+				}()
+				lkllm.NewFallbackAdapter(nil)
+			}()
+		default:
+			return nil, fmt.Errorf("unsupported LLM fallback validation mode %q", mode)
+		}
+		return map[string]any{
+			"contract": "llm-fallback",
+			"events": []map[string]any{
+				{
+					"name":        "validation",
+					"mode":        mode,
+					"error_class": errorClass,
+					"message":     message,
+				},
+			},
+		}, nil
 	case "option_defaults":
 		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
 			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "ok"}}},
@@ -1028,6 +1064,232 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "availability_handlers":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 2)
+		adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMHandlerEvents(handlerEvents, 2); err != nil {
+			return nil, err
+		}
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-handlers",
+			"events": []map[string]any{
+				{
+					"name":               "availability_handlers",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+				},
+			},
+		}, nil
+	case "availability_unsubscribe":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 1)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		unsubscribe()
+		unsubscribe()
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := collectScenarioLLMStreamChunks(stream)
+		if err != nil {
+			return nil, err
+		}
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-unsubscribe",
+			"events": []map[string]any{
+				{
+					"name":               "availability_unsubscribe",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+				},
+			},
+		}, nil
+	case "availability_panic_isolated":
+		primary := &fakeScenarioLLM{label: "primary", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{err: errors.New("primary stream failed")},
+		}}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		handlerEvents := make(chan map[string]any, 1)
+		adapter.OnAvailabilityChanged(func(lkllm.FallbackAvailabilityChangedEvent) {
+			panic("availability handler failed")
+		})
+		adapter.OnAvailabilityChanged(func(event lkllm.FallbackAvailabilityChangedEvent) {
+			handlerEvents <- map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+		})
+		escapedError := false
+		chunks := []string{}
+		func() {
+			defer func() {
+				if recover() != nil {
+					escapedError = true
+				}
+			}()
+			stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+			if err != nil {
+				escapedError = true
+				return
+			}
+			chunks, err = collectScenarioLLMStreamChunks(stream)
+			if err != nil {
+				escapedError = true
+			}
+		}()
+		events := collectScenarioLLMHandlerEvents(handlerEvents)
+		return map[string]any{
+			"contract": "llm-fallback-availability-panic-isolated",
+			"events": []map[string]any{
+				{
+					"name":               "availability_panic_isolated",
+					"chunks":             chunks,
+					"handler_events":     events,
+					"handler_call_count": len(events),
+					"escaped_error":      escapedError,
+				},
+			},
+		}, nil
+	case "mark_unavailable_after_chunk_failure":
+		primaryErr := errors.New("primary stream failed after output")
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "partial"}}},
+				{err: primaryErr},
+			}},
+			&fakeScenarioLLMStream{},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks := []string{}
+		firstErrored := false
+		for {
+			chunk, err := first.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				firstErrored = true
+				break
+			}
+			firstChunks = append(firstChunks, scenarioLLMChunkKind(chunk))
+		}
+		_ = first.Close()
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-mark-unavailable-after-chunk-failure",
+			"events": []map[string]any{
+				{
+					"name":                "mark_unavailable_after_chunk_failure",
+					"first_chunks":        firstChunks,
+					"first_errored":       firstErrored,
+					"second_chunks":       secondChunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+				},
+			},
+		}, nil
+	case "background_recovery":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "recovery probe"}}},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary active"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-background-recovery",
+			"events": []map[string]any{
+				{
+					"name":                "background_recovery",
+					"first_chunks":        firstChunks,
+					"second_chunks":       secondChunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
 	case "recovery_client_closed":
 		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
 			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
@@ -1070,6 +1332,57 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 					"first_chunks":        firstChunks,
 					"second_chunks":       secondChunks,
 					"availability_events": availabilityEvents,
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
+	case "retry_failed_recovery":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("recovery probe failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "second recovery probe"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback first"}}},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback second"}}},
+			}},
+		}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 2); err != nil {
+			return nil, err
+		}
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitForScenarioLLMCalls(primary, 3); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-retry-failed-recovery",
+			"events": []map[string]any{
+				{
+					"name":                "retry_failed_recovery",
+					"first_chunks":        firstChunks,
+					"second_chunks":       secondChunks,
+					"availability_events": collectScenarioLLMAvailability(adapter),
 					"primary_calls":       primary.calls,
 				},
 			},
@@ -1173,6 +1486,239 @@ func waitForScenarioLLMAvailable(adapter *lkllm.FallbackAdapter) ([]map[string]a
 		}
 	}
 }
+
+func waitForScenarioLLMHandlerEvents(events <-chan map[string]any, count int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	for len(events) < count && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(events) < count {
+		return fmt.Errorf("timed out waiting for handler events, got %d want %d", len(events), count)
+	}
+	return nil
+}
+
+func collectScenarioLLMHandlerEvents(handlerEvents <-chan map[string]any) []map[string]any {
+	events := []map[string]any{}
+	for {
+		select {
+		case event := <-handlerEvents:
+			events = append(events, event)
+		default:
+			return events
+		}
+	}
+}
+
+func runLLMRemoteChatContext(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action     string `json:"action"`
+		LookupID   string `json:"lookup_id"`
+		Operations []struct {
+			Op             string  `json:"op"`
+			ID             string  `json:"id"`
+			Role           string  `json:"role"`
+			Text           string  `json:"text"`
+			PreviousItemID *string `json:"previous_item_id"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "order"
+	}
+	if payload.Action == "errors" {
+		return runLLMRemoteChatContextErrors()
+	}
+	if payload.Action != "order" {
+		return nil, fmt.Errorf("unsupported remote chat context action %q", payload.Action)
+	}
+
+	ctx := lkllm.NewRemoteChatContext()
+	for _, operation := range payload.Operations {
+		switch operation.Op {
+		case "insert":
+			message := &lkllm.ChatMessage{
+				ID:      operation.ID,
+				Role:    lkllm.ChatRole(operation.Role),
+				Content: []lkllm.ChatContent{{Text: operation.Text}},
+			}
+			if err := ctx.Insert(operation.PreviousItemID, message); err != nil {
+				return nil, err
+			}
+		case "delete":
+			if err := ctx.Delete(operation.ID); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("unsupported remote chat context operation %q", operation.Op)
+		}
+	}
+
+	chatCtx := ctx.ToChatCtx()
+	lookup := ctx.Get(payload.LookupID)
+	lookupID := any(nil)
+	if lookup != nil {
+		lookupID = lookup.GetID()
+	}
+	return map[string]any{
+		"contract": "llm-remote-chat-context",
+		"events": []map[string]any{
+			{
+				"name":          "order",
+				"item_ids":      chatItemIDs(chatCtx.Items),
+				"lookup_id":     lookupID,
+				"lookup_exists": lookup != nil,
+			},
+		},
+	}, nil
+}
+
+func runLLMRemoteChatContextErrors() (any, error) {
+	ctx := lkllm.NewRemoteChatContext()
+	if err := ctx.Insert(nil, &lkllm.ChatMessage{ID: "first", Role: lkllm.ChatRoleUser, Content: []lkllm.ChatContent{{Text: "first"}}}); err != nil {
+		return nil, err
+	}
+
+	events := make([]map[string]any, 0, 3)
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "duplicate",
+			run: func() error {
+				return ctx.Insert(nil, &lkllm.ChatMessage{ID: "first", Role: lkllm.ChatRoleUser})
+			},
+		},
+		{
+			name: "missing_previous",
+			run: func() error {
+				missing := "missing"
+				return ctx.Insert(&missing, &lkllm.ChatMessage{ID: "second", Role: lkllm.ChatRoleAssistant})
+			},
+		},
+		{
+			name: "missing_delete",
+			run: func() error {
+				return ctx.Delete("missing")
+			},
+		},
+	} {
+		message := ""
+		if err := test.run(); err != nil {
+			message = err.Error()
+		}
+		events = append(events, map[string]any{
+			"name":          test.name,
+			"error_message": message,
+		})
+	}
+	return map[string]any{"contract": "llm-remote-chat-context", "events": events}, nil
+}
+
+func runLLMStrictSchema(input json.RawMessage) (any, error) {
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Action == "" {
+		payload.Action = "map_value_schema"
+	}
+	switch payload.Action {
+	case "map_value_schema":
+		type request struct {
+			Metadata map[string]string `json:"metadata"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		metadata, _ := props["metadata"].(map[string]interface{})
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "map_value_schema",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"metadata_type":                  metadata["type"],
+					"metadata_additional_properties": metadata["additionalProperties"],
+				},
+			},
+		}, nil
+	case "nested_description":
+		type location struct {
+			City string `json:"city"`
+		}
+		type request struct {
+			Location *location `json:"location,omitempty" jsonschema:"user location"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		locationSchema, _ := props["location"].(map[string]interface{})
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "nested_description",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"location_type":                  locationSchema["type"],
+					"location_description":           locationSchema["description"],
+					"location_additional_properties": locationSchema["additionalProperties"],
+					"location_required":              locationSchema["required"],
+				},
+			},
+		}, nil
+	case "pointer_map_value_schema":
+		type request struct {
+			Metadata *map[string]int `json:"metadata,omitempty"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		metadata, _ := props["metadata"].(map[string]interface{})
+		_, hasDefault := metadata["default"]
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                           "pointer_map_value_schema",
+					"root_additional_properties":     schema["additionalProperties"],
+					"required":                       schema["required"],
+					"metadata_type":                  metadata["type"],
+					"metadata_has_default":           hasDefault,
+					"metadata_additional_properties": metadata["additionalProperties"],
+				},
+			},
+		}, nil
+	case "nullable_defaults":
+		type request struct {
+			Limit int `json:"limit" jsonschema:"maximum results" default:"10"`
+		}
+		schema := lkllm.GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+		props, _ := schema["properties"].(map[string]interface{})
+		limit, _ := props["limit"].(map[string]interface{})
+		_, hasDefault := limit["default"]
+		return map[string]any{
+			"contract": "llm-strict-schema",
+			"events": []map[string]any{
+				{
+					"name":                       "nullable_defaults",
+					"root_additional_properties": schema["additionalProperties"],
+					"required":                   schema["required"],
+					"limit_type":                 limit["type"],
+					"limit_has_default":          hasDefault,
+					"limit_description":          limit["description"],
+				},
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported strict schema action %q", payload.Action)
+	}
+}
+
 func runLLMChatContext(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
@@ -2045,16 +2591,20 @@ func buildLLMScenarioItem(item map[string]any) (lkllm.ChatItem, error) {
 			Name:      stringArg(item, "name"),
 			Arguments: stringArg(item, "arguments"),
 		}
+		if extra, ok := item["extra"].(map[string]any); ok {
+			functionCall.Extra = extra
+		}
 		if createdAt, ok := scenarioIntArg(item, "created_at_unix"); ok {
 			functionCall.CreatedAt = time.Unix(int64(createdAt), 0)
 		}
 		return functionCall, nil
 	case "function_call_output":
 		output := &lkllm.FunctionCallOutput{
-			ID:     stringArg(item, "id"),
-			CallID: stringArg(item, "call_id"),
-			Name:   stringArg(item, "name"),
-			Output: stringArg(item, "output"),
+			ID:      stringArg(item, "id"),
+			CallID:  stringArg(item, "call_id"),
+			Name:    stringArg(item, "name"),
+			Output:  stringArg(item, "output"),
+			IsError: scenarioBoolArg(item, "is_error"),
 		}
 		if createdAt, ok := scenarioIntArg(item, "created_at_unix"); ok {
 			output.CreatedAt = time.Unix(int64(createdAt), 0)
@@ -2086,9 +2636,16 @@ func buildLLMScenarioMessage(item map[string]any) (*lkllm.ChatMessage, error) {
 		return nil, err
 	}
 	message := &lkllm.ChatMessage{
-		ID:      stringArg(item, "id"),
-		Role:    lkllm.ChatRole(stringArg(item, "role")),
-		Content: []lkllm.ChatContent{{Text: stringArg(item, "text")}},
+		ID:          stringArg(item, "id"),
+		Role:        lkllm.ChatRole(stringArg(item, "role")),
+		Content:     []lkllm.ChatContent{{Text: stringArg(item, "text")}},
+		Interrupted: scenarioBoolArg(item, "interrupted"),
+	}
+	if extra, ok := item["extra"].(map[string]any); ok {
+		message.Extra = extra
+	}
+	if metrics, ok := item["metrics"].(map[string]any); ok {
+		message.Metrics = metrics
 	}
 	if _, ok := item["text"]; !ok {
 		message.Content = nil
@@ -2133,11 +2690,15 @@ func buildLLMScenarioContentPart(part map[string]any) (lkllm.ChatContent, error)
 	partType, _ := part["type"].(string)
 	switch partType {
 	case "instructions":
+		instructions := lkllm.NewInstructions(stringArg(part, "audio"))
+		if _, ok := part["text"]; ok {
+			instructions = lkllm.NewInstructions(stringArg(part, "audio"), stringArg(part, "text"))
+		}
+		if active := stringArg(part, "active"); active != "" {
+			instructions = instructions.AsModality(active)
+		}
 		return lkllm.ChatContent{
-			Instructions: lkllm.NewInstructions(
-				stringArg(part, "audio"),
-				stringArg(part, "text"),
-			),
+			Instructions: instructions,
 		}, nil
 	case "image_content":
 		return lkllm.ChatContent{
@@ -2206,6 +2767,20 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 			ExcludeInstructions: scenarioBoolArg(step.Args, "exclude_instructions"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
 		})
+	case "is_equivalent":
+		otherName := stringArg(step.Args, "other")
+		other, ok := state.objects[otherName].(*lkllm.ChatContext)
+		if !ok {
+			return fmt.Errorf("is_equivalent other %q is %T, want *llm.ChatContext", otherName, state.objects[otherName])
+		}
+		state.vars[step.Assign] = ctx.IsEquivalent(other)
+	case "function_call_item_to_message":
+		item := ctx.GetByID(id)
+		if item == nil {
+			state.vars[step.Assign] = nil
+			return nil
+		}
+		state.vars[step.Assign] = lkllm.FunctionCallItemToMessage(item)
 	case "summarize":
 		keepLastTurns := 2
 		if value, ok := scenarioIntArg(step.Args, "keep_last_turns"); ok {
@@ -2226,6 +2801,14 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.GetToolNames(tools)
 	case "lookup_by_id":
 		state.vars[step.Assign] = ctx.GetByID(id)
+	case "messages":
+		state.vars[step.Assign] = ctx.Messages()
+	case "truncate":
+		maxItems, ok := scenarioIntArg(step.Args, "max_items")
+		if !ok {
+			return errors.New("truncate requires max_items")
+		}
+		state.vars[step.Assign] = ctx.Truncate(maxItems)
 	case "index":
 		index := ctx.IndexByID(id)
 		if index == nil {
@@ -2239,7 +2822,88 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.ToDict(lkllm.ChatContextDictOptions{
 			ExcludeFunctionCall: scenarioBoolArg(step.Args, "exclude_function_call"),
 			ExcludeConfigUpdate: scenarioBoolArg(step.Args, "exclude_config_update"),
+			ExcludeMetrics:      scenarioBoolArg(step.Args, "exclude_metrics"),
+			IncludeImage:        scenarioBoolArg(step.Args, "include_image"),
+			IncludeTimestamp:    scenarioBoolArg(step.Args, "include_timestamp"),
 		})
+	case "from_dict":
+		sourceName := stringArg(step.Args, "source")
+		source, ok := state.vars[sourceName].(map[string]any)
+		if !ok {
+			return fmt.Errorf("from_dict source %q is %T, want map[string]any", sourceName, state.vars[sourceName])
+		}
+		restored, err := lkllm.ChatContextFromDict(source)
+		if err != nil {
+			return err
+		}
+		state.vars[step.Assign] = restored
+	case "from_dict_capture_error":
+		data, ok := step.Args["data"].(map[string]any)
+		if !ok {
+			return errors.New("from_dict_capture_error requires data")
+		}
+		err := ctx.FromDict(data)
+		_, hasItems := data["items"]
+		switch {
+		case err == nil:
+			state.vars[step.Assign] = ""
+		case !hasItems:
+			state.vars[step.Assign] = "items_required"
+		case data["items"] == nil:
+			state.vars[step.Assign] = "items_list_required"
+		default:
+			state.vars[step.Assign] = "invalid_items"
+		}
+	case "to_provider_format":
+		options := lkllm.ChatContextProviderFormatOptions{}
+		if _, ok := step.Args["inject_dummy_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_dummy_user_message")
+			options.InjectDummyUserMessage = &value
+		}
+		if _, ok := step.Args["inject_trailing_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_trailing_user_message")
+			options.InjectTrailingUserMessage = &value
+		}
+		if raw, ok := step.Args["thought_signatures"].(map[string]any); ok {
+			options.ThoughtSignatures = map[string][]byte{}
+			for key, value := range raw {
+				options.ThoughtSignatures[key] = []byte(fmt.Sprint(value))
+			}
+		}
+		formatted, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
+		if providerErr != nil {
+			return providerErr
+		}
+		state.vars[step.Assign] = formatted
+	case "to_provider_format_with_extra":
+		options := lkllm.ChatContextProviderFormatOptions{}
+		if _, ok := step.Args["inject_dummy_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_dummy_user_message")
+			options.InjectDummyUserMessage = &value
+		}
+		if _, ok := step.Args["inject_trailing_user_message"]; ok {
+			value := scenarioBoolArg(step.Args, "inject_trailing_user_message")
+			options.InjectTrailingUserMessage = &value
+		}
+		if raw, ok := step.Args["thought_signatures"].(map[string]any); ok {
+			options.ThoughtSignatures = map[string][]byte{}
+			for key, value := range raw {
+				options.ThoughtSignatures[key] = []byte(fmt.Sprint(value))
+			}
+		}
+		formatted, extra, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"), options)
+		if providerErr != nil {
+			return providerErr
+		}
+		state.vars[step.Assign] = map[string]any{
+			"messages": formatted,
+			"extra":    extra,
+		}
+	case "to_provider_format_capture_error":
+		_, _, providerErr := ctx.ToProviderFormatE(stringArg(step.Args, "format"))
+		state.vars[step.Assign] = map[string]any{
+			"error": providerErr != nil,
+		}
 	case "add_message":
 		role, _ := step.Args["role"].(string)
 		args := lkllm.ChatMessageArgs{
@@ -2364,6 +3028,24 @@ func runLLMChatContextEmitStep(state *llmScenarioState, step llmScenarioStepSpec
 }
 
 func transformLLMScenarioField(state *llmScenarioState, value any, transform string) (any, error) {
+	if strings.HasPrefix(transform, "provider_first_extra_has:") {
+		key := strings.TrimPrefix(transform, "provider_first_extra_has:")
+		extra, err := firstProviderMessageExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		_, ok := extra[key]
+		return ok, nil
+	}
+	if strings.HasPrefix(transform, "provider_first_tool_call_extra_has:") {
+		key := strings.TrimPrefix(transform, "provider_first_tool_call_extra_has:")
+		extra, err := firstProviderToolCallExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		_, ok := extra[key]
+		return ok, nil
+	}
 	if strings.HasPrefix(transform, "context_first_id_matches:") {
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {
@@ -2458,12 +3140,32 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, fmt.Errorf("value %T cannot use message_text_content", value)
 		}
 		return message.TextContent(), nil
+	case "message_extra":
+		message, ok := value.(*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_extra", value)
+		}
+		return message.Extra, nil
 	case "item_created_at_set":
 		item, ok := value.(lkllm.ChatItem)
 		if !ok {
 			return nil, fmt.Errorf("value %T cannot use item_created_at_set", value)
 		}
 		return !item.GetCreatedAt().IsZero(), nil
+	case "dict_item_created_at_values":
+		data, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use dict_item_created_at_values", value)
+		}
+		items, ok := data["items"].([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("dict items are %T, want []map[string]any", data["items"])
+		}
+		values := make([]any, 0, len(items))
+		for _, item := range items {
+			values = append(values, item["created_at"])
+		}
+		return values, nil
 	case "context_item_ids":
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {
@@ -2512,6 +3214,25 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 			return nil, fmt.Errorf("value %T cannot use context_items_is_list", value)
 		}
 		return ctx.Items != nil, nil
+	case "message_list_is_list":
+		_, ok := value.([]*lkllm.ChatMessage)
+		return ok, nil
+	case "message_list_count":
+		messages, ok := value.([]*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_list_count", value)
+		}
+		return len(messages), nil
+	case "message_list_ids":
+		messages, ok := value.([]*lkllm.ChatMessage)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use message_list_ids", value)
+		}
+		ids := make([]string, 0, len(messages))
+		for _, message := range messages {
+			ids = append(ids, message.ID)
+		}
+		return ids, nil
 	case "context_first_message_text_content":
 		ctx, ok := value.(*lkllm.ChatContext)
 		if !ok {
@@ -2559,6 +3280,170 @@ func transformLLMScenarioField(state *llmScenarioState, value any, transform str
 		}
 		_, ok := instructions["text"]
 		return ok, nil
+	case "dict_first_image_id_has_prefix":
+		image, err := firstSerializedImage(value)
+		if err != nil {
+			return nil, err
+		}
+		id, _ := image["id"].(string)
+		return strings.HasPrefix(id, "img_"), nil
+	case "dict_first_image_inference_detail":
+		image, err := firstSerializedImage(value)
+		if err != nil {
+			return nil, err
+		}
+		return image["inference_detail"], nil
+	case "provider_first_content":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_content", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[0]["content"], nil
+	case "provider_first_role":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_role", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[0]["role"], nil
+	case "provider_first_image_url":
+		image, err := firstProviderImagePart(value)
+		if err != nil {
+			return nil, err
+		}
+		imageURL, _ := image["image_url"].(map[string]any)
+		return imageURL["url"], nil
+	case "provider_first_image_detail":
+		image, err := firstProviderImagePart(value)
+		if err != nil {
+			return nil, err
+		}
+		imageURL, _ := image["image_url"].(map[string]any)
+		return imageURL["detail"], nil
+	case "provider_first_text_part":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_text_part", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		content, ok := messages[0]["content"].([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("provider first content is %T, want []map[string]any", messages[0]["content"])
+		}
+		for _, part := range content {
+			if part["type"] == "text" {
+				return part["text"], nil
+			}
+		}
+		return nil, nil
+	case "provider_first_extra_exists":
+		extra, err := firstProviderMessageExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		return len(extra) > 0, nil
+	case "provider_first_tool_call_extra_exists":
+		extra, err := firstProviderToolCallExtra(value)
+		if err != nil {
+			return nil, err
+		}
+		return len(extra) > 0, nil
+	case "provider_first_tool_call_ids":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_first_tool_call_ids", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		toolCalls, ok := messages[0]["tool_calls"].([]map[string]any)
+		if !ok {
+			return []string{}, nil
+		}
+		ids := make([]string, 0, len(toolCalls))
+		for _, toolCall := range toolCalls {
+			id, _ := toolCall["id"].(string)
+			ids = append(ids, id)
+		}
+		return ids, nil
+	case "provider_tool_output_contents":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_tool_output_contents", value)
+		}
+		contents := make([]string, 0)
+		for _, message := range messages {
+			if message["role"] != "tool" {
+				continue
+			}
+			content, _ := message["content"].(string)
+			contents = append(contents, content)
+		}
+		return contents, nil
+	case "provider_message_count":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_message_count", value)
+		}
+		return len(messages), nil
+	case "provider_last_role":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_last_role", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		return messages[len(messages)-1]["role"], nil
+	case "provider_last_text":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_last_text", value)
+		}
+		if len(messages) == 0 {
+			return nil, nil
+		}
+		content, ok := messages[len(messages)-1]["content"].([]map[string]any)
+		if ok && len(content) > 0 {
+			return content[0]["text"], nil
+		}
+		return messages[len(messages)-1]["content"], nil
+	case "provider_error_exists":
+		data, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use provider_error_exists", value)
+		}
+		exists, _ := data["error"].(bool)
+		return exists, nil
+	case "google_first_function_call_thought_signature":
+		messages, ok := value.([]map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("value %T cannot use google_first_function_call_thought_signature", value)
+		}
+		for _, message := range messages {
+			parts, ok := message["parts"].([]map[string]any)
+			if !ok {
+				continue
+			}
+			for _, part := range parts {
+				if _, ok := part["function_call"]; !ok {
+					continue
+				}
+				signature, ok := part["thought_signature"].([]byte)
+				if ok {
+					return string(signature), nil
+				}
+				return part["thought_signature"], nil
+			}
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported transform %q", transform)
 	}
@@ -2582,6 +3467,84 @@ func firstSerializedInstruction(value any) (map[string]any, error) {
 		return nil, fmt.Errorf("first content is %T, want object", rawContent[0])
 	}
 	return instructions, nil
+}
+
+func firstSerializedImage(value any) (map[string]any, error) {
+	data, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use dict_first_image transform", value)
+	}
+	rawItems, ok := data["items"].([]map[string]any)
+	if !ok || len(rawItems) == 0 {
+		return nil, errors.New("dict_first_image requires non-empty items")
+	}
+	rawContent, ok := rawItems[0]["content"].([]any)
+	if !ok || len(rawContent) == 0 {
+		return nil, errors.New("dict_first_image requires non-empty content")
+	}
+	for _, part := range rawContent {
+		image, ok := part.(map[string]any)
+		if ok && image["type"] == "image_content" {
+			return image, nil
+		}
+	}
+	return nil, errors.New("dict_first_image requires image content")
+}
+
+func firstProviderImagePart(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_image transform", value)
+	}
+	if len(messages) == 0 {
+		return nil, errors.New("provider_first_image requires non-empty messages")
+	}
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("provider first content is %T, want []map[string]any", messages[0]["content"])
+	}
+	for _, part := range content {
+		if part["type"] == "image_url" {
+			return part, nil
+		}
+	}
+	return nil, errors.New("provider_first_image requires image_url content")
+}
+
+func firstProviderMessageExtra(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_extra transform", value)
+	}
+	if len(messages) == 0 {
+		return nil, errors.New("provider_first_extra requires non-empty messages")
+	}
+	extra, ok := messages[0]["extra_content"].(map[string]any)
+	if !ok {
+		return map[string]any{}, nil
+	}
+	return extra, nil
+}
+
+func firstProviderToolCallExtra(value any) (map[string]any, error) {
+	messages, ok := value.([]map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("value %T cannot use provider_first_tool_call_extra transform", value)
+	}
+	for _, message := range messages {
+		toolCalls, ok := message["tool_calls"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, toolCall := range toolCalls {
+			extra, ok := toolCall["extra_content"].(map[string]any)
+			if !ok {
+				return map[string]any{}, nil
+			}
+			return extra, nil
+		}
+	}
+	return map[string]any{}, nil
 }
 
 func stringArg(args map[string]any, name string) string {
@@ -2639,6 +3602,13 @@ func buildLLMScenarioTools(args map[string]any) ([]interface{}, error) {
 
 func buildLLMScenarioTool(spec map[string]any) (interface{}, error) {
 	toolType := stringArg(spec, "type")
+	if toolType == "" {
+		if _, ok := spec["tools"]; ok {
+			toolType = "toolset"
+		} else {
+			toolType = "tool"
+		}
+	}
 	switch toolType {
 	case "name":
 		return stringArg(spec, "name"), nil
@@ -2655,7 +3625,15 @@ func buildLLMScenarioTool(spec map[string]any) (interface{}, error) {
 			if !ok {
 				return nil, fmt.Errorf("toolset child %d is %T, want object", index, rawTool)
 			}
-			tools = append(tools, &scenarioTool{id: stringArg(childSpec, "id"), name: stringArg(childSpec, "name")})
+			child, err := buildLLMScenarioTool(childSpec)
+			if err != nil {
+				return nil, fmt.Errorf("toolset child %d: %w", index, err)
+			}
+			tool, ok := child.(lkllm.Tool)
+			if !ok {
+				return nil, fmt.Errorf("toolset child %d is %T, want tool", index, child)
+			}
+			tools = append(tools, tool)
 		}
 		return &scenarioToolset{id: stringArg(spec, "id"), tools: tools}, nil
 	case "ignored":
@@ -2750,8 +3728,12 @@ type scenarioToolset struct {
 	tools []lkllm.Tool
 }
 
-func (s *scenarioToolset) ID() string          { return s.id }
-func (s *scenarioToolset) Tools() []lkllm.Tool { return s.tools }
+func (s *scenarioToolset) ID() string                                      { return s.id }
+func (s *scenarioToolset) Name() string                                    { return s.id }
+func (s *scenarioToolset) Description() string                             { return "" }
+func (s *scenarioToolset) Parameters() map[string]any                      { return nil }
+func (s *scenarioToolset) Execute(context.Context, string) (string, error) { return "", nil }
+func (s *scenarioToolset) Tools() []lkllm.Tool                             { return s.tools }
 
 func runLLMValueObjects(input json.RawMessage) (any, error) {
 	var payload struct {
@@ -3403,6 +4385,94 @@ func runLLMValueObjects(input json.RawMessage) (any, error) {
 				{
 					"name":        "realtime_session_options",
 					"tool_choice": options.ToolChoice,
+				},
+			},
+		}, nil
+	case "realtime_session_options_voice":
+		options := lkllm.RealtimeSessionOptions{Voice: "marin"}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":  "realtime_session_options_voice",
+					"voice": options.Voice,
+				},
+			},
+		}, nil
+	case "realtime_session_options_speed":
+		options := lkllm.RealtimeSessionOptions{Speed: 1.25}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":  "realtime_session_options_speed",
+					"speed": options.Speed,
+				},
+			},
+		}, nil
+	case "realtime_session_options_max_response_output_tokens":
+		options := lkllm.RealtimeSessionOptions{MaxResponseOutputTokens: 64}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                       "realtime_session_options_max_response_output_tokens",
+					"max_response_output_tokens": options.MaxResponseOutputTokens,
+				},
+			},
+		}, nil
+	case "realtime_session_options_truncation":
+		options := lkllm.RealtimeSessionOptions{Truncation: "disabled"}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":       "realtime_session_options_truncation",
+					"truncation": options.Truncation,
+				},
+			},
+		}, nil
+	case "realtime_session_options_tracing":
+		options := lkllm.RealtimeSessionOptions{Tracing: map[string]any{"workflow_name": "checkout"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":    "realtime_session_options_tracing",
+					"tracing": options.Tracing,
+				},
+			},
+		}, nil
+	case "realtime_session_options_turn_detection":
+		options := lkllm.RealtimeSessionOptions{TurnDetection: map[string]any{"type": "server_vad"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":           "realtime_session_options_turn_detection",
+					"turn_detection": options.TurnDetection,
+				},
+			},
+		}, nil
+	case "realtime_session_options_input_audio_transcription":
+		options := lkllm.RealtimeSessionOptions{InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                      "realtime_session_options_input_audio_transcription",
+					"input_audio_transcription": options.InputAudioTranscription,
+				},
+			},
+		}, nil
+	case "realtime_session_options_input_audio_noise_reduction":
+		options := lkllm.RealtimeSessionOptions{InputAudioNoiseReduction: map[string]any{"type": "near_field"}}
+		return map[string]any{
+			"contract": "llm-value-objects",
+			"events": []map[string]any{
+				{
+					"name":                        "realtime_session_options_input_audio_noise_reduction",
+					"input_audio_noise_reduction": options.InputAudioNoiseReduction,
 				},
 			},
 		}, nil
@@ -4070,6 +5140,61 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			message = err.Error()
 		}
 		return map[string]any{"contract": "llm-tool-context", "events": []map[string]any{{"name": "add_duplicate", "error": err != nil, "error_message": message}}}, nil
+	case "add_updates_flattened":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		nestedProvider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "nested-provider", name: "nested-provider"}}
+		weather := newTool("weather", "weather")
+		toolset := &scenarioLLMToolset{id: "set", tools: []lkllm.Tool{weather, nestedProvider}}
+		ctx := lkllm.NewToolContext([]interface{}{lookup})
+		if err := ctx.AddTool(provider); err != nil {
+			return nil, err
+		}
+		if err := ctx.AddTool(toolset); err != nil {
+			return nil, err
+		}
+		toolsetNames := make([]string, 0, len(ctx.Toolsets()))
+		for _, toolset := range ctx.Toolsets() {
+			toolsetNames = append(toolsetNames, toolset.ID())
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "add_updates_flattened", map[string]any{
+					"lookup_found":  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found": ctx.GetFunctionTool("weather") == weather,
+					"toolset_names": toolsetNames,
+				}),
+			},
+		}, nil
+	case "confirm_duplicate_schema":
+		base := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []string{"city"},
+		}
+		tool := newTool("lookup", "lookup")
+		tool.params = base
+		tool.duplicateMode = lkllm.ToolDuplicateModeConfirm
+		params := lkllm.ToolParameters(tool)
+		props, _ := params["properties"].(map[string]any)
+		confirm, _ := props[lkllm.ConfirmDuplicateParam].(map[string]any)
+		originalProps, _ := base["properties"].(map[string]any)
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				{
+					"name":                      "confirm_duplicate_schema",
+					"confirm_type":              confirm["type"],
+					"confirm_description":       confirm["description"],
+					"required":                  params["required"],
+					"base_has_confirm_property": originalProps[lkllm.ConfirmDuplicateParam] != nil,
+					"base_required":             base["required"],
+				},
+			},
+		}, nil
 	case "equal_identity":
 		lookup := newTool("lookup", "lookup")
 		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
@@ -4229,14 +5354,19 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 }
 
 type scenarioLLMTool struct {
-	id   string
-	name string
+	id            string
+	name          string
+	params        map[string]any
+	duplicateMode lkllm.ToolDuplicateMode
 }
 
 func (t *scenarioLLMTool) ID() string                 { return t.id }
 func (t *scenarioLLMTool) Name() string               { return t.name }
 func (t *scenarioLLMTool) Description() string        { return "" }
-func (t *scenarioLLMTool) Parameters() map[string]any { return nil }
+func (t *scenarioLLMTool) Parameters() map[string]any { return t.params }
+func (t *scenarioLLMTool) ToolDuplicateMode() lkllm.ToolDuplicateMode {
+	return t.duplicateMode
+}
 func (t *scenarioLLMTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }

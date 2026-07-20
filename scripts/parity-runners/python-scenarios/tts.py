@@ -708,32 +708,6 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
-    if action == "text_replace":
-        transform_module = load_reference_text_transforms()
-        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
-        replacements = {
-            str(old): str(new)
-            for old, new in input_data.get("replacements", {}).items()
-        }
-        case_sensitive = bool(input_data.get("case_sensitive", False))
-        output = asyncio.run(
-            collect_text_transform_chunks(
-                transform_module,
-                chunks,
-                [transform_module.replace(replacements, case_sensitive=case_sensitive)],
-            )
-        )
-        joined = "".join(output)
-        return {
-            "contract": "tts-text-replacements",
-            "events": [
-                {
-                    "name": "text_replace",
-                    "joined": joined,
-                    "contains_original": any(old in joined for old in replacements),
-                }
-            ],
-        }
     if action == "error_unsubscribe":
         labels: list[str] = []
 

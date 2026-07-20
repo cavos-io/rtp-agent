@@ -1,7 +1,10 @@
 import ast
 import asyncio
+import base64
+import copy
+import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from common import *  # noqa: F403
@@ -71,10 +74,6 @@ def load_reference_llm_value_class(class_name: str):
     return namespace[class_name]
 
 
-def load_reference_completion_usage():
-    return load_reference_llm_value_class("CompletionUsage")
-
-
 def load_reference_llm_realtime_class(class_name: str):
     def Field(default=..., **kwargs: Any) -> Any:
         if "default_factory" in kwargs:
@@ -121,6 +120,66 @@ def load_reference_llm_realtime_class(class_name: str):
     return namespace[class_name]
 
 
+@dataclass
+class RemoteScenarioChatContext:
+    items: list[Any]
+
+
+@dataclass
+class RemoteScenarioMessage:
+    id: str
+    role: str
+    content: list[str]
+
+
+def load_reference_remote_chat_context_class():
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/remote_chat_context.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    body = [
+        node
+        for node in tree.body
+        if not (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 1
+            and node.module == "chat_context"
+        )
+    ]
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "ChatContext": RemoteScenarioChatContext,
+        "ChatItem": Any,
+        "dataclass": dataclass,
+        "field": field,
+    }
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace["RemoteChatContext"]
+
+
+def load_reference_strict_schema_normalizer():
+    path = repo_root() / "refs/agents/livekit-agents/livekit/agents/llm/_strict.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    body = [
+        node
+        for node in tree.body
+        if not (isinstance(node, ast.ImportFrom) and node.module == "pydantic")
+    ]
+    module = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {
+        "Any": Any,
+        "BaseModel": object,
+        "TypeAdapter": object,
+    }
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace["_ensure_strict_json_schema"]
+
+
+def load_reference_completion_usage():
+    return load_reference_llm_value_class("CompletionUsage")
+
+
 def load_reference_llm_fallback():
     livekit_mod = sys.modules.get("livekit") or types.ModuleType("livekit")
     rtc_mod = sys.modules.get("livekit.rtc") or types.ModuleType("livekit.rtc")
@@ -148,7 +207,10 @@ def load_reference_llm_fallback():
 
         def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
             for handler in list(self._handlers.get(event, [])):
-                handler(*args, **kwargs)
+                try:
+                    handler(*args, **kwargs)
+                except Exception:
+                    pass
 
     class Logger:
         def info(self, *args: Any, **kwargs: Any) -> None:
@@ -344,6 +406,30 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 chat_ctx=self._stream_chat_ctx or kwargs["chat_ctx"],
                 tools=kwargs.get("tools") or [],
             )
+
+    if action == "validation":
+        mode = input_data.get("mode", "empty")
+        error_class = ""
+        message = ""
+        if mode == "empty":
+            try:
+                module.FallbackAdapter([])
+            except ValueError as exc:
+                error_class = "error"
+                message = str(exc)
+        else:
+            raise ValueError(f"unsupported LLM fallback validation mode {mode!r}")
+        return {
+            "contract": "llm-fallback",
+            "events": [
+                {
+                    "name": "validation",
+                    "mode": mode,
+                    "error_class": error_class,
+                    "message": message,
+                }
+            ],
+        }
 
     if action == "option_defaults":
         primary = FakeLLM("primary", [FakeChunk("ok")])
@@ -964,6 +1050,221 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "availability_handlers":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("recovery probe")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        handler_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: handler_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while len(handler_events) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            return {
+                "contract": "llm-fallback-availability-handlers",
+                "events": [
+                    {
+                        "name": "availability_handlers",
+                        "chunks": chunks,
+                        "handler_events": handler_events,
+                        "handler_call_count": len(handler_events),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "availability_unsubscribe":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        handler_events: list[dict[str, Any]] = []
+
+        def handler(event: Any) -> None:
+            handler_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            )
+
+        adapter.on("llm_availability_changed", handler)
+        adapter.off("llm_availability_changed", handler)
+
+        async def run() -> dict[str, Any]:
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            await stream._run()
+            chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            return {
+                "contract": "llm-fallback-availability-unsubscribe",
+                "events": [
+                    {
+                        "name": "availability_unsubscribe",
+                        "chunks": chunks,
+                        "handler_events": handler_events,
+                        "handler_call_count": len(handler_events),
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "availability_panic_isolated":
+        primary = FakeLLM("primary", [RuntimeError("primary stream failed")])
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        handler_events: list[dict[str, Any]] = []
+
+        def failing_handler(event: Any) -> None:
+            raise RuntimeError("availability handler failed")
+
+        def recording_handler(event: Any) -> None:
+            handler_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            )
+
+        adapter.on("llm_availability_changed", failing_handler)
+        adapter.on("llm_availability_changed", recording_handler)
+
+        async def run() -> dict[str, Any]:
+            escaped_error = False
+            chunks: list[str] = []
+            stream = adapter.chat(chat_ctx=module.ChatContext())
+            try:
+                await stream._run()
+                chunks = [chunk_kind(chunk) for chunk in stream._event_ch.items]
+            except RuntimeError:
+                escaped_error = True
+            return {
+                "contract": "llm-fallback-availability-panic-isolated",
+                "events": [
+                    {
+                        "name": "availability_panic_isolated",
+                        "chunks": chunks,
+                        "handler_events": handler_events,
+                        "handler_call_count": len(handler_events),
+                        "escaped_error": escaped_error,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "mark_unavailable_after_chunk_failure":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [FakeChunk("partial"), RuntimeError("primary stream failed after output")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            first_errored = False
+            try:
+                await first._run()
+            except RuntimeError:
+                first_errored = True
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+            return {
+                "contract": "llm-fallback-mark-unavailable-after-chunk-failure",
+                "events": [
+                    {
+                        "name": "mark_unavailable_after_chunk_failure",
+                        "first_chunks": first_chunks,
+                        "first_errored": first_errored,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "background_recovery":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [FakeChunk("recovery probe")],
+                [FakeChunk("primary active")],
+            ],
+        )
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+
+            return {
+                "contract": "llm-fallback-background-recovery",
+                "events": [
+                    {
+                        "name": "background_recovery",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     if action == "recovery_client_closed":
         exceptions = sys.modules["livekit.agents._exceptions"]
 
@@ -1040,6 +1341,65 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
                 "events": [
                     {
                         "name": "recovery_client_closed",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
+    if action == "retry_failed_recovery":
+        primary = FakeLLM(
+            "primary",
+            streams=[
+                [RuntimeError("primary stream failed")],
+                [RuntimeError("recovery probe failed")],
+                [FakeChunk("second recovery probe")],
+            ],
+        )
+        fallback = FakeLLM(
+            "fallback",
+            streams=[
+                [FakeChunk("fallback first")],
+                [FakeChunk("fallback second")],
+            ],
+        )
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while primary.calls < 3 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+
+            return {
+                "contract": "llm-fallback-retry-failed-recovery",
+                "events": [
+                    {
+                        "name": "retry_failed_recovery",
                         "first_chunks": first_chunks,
                         "second_chunks": second_chunks,
                         "availability_events": availability_events,
@@ -1384,6 +1744,202 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
             ],
         }
     raise ValueError(f"unsupported api errors action {action!r}")
+
+
+def llm_remote_chat_context(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "order")
+    context_class = load_reference_remote_chat_context_class()
+    context = context_class()
+
+    def message(item_id: str, role: str = "user", text: str = "") -> RemoteScenarioMessage:
+        return RemoteScenarioMessage(id=item_id, role=role, content=[text])
+
+    if action == "errors":
+        context.insert(None, message("first", text="first"))
+        events: list[dict[str, Any]] = []
+        for name, callback in [
+            ("duplicate", lambda: context.insert(None, message("first"))),
+            (
+                "missing_previous",
+                lambda: context.insert(
+                    "missing",
+                    message("second", role="assistant"),
+                ),
+            ),
+            ("missing_delete", lambda: context.delete("missing")),
+        ]:
+            error_message = ""
+            try:
+                callback()
+            except Exception as exc:
+                error_message = str(exc)
+            events.append({"name": name, "error_message": error_message})
+        return {"contract": "llm-remote-chat-context", "events": events}
+
+    if action != "order":
+        raise ValueError(f"unsupported remote chat context action {action!r}")
+
+    for operation in input_data.get("operations", []):
+        op = operation.get("op")
+        if op == "insert":
+            context.insert(
+                operation.get("previous_item_id"),
+                message(
+                    str(operation.get("id", "")),
+                    role=str(operation.get("role", "")),
+                    text=str(operation.get("text", "")),
+                ),
+            )
+            continue
+        if op == "delete":
+            context.delete(str(operation.get("id", "")))
+            continue
+        raise ValueError(f"unsupported remote chat context operation {op!r}")
+
+    chat_context = context.to_chat_ctx()
+    lookup_id = str(input_data.get("lookup_id", ""))
+    lookup = context.get(lookup_id) if lookup_id else None
+    lookup_item = lookup.item if lookup is not None else None
+
+    return {
+        "contract": "llm-remote-chat-context",
+        "events": [
+            {
+                "name": "order",
+                "item_ids": [item.id for item in chat_context.items],
+                "lookup_id": getattr(lookup_item, "id", None),
+                "lookup_exists": lookup_item is not None,
+            }
+        ],
+    }
+
+
+def llm_strict_schema(input_data: Any) -> dict[str, Any]:
+    action = input_data.get("action", "map_value_schema")
+    normalizer = load_reference_strict_schema_normalizer()
+    if action == "map_value_schema":
+        schema = {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        metadata = strict["properties"]["metadata"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "map_value_schema",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "metadata_type": metadata.get("type"),
+                    "metadata_additional_properties": metadata.get(
+                        "additionalProperties"
+                    ),
+                }
+            ],
+        }
+    if action == "nested_description":
+        schema = {
+            "type": "object",
+            "$defs": {
+                "Location": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                    },
+                }
+            },
+            "properties": {
+                "location": {
+                    "$ref": "#/$defs/Location",
+                    "type": ["object", "null"],
+                    "default": None,
+                    "description": "user location",
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        location = strict["properties"]["location"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "nested_description",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "location_type": location.get("type"),
+                    "location_description": location.get("description"),
+                    "location_additional_properties": location.get(
+                        "additionalProperties"
+                    ),
+                    "location_required": location.get("required"),
+                }
+            ],
+        }
+    if action == "pointer_map_value_schema":
+        schema = {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": ["object", "null"],
+                    "default": None,
+                    "additionalProperties": {"type": "integer"},
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        metadata = strict["properties"]["metadata"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "pointer_map_value_schema",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "metadata_type": metadata.get("type"),
+                    "metadata_has_default": "default" in metadata,
+                    "metadata_additional_properties": metadata.get(
+                        "additionalProperties"
+                    ),
+                }
+            ],
+        }
+    if action == "nullable_defaults":
+        schema = {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "maximum results",
+                }
+            },
+        }
+        strict = copy.deepcopy(schema)
+        strict = normalizer(strict, path=(), root=strict)
+        limit = strict["properties"]["limit"]
+        return {
+            "contract": "llm-strict-schema",
+            "events": [
+                {
+                    "name": "nullable_defaults",
+                    "root_additional_properties": strict.get("additionalProperties"),
+                    "required": strict.get("required"),
+                    "limit_type": limit.get("type"),
+                    "limit_has_default": "default" in limit,
+                    "limit_description": limit.get("description"),
+                }
+            ],
+        }
+    raise ValueError(f"unsupported strict schema action {action!r}")
 
 
 def llm_value_objects(input_data: Any) -> dict[str, Any]:
@@ -1952,6 +2508,86 @@ def llm_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "realtime_session_options_voice":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_voice",
+                    "voice": "marin",
+                }
+            ],
+        }
+    if action == "realtime_session_options_speed":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_speed",
+                    "speed": 1.25,
+                }
+            ],
+        }
+    if action == "realtime_session_options_max_response_output_tokens":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_max_response_output_tokens",
+                    "max_response_output_tokens": 64,
+                }
+            ],
+        }
+    if action == "realtime_session_options_truncation":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_truncation",
+                    "truncation": "disabled",
+                }
+            ],
+        }
+    if action == "realtime_session_options_tracing":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_tracing",
+                    "tracing": {"workflow_name": "checkout"},
+                }
+            ],
+        }
+    if action == "realtime_session_options_turn_detection":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_turn_detection",
+                    "turn_detection": {"type": "server_vad"},
+                }
+            ],
+        }
+    if action == "realtime_session_options_input_audio_transcription":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_input_audio_transcription",
+                    "input_audio_transcription": {"model": "gpt-4o-transcribe"},
+                }
+            ],
+        }
+    if action == "realtime_session_options_input_audio_noise_reduction":
+        return {
+            "contract": "llm-value-objects",
+            "events": [
+                {
+                    "name": "realtime_session_options_input_audio_noise_reduction",
+                    "input_audio_noise_reduction": {"type": "near_field"},
+                }
+            ],
+        }
     if action == "realtime_generate_reply_options":
         return {
             "contract": "llm-value-objects",
@@ -2444,6 +3080,51 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                     {"name": "add_duplicate", "error": True, "error_message": str(exc)}
                 ],
             }
+    if action == "add_updates_flattened":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        nested_provider = provider_tool("nested-provider")
+        weather = fn_tool("weather")
+        toolset = module.Toolset(id="set", tools=[weather, nested_provider])
+        ctx = module.ToolContext([lookup])
+        ctx.update_tools([*ctx._tools, provider])
+        ctx.update_tools([*ctx._tools, toolset])
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "add_updates_flattened",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is weather,
+                        "toolset_names": [toolset.id for toolset in ctx.toolsets],
+                    },
+                )
+            ],
+        }
+    if action == "confirm_duplicate_schema":
+        base = {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        }
+        params = module._inject_confirm_duplicate(base)
+        confirm = params["properties"][module.CONFIRM_DUPLICATE_PARAM]
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                {
+                    "name": "confirm_duplicate_schema",
+                    "confirm_type": confirm.get("type"),
+                    "confirm_description": confirm.get("description"),
+                    "required": params.get("required"),
+                    "base_has_confirm_property": module.CONFIRM_DUPLICATE_PARAM
+                    in base["properties"],
+                    "base_required": base["required"],
+                }
+            ],
+        }
     if action == "equal_identity":
         lookup = fn_tool("lookup")
         provider = provider_tool("provider")
@@ -2630,6 +3311,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         content: list[Any] | None = None,
         *,
         created_at: float = 0.0,
+        extra: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "id": item_id,
@@ -2637,8 +3320,8 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "role": role,
             "content": list(content or []),
             "interrupted": False,
-            "extra": {},
-            "metrics": {},
+            "extra": dict(extra or {}),
+            "metrics": dict(metrics or {}),
             "created_at": created_at,
         }
 
@@ -2648,6 +3331,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         *,
         call_id: str = "",
         arguments: str = "",
+        extra: dict[str, Any] | None = None,
         created_at: float = 0.0,
     ) -> dict[str, Any]:
         return {
@@ -2656,7 +3340,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "call_id": call_id,
             "arguments": arguments,
             "name": name,
-            "extra": {},
+            "extra": dict(extra or {}),
             "created_at": created_at,
         }
 
@@ -2687,19 +3371,28 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             "created_at": created_at,
         }
 
-    def config(item_id: str, *, created_at: float = 0.0) -> dict[str, Any]:
-        return {
+    def config(item_id: str, *, created_at: float = 0.0, instructions: Any = None) -> dict[str, Any]:
+        item = {
             "id": item_id,
             "type": "agent_config_update",
             "created_at": created_at,
         }
+        if instructions is not None:
+            item["instructions"] = instructions
+        return item
 
     generated_id_counter = 0
+    generated_image_id_counter = 0
 
     def generated_id() -> str:
         nonlocal generated_id_counter
         generated_id_counter += 1
         return f"item_{generated_id_counter}"
+
+    def generated_image_id() -> str:
+        nonlocal generated_image_id_counter
+        generated_image_id_counter += 1
+        return f"img_{generated_image_id_counter}"
 
     def generated_time() -> float:
         return 1000.0 + generated_id_counter
@@ -2738,7 +3431,13 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         return [item["id"] for item in items]
 
     def text_content(parts: list[Any]) -> str | None:
-        text_parts = [part for part in parts if isinstance(part, str)]
+        text_parts = [
+            instruction_string(part)
+            if isinstance(part, dict) and part.get("type") == "instructions"
+            else part
+            for part in parts
+            if isinstance(part, str) or (isinstance(part, dict) and part.get("type") == "instructions")
+        ]
         if not text_parts:
             return None
         return "\n".join(text_parts)
@@ -2880,6 +3579,9 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         *,
         exclude_function_call: bool = False,
         exclude_config_update: bool = False,
+        exclude_metrics: bool = False,
+        include_image: bool = False,
+        include_timestamp: bool = False,
     ) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
         for item in items:
@@ -2889,16 +3591,659 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             if exclude_config_update and item_type == "agent_config_update":
                 continue
             data = dict(item)
-            data.pop("created_at", None)
+            if not include_timestamp:
+                data.pop("created_at", None)
             if item_type == "message":
                 content = []
                 for part in item["content"]:
-                    if isinstance(part, dict) and part.get("type") in ("image_content", "audio_content"):
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        if include_image:
+                            serialized = dict(part)
+                            if not serialized.get("id"):
+                                serialized["id"] = generated_image_id()
+                            if not serialized.get("inference_detail"):
+                                serialized["inference_detail"] = "auto"
+                            content.append(serialized)
+                        continue
+                    if isinstance(part, dict) and part.get("type") == "audio_content":
+                        continue
+                    if isinstance(part, dict) and part.get("type") == "instructions":
+                        serialized = {
+                            "type": "instructions",
+                            "audio": part["audio"],
+                        }
+                        if part["text_set"]:
+                            serialized["text"] = part["text"]
+                        content.append(serialized)
                         continue
                     content.append(part)
                 data["content"] = content
+                if exclude_metrics:
+                    data.pop("metrics", None)
             out.append(data)
         return {"items": out}
+
+    def google_prepared_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prepared: list[dict[str, Any]] = []
+        first_system_seen = False
+        for item in items:
+            if item["type"] == "message" and item["role"] in ("system", "developer"):
+                text = text_content(item["content"]) or ""
+                if first_system_seen and text:
+                    updated = dict(item)
+                    updated["role"] = "user"
+                    updated["content"] = [f"<instructions>\n{text}\n</instructions>"]
+                    prepared.append(updated)
+                    continue
+                first_system_seen = True
+            prepared.append(item)
+        return prepared
+
+    def google_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            base64.b64decode(match.group(2), validate=True)
+            return {
+                "inline_data": {
+                    "data": match.group(2),
+                    "mime_type": match.group(1),
+                }
+            }
+        mime_type = str(part.get("mime_type") or "image/jpeg")
+        return {"file_data": {"file_uri": image, "mime_type": mime_type}}
+
+    def anthropic_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            base64.b64decode(match.group(2), validate=True)
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": match.group(1),
+                    "data": match.group(2),
+                },
+            }
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": image,
+            },
+        }
+
+    def anthropic_content_parts(parts: list[Any]) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    content.append({"text": part, "type": "text"})
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                content.append(anthropic_image_part(part))
+                continue
+            if isinstance(part, dict) and part:
+                content.append({"text": json.dumps(part), "type": "text"})
+        if not content:
+            content.append({"text": "", "type": "text"})
+        return content
+
+    def anthropic_tool_result_content(output: str) -> Any:
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return output
+
+    def anthropic_system_messages(items: list[dict[str, Any]]) -> list[str]:
+        return [
+            text_content(item["content"]) or ""
+            for item in items
+            if item["type"] == "message"
+            and item["role"] == "system"
+            and (text_content(item["content"]) or "")
+        ]
+
+    def anthropic_messages(
+        items: list[dict[str, Any]],
+        *,
+        inject_dummy_user_message: bool,
+        inject_trailing_user_message: bool,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        current_role: str | None = None
+        content: list[dict[str, Any]] = []
+
+        def flush() -> None:
+            nonlocal content, current_role
+            if current_role is not None and content:
+                messages.append({"role": current_role, "content": content})
+                content = []
+
+        for item in items:
+            if item["type"] == "message" and item["role"] == "system":
+                continue
+            if item["type"] == "message":
+                role = "assistant" if item["role"] == "assistant" else "user"
+                if role != current_role:
+                    flush()
+                    current_role = role
+                content.extend(anthropic_content_parts(item["content"]))
+                continue
+            if item["type"] == "function_call":
+                args = json.loads(item.get("arguments") or "{}")
+                if current_role != "assistant":
+                    flush()
+                    current_role = "assistant"
+                content.append(
+                    {
+                        "id": item["call_id"],
+                        "type": "tool_use",
+                        "name": item["name"],
+                        "input": args,
+                    }
+                )
+                continue
+            if item["type"] == "function_call_output":
+                if current_role != "user":
+                    flush()
+                    current_role = "user"
+                content.append(
+                    {
+                        "tool_use_id": item["call_id"],
+                        "type": "tool_result",
+                        "content": anthropic_tool_result_content(str(item["output"])),
+                        "is_error": bool(item.get("is_error", False)),
+                    }
+                )
+        flush()
+        if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
+            messages.insert(
+                0,
+                {"role": "user", "content": [{"text": "(empty)", "type": "text"}]},
+            )
+        if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+            messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
+        return messages
+
+    def aws_image_part(part: dict[str, Any]) -> dict[str, Any]:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:image/([^;,]+);base64,(.*)$", image)
+        if not match:
+            raise ValueError("external_url is not supported by AWS Bedrock.")
+        base64.b64decode(match.group(2), validate=True)
+        return {
+            "image": {
+                "format": match.group(1),
+                "source": {"bytes": match.group(2)},
+            }
+        }
+
+    def aws_content_parts(parts: list[Any]) -> list[dict[str, Any]]:
+        content: list[dict[str, Any]] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    content.append({"text": part})
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                content.append(aws_image_part(part))
+                continue
+            if isinstance(part, dict) and part:
+                content.append({"text": json.dumps(part)})
+        return content
+
+    def aws_system_messages(items: list[dict[str, Any]]) -> list[str]:
+        return [
+            text_content(item["content"]) or ""
+            for item in items
+            if item["type"] == "message"
+            and item["role"] == "system"
+            and (text_content(item["content"]) or "")
+        ]
+
+    def aws_messages(
+        items: list[dict[str, Any]],
+        *,
+        inject_dummy_user_message: bool,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        current_role: str | None = None
+        content: list[dict[str, Any]] = []
+
+        def flush() -> None:
+            nonlocal content, current_role
+            if current_role is not None and content:
+                messages.append({"role": current_role, "content": content})
+                content = []
+
+        for item in items:
+            if item["type"] == "message" and item["role"] == "system":
+                continue
+            if item["type"] == "message":
+                role = "assistant" if item["role"] == "assistant" else "user"
+                if role != current_role:
+                    flush()
+                    current_role = role
+                content.extend(aws_content_parts(item["content"]))
+                continue
+            if item["type"] == "function_call":
+                args = json.loads(item.get("arguments") or "{}")
+                if current_role != "assistant":
+                    flush()
+                    current_role = "assistant"
+                content.append(
+                    {
+                        "toolUse": {
+                            "toolUseId": item["call_id"],
+                            "name": item["name"],
+                            "input": args,
+                        }
+                    }
+                )
+                continue
+            if item["type"] == "function_call_output":
+                if current_role != "user":
+                    flush()
+                    current_role = "user"
+                content.append(
+                    {
+                        "toolResult": {
+                            "toolUseId": item["call_id"],
+                            "content": [{"text": item["output"]}],
+                            "status": "success",
+                        }
+                    }
+                )
+        flush()
+        if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):
+            messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
+        return messages
+
+    def mistral_image_url(part: dict[str, Any]) -> str:
+        image = str(part.get("image", ""))
+        match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+        if match:
+            base64.b64decode(match.group(2), validate=True)
+            return image
+        return image
+
+    def mistral_content(parts: list[Any]) -> Any:
+        list_content: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+        for part in parts:
+            if isinstance(part, str):
+                if part:
+                    text_parts.append(part)
+                continue
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                list_content.append({"type": "image_url", "image_url": mistral_image_url(part)})
+                continue
+            if isinstance(part, dict) and part:
+                text_parts.append(json.dumps(part))
+        text = "\n".join(text_parts)
+        if not list_content:
+            return text
+        if text:
+            list_content.append({"type": "text", "text": text})
+        return list_content
+
+    def mistral_instructions(items: list[dict[str, Any]]) -> str | None:
+        instructions: str | None = None
+        for item in items:
+            if item["type"] != "message" or item["role"] not in ("system", "developer"):
+                continue
+            text_parts = [part for part in item["content"] if isinstance(part, str)]
+            instructions = "\n".join(text_parts) if text_parts else None
+        return instructions
+
+    def to_provider_format(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+        inject_dummy_user_message: bool = True,
+        inject_trailing_user_message: bool = False,
+        thought_signatures: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+
+        def openai_extra_content(extra: dict[str, Any]) -> dict[str, Any]:
+            return {
+                key: value
+                for key, value in extra.items()
+                if key in ("google", "livekit", "xai") and bool(value)
+            }
+
+        def openai_image_url(part: dict[str, Any]) -> str:
+            image = str(part.get("image", ""))
+            match = re.match(r"^data:([^;,]+);base64,(.*)$", image)
+            if match:
+                base64.b64decode(match.group(2), validate=True)
+            return image
+
+        def openai_valid_call_ids() -> set[str]:
+            function_call_ids = {
+                str(item.get("call_id", ""))
+                for item in items
+                if item.get("type") == "function_call"
+            }
+            function_output_ids = {
+                str(item.get("call_id", ""))
+                for item in items
+                if item.get("type") == "function_call_output"
+            }
+            return function_call_ids & function_output_ids
+
+        if provider_format == "openai":
+            messages: list[dict[str, Any]] = []
+            valid_call_ids = openai_valid_call_ids()
+            for item in items:
+                if item["type"] == "function_call":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    if not messages or messages[-1].get("role") != "assistant":
+                        messages.append({"role": "assistant"})
+                    tool_call: dict[str, Any] = {
+                        "id": item["call_id"],
+                        "type": "function",
+                        "function": {
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        },
+                    }
+                    extra_content = openai_extra_content(item.get("extra", {}))
+                    if extra_content:
+                        tool_call["extra_content"] = extra_content
+                    messages[-1].setdefault("tool_calls", []).append(tool_call)
+                    continue
+                if item["type"] == "function_call_output":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": item["call_id"],
+                            "content": item["output"],
+                        }
+                    )
+                    continue
+                if item["type"] != "message":
+                    continue
+                parts: list[dict[str, Any]] = []
+                for part in item["content"]:
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": openai_image_url(part),
+                                    "detail": part.get("inference_detail") or "auto",
+                                },
+                            }
+                        )
+                text = text_content(item["content"]) or ""
+                if parts:
+                    if text:
+                        parts.append({"type": "text", "text": text})
+                    content: Any = parts
+                else:
+                    content = text
+                messages.append(
+                    {
+                        "role": item["role"],
+                        "content": content,
+                    }
+                )
+                extra_content = openai_extra_content(item.get("extra", {}))
+                if extra_content:
+                    messages[-1]["extra_content"] = extra_content
+            return messages
+        if provider_format == "openai.responses":
+            responses_items: list[dict[str, Any]] = []
+            valid_call_ids = openai_valid_call_ids()
+            for item in items:
+                if item["type"] == "message":
+                    parts: list[dict[str, Any]] = []
+                    text = text_content(item["content"]) or ""
+                    for part in item["content"]:
+                        if isinstance(part, dict) and part.get("type") == "image_content":
+                            parts.append(
+                                {
+                                    "type": "input_image",
+                                    "image_url": openai_image_url(part),
+                                    "detail": part.get("inference_detail") or "auto",
+                                }
+                            )
+                    if parts:
+                        if text:
+                            parts.append({"type": "input_text", "text": text})
+                        content: Any = parts
+                    else:
+                        content = text
+                    response_item: dict[str, Any] = {
+                        "role": item["role"],
+                        "content": content,
+                    }
+                    if item["role"] == "assistant":
+                        phase = item.get("extra", {}).get("openai", {}).get("phase")
+                        if phase is not None:
+                            response_item["phase"] = phase
+                    responses_items.append(response_item)
+                    continue
+                if item["type"] == "function_call":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    responses_items.append(
+                        {
+                            "call_id": item["call_id"],
+                            "type": "function_call",
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        }
+                    )
+                    continue
+                if item["type"] == "function_call_output":
+                    if item["call_id"] not in valid_call_ids:
+                        continue
+                    responses_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item["call_id"],
+                            "output": item["output"],
+                        }
+                    )
+            return responses_items
+        if provider_format == "anthropic":
+            return anthropic_messages(
+                items,
+                inject_dummy_user_message=inject_dummy_user_message,
+                inject_trailing_user_message=inject_trailing_user_message,
+            )
+        if provider_format == "aws":
+            return aws_messages(items, inject_dummy_user_message=inject_dummy_user_message)
+        if provider_format == "mistralai":
+            entries: list[dict[str, Any]] = []
+            for item in items:
+                if item["type"] == "message":
+                    if item["role"] in ("system", "developer"):
+                        continue
+                    if item["role"] == "user":
+                        entries.append(
+                            {
+                                "type": "message.input",
+                                "role": "user",
+                                "content": mistral_content(item["content"]),
+                            }
+                        )
+                        continue
+                    if item["role"] == "assistant":
+                        entries.append(
+                            {
+                                "type": "message.output",
+                                "role": "assistant",
+                                "content": mistral_content(item["content"]),
+                            }
+                        )
+                        continue
+                if item["type"] == "function_call":
+                    entries.append(
+                        {
+                            "type": "function.call",
+                            "tool_call_id": item["call_id"],
+                            "name": item["name"],
+                            "arguments": item["arguments"],
+                        }
+                    )
+                    continue
+                if item["type"] == "function_call_output":
+                    entries.append(
+                        {
+                            "type": "function.result",
+                            "tool_call_id": item["call_id"],
+                            "result": item["output"],
+                        }
+                    )
+            return entries
+        if provider_format not in ("google", "anthropic", "aws"):
+            raise ValueError(f"unsupported provider format {provider_format!r}")
+
+        provider_items = google_prepared_items(items) if provider_format == "google" else items
+        messages: list[dict[str, Any]] = []
+        current_google_role: str | None = None
+        current_google_parts: list[dict[str, Any]] = []
+
+        def flush_google_parts() -> None:
+            nonlocal current_google_parts, current_google_role
+            if current_google_role is not None and current_google_parts:
+                messages.append({"role": current_google_role, "parts": current_google_parts})
+                current_google_parts = []
+
+        for item in provider_items:
+            if provider_format == "google" and item["type"] == "message" and item["role"] == "system":
+                continue
+            if item["type"] == "function_call":
+                args = json.loads(item.get("arguments") or "{}")
+                if provider_format == "google":
+                    if current_google_role != "model":
+                        flush_google_parts()
+                        current_google_role = "model"
+                    part = {
+                        "function_call": {
+                            "id": item["call_id"],
+                            "name": item["name"],
+                            "args": args,
+                        }
+                    }
+                    if thought_signatures and item["call_id"] in thought_signatures:
+                        part["thought_signature"] = thought_signatures[item["call_id"]]
+                    current_google_parts.append(part)
+                continue
+            if item["type"] == "function_call_output":
+                if provider_format == "google":
+                    if current_google_role != "tool":
+                        flush_google_parts()
+                        current_google_role = "tool"
+                    current_google_parts.append(
+                        {
+                            "function_response": {
+                                "id": item["call_id"],
+                                "name": item["name"],
+                                "response": {"output": item["output"]},
+                            }
+                        }
+                    )
+                continue
+            if item["type"] != "message":
+                continue
+            if provider_format == "google":
+                role = "model" if item["role"] == "assistant" else "user"
+                if current_google_role != role:
+                    flush_google_parts()
+                    current_google_role = role
+                for part in item["content"]:
+                    if isinstance(part, str):
+                        if part:
+                            current_google_parts.append({"text": part})
+                        continue
+                    if isinstance(part, dict) and part.get("type") == "image_content":
+                        current_google_parts.append(google_image_part(part))
+                        continue
+                    if isinstance(part, dict) and part:
+                        current_google_parts.append({"text": json.dumps(part)})
+                continue
+            messages.append(
+                {
+                    "role": "assistant" if item["role"] == "assistant" else "user",
+                    "content": anthropic_content_parts(item["content"])
+                    if provider_format == "anthropic"
+                    else aws_content_parts(item["content"])
+                    if provider_format == "aws"
+                    else [{"text": text_content(item["content"]) or ""}],
+                }
+            )
+        if provider_format == "google":
+            flush_google_parts()
+            for message in messages:
+                if message["role"] == "tool":
+                    message["role"] = "user"
+        if inject_dummy_user_message:
+            if provider_format == "google":
+                if not messages or messages[-1]["role"] not in ("user", "tool"):
+                    messages.append({"role": "user", "parts": [{"text": "."}]})
+            elif not messages or messages[0]["role"] != "user":
+                content = [{"text": "(empty)", "type": "text"}] if provider_format == "anthropic" else [{"text": "(empty)"}]
+                messages.insert(0, {"role": "user", "content": content})
+        if provider_format == "anthropic" and inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
+            messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
+        return messages
+
+    def to_provider_format_with_extra(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+        inject_dummy_user_message: bool = True,
+        inject_trailing_user_message: bool = False,
+        thought_signatures: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        messages = to_provider_format(
+            items,
+            provider_format=provider_format,
+            inject_dummy_user_message=inject_dummy_user_message,
+            inject_trailing_user_message=inject_trailing_user_message,
+            thought_signatures=thought_signatures,
+        )
+        extra: Any = None
+        if provider_format == "google":
+            extra = {
+                "system_messages": [
+                    text_content(item["content"]) or ""
+                    for item in google_prepared_items(items)
+                    if item["type"] == "message"
+                    and item["role"] == "system"
+                    and (text_content(item["content"]) or "")
+                ]
+            }
+        if provider_format == "anthropic":
+            extra = {"system_messages": anthropic_system_messages(items)}
+        if provider_format == "aws":
+            extra = {"system_messages": aws_system_messages(items)}
+        if provider_format == "mistralai":
+            extra = {"instructions": mistral_instructions(items)}
+        return {"messages": messages, "extra": extra}
+
+    def provider_format_error(
+        items: list[dict[str, Any]],
+        *,
+        provider_format: str,
+    ) -> dict[str, Any]:
+        try:
+            to_provider_format(items, provider_format=provider_format)
+        except Exception as exc:
+            return {"error": True, "error_class": type(exc).__name__}
+        return {"error": False, "error_class": ""}
 
     def build_declarative_fixture(fixture: dict[str, Any]) -> Any:
         factory = fixture.get("factory")
@@ -2931,79 +4276,80 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
     def build_declarative_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [build_declarative_item(item) for item in items]
 
-    def build_declarative_item(item: dict[str, Any]) -> dict[str, Any]:
-        item_type = str(item.get("type", "message"))
-        if item_type == "message":
-            if "content" in item:
-                content = build_declarative_content(item.get("content", []))
-            elif "text" in item:
-                content = [str(item.get("text", ""))]
-            else:
-                content = []
-            return message(
-                str(item.get("id", "")),
-                str(item.get("role", "")),
-                content,
-                created_at=float(item.get("created_at_unix", 0.0)),
-            )
+    def contexts_equivalent(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+        if left is right:
+            return True
+        if len(left) != len(right):
+            return False
+        for left_item, right_item in zip(left, right):
+            if left_item.get("id") != right_item.get("id") or left_item.get("type") != right_item.get("type"):
+                return False
+            item_type = left_item.get("type")
+            if item_type == "message":
+                if (
+                    left_item.get("role") != right_item.get("role")
+                    or bool(left_item.get("interrupted")) != bool(right_item.get("interrupted"))
+                    or left_item.get("content") != right_item.get("content")
+                ):
+                    return False
+            elif item_type == "function_call":
+                if (
+                    left_item.get("name") != right_item.get("name")
+                    or left_item.get("call_id") != right_item.get("call_id")
+                    or left_item.get("arguments") != right_item.get("arguments")
+                ):
+                    return False
+            elif item_type == "function_call_output":
+                if (
+                    left_item.get("name") != right_item.get("name")
+                    or left_item.get("call_id") != right_item.get("call_id")
+                    or left_item.get("output") != right_item.get("output")
+                    or bool(left_item.get("is_error")) != bool(right_item.get("is_error"))
+                ):
+                    return False
+        return True
+
+    def xml_string(tag_name: str, content: str | None = None, attrs: dict[str, Any] | None = None) -> str:
+        attrs_str = " ".join([f'{key}="{value}"' for key, value in (attrs or {}).items()])
+        open_tag = f"{tag_name} {attrs_str}" if attrs_str else tag_name
+        if content:
+            return "\n".join([f"<{open_tag}>", content, f"</{tag_name}>"])
+        return f"<{open_tag} />"
+
+    def function_call_item_to_message(item: dict[str, Any]) -> dict[str, Any]:
+        item_type = item.get("type")
         if item_type == "function_call":
-            return function_call(
-                str(item.get("id", "")),
-                str(item.get("name", "")),
-                call_id=str(item.get("call_id", "")),
-                arguments=str(item.get("arguments", "")),
-                created_at=float(item.get("created_at_unix", 0.0)),
+            return message(
+                "",
+                "user",
+                [
+                    xml_string(
+                        "function_call",
+                        str(item.get("arguments", "")),
+                        {"name": item.get("name", ""), "call_id": item.get("call_id", "")},
+                    )
+                ],
+                created_at=float(item.get("created_at", 0.0)),
+                extra={"is_function_call": True},
             )
         if item_type == "function_call_output":
-            return function_output(
-                str(item.get("id", "")),
-                str(item.get("name", "")),
-                call_id=str(item.get("call_id", "")),
-                output=str(item.get("output", "")),
-                created_at=float(item.get("created_at_unix", 0.0)),
+            output = str(item.get("output", ""))
+            if bool(item.get("is_error")):
+                output = xml_string("error", output)
+            return message(
+                "",
+                "assistant",
+                [
+                    xml_string(
+                        "function_call_output",
+                        output,
+                        {"call_id": item.get("call_id", ""), "name": item.get("name", "")},
+                    )
+                ],
+                created_at=float(item.get("created_at", 0.0)),
+                extra={"is_function_call_output": True},
             )
-        if item_type == "agent_handoff":
-            return handoff(str(item.get("id", "")), created_at=float(item.get("created_at_unix", 0.0)))
-        if item_type == "agent_config_update":
-            return config(str(item.get("id", "")), created_at=float(item.get("created_at_unix", 0.0)))
-        raise ValueError(f"unsupported item type {item_type!r}")
-
-    def build_declarative_content(parts: list[Any]) -> list[Any]:
-        content: list[Any] = []
-        for part in parts:
-            if isinstance(part, str):
-                content.append(part)
-                continue
-            part_type = str(part.get("type", ""))
-            if part_type == "instructions":
-                content.append(
-                    {
-                        "type": "instructions",
-                        "audio": str(part.get("audio", "")),
-                        "text": str(part.get("text", "")),
-                    }
-                )
-                continue
-            if part_type == "image_content":
-                content.append(
-                    {
-                        "id": str(part.get("id", "")),
-                        "type": "image_content",
-                        "image": part.get("image"),
-                        "inference_detail": str(part.get("inference_detail", "")),
-                    }
-                )
-                continue
-            if part_type == "audio_content":
-                content.append(
-                    {
-                        "type": "audio_content",
-                        "transcript": str(part.get("transcript", "")),
-                    }
-                )
-                continue
-            raise ValueError(f"unsupported content type {part_type!r}")
-        return content
+        raise ValueError(f"unsupported function call item type {item_type!r}")
 
     def summarize_items(
         items: list[dict[str, Any]],
@@ -3042,6 +4388,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                     to_summarize.append(item)
             elif item_type in ("function_call", "function_call_output"):
                 to_summarize.append(item)
+
         if not to_summarize:
             return
 
@@ -3057,6 +4404,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         summary = response.strip()
         if not summary:
             return
+
         preserved: list[dict[str, Any]] = []
         for item in head_items:
             if item.get("type") == "message" and item.get("role") in ("user", "assistant"):
@@ -3078,6 +4426,114 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             created_at=created_at,
         )
         items.extend(tail_items)
+
+    def declarative_item_id(item: dict[str, Any]) -> str:
+        return str(item["id"]) if "id" in item else generated_id()
+
+    def declarative_created_at(item: dict[str, Any]) -> float:
+        if "created_at_unix" in item:
+            return float(item["created_at_unix"])
+        if "created_at" in item:
+            return float(item["created_at"])
+        return generated_time()
+
+    def build_declarative_item(item: dict[str, Any]) -> dict[str, Any]:
+        item_type = str(item.get("type", "message"))
+        if item_type == "message":
+            if "content" in item:
+                content = build_declarative_content(item.get("content", []))
+            elif "text" in item:
+                content = [str(item.get("text", ""))]
+            else:
+                content = []
+            msg = message(
+                declarative_item_id(item),
+                str(item.get("role", "")),
+                content,
+                created_at=declarative_created_at(item),
+                extra=item.get("extra", {}),
+                metrics=item.get("metrics", {}),
+            )
+            msg["interrupted"] = bool(item.get("interrupted", False))
+            return msg
+        if item_type == "function_call":
+            return function_call(
+                declarative_item_id(item),
+                str(item.get("name", "")),
+                call_id=str(item.get("call_id", "")),
+                arguments=str(item.get("arguments", "")),
+                extra=item.get("extra", {}),
+                created_at=declarative_created_at(item),
+            )
+        if item_type == "function_call_output":
+            return function_output(
+                declarative_item_id(item),
+                str(item.get("name", "")),
+                call_id=str(item.get("call_id", "")),
+                output=str(item.get("output", "")),
+                is_error=bool(item.get("is_error", False)),
+                created_at=declarative_created_at(item),
+            )
+        if item_type == "agent_handoff":
+            return handoff(declarative_item_id(item), created_at=declarative_created_at(item))
+        if item_type == "agent_config_update":
+            instructions: Any = None
+            if "instructions" in item:
+                raw_instructions = item["instructions"]
+                if isinstance(raw_instructions, dict):
+                    parsed_instructions = build_declarative_content([raw_instructions])[0]
+                    instructions = {
+                        "type": "instructions",
+                        "audio": parsed_instructions["audio"],
+                    }
+                    if parsed_instructions["text_set"]:
+                        instructions["text"] = parsed_instructions["text"]
+                else:
+                    instructions = str(raw_instructions)
+            return config(
+                declarative_item_id(item),
+                created_at=declarative_created_at(item),
+                instructions=instructions,
+            )
+        raise ValueError(f"unsupported item type {item_type!r}")
+
+    def build_declarative_content(parts: list[Any]) -> list[Any]:
+        content: list[Any] = []
+        for part in parts:
+            if isinstance(part, str):
+                content.append(part)
+                continue
+            part_type = str(part.get("type", ""))
+            if part_type == "instructions":
+                inst = instruction(
+                    str(part.get("audio", "")),
+                    str(part["text"]) if "text" in part else None,
+                )
+                if "active" in part:
+                    inst = instruction_as_modality(inst, str(part.get("active", "")))
+                inst["type"] = "instructions"
+                content.append(inst)
+                continue
+            if part_type == "image_content":
+                content.append(
+                    {
+                        "id": str(part.get("id", "")),
+                        "type": "image_content",
+                        "image": part.get("image"),
+                        "inference_detail": str(part.get("inference_detail", "")),
+                    }
+                )
+                continue
+            if part_type == "audio_content":
+                content.append(
+                    {
+                        "type": "audio_content",
+                        "transcript": str(part.get("transcript", "")),
+                    }
+                )
+                continue
+            raise ValueError(f"unsupported content type {part_type!r}")
+        return content
 
     def run_declarative_call(
         objects: dict[str, Any],
@@ -3129,6 +4585,20 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             )
             objects[step["target"]] = variables[step["assign"]]
             return
+        if op == "is_equivalent":
+            other = objects[str(step.get("args", {}).get("other", ""))]
+            variables[step["assign"]] = contexts_equivalent(target_items, other)
+            return
+        if op == "function_call_item_to_message":
+            item = next(
+                (candidate for candidate in target_items if candidate.get("id") == item_id),
+                None,
+            )
+            if item is None:
+                variables[step["assign"]] = None
+                return
+            variables[step["assign"]] = function_call_item_to_message(item)
+            return
         if op == "summarize":
             args = step.get("args", {})
             summarize_items(
@@ -3149,6 +4619,37 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 None,
             )
             return
+        if op == "messages":
+            variables[step["assign"]] = [
+                item for item in target_items if item.get("type") == "message"
+            ]
+            return
+        if op == "truncate":
+            max_items = int(step.get("args", {}).get("max_items", 0))
+            if len(target_items) > max_items:
+                instructions = next(
+                    (
+                        item
+                        for item in target_items
+                        if item.get("type") == "message"
+                        and item.get("role") in ("system", "developer")
+                    ),
+                    None,
+                )
+                start = -max_items
+                new_items = target_items[start:]
+                while new_items and new_items[0].get("type") in (
+                    "function_call",
+                    "function_call_output",
+                ):
+                    new_items.pop(0)
+                if instructions and not any(
+                    item.get("id") == instructions.get("id") for item in new_items
+                ):
+                    new_items.insert(0, instructions)
+                target_items[:] = new_items
+            variables[step["assign"]] = target
+            return
         if op == "index":
             variables[step["assign"]] = ids.index(item_id) if item_id in ids else None
             return
@@ -3161,6 +4662,99 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 exclude_function_call=bool(args.get("exclude_function_call", False)),
                 exclude_config_update=bool(args.get("exclude_config_update", False)),
+                exclude_metrics=bool(args.get("exclude_metrics", False)),
+                include_image=bool(args.get("include_image", False)),
+                include_timestamp=bool(args.get("include_timestamp", False)),
+            )
+            return
+        if op == "from_dict":
+            source = variables[str(step.get("args", {}).get("source", ""))]
+            variables[step["assign"]] = build_declarative_items(source["items"])
+            return
+        if op == "from_dict_capture_error":
+            data = step.get("args", {}).get("data", {})
+            if "items" not in data:
+                variables[step["assign"]] = "items_required"
+                return
+            if data.get("items") is None:
+                variables[step["assign"]] = "items_list_required"
+                return
+            for item in data.get("items", []):
+                item_type = str(item.get("type", "message"))
+                if item_type == "message" and (
+                    "role" not in item or ("content" not in item and "text" not in item)
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "message":
+                    for part in item.get("content", []):
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = str(part.get("type", ""))
+                        if part_type == "audio_content" and "frame" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
+                        if part_type == "image_content" and "image" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
+                        if part_type == "instructions" and "audio" not in part:
+                            variables[step["assign"]] = "invalid_items"
+                            return
+                if item_type == "function_call" and not all(
+                    key in item for key in ("call_id", "name", "arguments")
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "function_call_output" and not all(
+                    key in item for key in ("call_id", "output", "is_error")
+                ):
+                    variables[step["assign"]] = "invalid_items"
+                    return
+                if item_type == "agent_handoff" and "new_agent_id" not in item:
+                    variables[step["assign"]] = "invalid_items"
+                    return
+            try:
+                target_items[:] = build_declarative_items(data["items"])
+            except Exception:
+                variables[step["assign"]] = "invalid_items"
+                return
+            variables[step["assign"]] = ""
+            return
+        if op == "to_provider_format":
+            args = step.get("args", {})
+            variables[step["assign"]] = to_provider_format(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
+                inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
+                inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
+                thought_signatures={
+                    str(key): str(value)
+                    for key, value in args.get("thought_signatures", {}).items()
+                }
+                if "thought_signatures" in args
+                else None,
+            )
+            return
+        if op == "to_provider_format_with_extra":
+            args = step.get("args", {})
+            variables[step["assign"]] = to_provider_format_with_extra(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
+                inject_dummy_user_message=bool(args.get("inject_dummy_user_message", True)),
+                inject_trailing_user_message=bool(args.get("inject_trailing_user_message", False)),
+                thought_signatures={
+                    str(key): str(value)
+                    for key, value in args.get("thought_signatures", {}).items()
+                }
+                if "thought_signatures" in args
+                else None,
+            )
+            return
+        if op == "to_provider_format_capture_error":
+            args = step.get("args", {})
+            variables[step["assign"]] = provider_format_error(
+                target_items,
+                provider_format=str(args.get("format", "openai")),
             )
             return
         if op == "add_message":
@@ -3252,11 +4846,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 names.append(tool)
                 continue
             tool_type = str(tool.get("type", ""))
+            if not tool_type:
+                tool_type = "toolset" if "tools" in tool else "tool"
             if tool_type in ("name", "tool"):
                 names.append(str(tool.get("name", "")))
             elif tool_type == "toolset":
-                for child in tool.get("tools", []):
-                    names.append(str(child.get("name", "")))
+                names.extend(build_declarative_tool_names(tool.get("tools", [])))
         return names
 
     def transform_declarative_value(
@@ -3274,6 +4869,18 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         if transform.startswith("context_last_identity_matches:"):
             var_name = transform.removeprefix("context_last_identity_matches:")
             return bool(value_items) and value_items[-1] is variables[var_name]
+        if transform.startswith("provider_first_extra_has:"):
+            key = transform.removeprefix("provider_first_extra_has:")
+            if not value:
+                return False
+            extra = value[0].get("extra_content", {})
+            return key in extra
+        if transform.startswith("provider_first_tool_call_extra_has:"):
+            key = transform.removeprefix("provider_first_tool_call_extra_has:")
+            for message_item in value:
+                for tool_call in message_item.get("tool_calls", []):
+                    return key in tool_call.get("extra_content", {})
+            return False
         if transform in ("", "identity"):
             return value
         if transform == "exists":
@@ -3294,8 +4901,18 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return value["role"]
         if transform == "message_text_content":
             return text_content(value["content"])
+        if transform == "message_extra":
+            return value.get("extra", {})
         if transform == "item_created_at_set":
             return has_created_at(value)
+        if transform == "dict_item_created_at_values":
+            values: list[Any] = []
+            for item in value.get("items", []):
+                created_at = item.get("created_at")
+                if isinstance(created_at, float) and created_at.is_integer():
+                    created_at = int(created_at)
+                values.append(created_at)
+            return values
         if transform == "context_item_ids":
             return item_ids(value_items)
         if transform == "context_item_types":
@@ -3312,6 +4929,12 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return len(value_items)
         if transform == "context_items_is_list":
             return isinstance(value_items, list)
+        if transform == "message_list_is_list":
+            return isinstance(value, list)
+        if transform == "message_list_count":
+            return len(value)
+        if transform == "message_list_ids":
+            return item_ids(value)
         if transform == "context_first_message_text_content":
             return None if not value_items else text_content(value_items[0]["content"])
         if transform == "context_first_item_type":
@@ -3324,10 +4947,75 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
             return first_serialized_instruction(value)["text"]
         if transform == "dict_first_instruction_text_present":
             return "text" in first_serialized_instruction(value)
+        if transform == "dict_first_image_id_has_prefix":
+            return str(first_serialized_image(value).get("id", "")).startswith("img_")
+        if transform == "dict_first_image_inference_detail":
+            return first_serialized_image(value).get("inference_detail")
+        if transform == "provider_first_content":
+            return None if not value else value[0].get("content")
+        if transform == "provider_first_role":
+            return None if not value else value[0].get("role")
+        if transform == "provider_first_image_url":
+            return first_provider_image(value).get("image_url", {}).get("url")
+        if transform == "provider_first_image_detail":
+            return first_provider_image(value).get("image_url", {}).get("detail")
+        if transform == "provider_first_text_part":
+            for part in value[0].get("content", []):
+                if isinstance(part, dict) and part.get("type") == "text":
+                    return part.get("text")
+            return None
+        if transform == "provider_first_extra_exists":
+            return bool(value and value[0].get("extra_content", {}))
+        if transform == "provider_first_tool_call_extra_exists":
+            for message_item in value:
+                for tool_call in message_item.get("tool_calls", []):
+                    return bool(tool_call.get("extra_content", {}))
+            return False
+        if transform == "provider_first_tool_call_ids":
+            if not value:
+                return None
+            return [tool_call.get("id", "") for tool_call in value[0].get("tool_calls", [])]
+        if transform == "provider_tool_output_contents":
+            return [
+                message_item.get("content", "")
+                for message_item in value
+                if message_item.get("role") == "tool"
+            ]
+        if transform == "provider_message_count":
+            return len(value)
+        if transform == "provider_last_role":
+            return None if not value else value[-1].get("role")
+        if transform == "provider_last_text":
+            if not value:
+                return None
+            content = value[-1].get("content")
+            if isinstance(content, list) and content:
+                return content[0].get("text")
+            return content
+        if transform == "provider_error_exists":
+            return bool(value.get("error"))
+        if transform == "google_first_function_call_thought_signature":
+            for turn in value:
+                for part in turn.get("parts", []):
+                    if "function_call" in part:
+                        return part.get("thought_signature")
+            return None
         raise ValueError(f"unsupported transform {transform!r}")
 
     def first_serialized_instruction(value: dict[str, Any]) -> dict[str, Any]:
         return value["items"][0]["content"][0]
+
+    def first_serialized_image(value: dict[str, Any]) -> dict[str, Any]:
+        for part in value["items"][0]["content"]:
+            if isinstance(part, dict) and part.get("type") == "image_content":
+                return part
+        raise ValueError("dict_first_image requires image content")
+
+    def first_provider_image(value: list[dict[str, Any]]) -> dict[str, Any]:
+        for part in value[0].get("content", []):
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                return part
+        raise ValueError("provider_first_image requires image content")
 
     def run_declarative_emit(
         objects: dict[str, Any],
