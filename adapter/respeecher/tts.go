@@ -37,7 +37,7 @@ var defaultRespeecherVoices = map[string]string{
 	"/public/tts/ua-rt": "olesia-conversation",
 }
 
-type RespeecherTTS struct {
+type TTS struct {
 	mu             sync.Mutex
 	streams        map[*respeecherTTSSynthesizeStream]struct{}
 	apiKey         string
@@ -50,18 +50,18 @@ type RespeecherTTS struct {
 	closed         bool
 }
 
-type RespeecherTTSOption func(*RespeecherTTS)
+type TTSOption func(*TTS)
 
-func WithRespeecherTTSBaseURL(baseURL string) RespeecherTTSOption {
-	return func(t *RespeecherTTS) {
+func WithRespeecherTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithRespeecherTTSModel(model string) RespeecherTTSOption {
-	return func(t *RespeecherTTS) {
+func WithRespeecherTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 			if voice := defaultRespeecherVoices[model]; voice != "" {
@@ -71,33 +71,33 @@ func WithRespeecherTTSModel(model string) RespeecherTTSOption {
 	}
 }
 
-func WithRespeecherTTSVoice(voiceID string) RespeecherTTSOption {
-	return func(t *RespeecherTTS) {
+func WithRespeecherTTSVoice(voiceID string) TTSOption {
+	return func(t *TTS) {
 		if voiceID != "" {
 			t.voiceID = voiceID
 		}
 	}
 }
 
-func WithRespeecherTTSSampleRate(sampleRate int) RespeecherTTSOption {
-	return func(t *RespeecherTTS) {
+func WithRespeecherTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithRespeecherTTSSamplingParams(params map[string]any) RespeecherTTSOption {
-	return func(t *RespeecherTTS) {
+func WithRespeecherTTSSamplingParams(params map[string]any) TTSOption {
+	return func(t *TTS) {
 		t.samplingParams = params
 	}
 }
 
-func NewRespeecherTTS(apiKey string, voiceID string, opts ...RespeecherTTSOption) *RespeecherTTS {
+func NewTTS(apiKey string, voiceID string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("RESPEECHER_API_KEY")
 	}
-	provider := &RespeecherTTS{
+	provider := &TTS{
 		streams:    make(map[*respeecherTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultRespeecherBaseURL,
@@ -118,19 +118,19 @@ func NewRespeecherTTS(apiKey string, voiceID string, opts ...RespeecherTTSOption
 	return provider
 }
 
-func (t *RespeecherTTS) Label() string { return "respeecher.TTS" }
-func (t *RespeecherTTS) Model() string { return t.model }
-func (t *RespeecherTTS) Provider() string {
+func (t *TTS) Label() string { return "respeecher.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "Respeecher"
 }
 
-func (t *RespeecherTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *RespeecherTTS) SampleRate() int  { return t.sampleRate }
-func (t *RespeecherTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *RespeecherTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*respeecherTTSSynthesizeStream, 0, len(t.streams))
@@ -149,7 +149,7 @@ func (t *RespeecherTTS) Close() error {
 	return closeErr
 }
 
-func (t *RespeecherTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -158,7 +158,7 @@ func (t *RespeecherTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *RespeecherTTS) registerStream(stream *respeecherTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *respeecherTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -175,7 +175,7 @@ func (t *RespeecherTTS) registerStream(stream *respeecherTTSSynthesizeStream) bo
 	return true
 }
 
-func (t *RespeecherTTS) unregisterStream(stream *respeecherTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *respeecherTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -184,7 +184,7 @@ func (t *RespeecherTTS) unregisterStream(stream *respeecherTTSSynthesizeStream) 
 	t.mu.Unlock()
 }
 
-func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -200,7 +200,7 @@ func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	}, nil
 }
 
-func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text string) (*http.Request, error) {
+func buildRespeecherTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	voice := map[string]interface{}{"id": t.voiceID}
 	if len(t.samplingParams) > 0 {
 		voice["sampling_params"] = t.samplingParams
@@ -227,7 +227,7 @@ func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text strin
 	return req, nil
 }
 
-func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -276,7 +276,7 @@ func validateRespeecherAPIKey(apiKey string) error {
 
 type respeecherTTSChunkedStream struct {
 	ctx        context.Context
-	provider   *RespeecherTTS
+	provider   *TTS
 	text       string
 	resp       *http.Response
 	sampleRate int
@@ -417,7 +417,7 @@ func decodeRespeecherWAVPCM16(data []byte) (*model.AudioFrame, error) {
 	}, nil
 }
 
-func buildRespeecherTTSWebsocketURL(t *RespeecherTTS) *url.URL {
+func buildRespeecherTTSWebsocketURL(t *TTS) *url.URL {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -434,7 +434,7 @@ func buildRespeecherTTSWebsocketURL(t *RespeecherTTS) *url.URL {
 	return wsURL
 }
 
-func buildRespeecherTTSTextMessage(t *RespeecherTTS, contextID string, text string, continuation bool) ([]byte, error) {
+func buildRespeecherTTSTextMessage(t *TTS, contextID string, text string, continuation bool) ([]byte, error) {
 	voice := map[string]interface{}{"id": t.voiceID}
 	if len(t.samplingParams) > 0 {
 		voice["sampling_params"] = t.samplingParams
@@ -448,11 +448,11 @@ func buildRespeecherTTSTextMessage(t *RespeecherTTS, contextID string, text stri
 	})
 }
 
-func buildRespeecherTTSEndMessage(t *RespeecherTTS, contextID string) ([]byte, error) {
+func buildRespeecherTTSEndMessage(t *TTS, contextID string) ([]byte, error) {
 	return buildRespeecherTTSTextMessage(t, contextID, " ", false)
 }
 
-func respeecherTTSOutputFormat(t *RespeecherTTS) map[string]interface{} {
+func respeecherTTSOutputFormat(t *TTS) map[string]interface{} {
 	return map[string]interface{}{
 		"sample_rate": t.sampleRate,
 		"encoding":    t.encoding,
@@ -463,7 +463,7 @@ type respeecherTTSSynthesizeStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
-	provider    *RespeecherTTS
+	provider    *TTS
 	contextID   string
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
@@ -764,4 +764,15 @@ func respeecherTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+// Deprecated: use TTS.
+type RespeecherTTS = TTS
+
+// Deprecated: use TTSOption.
+type RespeecherTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewRespeecherTTS(apiKey string, voiceID string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voiceID, opts...)
 }

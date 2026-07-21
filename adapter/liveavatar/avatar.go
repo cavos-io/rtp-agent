@@ -17,7 +17,7 @@ const (
 	defaultAvatarAgentName     = "liveavatar-avatar-agent"
 )
 
-type LiveAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatarID       string
 	avatarIdentity string
@@ -25,11 +25,11 @@ type LiveAvatar struct {
 	state          agent.AvatarState
 }
 
-func NewLiveAvatar(apiKey string) *LiveAvatar {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(liveAvatarAPIKeyEnv)
 	}
-	return &LiveAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		avatarID:       os.Getenv(liveAvatarAvatarIDEnv),
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -38,7 +38,7 @@ func NewLiveAvatar(apiKey string) *LiveAvatar {
 	}
 }
 
-func (a *LiveAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("LIVEAVATAR_API_KEY must be set")
 	}
@@ -49,16 +49,24 @@ func (a *LiveAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *LiveAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *LiveAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
 }
 
-func (a *LiveAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	fmt.Printf("LiveAvatar state updated to: %s\n", state)
 	return nil
+}
+
+// Deprecated: use Avatar.
+type LiveAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewLiveAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

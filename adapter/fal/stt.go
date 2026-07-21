@@ -15,7 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
-type FalSTT struct {
+type STT struct {
 	apiKey     string
 	language   string
 	task       string
@@ -23,42 +23,42 @@ type FalSTT struct {
 	version    string
 }
 
-type FalSTTOption func(*FalSTT)
+type STTOption func(*STT)
 
-func WithFalSTTLanguage(language string) FalSTTOption {
-	return func(s *FalSTT) {
+func WithFalSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithFalSTTTask(task string) FalSTTOption {
-	return func(s *FalSTT) {
+func WithFalSTTTask(task string) STTOption {
+	return func(s *STT) {
 		if task != "" {
 			s.task = task
 		}
 	}
 }
 
-func WithFalSTTChunkLevel(chunkLevel string) FalSTTOption {
-	return func(s *FalSTT) {
+func WithFalSTTChunkLevel(chunkLevel string) STTOption {
+	return func(s *STT) {
 		if chunkLevel != "" {
 			s.chunkLevel = chunkLevel
 		}
 	}
 }
 
-func WithFalSTTVersion(version string) FalSTTOption {
-	return func(s *FalSTT) {
+func WithFalSTTVersion(version string) STTOption {
+	return func(s *STT) {
 		if version != "" {
 			s.version = version
 		}
 	}
 }
 
-func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
-	provider := &FalSTT{
+func NewSTT(apiKey string, opts ...STTOption) *STT {
+	provider := &STT{
 		apiKey:     resolveFalAPIKey(apiKey),
 		language:   "en",
 		task:       "transcribe",
@@ -71,11 +71,11 @@ func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
 	return provider
 }
 
-func (s *FalSTT) UpdateOptions(opts ...FalSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
-	candidate := &FalSTT{
+	candidate := &STT{
 		language:   s.language,
 		task:       s.task,
 		chunkLevel: s.chunkLevel,
@@ -87,21 +87,21 @@ func (s *FalSTT) UpdateOptions(opts ...FalSTTOption) {
 	s.language = candidate.language
 }
 
-func (s *FalSTT) Label() string { return "fal.STT" }
-func (s *FalSTT) Model() string { return "Wizper" }
-func (s *FalSTT) Provider() string {
+func (s *STT) Label() string { return "fal.STT" }
+func (s *STT) Model() string { return "Wizper" }
+func (s *STT) Provider() string {
 	return "Fal"
 }
 
-func (s *FalSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
 
-func (s *FalSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	return nil, fmt.Errorf("streaming stt not natively supported by standard fal REST API")
 }
 
-func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := validateFalSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func falSTTResponseToEvent(result falSTTResponse, language string) *stt.SpeechEv
 	}
 }
 
-func (s *FalSTT) resolveLanguage(language string) string {
+func (s *STT) resolveLanguage(language string) string {
 	if language != "" {
 		return language
 	}
@@ -174,7 +174,7 @@ func validateFalSTTAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildFalSTTRequest(ctx context.Context, s *FalSTT, audio []byte, language string) (*http.Request, error) {
+func buildFalSTTRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	b64 := base64.StdEncoding.EncodeToString(audio)
 	resolvedLanguage := s.language
 	if language != "" {
@@ -200,4 +200,15 @@ func buildFalSTTRequest(ctx context.Context, s *FalSTT, audio []byte, language s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Key "+s.apiKey)
 	return req, nil
+}
+
+// Deprecated: use STT.
+type FalSTT = STT
+
+// Deprecated: use STTOption.
+type FalSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewFalSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

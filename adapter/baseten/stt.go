@@ -34,7 +34,7 @@ const (
 	basetenModelEndpointEnv                  = "BASETEN_MODEL_ENDPOINT"
 )
 
-type BasetenSTT struct {
+type STT struct {
 	apiKey                     string
 	modelEndpoint              string
 	endpointPriority           int
@@ -55,12 +55,12 @@ type BasetenSTT struct {
 	closed                     bool
 }
 
-type BasetenSTTOption func(*BasetenSTT)
+type STTOption func(*STT)
 
 type basetenSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithBasetenSTTModelEndpoint(endpoint string) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTModelEndpoint(endpoint string) STTOption {
+	return func(s *STT) {
 		if endpoint != "" {
 			s.modelEndpoint = endpoint
 			s.endpointPriority = 4
@@ -68,8 +68,8 @@ func WithBasetenSTTModelEndpoint(endpoint string) BasetenSTTOption {
 	}
 }
 
-func WithBasetenSTTChainID(chainID string) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTChainID(chainID string) STTOption {
+	return func(s *STT) {
 		if chainID != "" && s.endpointPriority < 2 {
 			s.modelEndpoint = fmt.Sprintf("wss://chain-%s.api.baseten.co/environments/production/websocket", chainID)
 			s.endpointPriority = 2
@@ -77,53 +77,53 @@ func WithBasetenSTTChainID(chainID string) BasetenSTTOption {
 	}
 }
 
-func WithBasetenSTTLanguage(language string) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithBasetenSTTEncoding(encoding string) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTEncoding(encoding string) STTOption {
+	return func(s *STT) {
 		if encoding != "" {
 			s.encoding = encoding
 		}
 	}
 }
 
-func WithBasetenSTTSampleRate(sampleRate int) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithBasetenSTTBufferSizeSeconds(seconds float64) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTBufferSizeSeconds(seconds float64) STTOption {
+	return func(s *STT) {
 		if seconds > 0 {
 			s.bufferSizeSeconds = seconds
 		}
 	}
 }
 
-func WithBasetenSTTVADThreshold(threshold float64) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func WithBasetenSTTVADThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.vadThreshold = threshold
 	}
 }
 
-func withBasetenSTTWebsocketDialer(dialer basetenSTTWebsocketDialer) BasetenSTTOption {
-	return func(s *BasetenSTT) {
+func withBasetenSTTWebsocketDialer(dialer basetenSTTWebsocketDialer) STTOption {
+	return func(s *STT) {
 		if dialer != nil {
 			s.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*BasetenSTT, error) {
+func NewSTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
@@ -143,7 +143,7 @@ func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*Base
 		endpoint = envEndpoint
 		endpointPriority = 1
 	}
-	provider := &BasetenSTT{
+	provider := &STT{
 		apiKey:                     apiKey,
 		modelEndpoint:              endpoint,
 		endpointPriority:           endpointPriority,
@@ -170,13 +170,13 @@ func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*Base
 	return provider, nil
 }
 
-func (s *BasetenSTT) Label() string { return "baseten.STT" }
-func (s *BasetenSTT) Model() string { return "unknown" }
-func (s *BasetenSTT) Provider() string {
+func (s *STT) Label() string { return "baseten.STT" }
+func (s *STT) Model() string { return "unknown" }
+func (s *STT) Provider() string {
 	return "Baseten"
 }
-func (s *BasetenSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
-func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
@@ -186,7 +186,7 @@ func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -239,7 +239,7 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	return stream, nil
 }
 
-func (s *BasetenSTT) UpdateOptions(opts ...BasetenSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -266,7 +266,7 @@ func (s *BasetenSTT) UpdateOptions(opts ...BasetenSTTOption) {
 	}
 }
 
-func (s *BasetenSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -292,7 +292,7 @@ func (s *BasetenSTT) Close() error {
 	return closeErr
 }
 
-func (s *BasetenSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -301,7 +301,7 @@ func (s *BasetenSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *BasetenSTT) registerStream(stream *basetenSTTStream) bool {
+func (s *STT) registerStream(stream *basetenSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -318,7 +318,7 @@ func (s *BasetenSTT) registerStream(stream *basetenSTTStream) bool {
 	return true
 }
 
-func (s *BasetenSTT) unregisterStream(stream *basetenSTTStream) {
+func (s *STT) unregisterStream(stream *basetenSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -334,21 +334,21 @@ func defaultBasetenSTTWebsocketDialer(ctx context.Context, endpoint string, head
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("baseten stt does not support offline recognize")
 }
 
-func buildBasetenSTTHeaders(s *BasetenSTT) http.Header {
+func buildBasetenSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Api-Key "+s.apiKey)
 	return headers
 }
 
-func buildBasetenSTTMetadata(s *BasetenSTT) map[string]interface{} {
+func buildBasetenSTTMetadata(s *STT) map[string]interface{} {
 	return buildBasetenSTTMetadataForLanguage(s, s.language)
 }
 
-func buildBasetenSTTMetadataForLanguage(s *BasetenSTT, language string) map[string]interface{} {
+func buildBasetenSTTMetadataForLanguage(s *STT, language string) map[string]interface{} {
 	return map[string]interface{}{
 		"whisper_params": map[string]interface{}{
 			"audio_language":       language,
@@ -373,7 +373,7 @@ type basetenSTTStream struct {
 	conn         *websocket.Conn
 	events       chan *stt.SpeechEvent
 	errCh        chan error
-	owner        *BasetenSTT
+	owner        *STT
 	mu           sync.Mutex
 	closed       bool
 	reconnecting bool
@@ -786,4 +786,15 @@ func basetenAnyFloat(value interface{}) float64 {
 	default:
 		return 0
 	}
+}
+
+// Deprecated: use STT.
+type BasetenSTT = STT
+
+// Deprecated: use STTOption.
+type BasetenSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewBasetenSTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
+	return NewSTT(apiKey, model, opts...)
 }

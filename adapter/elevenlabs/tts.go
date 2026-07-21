@@ -35,7 +35,7 @@ const (
 	defaultElevenLabsStreamTimeout     = 10 * time.Second
 )
 
-type ElevenLabsTTS struct {
+type TTS struct {
 	mu                             sync.Mutex
 	apiKey                         string
 	baseURL                        string
@@ -66,7 +66,7 @@ type ElevenLabsTTS struct {
 	closed                         bool
 }
 
-type ElevenLabsTTSOption func(*ElevenLabsTTS)
+type TTSOption func(*TTS)
 
 type ElevenLabsVoiceSettings struct {
 	Stability       float64
@@ -87,44 +87,44 @@ type ElevenLabsVoice struct {
 	Category string
 }
 
-func WithElevenLabsVoiceID(voiceID string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsVoiceID(voiceID string) TTSOption {
+	return func(t *TTS) {
 		if voiceID != "" {
 			t.voiceID = voiceID
 		}
 	}
 }
 
-func WithElevenLabsModel(modelID string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsModel(modelID string) TTSOption {
+	return func(t *TTS) {
 		if modelID != "" {
 			t.modelID = modelID
 		}
 	}
 }
 
-func WithElevenLabsBaseURL(baseURL string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithElevenLabsLanguage(language string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		t.language = langutil.NormalizeLanguage(language)
 	}
 }
 
-func WithElevenLabsEnableSSMLParsing(enable bool) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsEnableSSMLParsing(enable bool) TTSOption {
+	return func(t *TTS) {
 		t.enableSSMLParsing = enable
 	}
 }
 
-func WithElevenLabsEncoding(encoding string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 			t.sampleRate = elevenLabsSampleRate(encoding)
@@ -132,91 +132,91 @@ func WithElevenLabsEncoding(encoding string) ElevenLabsTTSOption {
 	}
 }
 
-func WithElevenLabsChunkLengthSchedule(schedule []int) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsChunkLengthSchedule(schedule []int) TTSOption {
+	return func(t *TTS) {
 		t.chunkLengthSchedule = append([]int(nil), schedule...)
 	}
 }
 
-func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) TTSOption {
+	return func(t *TTS) {
 		copied := settings
 		t.voiceSettings = &copied
 		t.streamConnectionRefresh = true
 	}
 }
 
-func WithElevenLabsStreamingLatency(latency int) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsStreamingLatency(latency int) TTSOption {
+	return func(t *TTS) {
 		t.streamingLatency = &latency
 	}
 }
 
-func WithElevenLabsInactivityTimeout(timeoutSeconds int) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsInactivityTimeout(timeoutSeconds int) TTSOption {
+	return func(t *TTS) {
 		if timeoutSeconds > 0 {
 			t.inactivityTimeout = timeoutSeconds
 		}
 	}
 }
 
-func WithElevenLabsStreamResponseTimeout(timeout time.Duration) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsStreamResponseTimeout(timeout time.Duration) TTSOption {
+	return func(t *TTS) {
 		if timeout >= 0 {
 			t.streamResponseTimeout = timeout
 		}
 	}
 }
 
-func WithElevenLabsEnableLogging(enabled bool) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsEnableLogging(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.enableLogging = enabled
 	}
 }
 
-func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) TTSOption {
+	return func(t *TTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
 		t.streamConnectionRefresh = true
 	}
 }
 
-func WithElevenLabsAutoMode(enabled bool) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsAutoMode(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.autoMode = &enabled
 		t.autoModeExplicit = true
 	}
 }
 
-func WithElevenLabsSyncAlignment(enabled bool) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsSyncAlignment(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.syncAlignment = enabled
 	}
 }
 
-func WithElevenLabsApplyTextNormalization(mode string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsApplyTextNormalization(mode string) TTSOption {
+	return func(t *TTS) {
 		if mode == "auto" || mode == "on" || mode == "off" {
 			t.applyTextNormalization = mode
 		}
 	}
 }
 
-func WithElevenLabsApplyLanguageTextNormalization(enabled bool) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsApplyLanguageTextNormalization(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.applyLanguageTextNormalization = &enabled
 	}
 }
 
-func WithElevenLabsPreferredAlignment(alignment string) ElevenLabsTTSOption {
-	return func(t *ElevenLabsTTS) {
+func WithElevenLabsPreferredAlignment(alignment string) TTSOption {
+	return func(t *TTS) {
 		if alignment == "normalized" || alignment == "original" {
 			t.preferredAlignment = alignment
 		}
 	}
 }
 
-func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...ElevenLabsTTSOption) (*ElevenLabsTTS, error) {
+func NewTTS(apiKey string, voiceID string, modelID string, opts ...TTSOption) (*TTS, error) {
 	if voiceID == "" {
 		voiceID = "hpp4J3VqNfWAUOO0d1Us"
 	}
@@ -224,7 +224,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		modelID = "eleven_turbo_v2_5"
 	}
 	streamConnCtx, streamConnCancel := context.WithCancel(context.Background())
-	provider := &ElevenLabsTTS{
+	provider := &TTS{
 		apiKey:                 resolveElevenLabsAPIKey(apiKey),
 		baseURL:                defaultElevenLabsBaseURL,
 		voiceID:                voiceID,
@@ -256,16 +256,16 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	return provider, nil
 }
 
-func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
-func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "elevenlabs.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: t.syncAlignment}
 }
-func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
-func (t *ElevenLabsTTS) NumChannels() int { return 1 }
-func (t *ElevenLabsTTS) Model() string    { return t.modelID }
-func (t *ElevenLabsTTS) Provider() string { return "ElevenLabs" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.modelID }
+func (t *TTS) Provider() string { return "ElevenLabs" }
 
-func (t *ElevenLabsTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -300,7 +300,7 @@ func (t *ElevenLabsTTS) Close() error {
 	return closeErr
 }
 
-func (t *ElevenLabsTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -309,7 +309,7 @@ func (t *ElevenLabsTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
+func (t *TTS) registerStream(stream *elevenLabsStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -327,7 +327,7 @@ func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
 	return true
 }
 
-func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
+func (t *TTS) unregisterStream(stream *elevenLabsStream) {
 	if t == nil {
 		return
 	}
@@ -336,7 +336,7 @@ func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
 	delete(t.streams, stream)
 }
 
-func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	before := t.connectionKey()
 	t.streamConnectionRefresh = false
 	for _, opt := range opts {
@@ -374,7 +374,7 @@ type elevenLabsTTSConnectionKey struct {
 	chunkSchedule             string
 }
 
-func (t *ElevenLabsTTS) connectionKey() elevenLabsTTSConnectionKey {
+func (t *TTS) connectionKey() elevenLabsTTSConnectionKey {
 	if t == nil {
 		return elevenLabsTTSConnectionKey{}
 	}
@@ -405,7 +405,7 @@ func (t *ElevenLabsTTS) connectionKey() elevenLabsTTSConnectionKey {
 	}
 }
 
-func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
+func (t *TTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
 	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, erro
 }
 
 // Synthesize creates a chunked stream for non-streaming scenarios.
-func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -468,7 +468,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	}, nil
 }
 
-func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
+func buildElevenLabsSynthesizeRequest(t *TTS, text string) (string, []byte) {
 	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?model_id=%s&output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.modelID), url.QueryEscape(t.encoding))
 	if t.streamingLatency != nil {
 		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
@@ -725,7 +725,7 @@ func (s *elevenLabsChunkedStream) Close() error {
 }
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
-func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -766,7 +766,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	return stream, nil
 }
 
-func (t *ElevenLabsTTS) currentConnection(ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
+func (t *TTS) currentConnection(ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.currentStreamConn != nil && t.currentStreamConn.matches(streamURL) {
@@ -781,7 +781,7 @@ func (t *ElevenLabsTTS) currentConnection(ctx context.Context, streamURL string,
 	return conn
 }
 
-func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
+func buildElevenLabsStreamURL(t *TTS) string {
 	streamBaseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(streamBaseURL, "http://") || strings.HasPrefix(streamBaseURL, "https://") {
 		streamBaseURL = strings.Replace(streamBaseURL, "http", "ws", 1)
@@ -834,7 +834,7 @@ func parseElevenLabsSampleRate(encoding string) (int, error) {
 }
 
 type elevenLabsStream struct {
-	provider       *ElevenLabsTTS
+	provider       *TTS
 	sharedConn     *elevenLabsTTSConnection
 	conn           *websocket.Conn
 	audio          chan *tts.SynthesizedAudio
@@ -926,7 +926,7 @@ func (r elWSResponse) contextID() string {
 }
 
 type elevenLabsTTSConnection struct {
-	provider  *ElevenLabsTTS
+	provider  *TTS
 	streamURL string
 	header    http.Header
 	dialer    *websocket.Dialer
@@ -942,7 +942,7 @@ type elevenLabsTTSConnection struct {
 	err     error
 }
 
-func newElevenLabsTTSConnection(provider *ElevenLabsTTS, ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
+func newElevenLabsTTSConnection(provider *TTS, ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
 	connCtx, cancel := context.WithCancel(ctx)
 	c := &elevenLabsTTSConnection{
 		provider:  provider,
@@ -2303,4 +2303,15 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	}
+}
+
+// Deprecated: use TTS.
+type ElevenLabsTTS = TTS
+
+// Deprecated: use TTSOption.
+type ElevenLabsTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, voiceID, modelID, opts...)
 }

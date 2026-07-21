@@ -39,7 +39,7 @@ var azureTTSSampleFormats = map[int]string{
 	48000: "raw-48khz-16bit-mono-pcm",
 }
 
-type AzureTTS struct {
+type TTS struct {
 	apiKey         string
 	region         string
 	voice          string
@@ -71,76 +71,76 @@ type AzureTTSStyle struct {
 	Degree float64
 }
 
-type AzureTTSOption func(*AzureTTS)
+type TTSOption func(*TTS)
 
-func WithAzureTTSLanguage(language string) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
-func WithAzureTTSSampleRate(sampleRate int) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithAzureTTSProsody(prosody AzureTTSProsody) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSProsody(prosody AzureTTSProsody) TTSOption {
+	return func(t *TTS) {
 		t.prosody = prosody
 		t.prosodySet = true
 	}
 }
 
-func WithAzureTTSStyle(style AzureTTSStyle) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSStyle(style AzureTTSStyle) TTSOption {
+	return func(t *TTS) {
 		t.style = style
 		t.styleSet = true
 	}
 }
 
-func WithAzureTTSLexiconURI(lexiconURI string) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSLexiconURI(lexiconURI string) TTSOption {
+	return func(t *TTS) {
 		t.lexiconURI = lexiconURI
 		t.lexiconURISet = true
 	}
 }
 
-func WithAzureTTSSpeechEndpoint(speechEndpoint string) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSSpeechEndpoint(speechEndpoint string) TTSOption {
+	return func(t *TTS) {
 		if speechEndpoint != "" {
 			t.speechEndpoint = speechEndpoint
 		}
 	}
 }
 
-func WithAzureTTSDeploymentID(deploymentID string) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSDeploymentID(deploymentID string) TTSOption {
+	return func(t *TTS) {
 		if deploymentID != "" {
 			t.deploymentID = deploymentID
 		}
 	}
 }
 
-func WithAzureTTSAuthToken(authToken string) AzureTTSOption {
-	return func(t *AzureTTS) {
+func WithAzureTTSAuthToken(authToken string) TTSOption {
+	return func(t *TTS) {
 		if authToken != "" {
 			t.authToken = authToken
 		}
 	}
 }
 
-func NewAzureTTS(apiKey string, region string, voice string, languages ...string) (*AzureTTS, error) {
-	opts := []AzureTTSOption{}
+func NewTTS(apiKey string, region string, voice string, languages ...string) (*TTS, error) {
+	opts := []TTSOption{}
 	if len(languages) > 0 {
 		opts = append(opts, WithAzureTTSLanguage(languages[0]))
 	}
 	return NewAzureTTSWithOptions(apiKey, region, voice, opts...)
 }
 
-func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...AzureTTSOption) (*AzureTTS, error) {
+func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
 	}
@@ -151,7 +151,7 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 	if voice == "" {
 		voice = defaultAzureTTSVoice
 	}
-	provider := &AzureTTS{
+	provider := &TTS{
 		apiKey:         apiKey,
 		region:         region,
 		voice:          voice,
@@ -177,20 +177,20 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 	return provider, nil
 }
 
-func (t *AzureTTS) Label() string { return "azure.TTS" }
-func (t *AzureTTS) Model() string { return "unknown" }
-func (t *AzureTTS) Provider() string {
+func (t *TTS) Label() string { return "azure.TTS" }
+func (t *TTS) Model() string { return "unknown" }
+func (t *TTS) Provider() string {
 	return "Azure TTS"
 }
-func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
-func (t *AzureTTS) NumChannels() int { return 1 }
-func (t *AzureTTS) Language() string { return t.language }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Language() string { return t.language }
 
-func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTSOption) error {
-	next := AzureTTS{
+func (t *TTS) UpdateOptions(voice string, language string, opts ...TTSOption) error {
+	next := TTS{
 		apiKey:         t.apiKey,
 		region:         t.region,
 		voice:          t.voice,
@@ -246,7 +246,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	return nil
 }
 
-func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -275,7 +275,7 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	return stream, nil
 }
 
-func (t *AzureTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -301,7 +301,7 @@ func (t *AzureTTS) Close() error {
 	return closeErr
 }
 
-func (t *AzureTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -310,7 +310,7 @@ func (t *AzureTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *AzureTTS) registerStream(stream *azureTTSChunkedStream) bool {
+func (t *TTS) registerStream(stream *azureTTSChunkedStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -323,13 +323,13 @@ func (t *AzureTTS) registerStream(stream *azureTTSChunkedStream) bool {
 	return true
 }
 
-func (t *AzureTTS) unregisterStream(stream *azureTTSChunkedStream) {
+func (t *TTS) unregisterStream(stream *azureTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.Request, error) {
+func buildAzureTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	endpointURL, err := azureTTSEndpointURL(t)
 	if err != nil {
 		return nil, err
@@ -356,7 +356,7 @@ func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.
 	return req, nil
 }
 
-func azureTTSEndpointURL(t *AzureTTS) (string, error) {
+func azureTTSEndpointURL(t *TTS) (string, error) {
 	endpointURL := t.speechEndpoint
 	if endpointURL == "" {
 		endpointURL = fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
@@ -374,7 +374,7 @@ func azureTTSEndpointURL(t *AzureTTS) (string, error) {
 	return parsed.String(), nil
 }
 
-func validateAzureTTSVoiceControls(t *AzureTTS) error {
+func validateAzureTTSVoiceControls(t *TTS) error {
 	if t.style.Degree != 0 && (t.style.Degree < 0.1 || t.style.Degree > 2.0) {
 		return fmt.Errorf("style degree must be between 0.1 and 2.0")
 	}
@@ -411,7 +411,7 @@ func azureTTSAllowed(value string, allowed ...string) bool {
 	return false
 }
 
-func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
+func buildAzureTTSSSML(t *TTS, language string, text string) string {
 	var b strings.Builder
 	escapedText := azureTTSEscapeText(text)
 	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
@@ -458,7 +458,7 @@ func azureTTSEscapeText(text string) string {
 	return b.String()
 }
 
-func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming azure tts is not supported")
 }
 
@@ -474,7 +474,7 @@ type azureTTSChunkedStream struct {
 	pendingErr error
 	finalSent  bool
 	closed     atomic.Bool
-	provider   *AzureTTS
+	provider   *TTS
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -692,4 +692,15 @@ func (s *azureTTSChunkedStream) unregister() {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
+}
+
+// Deprecated: use TTS.
+type AzureTTS = TTS
+
+// Deprecated: use TTSOption.
+type AzureTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewAzureTTS(apiKey string, region string, voice string, languages ...string) (*TTS, error) {
+	return NewTTS(apiKey, region, voice, languages...)
 }

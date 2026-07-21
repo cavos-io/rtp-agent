@@ -30,7 +30,7 @@ const (
 	defaultResembleSampleRate = 44100
 )
 
-type ResembleTTS struct {
+type TTS struct {
 	mu         sync.Mutex
 	streams    map[*resembleTTSSynthesizeStream]struct{}
 	apiKey     string
@@ -40,35 +40,35 @@ type ResembleTTS struct {
 	closed     bool
 }
 
-type ResembleTTSOption func(*ResembleTTS)
+type TTSOption func(*TTS)
 
-func WithResembleTTSVoice(voice string) ResembleTTSOption {
-	return func(t *ResembleTTS) {
+func WithResembleTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithResembleTTSSampleRate(sampleRate int) ResembleTTSOption {
-	return func(t *ResembleTTS) {
+func WithResembleTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithResembleTTSModel(model string) ResembleTTSOption {
-	return func(t *ResembleTTS) {
+func WithResembleTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		t.model = model
 	}
 }
 
-func NewResembleTTS(apiKey string, voice string, opts ...ResembleTTSOption) *ResembleTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("RESEMBLE_API_KEY")
 	}
-	provider := &ResembleTTS{
+	provider := &TTS{
 		streams:    make(map[*resembleTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		voice:      voice,
@@ -83,21 +83,21 @@ func NewResembleTTS(apiKey string, voice string, opts ...ResembleTTSOption) *Res
 	return provider
 }
 
-func (t *ResembleTTS) Label() string { return "resemble.TTS" }
-func (t *ResembleTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "resemble.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *ResembleTTS) SampleRate() int  { return t.sampleRate }
-func (t *ResembleTTS) NumChannels() int { return 1 }
-func (t *ResembleTTS) Model() string {
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string {
 	if t.model == "" {
 		return "unknown"
 	}
 	return t.model
 }
-func (t *ResembleTTS) Provider() string { return "Resemble" }
+func (t *TTS) Provider() string { return "Resemble" }
 
-func (t *ResembleTTS) UpdateOptions(opts ...ResembleTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, opt := range opts {
@@ -105,7 +105,7 @@ func (t *ResembleTTS) UpdateOptions(opts ...ResembleTTSOption) {
 	}
 }
 
-func (t *ResembleTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*resembleTTSSynthesizeStream, 0, len(t.streams))
@@ -124,7 +124,7 @@ func (t *ResembleTTS) Close() error {
 	return closeErr
 }
 
-func (t *ResembleTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -133,7 +133,7 @@ func (t *ResembleTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *ResembleTTS) registerStream(stream *resembleTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *resembleTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -150,7 +150,7 @@ func (t *ResembleTTS) registerStream(stream *resembleTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *ResembleTTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -159,7 +159,7 @@ func (t *ResembleTTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
 	t.mu.Unlock()
 }
 
-func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -179,7 +179,7 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}, nil
 }
 
-func buildResembleTTSRequest(ctx context.Context, t *ResembleTTS, text string) (*http.Request, error) {
+func buildResembleTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"voice_uuid":  t.voice,
 		"data":        text,
@@ -204,7 +204,7 @@ func buildResembleTTSRequest(ctx context.Context, t *ResembleTTS, text string) (
 	return req, nil
 }
 
-func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -251,13 +251,13 @@ func buildResembleTTSWebsocketURL() string {
 	return resembleWebsocketURL
 }
 
-func buildResembleTTSWebsocketHeaders(t *ResembleTTS) http.Header {
+func buildResembleTTSWebsocketHeaders(t *TTS) http.Header {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+t.apiKey)
 	return header
 }
 
-func buildResembleTTSWebsocketMessage(t *ResembleTTS, text string, requestID int) ([]byte, error) {
+func buildResembleTTSWebsocketMessage(t *TTS, text string, requestID int) ([]byte, error) {
 	message := map[string]interface{}{
 		"voice_uuid":    t.voice,
 		"data":          text,
@@ -276,7 +276,7 @@ type resembleTTSChunkedStream struct {
 	resp       *http.Response
 	ctx        context.Context
 	text       string
-	opts       ResembleTTS
+	opts       TTS
 	sampleRate int
 	requested  bool
 	closed     bool
@@ -428,7 +428,7 @@ type resembleTTSSynthesizeStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
-	provider    *ResembleTTS
+	provider    *TTS
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
 	mu          sync.Mutex
@@ -684,4 +684,15 @@ func resembleTTSMP3AudioFrame(audio []byte) (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+// Deprecated: use TTS.
+type ResembleTTS = TTS
+
+// Deprecated: use TTSOption.
+type ResembleTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewResembleTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

@@ -26,7 +26,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type SpeechmaticsSTT struct {
+type STT struct {
 	mu                   sync.Mutex
 	streams              map[*speechmaticsSTTStream]struct{}
 	apiKey               string
@@ -92,11 +92,11 @@ const (
 	speechmaticsAdaptiveSmartTurnTruePenalty      = 0.2
 )
 
-var speechmaticsLocalEndpointingDelay = func(s *SpeechmaticsSTT) time.Duration {
+var speechmaticsLocalEndpointingDelay = func(s *STT) time.Duration {
 	return speechmaticsLocalEndpointingDelayWithAnnotations(s, nil)
 }
 
-func speechmaticsLocalEndpointingDelayWithAnnotations(s *SpeechmaticsSTT, annotations []string) time.Duration {
+func speechmaticsLocalEndpointingDelayWithAnnotations(s *STT, annotations []string) time.Duration {
 	if s == nil {
 		return 0
 	}
@@ -188,7 +188,7 @@ var speechmaticsSTTRetryInterval = func(retryAttempt int) time.Duration {
 	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
 }
 
-type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
+type STTOption func(*STT)
 
 type SpeechmaticsAdditionalVocabEntry struct {
 	Content    string   `json:"content"`
@@ -201,80 +201,80 @@ type SpeechmaticsSpeakerIdentifier struct {
 	SpeakerIdentifiers []string `json:"speaker_identifiers,omitempty"`
 }
 
-func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.language = language
 	}
 }
 
-func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		s.baseURL = baseURL
 	}
 }
 
-func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		s.sampleRate = sampleRate
 	}
 }
 
-func WithSpeechmaticsSTTAudioEncoding(encoding string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTAudioEncoding(encoding string) STTOption {
+	return func(s *STT) {
 		s.audioEncoding = encoding
 	}
 }
 
-func WithSpeechmaticsSTTDomain(domain string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTDomain(domain string) STTOption {
+	return func(s *STT) {
 		s.domain = domain
 	}
 }
 
-func WithSpeechmaticsSTTOutputLocale(outputLocale string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTOutputLocale(outputLocale string) STTOption {
+	return func(s *STT) {
 		s.outputLocale = outputLocale
 	}
 }
 
-func WithSpeechmaticsSTTFixedTurnDetection() SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTFixedTurnDetection() STTOption {
+	return func(s *STT) {
 		s.turnDetectionMode = "fixed"
 	}
 }
 
-func WithSpeechmaticsSTTAdaptiveTurnDetection() SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTAdaptiveTurnDetection() STTOption {
+	return func(s *STT) {
 		s.turnDetectionMode = "adaptive"
 	}
 }
 
-func WithSpeechmaticsSTTSmartTurnDetection() SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTSmartTurnDetection() STTOption {
+	return func(s *STT) {
 		s.turnDetectionMode = "smart_turn"
 	}
 }
 
-func WithSpeechmaticsSTTIncludePartials(enabled bool) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTIncludePartials(enabled bool) STTOption {
+	return func(s *STT) {
 		s.includePartials = &enabled
 	}
 }
 
-func WithSpeechmaticsSTTEnableDiarization(enabled bool) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTEnableDiarization(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableDiarization = &enabled
 	}
 }
 
-func WithSpeechmaticsSTTAdditionalVocab(vocab []SpeechmaticsAdditionalVocabEntry) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTAdditionalVocab(vocab []SpeechmaticsAdditionalVocabEntry) STTOption {
+	return func(s *STT) {
 		s.additionalVocab = vocab
 	}
 }
 
-func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []string, focusMode string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []string, focusMode string) STTOption {
+	return func(s *STT) {
 		s.focusSpeakers = focusSpeakers
 		s.ignoreSpeakers = ignoreSpeakers
 		if focusMode != "" {
@@ -283,69 +283,69 @@ func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []st
 	}
 }
 
-func WithSpeechmaticsSTTSpeakerFormats(activeFormat string, passiveFormat string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTSpeakerFormats(activeFormat string, passiveFormat string) STTOption {
+	return func(s *STT) {
 		s.speakerActiveFormat = activeFormat
 		s.speakerPassiveFormat = passiveFormat
 	}
 }
 
-func WithSpeechmaticsSTTKnownSpeakers(speakers []SpeechmaticsSpeakerIdentifier) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTKnownSpeakers(speakers []SpeechmaticsSpeakerIdentifier) STTOption {
+	return func(s *STT) {
 		s.knownSpeakers = speakers
 	}
 }
 
-func WithSpeechmaticsSTTOperatingPoint(operatingPoint string) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTOperatingPoint(operatingPoint string) STTOption {
+	return func(s *STT) {
 		s.operatingPoint = operatingPoint
 	}
 }
 
-func WithSpeechmaticsSTTMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTMaxDelay(maxDelay float64) STTOption {
+	return func(s *STT) {
 		s.maxDelay = &maxDelay
 	}
 }
 
-func WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(trigger float64) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(trigger float64) STTOption {
+	return func(s *STT) {
 		s.eouSilenceTrigger = &trigger
 	}
 }
 
-func WithSpeechmaticsSTTEndOfUtteranceMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTEndOfUtteranceMaxDelay(maxDelay float64) STTOption {
+	return func(s *STT) {
 		s.eouMaxDelay = &maxDelay
 	}
 }
 
-func WithSpeechmaticsSTTPunctuationOverrides(overrides map[string]interface{}) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTPunctuationOverrides(overrides map[string]interface{}) STTOption {
+	return func(s *STT) {
 		s.punctuation = overrides
 	}
 }
 
-func WithSpeechmaticsSTTSpeakerSensitivity(sensitivity float64) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTSpeakerSensitivity(sensitivity float64) STTOption {
+	return func(s *STT) {
 		s.speakerSensitivity = &sensitivity
 	}
 }
 
-func WithSpeechmaticsSTTMaxSpeakers(maxSpeakers int) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTMaxSpeakers(maxSpeakers int) STTOption {
+	return func(s *STT) {
 		s.maxSpeakers = &maxSpeakers
 	}
 }
 
-func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) STTOption {
+	return func(s *STT) {
 		s.preferCurrentSpeaker = &prefer
 	}
 }
 
-func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
-	return func(s *SpeechmaticsSTT) {
+func WithSpeechmaticsSTTVAD(detector corevad.VAD) STTOption {
+	return func(s *STT) {
 		s.vad = detector
 		s.vadSet = true
 		if detector != nil {
@@ -354,7 +354,7 @@ func WithSpeechmaticsSTTVAD(detector corevad.VAD) SpeechmaticsSTTOption {
 	}
 }
 
-func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
 	}
@@ -363,7 +363,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 		baseURL = "wss://eu2.rt.speechmatics.com/v2"
 	}
 	maxDelay := 2.0
-	provider := &SpeechmaticsSTT{
+	provider := &STT{
 		apiKey:            apiKey,
 		baseURL:           baseURL,
 		language:          "en",
@@ -384,7 +384,7 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	switch provider.turnDetectionMode {
 	case "external":
 		if !provider.vadSet {
-			provider.vad = silero.NewSileroVAD()
+			provider.vad = silero.NewVAD()
 		}
 	case "adaptive", "smart_turn":
 		provider.vad = speechmaticsLocalEndpointingVAD()
@@ -393,29 +393,29 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 }
 
 func speechmaticsLocalEndpointingVAD() corevad.VAD {
-	return silero.NewSileroVAD(
+	return silero.NewVAD(
 		silero.WithMinSilenceDuration(0.18),
 		silero.WithActivationThreshold(0.35),
 	)
 }
 
-func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
-func (s *SpeechmaticsSTT) Model() string {
+func (s *STT) Label() string { return "speechmatics.STT" }
+func (s *STT) Model() string {
 	if s.operatingPoint != "" {
 		return s.operatingPoint
 	}
 	return "enhanced"
 }
-func (s *SpeechmaticsSTT) Provider() string {
+func (s *STT) Provider() string {
 	return "Speechmatics"
 }
-func (s *SpeechmaticsSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate < 0 {
 		return 0
 	}
 	return uint32(s.sampleRate)
 }
-func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	diarization := true
 	if s != nil && s.enableDiarization != nil {
 		diarization = *s.enableDiarization
@@ -423,7 +423,7 @@ func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: diarization, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
-func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -525,7 +525,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	}
 }
 
-func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, header http.Header, startupAttempt *int) (*websocket.Conn, error) {
+func (s *STT) dialStream(ctx context.Context, streamURL string, header http.Header, startupAttempt *int) (*websocket.Conn, error) {
 	for {
 		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 		if err == nil {
@@ -537,7 +537,7 @@ func (s *SpeechmaticsSTT) dialStream(ctx context.Context, streamURL string, head
 	}
 }
 
-func (s *SpeechmaticsSTT) waitBeforeStartupRetry(ctx context.Context, err error, startupAttempt *int) error {
+func (s *STT) waitBeforeStartupRetry(ctx context.Context, err error, startupAttempt *int) error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
@@ -570,11 +570,11 @@ func (s *SpeechmaticsSTT) waitBeforeStartupRetry(ctx context.Context, err error,
 	return nil
 }
 
-func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("speechmatics offline recognize is not implemented")
 }
 
-func (s *SpeechmaticsSTT) Close() error {
+func (s *STT) Close() error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -600,7 +600,7 @@ func (s *SpeechmaticsSTT) Close() error {
 	return closeErr
 }
 
-func (s *SpeechmaticsSTT) Finalize() error {
+func (s *STT) Finalize() error {
 	if s == nil {
 		return io.ErrClosedPipe
 	}
@@ -620,7 +620,7 @@ func (s *SpeechmaticsSTT) Finalize() error {
 	return finalizeErr
 }
 
-func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
+func (s *STT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers []string, focusMode string) error {
 	if s == nil {
 		return io.ErrClosedPipe
 	}
@@ -665,7 +665,7 @@ func (s *SpeechmaticsSTT) UpdateSpeakers(focusSpeakers []string, ignoreSpeakers 
 	return updateErr
 }
 
-func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
+func (s *STT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpeakerIdentifier, error) {
 	groups, err := s.GetSpeakerIDGroups(ctx)
 	speakers := make([]SpeechmaticsSpeakerIdentifier, 0)
 	for _, group := range groups {
@@ -674,7 +674,7 @@ func (s *SpeechmaticsSTT) GetSpeakerIDs(ctx context.Context) ([]SpeechmaticsSpea
 	return speakers, err
 }
 
-func (s *SpeechmaticsSTT) GetSpeakerIDGroups(ctx context.Context) ([][]SpeechmaticsSpeakerIdentifier, error) {
+func (s *STT) GetSpeakerIDGroups(ctx context.Context) ([][]SpeechmaticsSpeakerIdentifier, error) {
 	if s == nil {
 		return nil, io.ErrClosedPipe
 	}
@@ -721,7 +721,7 @@ func speechmaticsSpeakerResultContext(ctx context.Context) (context.Context, con
 	return context.WithTimeout(ctx, timeout)
 }
 
-func (s *SpeechmaticsSTT) closeDoneChannel() <-chan struct{} {
+func (s *STT) closeDoneChannel() <-chan struct{} {
 	if s == nil {
 		return nil
 	}
@@ -730,7 +730,7 @@ func (s *SpeechmaticsSTT) closeDoneChannel() <-chan struct{} {
 	return s.closeDone
 }
 
-func (s *SpeechmaticsSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -739,7 +739,7 @@ func (s *SpeechmaticsSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) bool {
+func (s *STT) registerStream(stream *speechmaticsSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -757,7 +757,7 @@ func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) bool {
 	return true
 }
 
-func (s *SpeechmaticsSTT) unregisterStream(stream *speechmaticsSTTStream) {
+func (s *STT) unregisterStream(stream *speechmaticsSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -766,7 +766,7 @@ func (s *SpeechmaticsSTT) unregisterStream(stream *speechmaticsSTTStream) {
 	delete(s.streams, stream)
 }
 
-func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
+func (s *STT) activeStreams() []*speechmaticsSTTStream {
 	if s == nil {
 		return nil
 	}
@@ -779,7 +779,7 @@ func (s *SpeechmaticsSTT) activeStreams() []*speechmaticsSTTStream {
 	return streams
 }
 
-func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
+func buildSpeechmaticsSTTStreamURL(s *STT) string {
 	rawURL := s.baseURL
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -792,7 +792,7 @@ func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
 	return parsed.String()
 }
 
-func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
+func speechmaticsSTTStreamLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -802,7 +802,7 @@ func speechmaticsSTTStreamLanguage(s *SpeechmaticsSTT, language string) string {
 	return "en"
 }
 
-func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
+func validateSpeechmaticsSTTOptions(s *STT) error {
 	if s == nil {
 		return io.ErrClosedPipe
 	}
@@ -833,7 +833,7 @@ func validateSpeechmaticsSTTOptions(s *SpeechmaticsSTT) error {
 	return nil
 }
 
-func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {
+func buildSpeechmaticsSTTStartMessage(s *STT, language string) map[string]interface{} {
 	language = speechmaticsSTTStreamLanguage(s, language)
 	config := map[string]interface{}{
 		"language": language,
@@ -886,7 +886,7 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	}
 }
 
-func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
+func speechmaticsEndpointingConfig(s *STT) map[string]interface{} {
 	config := make(map[string]interface{})
 	if s == nil {
 		return config
@@ -924,18 +924,18 @@ func speechmaticsEndpointingConfig(s *SpeechmaticsSTT) map[string]interface{} {
 	return config
 }
 
-func speechmaticsProviderManagedEndpointing(s *SpeechmaticsSTT) bool {
+func speechmaticsProviderManagedEndpointing(s *STT) bool {
 	return s != nil && (s.turnDetectionMode == "fixed" || s.turnDetectionMode == "adaptive" || s.turnDetectionMode == "smart_turn")
 }
 
-func speechmaticsIncludePartials(s *SpeechmaticsSTT) bool {
+func speechmaticsIncludePartials(s *STT) bool {
 	if s == nil || s.includePartials == nil {
 		return true
 	}
 	return *s.includePartials
 }
 
-func speechmaticsSTTDiarizationConfig(s *SpeechmaticsSTT) map[string]interface{} {
+func speechmaticsSTTDiarizationConfig(s *STT) map[string]interface{} {
 	config := make(map[string]interface{})
 	if s.enableDiarization != nil && !*s.enableDiarization {
 		return config
@@ -1004,7 +1004,7 @@ type speechmaticsSTTStream struct {
 	writeBinary func([]byte) error
 	writeJSON   func(interface{}) error
 	closeConn   func() error
-	owner       *SpeechmaticsSTT
+	owner       *STT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 	inputAudio  speechmaticsSTTInputAudioNormalizer
@@ -4533,4 +4533,15 @@ func (s *speechmaticsSTTStream) closeDone() {
 	s.doneOnce.Do(func() {
 		close(s.done)
 	})
+}
+
+// Deprecated: use STT.
+type SpeechmaticsSTT = STT
+
+// Deprecated: use STTOption.
+type SpeechmaticsSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewSpeechmaticsSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

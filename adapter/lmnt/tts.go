@@ -28,7 +28,7 @@ const (
 	defaultLMNTLanguage     = "en"
 )
 
-type LMNTTTS struct {
+type TTS struct {
 	apiKey      string
 	voice       string
 	model       string
@@ -39,65 +39,65 @@ type LMNTTTS struct {
 	topP        float64
 }
 
-type LMNTTTSOption func(*LMNTTTS)
+type TTSOption func(*TTS)
 
-func WithLMNTTTSModel(model string) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithLMNTTTSVoice(voice string) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithLMNTTTSLanguage(language string) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithLMNTTTSFormat(format string) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSFormat(format string) TTSOption {
+	return func(t *TTS) {
 		if format != "" {
 			t.format = format
 		}
 	}
 }
 
-func WithLMNTTTSSampleRate(sampleRate int) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithLMNTTTSTemperature(temperature float64) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSTemperature(temperature float64) TTSOption {
+	return func(t *TTS) {
 		t.temperature = temperature
 	}
 }
 
-func WithLMNTTTSTopP(topP float64) LMNTTTSOption {
-	return func(t *LMNTTTS) {
+func WithLMNTTTSTopP(topP float64) TTSOption {
+	return func(t *TTS) {
 		t.topP = topP
 	}
 }
 
-func NewLMNTTTS(apiKey string, voice string, opts ...LMNTTTSOption) *LMNTTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("LMNT_API_KEY")
 	}
-	provider := &LMNTTTS{
+	provider := &TTS{
 		apiKey:      apiKey,
 		voice:       voice,
 		model:       defaultLMNTModel,
@@ -121,22 +121,22 @@ func NewLMNTTTS(apiKey string, voice string, opts ...LMNTTTSOption) *LMNTTTS {
 	return provider
 }
 
-func (t *LMNTTTS) Label() string { return "lmnt.TTS" }
-func (t *LMNTTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "lmnt.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *LMNTTTS) SampleRate() int  { return t.sampleRate }
-func (t *LMNTTTS) NumChannels() int { return 1 }
-func (t *LMNTTTS) Model() string    { return t.model }
-func (t *LMNTTTS) Provider() string { return "LMNT" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "LMNT" }
 
-func (t *LMNTTTS) UpdateOptions(opts ...LMNTTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
 }
 
-func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateLMNTAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}, nil
 }
 
-func buildLMNTTTSRequest(ctx context.Context, t *LMNTTTS, text string) (*http.Request, error) {
+func buildLMNTTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	return buildLMNTTTSRequestFromOptions(ctx, lmntTTSRequestOptions{
 		text:        text,
 		apiKey:      t.apiKey,
@@ -212,7 +212,7 @@ func validateLMNTAPIKey(apiKey string) error {
 	return nil
 }
 
-func (t *LMNTTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming tts is not supported by the LMNT TTS API")
 }
 
@@ -367,4 +367,15 @@ func (s *lmntTTSChunkedStream) Close() error {
 		_ = decoder.Close()
 	}
 	return body.Close()
+}
+
+// Deprecated: use TTS.
+type LMNTTTS = TTS
+
+// Deprecated: use TTSOption.
+type LMNTTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewLMNTTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

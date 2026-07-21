@@ -25,7 +25,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type DeepgramSTT struct {
+type STT struct {
 	apiKey             string
 	model              string
 	language           string
@@ -70,10 +70,10 @@ type DeepgramKeyword struct {
 	Boost   float64
 }
 
-type DeepgramSTTOption func(*DeepgramSTT)
+type STTOption func(*STT)
 
-func WithDeepgramSTTModel(model string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTModel(model string) STTOption {
+	return func(s *STT) {
 		s.model = model
 	}
 }
@@ -85,138 +85,138 @@ const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
 const deepgramSTTFinalizeMessage = `{"type": "Finalize"}`
 const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
 
-func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		s.baseURL = strings.TrimRight(baseURL, "/")
 	}
 }
 
-func WithDeepgramSTTInterimResults(interimResults bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTInterimResults(interimResults bool) STTOption {
+	return func(s *STT) {
 		s.interimResults = interimResults
 	}
 }
 
-func WithDeepgramSTTDetectLanguage(detectLanguage bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTDetectLanguage(detectLanguage bool) STTOption {
+	return func(s *STT) {
 		s.detectLanguage = detectLanguage
 	}
 }
 
-func WithDeepgramSTTLanguage(languageStr string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTLanguage(languageStr string) STTOption {
+	return func(s *STT) {
 		s.language = language.NormalizeLanguage(languageStr)
 	}
 }
 
-func WithDeepgramSTTPunctuate(punctuate bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTPunctuate(punctuate bool) STTOption {
+	return func(s *STT) {
 		s.punctuate = punctuate
 	}
 }
 
-func WithDeepgramSTTSmartFormat(smartFormat bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTSmartFormat(smartFormat bool) STTOption {
+	return func(s *STT) {
 		s.smartFormat = smartFormat
 	}
 }
 
-func WithDeepgramSTTNoDelay(noDelay bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTNoDelay(noDelay bool) STTOption {
+	return func(s *STT) {
 		s.noDelay = noDelay
 	}
 }
 
-func WithDeepgramSTTEndpointing(endpointingMS int) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTEndpointing(endpointingMS int) STTOption {
+	return func(s *STT) {
 		s.endpointingMS = endpointingMS
 	}
 }
 
-func WithDeepgramSTTDiarization(enableDiarization bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTDiarization(enableDiarization bool) STTOption {
+	return func(s *STT) {
 		s.enableDiarization = enableDiarization
 	}
 }
 
-func WithDeepgramSTTFillerWords(fillerWords bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTFillerWords(fillerWords bool) STTOption {
+	return func(s *STT) {
 		s.fillerWords = fillerWords
 	}
 }
 
-func WithDeepgramSTTSampleRate(sampleRate int) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		s.sampleRate = sampleRate
 	}
 }
 
-func WithDeepgramSTTNumChannels(numChannels int) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTNumChannels(numChannels int) STTOption {
+	return func(s *STT) {
 		if numChannels > 0 {
 			s.numChannels = numChannels
 		}
 	}
 }
 
-func WithDeepgramSTTVADEvents(vadEvents bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTVADEvents(vadEvents bool) STTOption {
+	return func(s *STT) {
 		s.vadEvents = vadEvents
 	}
 }
 
-func WithDeepgramSTTProfanityFilter(profanityFilter bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTProfanityFilter(profanityFilter bool) STTOption {
+	return func(s *STT) {
 		s.profanityFilter = profanityFilter
 	}
 }
 
-func WithDeepgramSTTNumerals(numerals bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTNumerals(numerals bool) STTOption {
+	return func(s *STT) {
 		s.numerals = numerals
 	}
 }
 
-func WithDeepgramSTTMipOptOut(mipOptOut bool) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTMipOptOut(mipOptOut bool) STTOption {
+	return func(s *STT) {
 		s.mipOptOut = mipOptOut
 	}
 }
 
-func WithDeepgramSTTKeywords(keywords []DeepgramKeyword) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTKeywords(keywords []DeepgramKeyword) STTOption {
+	return func(s *STT) {
 		s.keywords = append([]DeepgramKeyword(nil), keywords...)
 		s.keywordsSet = keywords != nil
 	}
 }
 
-func WithDeepgramSTTKeyterms(keyterms []string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTKeyterms(keyterms []string) STTOption {
+	return func(s *STT) {
 		s.keyterms = append([]string(nil), keyterms...)
 		s.keytermsSet = keyterms != nil
 	}
 }
 
-func WithDeepgramSTTRedact(redact []string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTRedact(redact []string) STTOption {
+	return func(s *STT) {
 		s.redact = append([]string(nil), redact...)
 	}
 }
 
-func WithDeepgramSTTTags(tags []string) DeepgramSTTOption {
-	return func(s *DeepgramSTT) {
+func WithDeepgramSTTTags(tags []string) STTOption {
+	return func(s *STT) {
 		s.tags = append([]string(nil), tags...)
 	}
 }
 
-func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *DeepgramSTT {
+func NewSTT(apiKey string, model string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("DEEPGRAM_API_KEY")
 	}
 	if model == "" {
 		model = "nova-3"
 	}
-	provider := &DeepgramSTT{
+	provider := &STT{
 		apiKey:         apiKey,
 		model:          model,
 		language:       "en-US",
@@ -238,17 +238,17 @@ func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *Dee
 	return provider
 }
 
-func (s *DeepgramSTT) Label() string { return "deepgram.STT" }
-func (s *DeepgramSTT) Model() string { return s.model }
-func (s *DeepgramSTT) Provider() string {
+func (s *STT) Label() string { return "deepgram.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Deepgram"
 }
-func (s *DeepgramSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
-func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
-func (s *DeepgramSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -290,9 +290,9 @@ func (s *DeepgramSTT) Close() error {
 	return closeErr
 }
 
-func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
+func (s *STT) UpdateOptions(opts ...STTOption) error {
 	s.mu.Lock()
-	next := &DeepgramSTT{
+	next := &STT{
 		apiKey:            s.apiKey,
 		model:             s.model,
 		language:          s.language,
@@ -362,7 +362,7 @@ func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
 	return nil
 }
 
-func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -427,7 +427,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	return stream, nil
 }
 
-func (s *DeepgramSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -436,7 +436,7 @@ func (s *DeepgramSTT) isClosed() bool {
 	return s.closed
 }
 
-func openDeepgramStreamConnection(ctx context.Context, s *DeepgramSTT, streamURL string, header http.Header) (*websocket.Conn, error) {
+func openDeepgramStreamConnection(ctx context.Context, s *STT, streamURL string, header http.Header) (*websocket.Conn, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -447,7 +447,7 @@ func openDeepgramStreamConnection(ctx context.Context, s *DeepgramSTT, streamURL
 	return conn, nil
 }
 
-func (s *DeepgramSTT) registerStream(stream *deepgramStream) bool {
+func (s *STT) registerStream(stream *deepgramStream) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -460,7 +460,7 @@ func (s *DeepgramSTT) registerStream(stream *deepgramStream) bool {
 	return true
 }
 
-func (s *DeepgramSTT) registerPendingStreamDial(pending *deepgramSTTPendingDial) bool {
+func (s *STT) registerPendingStreamDial(pending *deepgramSTTPendingDial) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -473,13 +473,13 @@ func (s *DeepgramSTT) registerPendingStreamDial(pending *deepgramSTTPendingDial)
 	return true
 }
 
-func (s *DeepgramSTT) unregisterPendingStreamDial(pending *deepgramSTTPendingDial) {
+func (s *STT) unregisterPendingStreamDial(pending *deepgramSTTPendingDial) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.pendingStreamDials, pending)
 }
 
-func (s *DeepgramSTT) registerPendingRecognize(pending *deepgramSTTPendingRecognize) bool {
+func (s *STT) registerPendingRecognize(pending *deepgramSTTPendingRecognize) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -492,19 +492,19 @@ func (s *DeepgramSTT) registerPendingRecognize(pending *deepgramSTTPendingRecogn
 	return true
 }
 
-func (s *DeepgramSTT) unregisterPendingRecognize(pending *deepgramSTTPendingRecognize) {
+func (s *STT) unregisterPendingRecognize(pending *deepgramSTTPendingRecognize) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.pendingRecognizes, pending)
 }
 
-func (s *DeepgramSTT) unregisterStream(stream *deepgramStream) {
+func (s *STT) unregisterStream(stream *deepgramStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
 }
 
-func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -579,7 +579,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
 }
 
-func (s *DeepgramSTT) resolveLanguage(languageStr string) string {
+func (s *STT) resolveLanguage(languageStr string) string {
 	if normalized := language.NormalizeLanguage(languageStr); normalized != "" {
 		return normalized
 	}
@@ -639,7 +639,7 @@ func deepgramSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, d
 	return wav.Bytes()
 }
 
-func validateDeepgramSTTOptions(s *DeepgramSTT) error {
+func validateDeepgramSTTOptions(s *STT) error {
 	for _, tag := range s.tags {
 		if len(tag) > 128 {
 			return fmt.Errorf("tag must be no more than 128 characters")
@@ -658,7 +658,7 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 	return nil
 }
 
-func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
+func buildDeepgramStreamURL(s *STT, languageStr string) string {
 	languageStr = s.resolveLanguage(languageStr)
 	u, q := deepgramBaseURL(s, true)
 	q.Set("model", deepgramSTTModelForLanguage(s.model, languageStr))
@@ -690,7 +690,7 @@ func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 	return u.String()
 }
 
-func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
+func buildDeepgramRecognizeURL(s *STT, languageStr string) string {
 	languageStr = s.resolveLanguage(languageStr)
 	if s.detectLanguage {
 		languageStr = ""
@@ -711,7 +711,7 @@ func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	return u.String()
 }
 
-func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
+func addDeepgramSTTAdvancedQuery(q url.Values, s *STT) {
 	for _, keyword := range s.keywords {
 		q.Add("keywords", keyword.Keyword+":"+strconv.FormatFloat(keyword.Boost, 'f', -1, 64))
 	}
@@ -726,7 +726,7 @@ func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
 	}
 }
 
-func addDeepgramSTTRecognizeAdvancedQuery(q url.Values, s *DeepgramSTT) {
+func addDeepgramSTTRecognizeAdvancedQuery(q url.Values, s *STT) {
 	for _, keyword := range s.keywords {
 		q.Add("keywords", keyword.Keyword+":"+strconv.FormatFloat(keyword.Boost, 'f', -1, 64))
 	}
@@ -745,7 +745,7 @@ func deepgramSTTModelForLanguage(model string, languageStr string) string {
 	return model
 }
 
-func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
+func deepgramBaseURL(s *STT, websocketURL bool) (*url.URL, url.Values) {
 	parsed, err := url.Parse(s.baseURL)
 	if err != nil {
 		parsed = &url.URL{Scheme: "https", Host: "api.deepgram.com", Path: "/v1/listen"}
@@ -763,7 +763,7 @@ func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
-	provider       *DeepgramSTT
+	provider       *STT
 	conn           *websocket.Conn
 	streamURL      string
 	events         chan *stt.SpeechEvent
@@ -1726,8 +1726,8 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 	}
 }
 
-func (s *deepgramStream) activeConfigLocked() *DeepgramSTT {
-	return &DeepgramSTT{
+func (s *deepgramStream) activeConfigLocked() *STT {
+	return &STT{
 		model:             s.provider.model,
 		language:          s.provider.language,
 		punctuate:         s.provider.punctuate,
@@ -1955,4 +1955,15 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	}
+}
+
+// Deprecated: use STT.
+type DeepgramSTT = STT
+
+// Deprecated: use STTOption.
+type DeepgramSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewDeepgramSTT(apiKey string, model string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, model, opts...)
 }

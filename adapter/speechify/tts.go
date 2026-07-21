@@ -25,7 +25,7 @@ const (
 	speechifyAPIKeyEnv       = "SPEECHIFY_API_KEY"
 )
 
-type SpeechifyTTS struct {
+type TTS struct {
 	apiKey                string
 	baseURL               string
 	voice                 string
@@ -37,28 +37,28 @@ type SpeechifyTTS struct {
 	textNormalization     *bool
 }
 
-type SpeechifyTTSOption func(*SpeechifyTTS)
+type TTSOption func(*TTS)
 
-type SpeechifyTTSUpdateOption func(*SpeechifyTTS)
+type SpeechifyTTSUpdateOption func(*TTS)
 
-func WithSpeechifyTTSBaseURL(baseURL string) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSpeechifyTTSVoice(voice string) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithSpeechifyTTSEncoding(encoding string) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 			t.sampleRate = speechifySampleRateFromEncoding(encoding)
@@ -66,65 +66,65 @@ func WithSpeechifyTTSEncoding(encoding string) SpeechifyTTSOption {
 	}
 }
 
-func WithSpeechifyTTSLanguage(language string) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
-func WithSpeechifyTTSModel(model string) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		t.model = model
 	}
 }
 
-func WithSpeechifyTTSLoudnessNormalization(enabled bool) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSLoudnessNormalization(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.loudnessNormalization = &enabled
 	}
 }
 
-func WithSpeechifyTTSTextNormalization(enabled bool) SpeechifyTTSOption {
-	return func(t *SpeechifyTTS) {
+func WithSpeechifyTTSTextNormalization(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.textNormalization = &enabled
 	}
 }
 
 func WithSpeechifyTTSUpdateVoice(voice string) SpeechifyTTSUpdateOption {
-	return func(t *SpeechifyTTS) {
+	return func(t *TTS) {
 		t.voice = voice
 	}
 }
 
 func WithSpeechifyTTSUpdateModel(model string) SpeechifyTTSUpdateOption {
-	return func(t *SpeechifyTTS) {
+	return func(t *TTS) {
 		t.model = model
 	}
 }
 
 func WithSpeechifyTTSUpdateLanguage(language string) SpeechifyTTSUpdateOption {
-	return func(t *SpeechifyTTS) {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
 func WithSpeechifyTTSUpdateLoudnessNormalization(enabled bool) SpeechifyTTSUpdateOption {
-	return func(t *SpeechifyTTS) {
+	return func(t *TTS) {
 		t.loudnessNormalization = &enabled
 	}
 }
 
 func WithSpeechifyTTSUpdateTextNormalization(enabled bool) SpeechifyTTSUpdateOption {
-	return func(t *SpeechifyTTS) {
+	return func(t *TTS) {
 		t.textNormalization = &enabled
 	}
 }
 
-func NewSpeechifyTTS(apiKey string, voice string, opts ...SpeechifyTTSOption) *SpeechifyTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechifyAPIKeyEnv)
 	}
-	provider := &SpeechifyTTS{
+	provider := &TTS{
 		apiKey:     apiKey,
 		baseURL:    defaultSpeechifyBaseURL,
 		voice:      voice,
@@ -140,27 +140,27 @@ func NewSpeechifyTTS(apiKey string, voice string, opts ...SpeechifyTTSOption) *S
 	return provider
 }
 
-func (t *SpeechifyTTS) Label() string { return "speechify.TTS" }
-func (t *SpeechifyTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "speechify.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpeechifyTTS) SampleRate() int  { return t.sampleRate }
-func (t *SpeechifyTTS) NumChannels() int { return 1 }
-func (t *SpeechifyTTS) Model() string {
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string {
 	if t.model == "" {
 		return "unknown"
 	}
 	return t.model
 }
-func (t *SpeechifyTTS) Provider() string { return "Speechify" }
+func (t *TTS) Provider() string { return "Speechify" }
 
-func (t *SpeechifyTTS) UpdateOptions(opts ...SpeechifyTTSUpdateOption) {
+func (t *TTS) UpdateOptions(opts ...SpeechifyTTSUpdateOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
 }
 
-func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateSpeechifyAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}, nil
 }
 
-func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string) (*http.Request, error) {
+func buildSpeechifyTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	return buildSpeechifyTTSRequestFromOptions(ctx, speechifyTTSRequestOptions{
 		text:                  text,
 		apiKey:                t.apiKey,
@@ -242,7 +242,7 @@ func validateSpeechifyAPIKey(apiKey string) error {
 	return nil
 }
 
-func (t *SpeechifyTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming tts is not supported by the Speechify TTS API")
 }
 
@@ -488,4 +488,15 @@ func cloneBoolPtr(value *bool) *bool {
 	}
 	cloned := *value
 	return &cloned
+}
+
+// Deprecated: use TTS.
+type SpeechifyTTS = TTS
+
+// Deprecated: use TTSOption.
+type SpeechifyTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSpeechifyTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

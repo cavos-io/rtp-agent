@@ -19,7 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
-type AnthropicLLM struct {
+type LLM struct {
 	apiKey               string
 	model                string
 	baseURL              string
@@ -67,73 +67,73 @@ var anthropicNoPrefillModelPrefixes = []string{
 	"claude-opus-4-6",
 }
 
-type AnthropicOption func(*AnthropicLLM)
+type LLMOption func(*LLM)
 
-func WithAnthropicBaseURL(baseURL string) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicBaseURL(baseURL string) LLMOption {
+	return func(l *LLM) {
 		if baseURL != "" {
 			l.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithAnthropicUser(user string) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicUser(user string) LLMOption {
+	return func(l *LLM) {
 		l.user = user
 		l.userSet = true
 	}
 }
 
-func WithAnthropicMaxTokens(maxTokens int) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicMaxTokens(maxTokens int) LLMOption {
+	return func(l *LLM) {
 		l.maxTokens = maxTokens
 		l.maxTokensSet = true
 	}
 }
 
-func WithAnthropicTemperature(temperature float64) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicTemperature(temperature float64) LLMOption {
+	return func(l *LLM) {
 		l.temperature = temperature
 		l.tempSet = true
 	}
 }
 
-func WithAnthropicTopK(topK int) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicTopK(topK int) LLMOption {
+	return func(l *LLM) {
 		l.topK = topK
 		l.topKSet = true
 	}
 }
 
-func WithAnthropicCaching(caching string) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicCaching(caching string) LLMOption {
+	return func(l *LLM) {
 		l.caching = caching
 		l.cachingSet = true
 	}
 }
 
-func WithAnthropicToolChoice(choice llm.ToolChoice) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicToolChoice(choice llm.ToolChoice) LLMOption {
+	return func(l *LLM) {
 		l.toolChoice = choice
 		l.toolChoiceSet = true
 	}
 }
 
-func WithAnthropicStrictToolSchema(strict bool) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicStrictToolSchema(strict bool) LLMOption {
+	return func(l *LLM) {
 		l.strictToolSchema = strict
 	}
 }
 
-func WithAnthropicParallelToolCalls(parallel bool) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicParallelToolCalls(parallel bool) LLMOption {
+	return func(l *LLM) {
 		l.parallelToolCalls = parallel
 		l.parallelToolCallsSet = true
 	}
 }
 
-func WithAnthropicReadTimeout(timeout time.Duration) AnthropicOption {
-	return func(l *AnthropicLLM) {
+func WithAnthropicReadTimeout(timeout time.Duration) LLMOption {
+	return func(l *LLM) {
 		if timeout > 0 {
 			l.readTimeout = timeout
 			l.httpClient = newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout, timeout)
@@ -141,7 +141,7 @@ func WithAnthropicReadTimeout(timeout time.Duration) AnthropicOption {
 	}
 }
 
-func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*AnthropicLLM, error) {
+func NewLLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultAnthropicMode
 	}
@@ -151,7 +151,7 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 	if apiKey == "" {
 		return nil, errors.New("anthropic API key is required, either as argument or set ANTHROPIC_API_KEY environment variable")
 	}
-	llm := &AnthropicLLM{
+	llm := &LLM{
 		apiKey:           apiKey,
 		model:            model,
 		baseURL:          defaultAnthropicURL,
@@ -165,11 +165,11 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 	return llm, nil
 }
 
-func (l *AnthropicLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
-func (l *AnthropicLLM) Provider() string {
+func (l *LLM) Provider() string {
 	u, err := url.Parse(l.baseURL)
 	if err != nil || u.Host == "" {
 		return "anthropic"
@@ -195,7 +195,7 @@ type anthropicContentBlock struct {
 	CacheControl map[string]any `json:"cache_control,omitempty"`
 }
 
-func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -356,7 +356,7 @@ func (anthropicEOFStream) Close() error {
 	return nil
 }
 
-func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string, connectTimeout time.Duration) (*http.Response, error) {
+func (l *LLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string, connectTimeout time.Duration) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
@@ -551,7 +551,7 @@ func validateAnthropicExtraParams(params map[string]any) error {
 	return nil
 }
 
-func (l *AnthropicLLM) anthropicEphemeralCacheControl() map[string]any {
+func (l *LLM) anthropicEphemeralCacheControl() map[string]any {
 	if l.cachingSet && l.caching == "ephemeral" {
 		return map[string]any{"type": "ephemeral"}
 	}
@@ -678,7 +678,7 @@ func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl
 }
 
 type anthropicStream struct {
-	llm            *AnthropicLLM
+	llm            *LLM
 	ctx            context.Context
 	jsonBody       []byte
 	betaFlag       string
@@ -1529,4 +1529,15 @@ func (s *anthropicStream) closeResponseBody() {
 		s.cancel()
 		s.cancel = nil
 	}
+}
+
+// Deprecated: use LLM.
+type AnthropicLLM = LLM
+
+// Deprecated: use LLMOption.
+type AnthropicOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewAnthropicLLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
+	return NewLLM(apiKey, model, opts...)
 }

@@ -38,7 +38,7 @@ const (
 	defaultGladiaEnergyThreshold                   = 0.004 * 0.004
 )
 
-type GladiaSTT struct {
+type STT struct {
 	mu                                 sync.Mutex
 	apiKey                             string
 	baseURL                            string
@@ -70,44 +70,44 @@ type GladiaSTT struct {
 	closed                             bool
 }
 
-type GladiaSTTOption func(*GladiaSTT)
+type STTOption func(*STT)
 
-func WithGladiaBaseURL(baseURL string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = baseURL
 		}
 	}
 }
 
-func WithGladiaModel(model string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithGladiaInterimResults(interimResults bool) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaInterimResults(interimResults bool) STTOption {
+	return func(s *STT) {
 		s.interimResults = interimResults
 	}
 }
 
-func WithGladiaLanguages(languages []string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaLanguages(languages []string) STTOption {
+	return func(s *STT) {
 		s.languages = append([]string(nil), languages...)
 	}
 }
 
-func WithGladiaCodeSwitching(codeSwitching bool) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaCodeSwitching(codeSwitching bool) STTOption {
+	return func(s *STT) {
 		s.codeSwitching = codeSwitching
 	}
 }
 
-func WithGladiaAudioFormat(sampleRate int, bitDepth int, channels int, encoding string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaAudioFormat(sampleRate int, bitDepth int, channels int, encoding string) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
@@ -123,8 +123,8 @@ func WithGladiaAudioFormat(sampleRate int, bitDepth int, channels int, encoding 
 	}
 }
 
-func WithGladiaEndpointing(endpointing float64, maximumDurationWithoutEndpointing float64) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaEndpointing(endpointing float64, maximumDurationWithoutEndpointing float64) STTOption {
+	return func(s *STT) {
 		if endpointing >= 0 {
 			s.endpointing = endpointing
 		}
@@ -134,22 +134,22 @@ func WithGladiaEndpointing(endpointing float64, maximumDurationWithoutEndpointin
 	}
 }
 
-func WithGladiaRegion(region string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaRegion(region string) STTOption {
+	return func(s *STT) {
 		if region != "" {
 			s.region = region
 		}
 	}
 }
 
-func WithGladiaCustomVocabulary(vocabulary []any) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaCustomVocabulary(vocabulary []any) STTOption {
+	return func(s *STT) {
 		s.customVocabulary = append([]any(nil), vocabulary...)
 	}
 }
 
-func WithGladiaCustomSpelling(spelling map[string][]string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaCustomSpelling(spelling map[string][]string) STTOption {
+	return func(s *STT) {
 		if spelling == nil {
 			s.customSpelling = nil
 			return
@@ -162,15 +162,15 @@ func WithGladiaCustomSpelling(spelling map[string][]string) GladiaSTTOption {
 	}
 }
 
-func WithGladiaTranslation(targetLanguages []string) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaTranslation(targetLanguages []string) STTOption {
+	return func(s *STT) {
 		s.translationEnabled = true
 		s.translationTargetLanguages = append([]string(nil), targetLanguages...)
 	}
 }
 
-func WithGladiaTranslationConfig(targetLanguages []string, model string, matchOriginalUtterances bool, lipsync bool, contextAdaptation bool, context string, informal bool) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaTranslationConfig(targetLanguages []string, model string, matchOriginalUtterances bool, lipsync bool, contextAdaptation bool, context string, informal bool) STTOption {
+	return func(s *STT) {
 		s.translationEnabled = true
 		s.translationTargetLanguages = append([]string(nil), targetLanguages...)
 		if model != "" {
@@ -184,15 +184,15 @@ func WithGladiaTranslationConfig(targetLanguages []string, model string, matchOr
 	}
 }
 
-func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) STTOption {
+	return func(s *STT) {
 		s.preProcessingAudioEnhancer = audioEnhancer
 		s.preProcessingSpeechThreshold = speechThreshold
 	}
 }
 
-func WithGladiaEnergyFilter(minSilence float64, rmsThreshold float64) GladiaSTTOption {
-	return func(s *GladiaSTT) {
+func WithGladiaEnergyFilter(minSilence float64, rmsThreshold float64) STTOption {
+	return func(s *STT) {
 		if minSilence <= 0 {
 			minSilence = defaultGladiaEnergyMinSilence
 		}
@@ -206,11 +206,11 @@ func WithGladiaEnergyFilter(minSilence float64, rmsThreshold float64) GladiaSTTO
 	}
 }
 
-func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("GLADIA_API_KEY")
 	}
-	provider := &GladiaSTT{
+	provider := &STT{
 		apiKey:                             apiKey,
 		baseURL:                            defaultGladiaBaseURL,
 		model:                              defaultGladiaModel,
@@ -234,20 +234,20 @@ func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
 	return provider
 }
 
-func (s *GladiaSTT) Label() string { return "gladia.STT" }
-func (s *GladiaSTT) Model() string { return s.model }
-func (s *GladiaSTT) Provider() string {
+func (s *STT) Label() string { return "gladia.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Gladia"
 }
 
-func (s *GladiaSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultGladiaSampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    s.interimResults,
@@ -257,7 +257,7 @@ func (s *GladiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *GladiaSTT) UpdateOptions(opts ...GladiaSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -276,7 +276,7 @@ func (s *GladiaSTT) UpdateOptions(opts ...GladiaSTTOption) {
 	}
 }
 
-func (s *GladiaSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -302,7 +302,7 @@ func (s *GladiaSTT) Close() error {
 	return closeErr
 }
 
-func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) bool {
+func (s *STT) registerStream(stream *gladiaSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -319,7 +319,7 @@ func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) bool {
 	return true
 }
 
-func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
+func (s *STT) unregisterStream(stream *gladiaSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -331,7 +331,7 @@ func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
 	}
 }
 
-func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -400,7 +400,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	return stream, nil
 }
 
-func (s *GladiaSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -416,7 +416,7 @@ func validateGladiaAPIKey(apiKey string) error {
 	return nil
 }
 
-func (s *GladiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	stream, err := s.Stream(ctx, language)
 	if err != nil {
 		return nil, err
@@ -441,7 +441,7 @@ func (s *GladiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 }
 
-func buildGladiaStreamingConfig(s *GladiaSTT) map[string]any {
+func buildGladiaStreamingConfig(s *STT) map[string]any {
 	realtime := map[string]any{
 		"words_accurate_timestamps": false,
 	}
@@ -496,7 +496,7 @@ func buildGladiaStreamingConfig(s *GladiaSTT) map[string]any {
 	}
 }
 
-func buildGladiaInitRequest(ctx context.Context, s *GladiaSTT) (*http.Request, error) {
+func buildGladiaInitRequest(ctx context.Context, s *STT) (*http.Request, error) {
 	config := buildGladiaStreamingConfig(s)
 	region, _ := config["region"].(string)
 	delete(config, "region")
@@ -541,10 +541,10 @@ func writeGladiaMessage(conn *websocket.Conn, message map[string]any) error {
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-func (s *GladiaSTT) cloneWithLanguage(language string) *GladiaSTT {
+func (s *STT) cloneWithLanguage(language string) *STT {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clone := &GladiaSTT{
+	clone := &STT{
 		apiKey:                             s.apiKey,
 		baseURL:                            s.baseURL,
 		model:                              s.model,
@@ -593,7 +593,7 @@ func cloneGladiaCustomSpelling(spelling map[string][]string) map[string][]string
 }
 
 type gladiaSTTStream struct {
-	owner  *GladiaSTT
+	owner  *STT
 	conn   *websocket.Conn
 	events chan *stt.SpeechEvent
 	errCh  chan error
@@ -829,7 +829,7 @@ func (s *gladiaSTTStream) isClosed() bool {
 	return s.closed
 }
 
-func (s *gladiaSTTStream) updateOptions(provider *GladiaSTT) {
+func (s *gladiaSTTStream) updateOptions(provider *STT) {
 	if s == nil || provider == nil {
 		return
 	}
@@ -1110,4 +1110,15 @@ func gladiaConfidence(value any) float64 {
 		return 1.0
 	}
 	return gladiaAnyFloat(value)
+}
+
+// Deprecated: use STT.
+type GladiaSTT = STT
+
+// Deprecated: use STTOption.
+type GladiaSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewGladiaSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

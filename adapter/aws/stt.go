@@ -18,7 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
-type AWSSTT struct {
+type STT struct {
 	mu                                sync.Mutex
 	client                            awsSTTClient
 	credentials                       AWSCredentials
@@ -54,7 +54,7 @@ type AWSSTT struct {
 	closed                            bool
 }
 
-type AWSSTTOption func(*AWSSTT)
+type STTOption func(*STT)
 
 type awsSTTClient interface {
 	StartStreamTranscription(ctx context.Context, input *transcribestreaming.StartStreamTranscriptionInput) (awsSTTEventStream, error)
@@ -79,14 +79,14 @@ type awsSTTEventStream interface {
 	Err() error
 }
 
-func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTSampleRate(sampleRate int32) STTOption {
+	return func(s *STT) {
 		s.sampleRate = sampleRate
 	}
 }
 
-func WithAWSSTTCredentials(creds AWSCredentials) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTCredentials(creds AWSCredentials) STTOption {
+	return func(s *STT) {
 		if creds.valid() {
 			s.credentials = creds
 			s.credentialsSet = true
@@ -94,119 +94,119 @@ func WithAWSSTTCredentials(creds AWSCredentials) AWSSTTOption {
 	}
 }
 
-func WithAWSSTTLanguage(language types.LanguageCode) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTLanguage(language types.LanguageCode) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithAWSSTTVocabularyName(name string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTVocabularyName(name string) STTOption {
+	return func(s *STT) {
 		s.vocabularyName = name
 		s.vocabularyNameSet = true
 	}
 }
 
-func WithAWSSTTSessionID(sessionID string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTSessionID(sessionID string) STTOption {
+	return func(s *STT) {
 		s.sessionID = sessionID
 		s.sessionIDSet = true
 	}
 }
 
-func WithAWSSTTVocabularyFilterMethod(method types.VocabularyFilterMethod) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTVocabularyFilterMethod(method types.VocabularyFilterMethod) STTOption {
+	return func(s *STT) {
 		s.vocabularyFilterMethod = method
 	}
 }
 
-func WithAWSSTTVocabularyFilterName(name string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTVocabularyFilterName(name string) STTOption {
+	return func(s *STT) {
 		s.vocabularyFilterName = name
 		s.vocabularyFilterNameSet = true
 	}
 }
 
-func WithAWSSTTShowSpeakerLabel(show bool) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTShowSpeakerLabel(show bool) STTOption {
+	return func(s *STT) {
 		s.showSpeakerLabel = show
 	}
 }
 
-func WithAWSSTTEnableChannelIdentification(enable bool) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTEnableChannelIdentification(enable bool) STTOption {
+	return func(s *STT) {
 		s.enableChannelIdentification = enable
 	}
 }
 
-func WithAWSSTTNumberOfChannels(channels int32) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTNumberOfChannels(channels int32) STTOption {
+	return func(s *STT) {
 		s.numberOfChannels = channels
 		s.numberOfChannelsSet = true
 	}
 }
 
-func WithAWSSTTEnablePartialResultsStabilization(enable bool) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTEnablePartialResultsStabilization(enable bool) STTOption {
+	return func(s *STT) {
 		s.enablePartialResultsStabilization = enable
 	}
 }
 
-func WithAWSSTTPartialResultsStability(stability types.PartialResultsStability) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTPartialResultsStability(stability types.PartialResultsStability) STTOption {
+	return func(s *STT) {
 		s.partialResultsStability = stability
 	}
 }
 
-func WithAWSSTTLanguageModelName(name string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTLanguageModelName(name string) STTOption {
+	return func(s *STT) {
 		s.languageModelName = name
 		s.languageModelNameSet = true
 	}
 }
 
-func WithAWSSTTIdentifyLanguage(identify bool) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTIdentifyLanguage(identify bool) STTOption {
+	return func(s *STT) {
 		s.identifyLanguage = identify
 	}
 }
 
-func WithAWSSTTIdentifyMultipleLanguages(identify bool) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTIdentifyMultipleLanguages(identify bool) STTOption {
+	return func(s *STT) {
 		s.identifyMultipleLanguages = identify
 	}
 }
 
-func WithAWSSTTLanguageOptions(options string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTLanguageOptions(options string) STTOption {
+	return func(s *STT) {
 		s.languageOptions = options
 		s.languageOptionsSet = true
 	}
 }
 
-func WithAWSSTTPreferredLanguage(language types.LanguageCode) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTPreferredLanguage(language types.LanguageCode) STTOption {
+	return func(s *STT) {
 		s.preferredLanguage = language
 	}
 }
 
-func WithAWSSTTVocabularyNames(names string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTVocabularyNames(names string) STTOption {
+	return func(s *STT) {
 		s.vocabularyNames = names
 		s.vocabularyNamesSet = true
 	}
 }
 
-func WithAWSSTTVocabularyFilterNames(names string) AWSSTTOption {
-	return func(s *AWSSTT) {
+func WithAWSSTTVocabularyFilterNames(names string) STTOption {
+	return func(s *STT) {
 		s.vocabularyFilterNames = names
 		s.vocabularyFilterNamesSet = true
 	}
 }
 
-func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption) (*AWSSTT, error) {
+func NewSTT(ctx context.Context, region string, providerOpts ...STTOption) (*STT, error) {
 	provider, err := newAWSSTTWithClient(nil, providerOpts...)
 	if err != nil {
 		return nil, err
@@ -234,8 +234,8 @@ func awsSTTRegionOrDefault(region string) string {
 	return defaultAWSRegion
 }
 
-func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, error) {
-	provider := &AWSSTT{
+func newAWSSTTWithClient(client awsSTTClient, opts ...STTOption) (*STT, error) {
+	provider := &STT{
 		client:     client,
 		sampleRate: 24000,
 		encoding:   types.MediaEncodingPcm,
@@ -251,31 +251,31 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 	return provider, nil
 }
 
-func (s *AWSSTT) Label() string { return "aws.STT" }
-func (s *AWSSTT) Model() string {
+func (s *STT) Label() string { return "aws.STT" }
+func (s *STT) Model() string {
 	if s == nil || !s.languageModelNameSet {
 		return "unknown"
 	}
 	return s.languageModelName
 }
-func (s *AWSSTT) Provider() string { return "Amazon Transcribe" }
-func (s *AWSSTT) Language() string {
+func (s *STT) Provider() string { return "Amazon Transcribe" }
+func (s *STT) Language() string {
 	if s == nil {
 		return ""
 	}
 	return string(s.language)
 }
-func (s *AWSSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil {
 		return 24000
 	}
 	return uint32(s.sampleRate)
 }
-func (s *AWSSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
-func (s *AWSSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -298,7 +298,7 @@ func (s *AWSSTT) Close() error {
 	return nil
 }
 
-func (s *AWSSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -307,7 +307,7 @@ func (s *AWSSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *AWSSTT) registerStream(stream *awsSTTStream) bool {
+func (s *STT) registerStream(stream *awsSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -325,7 +325,7 @@ func (s *AWSSTT) registerStream(stream *awsSTTStream) bool {
 	return true
 }
 
-func (s *AWSSTT) unregisterStream(stream *awsSTTStream) {
+func (s *STT) unregisterStream(stream *awsSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -334,7 +334,7 @@ func (s *AWSSTT) unregisterStream(stream *awsSTTStream) {
 	s.mu.Unlock()
 }
 
-func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -370,7 +370,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	return gs, nil
 }
 
-func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcribestreaming.StartStreamTranscriptionInput {
+func buildAWSStartStreamTranscriptionInput(s *STT, language string) *transcribestreaming.StartStreamTranscriptionInput {
 	languageCode := s.language
 	input := &transcribestreaming.StartStreamTranscriptionInput{
 		MediaEncoding:        s.encoding,
@@ -412,7 +412,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	return input
 }
 
-func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *AWSSTT) {
+func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *STT) {
 	if s.languageOptionsSet {
 		input.LanguageOptions = aws.String(s.languageOptions)
 	}
@@ -427,14 +427,14 @@ func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamT
 	}
 }
 
-func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	// AWS Transcribe (non-streaming) uses jobs on S3. Since we don't have S3 upload configured,
 	// offline recognize is unsupported natively via simple buffer upload.
 	return nil, fmt.Errorf("offline recognize is not natively supported by AWSSTT via simple upload (S3 required). Use Stream instead")
 }
 
 type awsSTTStream struct {
-	provider                 *AWSSTT
+	provider                 *STT
 	stream                   awsSTTEventStream
 	restart                  func() (awsSTTEventStream, error)
 	language                 types.LanguageCode
@@ -961,4 +961,15 @@ func (s *awsSTTStream) nextQueuedSpeechEvent() (*stt.SpeechEvent, bool) {
 	default:
 	}
 	return nil, false
+}
+
+// Deprecated: use STT.
+type AWSSTT = STT
+
+// Deprecated: use STTOption.
+type AWSSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewAWSSTT(ctx context.Context, region string, providerOpts ...STTOption) (*STT, error) {
+	return NewSTT(ctx, region, providerOpts...)
 }

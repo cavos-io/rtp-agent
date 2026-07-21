@@ -32,7 +32,7 @@ var cambaiModelSampleRates = map[string]int{
 	"mars-instruct": 22050,
 }
 
-type CambaiTTS struct {
+type TTS struct {
 	apiKey               string
 	baseURL              string
 	voiceID              int
@@ -45,36 +45,36 @@ type CambaiTTS struct {
 	httpClient           *http.Client
 }
 
-type CambaiTTSOption func(*CambaiTTS)
+type TTSOption func(*TTS)
 
-type CambaiTTSUpdateOption func(*CambaiTTS)
+type CambaiTTSUpdateOption func(*TTS)
 
-func WithCambaiTTSBaseURL(baseURL string) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithCambaiTTSVoiceID(voiceID int) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSVoiceID(voiceID int) TTSOption {
+	return func(t *TTS) {
 		if voiceID > 0 {
 			t.voiceID = voiceID
 		}
 	}
 }
 
-func WithCambaiTTSLanguage(language string) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithCambaiTTSModel(model string) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 			t.sampleRate = cambaiSampleRateForModel(model)
@@ -82,28 +82,28 @@ func WithCambaiTTSModel(model string) CambaiTTSOption {
 	}
 }
 
-func WithCambaiTTSOutputFormat(outputFormat string) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSOutputFormat(outputFormat string) TTSOption {
+	return func(t *TTS) {
 		if outputFormat != "" {
 			t.outputFormat = outputFormat
 		}
 	}
 }
 
-func WithCambaiTTSUserInstructions(userInstructions string) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSUserInstructions(userInstructions string) TTSOption {
+	return func(t *TTS) {
 		t.userInstructions = userInstructions
 	}
 }
 
-func WithCambaiTTSEnhanceNamedEntities(enabled bool) CambaiTTSOption {
-	return func(t *CambaiTTS) {
+func WithCambaiTTSEnhanceNamedEntities(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.enhanceNamedEntities = enabled
 	}
 }
 
 func WithCambaiTTSUpdateVoiceID(voiceID int) CambaiTTSUpdateOption {
-	return func(t *CambaiTTS) {
+	return func(t *TTS) {
 		if voiceID > 0 {
 			t.voiceID = voiceID
 		}
@@ -111,7 +111,7 @@ func WithCambaiTTSUpdateVoiceID(voiceID int) CambaiTTSUpdateOption {
 }
 
 func WithCambaiTTSUpdateLanguage(language string) CambaiTTSUpdateOption {
-	return func(t *CambaiTTS) {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
@@ -119,7 +119,7 @@ func WithCambaiTTSUpdateLanguage(language string) CambaiTTSUpdateOption {
 }
 
 func WithCambaiTTSUpdateModel(model string) CambaiTTSUpdateOption {
-	return func(t *CambaiTTS) {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 			t.sampleRate = cambaiSampleRateForModel(model)
@@ -128,19 +128,19 @@ func WithCambaiTTSUpdateModel(model string) CambaiTTSUpdateOption {
 }
 
 func WithCambaiTTSUpdateUserInstructions(userInstructions string) CambaiTTSUpdateOption {
-	return func(t *CambaiTTS) {
+	return func(t *TTS) {
 		t.userInstructions = userInstructions
 	}
 }
 
-func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) (*CambaiTTS, error) {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(cambaiAPIKeyEnv)
 	}
 	if apiKey == "" {
 		return nil, fmt.Errorf("camb.ai API key must be provided via api_key parameter or CAMB_API_KEY environment variable")
 	}
-	provider := &CambaiTTS{
+	provider := &TTS{
 		apiKey:       apiKey,
 		baseURL:      defaultCambaiBaseURL,
 		voiceID:      defaultCambaiVoiceID,
@@ -161,24 +161,24 @@ func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) (*Cambai
 	return provider, nil
 }
 
-func (t *CambaiTTS) Label() string { return "cambai.TTS" }
-func (t *CambaiTTS) Model() string { return t.model }
-func (t *CambaiTTS) Provider() string {
+func (t *TTS) Label() string { return "cambai.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "Camb.ai"
 }
-func (t *CambaiTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *CambaiTTS) SampleRate() int  { return t.sampleRate }
-func (t *CambaiTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *CambaiTTS) UpdateOptions(opts ...CambaiTTSUpdateOption) {
+func (t *TTS) UpdateOptions(opts ...CambaiTTSUpdateOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
 }
 
-func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	client := t.httpClient
 	if client == nil {
 		client = http.DefaultClient
@@ -195,7 +195,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}, nil
 }
 
-func buildCambaiTTSRequest(ctx context.Context, t *CambaiTTS, text string) (*http.Request, error) {
+func buildCambaiTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"text":                                 text,
 		"voice_id":                             t.voiceID,
@@ -221,7 +221,7 @@ func buildCambaiTTSRequest(ctx context.Context, t *CambaiTTS, text string) (*htt
 	return req, nil
 }
 
-func (t *CambaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("cambai streaming tts not natively supported by basic rest api")
 }
 
@@ -229,7 +229,7 @@ type cambaiTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
 	text         string
-	opts         CambaiTTS
+	opts         TTS
 	httpClient   *http.Client
 	sampleRate   int
 	outputFormat string
@@ -412,4 +412,15 @@ func cambaiSampleRateForModel(model string) int {
 		return sampleRate
 	}
 	return 22050
+}
+
+// Deprecated: use TTS.
+type CambaiTTS = TTS
+
+// Deprecated: use TTSOption.
+type CambaiTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewCambaiTTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, voice, opts...)
 }

@@ -85,145 +85,148 @@ type openAIRealtimeModelOptions struct {
 	sessionCloseMetricsHook     OpenAIRealtimeSessionCloseMetricsHook
 }
 
-type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
+type RealtimeOption func(*openAIRealtimeModelOptions)
 
-func WithOpenAIRealtimeVoice(voice string) OpenAIRealtimeOption {
+// Deprecated: use RealtimeOption.
+type OpenAIRealtimeOption = RealtimeOption
+
+func WithOpenAIRealtimeVoice(voice string) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Voice = voice
 		options.sessionOptions.VoiceSet = true
 	}
 }
 
-func WithOpenAIRealtimeSpeed(speed float64) OpenAIRealtimeOption {
+func WithOpenAIRealtimeSpeed(speed float64) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Speed = speed
 		options.sessionOptions.SpeedSet = true
 	}
 }
 
-func WithOpenAIRealtimeToolChoice(toolChoice llm.ToolChoice) OpenAIRealtimeOption {
+func WithOpenAIRealtimeToolChoice(toolChoice llm.ToolChoice) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.ToolChoice = toolChoice
 		options.sessionOptions.ToolChoiceSet = true
 	}
 }
 
-func WithOpenAIRealtimeTracing(tracing any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeTracing(tracing any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Tracing = tracing
 		options.sessionOptions.TracingSet = true
 	}
 }
 
-func WithOpenAIRealtimeReasoning(reasoning any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeReasoning(reasoning any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Reasoning = reasoning
 		options.sessionOptions.ReasoningSet = true
 	}
 }
 
-func WithOpenAIRealtimeTruncation(truncation any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeTruncation(truncation any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Truncation = truncation
 		options.sessionOptions.TruncationSet = true
 	}
 }
 
-func WithOpenAIRealtimeInputAudioTranscription(transcription any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeInputAudioTranscription(transcription any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.InputAudioTranscription = transcription
 		options.sessionOptions.InputAudioTranscriptionSet = true
 	}
 }
 
-func WithOpenAIRealtimeInputAudioNoiseReduction(noiseReduction any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeInputAudioNoiseReduction(noiseReduction any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.InputAudioNoiseReduction = noiseReduction
 		options.sessionOptions.InputAudioNoiseReductionSet = true
 	}
 }
 
-func WithOpenAIRealtimeTurnDetection(turnDetection any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeTurnDetection(turnDetection any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.TurnDetection = turnDetection
 		options.sessionOptions.TurnDetectionSet = true
 	}
 }
 
-func WithOpenAIRealtimeModalities(modalities []string) OpenAIRealtimeOption {
+func WithOpenAIRealtimeModalities(modalities []string) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.modalities = append([]string(nil), modalities...)
 		options.modalitiesSet = true
 	}
 }
 
-func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption {
+func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.MaxResponseOutputTokens = tokens
 		options.sessionOptions.MaxResponseOutputTokensSet = true
 	}
 }
 
-func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) OpenAIRealtimeOption {
+func WithOpenAIRealtimeMaxSessionDuration(duration time.Duration) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.maxSession = duration
 		options.maxSessionSet = true
 	}
 }
 
-func WithOpenAIRealtimeConnectOptions(connectOptions llm.APIConnectOptions) OpenAIRealtimeOption {
+func WithOpenAIRealtimeConnectOptions(connectOptions llm.APIConnectOptions) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.connect = &connectOptions
 	}
 }
 
-func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
+func WithOpenAIRealtimeBaseURL(baseURL string) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.baseURL = baseURL
 	}
 }
 
-func WithOpenAIRealtimeWebsocketDialer(dialer OpenAIRealtimeWebsocketDialer) OpenAIRealtimeOption {
+func WithOpenAIRealtimeWebsocketDialer(dialer OpenAIRealtimeWebsocketDialer) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.dialWebsocket = dialer
 	}
 }
 
-func WithOpenAIRealtimeToolFormatter(formatter OpenAIRealtimeToolFormatter) OpenAIRealtimeOption {
+func WithOpenAIRealtimeToolFormatter(formatter OpenAIRealtimeToolFormatter) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.toolFormatter = formatter
 	}
 }
 
-func WithOpenAIRealtimeInputTranscriptionFinalHook(hook OpenAIRealtimeInputTranscriptionFinalHook) OpenAIRealtimeOption {
+func WithOpenAIRealtimeInputTranscriptionFinalHook(hook OpenAIRealtimeInputTranscriptionFinalHook) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.inputTranscriptionFinalHook = hook
 	}
 }
 
-func WithOpenAIRealtimeRemoteItemAddedHook(hook OpenAIRealtimeRemoteItemAddedHook) OpenAIRealtimeOption {
+func WithOpenAIRealtimeRemoteItemAddedHook(hook OpenAIRealtimeRemoteItemAddedHook) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.remoteItemAddedHook = hook
 	}
 }
 
-func WithOpenAIRealtimeFunctionCallFilter(filter OpenAIRealtimeFunctionCallFilter) OpenAIRealtimeOption {
+func WithOpenAIRealtimeFunctionCallFilter(filter OpenAIRealtimeFunctionCallFilter) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.functionCallFilter = filter
 	}
 }
 
-func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMetricsHook) OpenAIRealtimeOption {
+func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMetricsHook) RealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionCloseMetricsHook = hook
 	}
 }
 
-func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
+func NewRealtimeModel(apiKey, model string, opts ...RealtimeOption) *RealtimeModel {
 	return newRealtimeModel(apiKey, model, openAIRealtimeApplyModelOptions(opts...))
 }
 
-func openAIRealtimeApplyModelOptions(opts ...OpenAIRealtimeOption) openAIRealtimeModelOptions {
+func openAIRealtimeApplyModelOptions(opts ...RealtimeOption) openAIRealtimeModelOptions {
 	options := openAIRealtimeModelOptions{}
 	for _, opt := range opts {
 		opt(&options)
@@ -275,7 +278,7 @@ func newRealtimeModel(apiKey, model string, options openAIRealtimeModelOptions) 
 	}
 }
 
-func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAIRealtimeOption) (*RealtimeModel, error) {
+func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...RealtimeOption) (*RealtimeModel, error) {
 	options := openAIRealtimeApplyModelOptions(opts...)
 	if model == "" {
 		model = "gpt-realtime"

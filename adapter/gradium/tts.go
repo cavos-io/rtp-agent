@@ -27,7 +27,7 @@ const (
 	gradiumTTSSampleRate    = 48000
 )
 
-type GradiumTTS struct {
+type TTS struct {
 	apiKey          string
 	modelEndpoint   string
 	modelName       string
@@ -37,44 +37,44 @@ type GradiumTTS struct {
 	jsonConfig      map[string]any
 }
 
-type GradiumTTSOption func(*GradiumTTS)
+type TTSOption func(*TTS)
 
-func WithGradiumTTSModelEndpoint(endpoint string) GradiumTTSOption {
-	return func(t *GradiumTTS) {
+func WithGradiumTTSModelEndpoint(endpoint string) TTSOption {
+	return func(t *TTS) {
 		if endpoint != "" {
 			t.modelEndpoint = strings.TrimRight(endpoint, "/")
 		}
 	}
 }
 
-func WithGradiumTTSModelName(modelName string) GradiumTTSOption {
-	return func(t *GradiumTTS) {
+func WithGradiumTTSModelName(modelName string) TTSOption {
+	return func(t *TTS) {
 		if modelName != "" {
 			t.modelName = modelName
 		}
 	}
 }
 
-func WithGradiumTTSVoiceID(voiceID string) GradiumTTSOption {
-	return func(t *GradiumTTS) {
+func WithGradiumTTSVoiceID(voiceID string) TTSOption {
+	return func(t *TTS) {
 		t.voiceID = voiceID
 	}
 }
 
-func WithGradiumTTSPronunciationID(pronunciationID string) GradiumTTSOption {
-	return func(t *GradiumTTS) {
+func WithGradiumTTSPronunciationID(pronunciationID string) TTSOption {
+	return func(t *TTS) {
 		t.pronunciationID = pronunciationID
 	}
 }
 
-func WithGradiumTTSJSONConfig(jsonConfig map[string]any) GradiumTTSOption {
-	return func(t *GradiumTTS) {
+func WithGradiumTTSJSONConfig(jsonConfig map[string]any) TTSOption {
+	return func(t *TTS) {
 		t.jsonConfig = jsonConfig
 	}
 }
 
-func NewGradiumTTS(apiKey string, voice string, opts ...GradiumTTSOption) *GradiumTTS {
-	provider := &GradiumTTS{
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	provider := &TTS{
 		apiKey:        resolveGradiumAPIKey(apiKey),
 		modelEndpoint: defaultTTSModelEndpoint,
 		modelName:     defaultTTSModelName,
@@ -87,16 +87,16 @@ func NewGradiumTTS(apiKey string, voice string, opts ...GradiumTTSOption) *Gradi
 	return provider
 }
 
-func (t *GradiumTTS) Label() string { return "gradium.TTS" }
-func (t *GradiumTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "gradium.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *GradiumTTS) SampleRate() int  { return gradiumTTSSampleRate }
-func (t *GradiumTTS) NumChannels() int { return 1 }
-func (t *GradiumTTS) Model() string    { return "unknown" }
-func (t *GradiumTTS) Provider() string { return "Gradium" }
+func (t *TTS) SampleRate() int  { return gradiumTTSSampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return "unknown" }
+func (t *TTS) Provider() string { return "Gradium" }
 
-func (t *GradiumTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateGradiumAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -111,14 +111,14 @@ func (t *GradiumTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}, nil
 }
 
-func buildGradiumTTSHeaders(t *GradiumTTS) http.Header {
+func buildGradiumTTSHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("x-api-key", t.apiKey)
 	headers.Set("x-api-source", "livekit")
 	return headers
 }
 
-func buildGradiumTTSSetup(t *GradiumTTS) (map[string]any, error) {
+func buildGradiumTTSSetup(t *TTS) (map[string]any, error) {
 	setup := map[string]any{
 		"type":          "setup",
 		"model_name":    t.modelName,
@@ -143,7 +143,7 @@ func buildGradiumTTSSetup(t *GradiumTTS) (map[string]any, error) {
 	return setup, nil
 }
 
-func mustBuildGradiumTTSSetup(t *GradiumTTS) map[string]any {
+func mustBuildGradiumTTSSetup(t *TTS) map[string]any {
 	setup, err := buildGradiumTTSSetup(t)
 	if err != nil {
 		return map[string]any{}
@@ -167,7 +167,7 @@ func writeGradiumTTSMessage(conn *websocket.Conn, message map[string]any) error 
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
-func (t *GradiumTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateGradiumAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -583,4 +583,15 @@ func gradiumTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+// Deprecated: use TTS.
+type GradiumTTS = TTS
+
+// Deprecated: use TTSOption.
+type GradiumTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewGradiumTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

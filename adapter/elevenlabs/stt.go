@@ -42,7 +42,7 @@ type ElevenLabsVADOptions struct {
 	MinSilenceDurationMS    *int
 }
 
-type ElevenLabsSTT struct {
+type STT struct {
 	apiKey            string
 	baseURL           string
 	modelID           string
@@ -58,72 +58,72 @@ type ElevenLabsSTT struct {
 	closed            bool
 }
 
-type ElevenLabsSTTOption func(*ElevenLabsSTT)
+type STTOption func(*STT)
 
-func WithElevenLabsSTTBaseURL(baseURL string) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithElevenLabsSTTModel(modelID string) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTModel(modelID string) STTOption {
+	return func(s *STT) {
 		if modelID != "" {
 			s.modelID = modelID
 		}
 	}
 }
 
-func WithElevenLabsSTTLanguage(languageCode string) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTLanguage(languageCode string) STTOption {
+	return func(s *STT) {
 		s.languageCode = langutil.NormalizeLanguage(languageCode)
 	}
 }
 
-func WithElevenLabsSTTTagAudioEvents(enabled bool) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTTagAudioEvents(enabled bool) STTOption {
+	return func(s *STT) {
 		s.tagAudioEvents = enabled
 	}
 }
 
-func WithElevenLabsSTTIncludeTimestamps(enabled bool) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTIncludeTimestamps(enabled bool) STTOption {
+	return func(s *STT) {
 		s.includeTimestamps = enabled
 	}
 }
 
-func WithElevenLabsSTTSampleRate(sampleRate int) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) STTOption {
+	return func(s *STT) {
 		s.serverVAD = &serverVAD
 		s.serverVADRefresh = true
 	}
 }
 
-func WithElevenLabsSTTServerVADDisabled() ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTServerVADDisabled() STTOption {
+	return func(s *STT) {
 		s.serverVAD = nil
 		s.serverVADRefresh = true
 	}
 }
 
-func WithElevenLabsSTTKeyterms(keyterms []string) ElevenLabsSTTOption {
-	return func(s *ElevenLabsSTT) {
+func WithElevenLabsSTTKeyterms(keyterms []string) STTOption {
+	return func(s *STT) {
 		s.keyterms = keyterms
 	}
 }
 
-func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT {
-	provider := &ElevenLabsSTT{
+func NewSTT(apiKey string, opts ...STTOption) *STT {
+	provider := &STT{
 		apiKey:         resolveElevenLabsAPIKey(apiKey),
 		baseURL:        defaultElevenLabsSTTBaseURL,
 		modelID:        defaultElevenLabsSTTModel,
@@ -137,18 +137,18 @@ func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT
 	return provider
 }
 
-func (s *ElevenLabsSTT) Label() string { return "elevenlabs.STT" }
-func (s *ElevenLabsSTT) Model() string { return s.modelID }
-func (s *ElevenLabsSTT) Provider() string {
+func (s *STT) Label() string { return "elevenlabs.STT" }
+func (s *STT) Model() string { return s.modelID }
+func (s *STT) Provider() string {
 	return "ElevenLabs"
 }
-func (s *ElevenLabsSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultElevenLabsSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
-func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	realtime := elevenLabsSTTIsRealtime(s.modelID)
 	aligned := ""
 	if realtime && s.includeTimestamps {
@@ -163,7 +163,7 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *ElevenLabsSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -185,7 +185,7 @@ func (s *ElevenLabsSTT) Close() error {
 	return closeErr
 }
 
-func (s *ElevenLabsSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -194,7 +194,7 @@ func (s *ElevenLabsSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	s.serverVADRefresh = false
 	oldServerVAD := s.serverVAD
 	for _, opt := range opts {
@@ -218,7 +218,7 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 	}
 }
 
-func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -261,7 +261,7 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 	return stream, nil
 }
 
-func (s *ElevenLabsSTT) registerStream(stream *elevenLabsSTTStream) bool {
+func (s *STT) registerStream(stream *elevenLabsSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -280,13 +280,13 @@ func (s *ElevenLabsSTT) registerStream(stream *elevenLabsSTTStream) bool {
 	return true
 }
 
-func (s *ElevenLabsSTT) unregisterStream(stream *elevenLabsSTTStream) {
+func (s *STT) unregisterStream(stream *elevenLabsSTTStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
 }
 
-func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -382,7 +382,7 @@ func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32,
 	return wav.Bytes()
 }
 
-func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *ElevenLabsSTT, audio []byte, language string) (*http.Request, error) {
+func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	header := make(textproto.MIMEHeader)
@@ -427,7 +427,7 @@ func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *ElevenLabsSTT, a
 	return req, nil
 }
 
-func buildElevenLabsSTTStreamURL(s *ElevenLabsSTT, language string) string {
+func buildElevenLabsSTTStreamURL(s *STT, language string) string {
 	baseURL := strings.TrimRight(s.baseURL, "/")
 	baseURL = strings.Replace(baseURL, "https://", "wss://", 1)
 	baseURL = strings.Replace(baseURL, "http://", "ws://", 1)
@@ -467,7 +467,7 @@ func buildElevenLabsSTTStreamURL(s *ElevenLabsSTT, language string) string {
 	return u.String()
 }
 
-func buildElevenLabsSTTHeaders(s *ElevenLabsSTT) http.Header {
+func buildElevenLabsSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set(elevenLabsSTTAuthHeader, s.apiKey)
 	return headers
@@ -482,7 +482,7 @@ func buildElevenLabsSTTAudioChunkMessage(audio []byte, sampleRate int, commit bo
 	}
 }
 
-func resolveElevenLabsSTTLanguage(s *ElevenLabsSTT, language string) string {
+func resolveElevenLabsSTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return elevenLabsNormalizeSTTLanguage(language)
 	}
@@ -1154,4 +1154,15 @@ func elevenLabsAnyFloat(value any) float64 {
 	default:
 		return 0
 	}
+}
+
+// Deprecated: use STT.
+type ElevenLabsSTT = STT
+
+// Deprecated: use STTOption.
+type ElevenLabsSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewElevenLabsSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

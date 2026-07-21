@@ -16,20 +16,20 @@ const (
 	defaultBasetenLLMURL   = "https://inference.baseten.co/v1"
 )
 
-type BasetenLLM struct {
-	inner   *adapteropenai.OpenAILLM
+type LLM struct {
+	inner   *adapteropenai.LLM
 	baseURL string
 }
 
-func NewBasetenLLM(apiKey string, model string) (*BasetenLLM, error) {
+func NewLLM(apiKey string, model string) (*LLM, error) {
 	return newBasetenLLMWithBaseURL(apiKey, model, defaultBasetenLLMURL)
 }
 
-func newBasetenLLMWithBaseURL(apiKey string, model string, baseURL string) (*BasetenLLM, error) {
+func newBasetenLLMWithBaseURL(apiKey string, model string, baseURL string) (*LLM, error) {
 	return newBasetenLLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil)
 }
 
-func newBasetenLLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openaisdk.HTTPDoer) (*BasetenLLM, error) {
+func newBasetenLLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openaisdk.HTTPDoer) (*LLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
@@ -39,17 +39,25 @@ func newBasetenLLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL 
 	if model == "" {
 		model = defaultBasetenLLMModel
 	}
-	return &BasetenLLM{
+	return &LLM{
 		inner:   adapteropenai.NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, httpClient),
 		baseURL: baseURL,
 	}, nil
 }
 
-func (l *BasetenLLM) Model() string { return l.inner.Model() }
-func (l *BasetenLLM) Provider() string {
+func (l *LLM) Model() string { return l.inner.Model() }
+func (l *LLM) Provider() string {
 	return "Baseten"
 }
 
-func (l *BasetenLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
+}
+
+// Deprecated: use LLM.
+type BasetenLLM = LLM
+
+// Deprecated: use NewLLM.
+func NewBasetenLLM(apiKey string, model string) (*LLM, error) {
+	return NewLLM(apiKey, model)
 }

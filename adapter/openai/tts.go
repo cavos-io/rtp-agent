@@ -28,7 +28,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-type OpenAITTS struct {
+type TTS struct {
 	tts.MetricsEmitter
 	client               *openai.Client
 	httpClient           openai.HTTPDoer
@@ -58,44 +58,44 @@ const (
 	openAITTSRequestTimeout    = 30 * time.Second
 )
 
-type OpenAITTSOption func(*OpenAITTS)
+type TTSOption func(*TTS)
 
-func WithOpenAITTSModel(model openai.SpeechModel) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSModel(model openai.SpeechModel) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithOpenAITTSVoice(voice openai.SpeechVoice) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSVoice(voice openai.SpeechVoice) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithOpenAITTSSpeed(speed float64) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
 		t.speed = speed
 	}
 }
 
-func WithOpenAITTSInstructions(instructions string) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSInstructions(instructions string) TTSOption {
+	return func(t *TTS) {
 		t.instructions = instructions
 	}
 }
 
-func WithOpenAITTSResponseFormat(format openai.SpeechResponseFormat) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSResponseFormat(format openai.SpeechResponseFormat) TTSOption {
+	return func(t *TTS) {
 		t.responseFormat = format
 	}
 }
 
-func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 			t.baseURLSet = true
@@ -103,30 +103,30 @@ func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
 	}
 }
 
-func withOpenAITTSHTTPClient(client openai.HTTPDoer) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func withOpenAITTSHTTPClient(client openai.HTTPDoer) TTSOption {
+	return func(t *TTS) {
 		if client != nil {
 			t.httpClient = client
 		}
 	}
 }
 
-func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, error)) TTSOption {
+	return func(t *TTS) {
 		t.azureADTokenProvider = provider
 	}
 }
 
-func WithOpenAITTSOrganization(organization string) OpenAITTSOption {
+func WithOpenAITTSOrganization(organization string) TTSOption {
 	return withOpenAITTSExtraHeader("OpenAI-Organization", organization)
 }
 
-func WithOpenAITTSProject(project string) OpenAITTSOption {
+func WithOpenAITTSProject(project string) TTSOption {
 	return withOpenAITTSExtraHeader("OpenAI-Project", project)
 }
 
-func withOpenAITTSExtraHeader(key string, value string) OpenAITTSOption {
-	return func(t *OpenAITTS) {
+func withOpenAITTSExtraHeader(key string, value string) TTSOption {
+	return func(t *TTS) {
 		if t.extraHeaders == nil {
 			t.extraHeaders = map[string]string{}
 		}
@@ -134,7 +134,7 @@ func withOpenAITTSExtraHeader(key string, value string) OpenAITTSOption {
 	}
 }
 
-func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
+func NewTTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
@@ -144,14 +144,14 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 	return newOpenAITTS(openai.NewClient(apiKey), apiKey, model, voice, opts...), nil
 }
 
-func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAITTSOption) (*OpenAITTS, error) {
+func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...TTSOption) (*TTS, error) {
 	if model == "" {
 		model = openai.TTSModelGPT4oMini
 	}
 	if voice == "" {
 		voice = openai.VoiceAsh
 	}
-	preflight := &OpenAITTS{}
+	preflight := &TTS{}
 	for _, opt := range opts {
 		opt(preflight)
 	}
@@ -177,7 +177,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 		azureDeployment = string(model)
 	}
 
-	provider := &OpenAITTS{
+	provider := &TTS{
 		apiKey:          apiKey,
 		azureADToken:    azureADToken,
 		azureAPIKeyAuth: apiKey != "",
@@ -242,14 +242,14 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	return provider, nil
 }
 
-func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) *OpenAITTS {
+func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = openai.TTSModelGPT4oMini
 	}
 	if voice == "" {
 		voice = openai.VoiceAsh
 	}
-	provider := &OpenAITTS{
+	provider := &TTS{
 		client:         client,
 		apiKey:         apiKey,
 		model:          model,
@@ -279,7 +279,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 	return provider
 }
 
-func (t *OpenAITTS) UpdateOptions(opts ...OpenAITTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	responseFormat := t.responseFormat
 	for _, opt := range opts {
 		opt(t)
@@ -287,22 +287,22 @@ func (t *OpenAITTS) UpdateOptions(opts ...OpenAITTSOption) {
 	t.responseFormat = responseFormat
 }
 
-func (t *OpenAITTS) Label() string { return "openai.TTS" }
-func (t *OpenAITTS) Provider() string {
+func (t *TTS) Label() string { return "openai.TTS" }
+func (t *TTS) Provider() string {
 	u, err := url.Parse(t.baseURL)
 	if err != nil || u.Host == "" {
 		return "openai"
 	}
 	return u.Host
 }
-func (t *OpenAITTS) Model() string { return string(t.model) }
-func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Model() string { return string(t.model) }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *OpenAITTS) SampleRate() int  { return 24000 }
-func (t *OpenAITTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return 24000 }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 	}
@@ -326,7 +326,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	return stream, nil
 }
 
-func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechRequest {
+func buildOpenAITTSSpeechRequest(t *TTS, text string) openai.CreateSpeechRequest {
 	return openai.CreateSpeechRequest{
 		Model:          t.model,
 		Input:          text,
@@ -337,12 +337,12 @@ func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechR
 	}
 }
 
-func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	// OpenAI does not have a native streaming API for TTS via standard REST.
 	return nil, fmt.Errorf("streaming is not supported by openai tts, use Synthesize or a StreamAdapter")
 }
 
-func (t *OpenAITTS) Prewarm() {
+func (t *TTS) Prewarm() {
 	if t == nil {
 		return
 	}
@@ -412,7 +412,7 @@ func openAITTSPrewarmURL(baseURL string) string {
 	return u.String()
 }
 
-func (t *OpenAITTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -445,7 +445,7 @@ func (t *OpenAITTS) Close() error {
 	return closeErr
 }
 
-func (t *OpenAITTS) registerStream(stream *openaiTTSChunkedStream) bool {
+func (t *TTS) registerStream(stream *openaiTTSChunkedStream) bool {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -457,13 +457,13 @@ func (t *OpenAITTS) registerStream(stream *openaiTTSChunkedStream) bool {
 	return true
 }
 
-func (t *OpenAITTS) unregisterStream(stream *openaiTTSChunkedStream) {
+func (t *TTS) unregisterStream(stream *openaiTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func (t *OpenAITTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closed
@@ -477,7 +477,7 @@ type openaiTTSChunkedStream struct {
 	resp            io.ReadCloser
 	responseFormat  openai.SpeechResponseFormat
 	streamFormat    string
-	provider        *OpenAITTS
+	provider        *TTS
 	inputText       string
 	requestID       string
 	startOnce       sync.Once
@@ -1317,7 +1317,7 @@ func (s *openaiTTSChunkedStream) Close() error {
 
 type openAITTSStreamFormatHTTPClient struct {
 	base     openai.HTTPDoer
-	provider *OpenAITTS
+	provider *TTS
 }
 
 func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -1341,7 +1341,7 @@ func (c *openAITTSStreamFormatHTTPClient) Do(req *http.Request) (*http.Response,
 	return base.Do(req)
 }
 
-func addOpenAITTSRequestFields(body []byte, provider *OpenAITTS) []byte {
+func addOpenAITTSRequestFields(body []byte, provider *TTS) []byte {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body
@@ -1369,4 +1369,15 @@ func openAITTSStreamFormatForModel(model openai.SpeechModel) string {
 	default:
 		return openAITTSStreamFormatSSE
 	}
+}
+
+// Deprecated: use TTS.
+type OpenAITTS = TTS
+
+// Deprecated: use TTSOption.
+type OpenAITTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, model, voice, opts...)
 }

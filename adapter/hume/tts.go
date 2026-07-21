@@ -30,7 +30,7 @@ const (
 	defaultHumeSampleRate    = 48000
 )
 
-type HumeTTS struct {
+type TTS struct {
 	apiKey          string
 	baseURL         string
 	modelVersion    string
@@ -61,26 +61,26 @@ type HumeTTSUtterance struct {
 	TrailingSilence *float64
 }
 
-type HumeTTSOption func(*HumeTTS)
+type TTSOption func(*TTS)
 
-func WithHumeTTSBaseURL(baseURL string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithHumeTTSModelVersion(modelVersion string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSModelVersion(modelVersion string) TTSOption {
+	return func(t *TTS) {
 		if modelVersion != "" {
 			t.modelVersion = modelVersion
 		}
 	}
 }
 
-func WithHumeTTSVoiceName(name string, provider string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSVoiceName(name string, provider string) TTSOption {
+	return func(t *TTS) {
 		t.voiceID = ""
 		t.voiceName = name
 		t.voiceProvider = provider
@@ -88,8 +88,8 @@ func WithHumeTTSVoiceName(name string, provider string) HumeTTSOption {
 	}
 }
 
-func WithHumeTTSVoiceID(id string, provider string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSVoiceID(id string, provider string) TTSOption {
+	return func(t *TTS) {
 		t.voiceID = id
 		t.voiceName = ""
 		t.voiceProvider = provider
@@ -97,57 +97,57 @@ func WithHumeTTSVoiceID(id string, provider string) HumeTTSOption {
 	}
 }
 
-func WithHumeTTSDescription(description string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSDescription(description string) TTSOption {
+	return func(t *TTS) {
 		t.description = description
 	}
 }
 
-func WithHumeTTSSpeed(speed float64) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
 		t.speed = &speed
 	}
 }
 
-func WithHumeTTSTrailingSilence(trailingSilence float64) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSTrailingSilence(trailingSilence float64) TTSOption {
+	return func(t *TTS) {
 		t.trailingSilence = &trailingSilence
 	}
 }
 
-func WithHumeTTSInstantMode(enabled bool) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSInstantMode(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.instantMode = enabled
 	}
 }
 
-func WithHumeTTSAudioFormat(audioFormat string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSAudioFormat(audioFormat string) TTSOption {
+	return func(t *TTS) {
 		if audioFormat != "" {
 			t.audioFormat = audioFormat
 		}
 	}
 }
 
-func WithHumeTTSContextGenerationID(generationID string) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSContextGenerationID(generationID string) TTSOption {
+	return func(t *TTS) {
 		t.contextID = generationID
 		t.context = nil
 	}
 }
 
-func WithHumeTTSContextUtterances(context []HumeTTSUtterance) HumeTTSOption {
-	return func(t *HumeTTS) {
+func WithHumeTTSContextUtterances(context []HumeTTSUtterance) TTSOption {
+	return func(t *TTS) {
 		t.context = context
 		t.contextID = ""
 	}
 }
 
-func NewHumeTTS(apiKey string, model string, opts ...HumeTTSOption) *HumeTTS {
+func NewTTS(apiKey string, model string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("HUME_API_KEY")
 	}
-	provider := &HumeTTS{
+	provider := &TTS{
 		apiKey:        apiKey,
 		baseURL:       defaultHumeBaseURL,
 		modelVersion:  defaultHumeModelVersion,
@@ -166,16 +166,16 @@ func NewHumeTTS(apiKey string, model string, opts ...HumeTTSOption) *HumeTTS {
 	return provider
 }
 
-func (t *HumeTTS) Label() string { return "hume.TTS" }
-func (t *HumeTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "hume.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *HumeTTS) SampleRate() int  { return t.sampleRate }
-func (t *HumeTTS) NumChannels() int { return 1 }
-func (t *HumeTTS) Model() string    { return "Octave" }
-func (t *HumeTTS) Provider() string { return "Hume" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return "Octave" }
+func (t *TTS) Provider() string { return "Hume" }
 
-func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if _, err := buildHumeTTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}, nil
 }
 
-func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Request, error) {
+func buildHumeTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("hume API key is required via api_key or HUME_API_KEY env var")
 	}
@@ -250,7 +250,7 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	return req, nil
 }
 
-func validateHumeTTSOptions(t *HumeTTS) error {
+func validateHumeTTSOptions(t *TTS) error {
 	if t.instantMode && t.voiceID == "" && t.voiceName == "" {
 		return fmt.Errorf("hume TTS: instant_mode cannot be enabled without specifying a voice")
 	}
@@ -291,7 +291,7 @@ func humeTTSVoicePayload(voice HumeTTSVoice) map[string]interface{} {
 	return payload
 }
 
-func (t *HumeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming tts not natively supported by basic hume rest api")
 }
 
@@ -299,7 +299,7 @@ type humeTTSChunkedStream struct {
 	resp          *http.Response
 	ctx           context.Context
 	text          string
-	opts          HumeTTS
+	opts          TTS
 	audioFormat   string
 	sampleRate    int
 	scanner       *bufio.Scanner
@@ -551,4 +551,15 @@ func decodeHumeBase64Audio(value string) ([]byte, error) {
 		return nil, nil
 	}
 	return base64.StdEncoding.DecodeString(string(filtered))
+}
+
+// Deprecated: use TTS.
+type HumeTTS = TTS
+
+// Deprecated: use TTSOption.
+type HumeTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewHumeTTS(apiKey string, model string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, model, opts...)
 }

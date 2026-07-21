@@ -37,7 +37,7 @@ var (
 	}
 )
 
-type SarvamLLM struct {
+type LLM struct {
 	apiKey       string
 	model        string
 	baseURL      string
@@ -46,46 +46,46 @@ type SarvamLLM struct {
 	httpClient   sarvamLLMHTTPDoer
 }
 
-type SarvamLLMOption func(*SarvamLLM)
+type LLMOption func(*LLM)
 
 type sarvamLLMHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-func WithSarvamLLMBaseURL(baseURL string) SarvamLLMOption {
-	return func(l *SarvamLLM) {
+func WithSarvamLLMBaseURL(baseURL string) LLMOption {
+	return func(l *LLM) {
 		if baseURL != "" {
 			l.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSarvamLLMExtraHeaders(headers map[string]string) SarvamLLMOption {
-	return func(l *SarvamLLM) {
+func WithSarvamLLMExtraHeaders(headers map[string]string) LLMOption {
+	return func(l *LLM) {
 		l.extraHeaders = cloneSarvamStringMap(headers)
 	}
 }
 
-func WithSarvamLLMExtraBody(body map[string]any) SarvamLLMOption {
-	return func(l *SarvamLLM) {
+func WithSarvamLLMExtraBody(body map[string]any) LLMOption {
+	return func(l *LLM) {
 		l.extraBody = filterSarvamLLMExtraBody(body)
 	}
 }
 
-func withSarvamLLMHTTPClient(client sarvamLLMHTTPDoer) SarvamLLMOption {
-	return func(l *SarvamLLM) {
+func withSarvamLLMHTTPClient(client sarvamLLMHTTPDoer) LLMOption {
+	return func(l *LLM) {
 		if client != nil {
 			l.httpClient = client
 		}
 	}
 }
 
-func NewSarvamLLM(apiKey string, model string, opts ...SarvamLLMOption) *SarvamLLM {
+func NewLLM(apiKey string, model string, opts ...LLMOption) *LLM {
 	provider, _ := NewSarvamLLMWithError(apiKey, model, opts...)
 	return provider
 }
 
-func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption) (*SarvamLLM, error) {
+func NewSarvamLLMWithError(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultSarvamLLMModel
 	}
@@ -96,7 +96,7 @@ func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption)
 	if resolvedAPIKey == "" {
 		return nil, fmt.Errorf("sarvam API key is required, either as argument or set SARVAM_API_KEY environment variable")
 	}
-	provider := &SarvamLLM{
+	provider := &LLM{
 		apiKey:     resolvedAPIKey,
 		model:      model,
 		baseURL:    defaultSarvamLLMBaseURL,
@@ -108,19 +108,19 @@ func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption)
 	return provider, nil
 }
 
-func (l *SarvamLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
-func (l *SarvamLLM) Provider() string {
+func (l *LLM) Provider() string {
 	return "Sarvam"
 }
 
-func (l *SarvamLLM) BaseURL() string {
+func (l *LLM) BaseURL() string {
 	return l.baseURL
 }
 
-func (l *SarvamLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{
 		ParallelToolCalls: true,
 	}
@@ -164,7 +164,7 @@ func (l *SarvamLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}, nil
 }
 
-func buildSarvamLLMChatRequest(ctx context.Context, l *SarvamLLM, chatCtx *llm.ChatContext, options *llm.ChatOptions) (*http.Request, error) {
+func buildSarvamLLMChatRequest(ctx context.Context, l *LLM, chatCtx *llm.ChatContext, options *llm.ChatOptions) (*http.Request, error) {
 	payload := map[string]any{
 		"model":    l.model,
 		"messages": buildSarvamLLMMessages(chatCtx),
@@ -323,4 +323,15 @@ func sarvamLLMChunkFromSSEData(data []byte) (*llm.ChatChunk, error) {
 		}
 	}
 	return chunk, nil
+}
+
+// Deprecated: use LLM.
+type SarvamLLM = LLM
+
+// Deprecated: use LLMOption.
+type SarvamLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewSarvamLLM(apiKey string, model string, opts ...LLMOption) *LLM {
+	return NewLLM(apiKey, model, opts...)
 }

@@ -37,7 +37,7 @@ var speechmaticsTTSRetryInterval = func(retryAttempt int) time.Duration {
 	return llm.DefaultAPIConnectOptions().IntervalForRetry(retryAttempt)
 }
 
-type SpeechmaticsTTS struct {
+type TTS struct {
 	mu         sync.Mutex
 	streams    map[*speechmaticsTTSChunkedStream]struct{}
 	apiKey     string
@@ -47,31 +47,31 @@ type SpeechmaticsTTS struct {
 	closed     bool
 }
 
-type SpeechmaticsTTSOption func(*SpeechmaticsTTS)
+type TTSOption func(*TTS)
 
-func WithSpeechmaticsTTSVoice(voice string) SpeechmaticsTTSOption {
-	return func(t *SpeechmaticsTTS) {
+func WithSpeechmaticsTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		t.voice = voice
 	}
 }
 
-func WithSpeechmaticsTTSSampleRate(sampleRate int) SpeechmaticsTTSOption {
-	return func(t *SpeechmaticsTTS) {
+func WithSpeechmaticsTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		t.sampleRate = sampleRate
 	}
 }
 
-func WithSpeechmaticsTTSBaseURL(baseURL string) SpeechmaticsTTSOption {
-	return func(t *SpeechmaticsTTS) {
+func WithSpeechmaticsTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		t.baseURL = baseURL
 	}
 }
 
-func NewSpeechmaticsTTS(apiKey string, opts ...SpeechmaticsTTSOption) *SpeechmaticsTTS {
+func NewTTS(apiKey string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
 	}
-	provider := &SpeechmaticsTTS{
+	provider := &TTS{
 		apiKey:     apiKey,
 		voice:      defaultSpeechmaticsTTSVoice,
 		sampleRate: defaultSpeechmaticsTTSSampleRate,
@@ -83,23 +83,23 @@ func NewSpeechmaticsTTS(apiKey string, opts ...SpeechmaticsTTSOption) *Speechmat
 	return provider
 }
 
-func (t *SpeechmaticsTTS) Label() string { return "speechmatics.TTS" }
-func (t *SpeechmaticsTTS) Model() string { return "unknown" }
-func (t *SpeechmaticsTTS) Provider() string {
+func (t *TTS) Label() string { return "speechmatics.TTS" }
+func (t *TTS) Model() string { return "unknown" }
+func (t *TTS) Provider() string {
 	return "Speechmatics"
 }
 
-func (t *SpeechmaticsTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpeechmaticsTTS) SampleRate() int {
+func (t *TTS) SampleRate() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sampleRate
 }
-func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	t.mu.Lock()
 	closed := t.closed
 	apiKey := t.apiKey
@@ -130,7 +130,7 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 	return stream, nil
 }
 
-func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text string) (*http.Request, error) {
+func buildSpeechmaticsTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	t.mu.Lock()
 	apiKey := t.apiKey
 	baseURL := t.baseURL
@@ -180,7 +180,7 @@ func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmati
 	return req, nil
 }
 
-func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	sampleRate := t.sampleRate
@@ -192,7 +192,7 @@ func (t *SpeechmaticsTTS) UpdateOptions(opts ...SpeechmaticsTTSOption) {
 	t.baseURL = baseURL
 }
 
-func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	t.mu.Lock()
 	closed := t.closed
 	t.mu.Unlock()
@@ -202,7 +202,7 @@ func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, err
 	return nil, fmt.Errorf("streaming is not supported by this TTS, please use a different TTS or use a StreamAdapter")
 }
 
-func (t *SpeechmaticsTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -228,7 +228,7 @@ func (t *SpeechmaticsTTS) Close() error {
 	return closeErr
 }
 
-func (t *SpeechmaticsTTS) registerStream(stream *speechmaticsTTSChunkedStream) bool {
+func (t *TTS) registerStream(stream *speechmaticsTTSChunkedStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -246,7 +246,7 @@ func (t *SpeechmaticsTTS) registerStream(stream *speechmaticsTTSChunkedStream) b
 	return true
 }
 
-func (t *SpeechmaticsTTS) unregisterStream(stream *speechmaticsTTSChunkedStream) {
+func (t *TTS) unregisterStream(stream *speechmaticsTTSChunkedStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -261,7 +261,7 @@ type speechmaticsTTSChunkedStream struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	requestCancel context.CancelFunc
-	owner         *SpeechmaticsTTS
+	owner         *TTS
 	text          string
 	apiKey        string
 	baseURL       string
@@ -976,4 +976,15 @@ func (s *speechmaticsTTSChunkedStream) finish() {
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
 	}
+}
+
+// Deprecated: use TTS.
+type SpeechmaticsTTS = TTS
+
+// Deprecated: use TTSOption.
+type SpeechmaticsTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSpeechmaticsTTS(apiKey string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, opts...)
 }

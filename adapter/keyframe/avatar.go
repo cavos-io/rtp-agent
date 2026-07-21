@@ -16,14 +16,14 @@ const (
 	keyframeAPIURLEnv          = "KEYFRAME_API_URL"
 )
 
-type KeyframeAgent struct {
+type Avatar struct {
 	apiKey         string
 	apiURL         string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewKeyframeAgent(apiKey string) *KeyframeAgent {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(keyframeAPIKeyEnv)
 	}
@@ -31,7 +31,7 @@ func NewKeyframeAgent(apiKey string) *KeyframeAgent {
 	if apiURL == "" {
 		apiURL = defaultAPIURL
 	}
-	return &KeyframeAgent{
+	return &Avatar{
 		apiKey:         apiKey,
 		apiURL:         apiURL,
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -39,19 +39,27 @@ func NewKeyframeAgent(apiKey string) *KeyframeAgent {
 	}
 }
 
-func (a *KeyframeAgent) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *KeyframeAgent) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *KeyframeAgent) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *KeyframeAgent) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type KeyframeAgent = Avatar
+
+// Deprecated: use NewAvatar.
+func NewKeyframeAgent(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

@@ -40,7 +40,7 @@ const (
 	nvidiaRealtimeGenerateReplyUnsupported  = "generate_reply is not yet supported by the PersonaPlex realtime model."
 )
 
-type NvidiaRealtimeModel struct {
+type RealtimeModel struct {
 	baseURL            string
 	voice              string
 	textPrompt         string
@@ -177,10 +177,10 @@ func (s *nvidiaRealtimeUnboundedStream[T]) channel() <-chan T {
 	return s.out
 }
 
-type NvidiaRealtimeOption func(*NvidiaRealtimeModel)
+type RealtimeOption func(*RealtimeModel)
 
-func WithNvidiaRealtimeBaseURL(baseURL string) NvidiaRealtimeOption {
-	return func(m *NvidiaRealtimeModel) {
+func WithNvidiaRealtimeBaseURL(baseURL string) RealtimeOption {
+	return func(m *RealtimeModel) {
 		if baseURL == "" {
 			return
 		}
@@ -189,37 +189,37 @@ func WithNvidiaRealtimeBaseURL(baseURL string) NvidiaRealtimeOption {
 	}
 }
 
-func WithNvidiaRealtimeVoice(voice string) NvidiaRealtimeOption {
-	return func(m *NvidiaRealtimeModel) {
+func WithNvidiaRealtimeVoice(voice string) RealtimeOption {
+	return func(m *RealtimeModel) {
 		m.voice = voice
 	}
 }
 
-func WithNvidiaRealtimeTextPrompt(prompt string) NvidiaRealtimeOption {
-	return func(m *NvidiaRealtimeModel) {
+func WithNvidiaRealtimeTextPrompt(prompt string) RealtimeOption {
+	return func(m *RealtimeModel) {
 		m.textPrompt = prompt
 	}
 }
 
-func WithNvidiaRealtimeSeed(seed int) NvidiaRealtimeOption {
-	return func(m *NvidiaRealtimeModel) {
+func WithNvidiaRealtimeSeed(seed int) RealtimeOption {
+	return func(m *RealtimeModel) {
 		m.seed = &seed
 	}
 }
 
-func WithNvidiaRealtimeSilenceThresholdMS(threshold int) NvidiaRealtimeOption {
-	return func(m *NvidiaRealtimeModel) {
+func WithNvidiaRealtimeSilenceThresholdMS(threshold int) RealtimeOption {
+	return func(m *RealtimeModel) {
 		m.silenceThresholdMS = threshold
 	}
 }
 
-func NewNvidiaRealtimeModel(opts ...NvidiaRealtimeOption) *NvidiaRealtimeModel {
+func NewRealtimeModel(opts ...RealtimeOption) *RealtimeModel {
 	baseURL := os.Getenv(nvidiaPersonaplexURLEnv)
 	if baseURL == "" {
 		baseURL = defaultNvidiaRealtimeBaseURL
 	}
 	normalizedBaseURL, useSSL := normalizeNvidiaRealtimeBaseURL(baseURL)
-	model := &NvidiaRealtimeModel{
+	model := &RealtimeModel{
 		baseURL:            normalizedBaseURL,
 		voice:              defaultNvidiaRealtimeVoice,
 		textPrompt:         defaultNvidiaRealtimeTextPrompt,
@@ -244,19 +244,19 @@ func normalizeNvidiaRealtimeBaseURL(baseURL string) (string, bool) {
 	return baseURL, useSSL
 }
 
-func (m *NvidiaRealtimeModel) Label() string {
+func (m *RealtimeModel) Label() string {
 	return "personaplex-" + m.voice
 }
 
-func (m *NvidiaRealtimeModel) Model() string {
+func (m *RealtimeModel) Model() string {
 	return defaultNvidiaRealtimeModel
 }
 
-func (m *NvidiaRealtimeModel) Provider() string {
+func (m *RealtimeModel) Provider() string {
 	return "nvidia"
 }
 
-func (m *NvidiaRealtimeModel) websocketURL() string {
+func (m *RealtimeModel) websocketURL() string {
 	return buildNvidiaRealtimeWebsocketURL(m.useSSL, m.baseURL, m.voice, m.textPrompt, m.seed)
 }
 
@@ -276,19 +276,19 @@ func buildNvidiaRealtimeWebsocketURL(useSSL bool, baseURL string, voice string, 
 	return fmt.Sprintf("%s://%s/api/chat?%s", scheme, baseURL, query)
 }
 
-func (m *NvidiaRealtimeModel) InputSampleRate() int {
+func (m *RealtimeModel) InputSampleRate() int {
 	return defaultNvidiaRealtimeSampleRate
 }
 
-func (m *NvidiaRealtimeModel) OutputSampleRate() int {
+func (m *RealtimeModel) OutputSampleRate() int {
 	return defaultNvidiaRealtimeSampleRate
 }
 
-func (m *NvidiaRealtimeModel) NumChannels() int {
+func (m *RealtimeModel) NumChannels() int {
 	return defaultNvidiaRealtimeNumChannels
 }
 
-func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       false,
 		TurnDetection:           false,
@@ -300,7 +300,7 @@ func (m *NvidiaRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	}
 }
 
-func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
+func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	session := &nvidiaRealtimeSession{
 		baseURL:            m.baseURL,
 		voice:              m.voice,
@@ -323,7 +323,7 @@ func (m *NvidiaRealtimeModel) Session() (llm.RealtimeSession, error) {
 	return session, nil
 }
 
-func (m *NvidiaRealtimeModel) Close() error {
+func (m *RealtimeModel) Close() error {
 	return nil
 }
 
@@ -1254,4 +1254,15 @@ func (g *nvidiaRealtimeGeneration) markFirstToken() {
 	}
 	now := time.Now()
 	g.firstTokenAt = &now
+}
+
+// Deprecated: use RealtimeModel.
+type NvidiaRealtimeModel = RealtimeModel
+
+// Deprecated: use RealtimeOption.
+type NvidiaRealtimeOption = RealtimeOption
+
+// Deprecated: use NewRealtimeModel.
+func NewNvidiaRealtimeModel(opts ...RealtimeOption) *RealtimeModel {
+	return NewRealtimeModel(opts...)
 }

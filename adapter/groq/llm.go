@@ -19,12 +19,12 @@ const (
 	defaultGroqLLMModel   = "llama-3.3-70b-versatile"
 )
 
-type GroqLLM struct {
-	inner           *openai.OpenAILLM
+type LLM struct {
+	inner           *openai.LLM
 	apiKey          string
 	baseURL         string
 	reasoningEffort string
-	llmOptions      []openai.OpenAILLMOption
+	llmOptions      []openai.LLMOption
 	mu              sync.Mutex
 	closed          bool
 	streams         map[*groqLLMStream]struct{}
@@ -33,58 +33,58 @@ type GroqLLM struct {
 	}
 }
 
-type GroqLLMOption func(*GroqLLM)
+type LLMOption func(*LLM)
 
-func WithGroqLLMBaseURL(baseURL string) GroqLLMOption {
-	return func(l *GroqLLM) {
+func WithGroqLLMBaseURL(baseURL string) LLMOption {
+	return func(l *LLM) {
 		if baseURL != "" {
 			l.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithGroqLLMReasoningEffort(reasoningEffort string) GroqLLMOption {
-	return func(l *GroqLLM) {
+func WithGroqLLMReasoningEffort(reasoningEffort string) LLMOption {
+	return func(l *LLM) {
 		l.reasoningEffort = reasoningEffort
 	}
 }
 
-func WithGroqLLMTimeout(timeout time.Duration) GroqLLMOption {
-	return func(l *GroqLLM) {
+func WithGroqLLMTimeout(timeout time.Duration) LLMOption {
+	return func(l *LLM) {
 		if timeout > 0 {
 			l.llmOptions = append(l.llmOptions, openai.WithOpenAILLMTimeout(timeout))
 		}
 	}
 }
 
-func WithGroqLLMMaxRetries(maxRetries int) GroqLLMOption {
-	return func(l *GroqLLM) {
+func WithGroqLLMMaxRetries(maxRetries int) LLMOption {
+	return func(l *LLM) {
 		if maxRetries >= 0 {
 			l.llmOptions = append(l.llmOptions, openai.WithOpenAILLMMaxRetries(maxRetries))
 		}
 	}
 }
 
-func WithGroqLLMOptions(opts ...openai.OpenAILLMOption) GroqLLMOption {
-	return func(l *GroqLLM) {
+func WithGroqLLMOptions(opts ...openai.LLMOption) LLMOption {
+	return func(l *LLM) {
 		l.llmOptions = append(l.llmOptions, opts...)
 	}
 }
 
 func withGroqLLMHTTPClient(client interface {
 	Do(*http.Request) (*http.Response, error)
-}) GroqLLMOption {
-	return func(l *GroqLLM) {
+}) LLMOption {
+	return func(l *LLM) {
 		l.httpClient = client
 	}
 }
 
-func NewGroqLLM(apiKey string, model string, opts ...GroqLLMOption) *GroqLLM {
+func NewLLM(apiKey string, model string, opts ...LLMOption) *LLM {
 	resolvedAPIKey := resolveGroqAPIKey(apiKey)
 	if model == "" {
 		model = defaultGroqLLMModel
 	}
-	provider := &GroqLLM{
+	provider := &LLM{
 		apiKey:  resolvedAPIKey,
 		baseURL: defaultGroqLLMBaseURL,
 	}
@@ -94,7 +94,7 @@ func NewGroqLLM(apiKey string, model string, opts ...GroqLLMOption) *GroqLLM {
 	if provider.reasoningEffort == "" {
 		provider.reasoningEffort = defaultGroqLLMReasoningEffort(model)
 	}
-	openAIOpts := []openai.OpenAILLMOption{openai.WithOpenAILLMMaxRetries(0)}
+	openAIOpts := []openai.LLMOption{openai.WithOpenAILLMMaxRetries(0)}
 	if provider.reasoningEffort != "" {
 		openAIOpts = append(openAIOpts, openai.WithOpenAILLMReasoningEffort(provider.reasoningEffort))
 	}
@@ -110,8 +110,8 @@ func resolveGroqAPIKey(apiKey string) string {
 	return os.Getenv("GROQ_API_KEY")
 }
 
-func (l *GroqLLM) Model() string { return l.inner.Model() }
-func (l *GroqLLM) Provider() string {
+func (l *LLM) Model() string { return l.inner.Model() }
+func (l *LLM) Provider() string {
 	return groqProviderHost(l.baseURL, "groq")
 }
 
@@ -126,7 +126,7 @@ func defaultGroqLLMReasoningEffort(model string) string {
 	}
 }
 
-func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("groq API key is required, either as argument or set GROQ_API_KEY environmental variable")
 	}
@@ -148,7 +148,7 @@ func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...ll
 	return stream, nil
 }
 
-func (l *GroqLLM) Close() error {
+func (l *LLM) Close() error {
 	if l == nil || l.inner == nil {
 		return nil
 	}
@@ -166,13 +166,13 @@ func (l *GroqLLM) Close() error {
 	return l.inner.Close()
 }
 
-func (l *GroqLLM) isClosed() bool {
+func (l *LLM) isClosed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.closed
 }
 
-func (l *GroqLLM) registerStream(stream *groqLLMStream) bool {
+func (l *LLM) registerStream(stream *groqLLMStream) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
@@ -185,7 +185,7 @@ func (l *GroqLLM) registerStream(stream *groqLLMStream) bool {
 	return true
 }
 
-func (l *GroqLLM) unregisterStream(stream *groqLLMStream) {
+func (l *LLM) unregisterStream(stream *groqLLMStream) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.streams, stream)
@@ -194,7 +194,7 @@ func (l *GroqLLM) unregisterStream(stream *groqLLMStream) {
 type groqLLMStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
-	provider *GroqLLM
+	provider *LLM
 	chatCtx  *llm.ChatContext
 	opts     []llm.ChatOption
 
@@ -290,4 +290,15 @@ func (s *groqLLMStream) unregister() {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
+}
+
+// Deprecated: use LLM.
+type GroqLLM = LLM
+
+// Deprecated: use LLMOption.
+type GroqLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewGroqLLM(apiKey string, model string, opts ...LLMOption) *LLM {
+	return NewLLM(apiKey, model, opts...)
 }

@@ -39,7 +39,7 @@ var (
 	smallestAISTTUsageReportInterval = 5 * time.Second
 )
 
-type SmallestAISTT struct {
+type STT struct {
 	apiKey         string
 	baseURL        string
 	model          string
@@ -55,82 +55,82 @@ type SmallestAISTT struct {
 	closed         bool
 }
 
-type SmallestAISTTOption func(*SmallestAISTT)
+type STTOption func(*STT)
 type smallestAISTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithSmallestAISTTBaseURL(baseURL string) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSmallestAISTTModel(model string) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithSmallestAISTTLanguage(language string) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithSmallestAISTTSampleRate(sampleRate int) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithSmallestAISTTEncoding(encoding string) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTEncoding(encoding string) STTOption {
+	return func(s *STT) {
 		if encoding != "" {
 			s.encoding = encoding
 		}
 	}
 }
 
-func WithSmallestAISTTWordTimestamps(enabled bool) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTWordTimestamps(enabled bool) STTOption {
+	return func(s *STT) {
 		s.wordTimestamps = enabled
 	}
 }
 
-func WithSmallestAISTTDiarize(enabled bool) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTDiarize(enabled bool) STTOption {
+	return func(s *STT) {
 		s.diarize = enabled
 	}
 }
 
-func WithSmallestAISTTEOUTimeoutMS(timeoutMS int) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func WithSmallestAISTTEOUTimeoutMS(timeoutMS int) STTOption {
+	return func(s *STT) {
 		if timeoutMS >= 0 {
 			s.eouTimeoutMS = timeoutMS
 		}
 	}
 }
 
-func withSmallestAISTTWebsocketDialer(dialer smallestAISTTWebsocketDialer) SmallestAISTTOption {
-	return func(s *SmallestAISTT) {
+func withSmallestAISTTWebsocketDialer(dialer smallestAISTTWebsocketDialer) STTOption {
+	return func(s *STT) {
 		if dialer != nil {
 			s.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(smallestAIAPIKeyEnv)
 	}
-	provider := &SmallestAISTT{
+	provider := &STT{
 		apiKey:         apiKey,
 		baseURL:        defaultSmallestAISTTBaseURL,
 		model:          defaultSmallestAISTTModel,
@@ -149,16 +149,16 @@ func NewSmallestAISTT(apiKey string, opts ...SmallestAISTTOption) *SmallestAISTT
 	return provider
 }
 
-func (s *SmallestAISTT) Label() string { return "smallestai.STT" }
-func (s *SmallestAISTT) Model() string { return s.model }
-func (s *SmallestAISTT) Provider() string {
+func (s *STT) Label() string { return "smallestai.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "SmallestAI"
 }
-func (s *SmallestAISTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 
-func (s *SmallestAISTT) UpdateOptions(opts ...SmallestAISTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -180,7 +180,7 @@ func (s *SmallestAISTT) UpdateOptions(opts ...SmallestAISTTOption) {
 	}
 }
 
-func (s *SmallestAISTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -206,7 +206,7 @@ func (s *SmallestAISTT) Close() error {
 	return closeErr
 }
 
-func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	aligned := ""
 	if s.wordTimestamps {
 		aligned = "word"
@@ -220,7 +220,7 @@ func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -267,7 +267,7 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	return stream, nil
 }
 
-func (s *SmallestAISTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -276,7 +276,7 @@ func (s *SmallestAISTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *SmallestAISTT) registerStream(stream *smallestAISTTStream) bool {
+func (s *STT) registerStream(stream *smallestAISTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -292,7 +292,7 @@ func (s *SmallestAISTT) registerStream(stream *smallestAISTTStream) bool {
 	return true
 }
 
-func (s *SmallestAISTT) unregisterStream(stream *smallestAISTTStream) {
+func (s *STT) unregisterStream(stream *smallestAISTTStream) {
 	if s == nil {
 		return
 	}
@@ -305,7 +305,7 @@ func defaultSmallestAISTTWebsocketDialer(ctx context.Context, endpoint string, h
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := validateSmallestAISTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -379,7 +379,7 @@ func smallestAISTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32)
 	return wav.Bytes()
 }
 
-func buildSmallestAISTTRecognizeRequest(ctx context.Context, s *SmallestAISTT, audio []byte, language string) (*http.Request, error) {
+func buildSmallestAISTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, buildSmallestAISTTHTTPURL(s, language), bytes.NewReader(audio))
 	if err != nil {
 		return nil, err
@@ -393,14 +393,14 @@ func buildSmallestAISTTRecognizeRequest(ctx context.Context, s *SmallestAISTT, a
 	return req, nil
 }
 
-func buildSmallestAISTTHTTPURL(s *SmallestAISTT, language string) string {
+func buildSmallestAISTTHTTPURL(s *STT, language string) string {
 	u, _ := url.Parse(strings.TrimRight(s.baseURL, "/") + "/" + s.model + "/get_text")
 	q := smallestAISTTQuery(s, language, false)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
-func buildSmallestAISTTStreamURL(s *SmallestAISTT, language string) string {
+func buildSmallestAISTTStreamURL(s *STT, language string) string {
 	return buildSmallestAISTTStreamURLFromOptions(s.streamOptionsLocked(language))
 }
 
@@ -414,7 +414,7 @@ func buildSmallestAISTTStreamURLFromOptions(opts smallestAISTTStreamOptions) str
 	return u.String()
 }
 
-func smallestAISTTQuery(s *SmallestAISTT, language string, includeEOU bool) url.Values {
+func smallestAISTTQuery(s *STT, language string, includeEOU bool) url.Values {
 	q := url.Values{}
 	q.Set("language", resolveSmallestAISTTLanguage(s, language))
 	q.Set("encoding", s.encoding)
@@ -440,7 +440,7 @@ func smallestAISTTQueryFromOptions(opts smallestAISTTStreamOptions, includeEOU b
 	return q
 }
 
-func buildSmallestAISTTHeaders(s *SmallestAISTT) http.Header {
+func buildSmallestAISTTHeaders(s *STT) http.Header {
 	return buildSmallestAISTTHeadersFromAPIKey(s.apiKey)
 }
 
@@ -452,7 +452,7 @@ func buildSmallestAISTTHeadersFromAPIKey(apiKey string) http.Header {
 	return headers
 }
 
-func resolveSmallestAISTTLanguage(s *SmallestAISTT, language string) string {
+func resolveSmallestAISTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -471,7 +471,7 @@ type smallestAISTTStreamOptions struct {
 	eouTimeoutMS   int
 }
 
-func (s *SmallestAISTT) streamOptionsLocked(language string) smallestAISTTStreamOptions {
+func (s *STT) streamOptionsLocked(language string) smallestAISTTStreamOptions {
 	streamLanguage := s.language
 	if language != "" {
 		streamLanguage = language
@@ -490,7 +490,7 @@ func (s *SmallestAISTT) streamOptionsLocked(language string) smallestAISTTStream
 }
 
 type smallestAISTTStream struct {
-	owner         *SmallestAISTT
+	owner         *STT
 	dialWebsocket smallestAISTTWebsocketDialer
 	conn          *websocket.Conn
 	events        chan *stt.SpeechEvent
@@ -995,4 +995,15 @@ func smallestAIMajoritySpeaker(words []smallestAIWord) string {
 		return counts[speakers[i]] > counts[speakers[j]]
 	})
 	return "S" + strconv.Itoa(speakers[0])
+}
+
+// Deprecated: use STT.
+type SmallestAISTT = STT
+
+// Deprecated: use STTOption.
+type SmallestAISTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewSmallestAISTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

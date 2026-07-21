@@ -38,7 +38,7 @@ const (
 	rtzrClientSecretEnv    = "RTZR_CLIENT_SECRET"
 )
 
-type RtzrSTT struct {
+type STT struct {
 	clientID        string
 	clientSecret    string
 	accessToken     string
@@ -58,7 +58,7 @@ type RtzrSTT struct {
 	dialWebsocket   rtzrWebsocketDialer
 }
 
-type RtzrSTTOption func(*RtzrSTT)
+type STTOption func(*STT)
 
 type rtzrHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -66,123 +66,123 @@ type rtzrHTTPDoer interface {
 
 type rtzrWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithRtzrClientSecret(secret string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrClientSecret(secret string) STTOption {
+	return func(s *STT) {
 		s.clientSecret = secret
 	}
 }
 
-func WithRtzrAccessToken(token string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrAccessToken(token string) STTOption {
+	return func(s *STT) {
 		s.accessToken = token
 	}
 }
 
-func WithRtzrAPIBase(apiBase string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrAPIBase(apiBase string) STTOption {
+	return func(s *STT) {
 		if apiBase != "" {
 			s.apiBase = strings.TrimRight(apiBase, "/")
 		}
 	}
 }
 
-func WithRtzrWSBase(wsBase string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrWSBase(wsBase string) STTOption {
+	return func(s *STT) {
 		if wsBase != "" {
 			s.wsBase = strings.TrimRight(wsBase, "/")
 		}
 	}
 }
 
-func WithRtzrModel(model string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.modelName = model
 		}
 	}
 }
 
-func WithRtzrLanguage(language string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithRtzrSampleRate(sampleRate int) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithRtzrDomain(domain string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrDomain(domain string) STTOption {
+	return func(s *STT) {
 		if domain != "" {
 			s.domain = domain
 		}
 	}
 }
 
-func WithRtzrEPDTime(epdTime float64) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrEPDTime(epdTime float64) STTOption {
+	return func(s *STT) {
 		if epdTime > 0 {
 			s.epdTime = epdTime
 		}
 	}
 }
 
-func WithRtzrNoiseThreshold(noiseThreshold float64) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrNoiseThreshold(noiseThreshold float64) STTOption {
+	return func(s *STT) {
 		if noiseThreshold > 0 {
 			s.noiseThreshold = noiseThreshold
 		}
 	}
 }
 
-func WithRtzrActiveThreshold(activeThreshold float64) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrActiveThreshold(activeThreshold float64) STTOption {
+	return func(s *STT) {
 		if activeThreshold > 0 {
 			s.activeThreshold = activeThreshold
 		}
 	}
 }
 
-func WithRtzrUsePunctuation(usePunctuation bool) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrUsePunctuation(usePunctuation bool) STTOption {
+	return func(s *STT) {
 		s.usePunctuation = usePunctuation
 	}
 }
 
-func WithRtzrKeywords(keywords []string) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func WithRtzrKeywords(keywords []string) STTOption {
+	return func(s *STT) {
 		s.keywords = keywords
 	}
 }
 
-func withRtzrHTTPClient(client rtzrHTTPDoer) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func withRtzrHTTPClient(client rtzrHTTPDoer) STTOption {
+	return func(s *STT) {
 		if client != nil {
 			s.httpClient = client
 		}
 	}
 }
 
-func withRtzrWebsocketDialer(dialer rtzrWebsocketDialer) RtzrSTTOption {
-	return func(s *RtzrSTT) {
+func withRtzrWebsocketDialer(dialer rtzrWebsocketDialer) STTOption {
+	return func(s *STT) {
 		if dialer != nil {
 			s.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
+func NewSTT(clientID string, opts ...STTOption) *STT {
 	if clientID == "" {
 		clientID = os.Getenv(rtzrClientIDEnv)
 	}
-	provider := &RtzrSTT{
+	provider := &STT{
 		clientID:        clientID,
 		clientSecret:    os.Getenv(rtzrClientSecretEnv),
 		apiBase:         defaultAPIBase,
@@ -204,24 +204,24 @@ func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
 	return provider
 }
 
-func (s *RtzrSTT) Label() string { return "rtzr.STT" }
-func (s *RtzrSTT) Model() string { return s.modelName }
-func (s *RtzrSTT) Provider() string {
+func (s *STT) Label() string { return "rtzr.STT" }
+func (s *STT) Model() string { return s.modelName }
+func (s *STT) Provider() string {
 	return "RTZR"
 }
 
-func (s *RtzrSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultSampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *RtzrSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
-func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rtzrStream{
 		events:       make(chan *stt.SpeechEvent, 100),
@@ -235,11 +235,11 @@ func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 	return stream, nil
 }
 
-func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("single-shot recognition is not supported; use stream")
 }
 
-func (s *RtzrSTT) token(ctx context.Context) (string, error) {
+func (s *STT) token(ctx context.Context) (string, error) {
 	if s.accessToken != "" {
 		return s.accessToken, nil
 	}
@@ -276,7 +276,7 @@ func defaultRtzrWebsocketDialer(ctx context.Context, endpoint string, headers ht
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func buildRtzrAuthRequest(ctx context.Context, s *RtzrSTT) (*http.Request, error) {
+func buildRtzrAuthRequest(ctx context.Context, s *STT) (*http.Request, error) {
 	values := url.Values{}
 	values.Set("client_id", s.clientID)
 	values.Set("client_secret", s.clientSecret)
@@ -288,7 +288,7 @@ func buildRtzrAuthRequest(ctx context.Context, s *RtzrSTT) (*http.Request, error
 	return req, nil
 }
 
-func buildRtzrConfig(s *RtzrSTT) map[string]string {
+func buildRtzrConfig(s *STT) map[string]string {
 	config := map[string]string{
 		"model_name":       s.modelName,
 		"domain":           s.domain,
@@ -305,7 +305,7 @@ func buildRtzrConfig(s *RtzrSTT) map[string]string {
 	return config
 }
 
-func buildRtzrStreamURL(s *RtzrSTT, config map[string]string) string {
+func buildRtzrStreamURL(s *STT, config map[string]string) string {
 	u, err := url.Parse(strings.TrimRight(s.wsBase, "/") + "/v1/transcribe:streaming")
 	if err != nil {
 		return ""
@@ -336,7 +336,7 @@ type rtzrStream struct {
 
 	ctx      context.Context
 	cancel   context.CancelFunc
-	provider *RtzrSTT
+	provider *STT
 	state    *rtzrTranscriptState
 
 	audioBStream *audio.AudioByteStream
@@ -680,4 +680,15 @@ func rtzrTimedStrings(words []rtzrWord, startTimeOffset float64) []stt.TimedStri
 		})
 	}
 	return timed
+}
+
+// Deprecated: use STT.
+type RtzrSTT = STT
+
+// Deprecated: use STTOption.
+type RtzrSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewRtzrSTT(clientID string, opts ...STTOption) *STT {
+	return NewSTT(clientID, opts...)
 }

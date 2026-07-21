@@ -17,7 +17,7 @@ import (
 	"google.golang.org/genai"
 )
 
-type GoogleLLM struct {
+type LLM struct {
 	client            *genai.Client
 	model             string
 	vertexAI          bool
@@ -25,7 +25,7 @@ type GoogleLLM struct {
 	thoughtSignatures map[string][]byte
 }
 
-type GoogleLLMOption func(*googleLLMOptions)
+type LLMOption func(*googleLLMOptions)
 
 type googleLLMOptions struct {
 	vertexAI    bool
@@ -35,27 +35,27 @@ type googleLLMOptions struct {
 	locationSet bool
 }
 
-func WithGoogleLLMVertexAI(enabled bool) GoogleLLMOption {
+func WithGoogleLLMVertexAI(enabled bool) LLMOption {
 	return func(options *googleLLMOptions) {
 		options.vertexAI = enabled
 		options.vertexAISet = true
 	}
 }
 
-func WithGoogleLLMProject(project string) GoogleLLMOption {
+func WithGoogleLLMProject(project string) LLMOption {
 	return func(options *googleLLMOptions) {
 		options.project = project
 	}
 }
 
-func WithGoogleLLMLocation(location string) GoogleLLMOption {
+func WithGoogleLLMLocation(location string) LLMOption {
 	return func(options *googleLLMOptions) {
 		options.location = location
 		options.locationSet = true
 	}
 }
 
-func NewGoogleLLM(apiKey string, model string, opts ...GoogleLLMOption) (*GoogleLLM, error) {
+func NewLLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
 	clientConfig, model, vertexAI, err := googleLLMClientConfig(apiKey, model, opts...)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func NewGoogleLLM(apiKey string, model string, opts ...GoogleLLMOption) (*Google
 	if err != nil {
 		return nil, err
 	}
-	return &GoogleLLM{
+	return &LLM{
 		client:            client,
 		model:             model,
 		vertexAI:          vertexAI,
@@ -73,7 +73,7 @@ func NewGoogleLLM(apiKey string, model string, opts ...GoogleLLMOption) (*Google
 	}, nil
 }
 
-func googleLLMClientConfig(apiKey string, model string, opts ...GoogleLLMOption) (*genai.ClientConfig, string, bool, error) {
+func googleLLMClientConfig(apiKey string, model string, opts ...LLMOption) (*genai.ClientConfig, string, bool, error) {
 	if model == "" {
 		model = "gemini-2.5-flash"
 	}
@@ -142,15 +142,15 @@ func googleModelRequiresThoughtSignatures(model string) bool {
 	return strings.Contains(model, "gemini-3") || strings.Contains(model, "gemini-2.5")
 }
 
-func (l *GoogleLLM) Model() string { return l.model }
-func (l *GoogleLLM) Provider() string {
+func (l *LLM) Model() string { return l.model }
+func (l *LLM) Provider() string {
 	if l != nil && l.vertexAI {
 		return "Vertex AI"
 	}
 	return "Gemini"
 }
 
-func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -202,7 +202,7 @@ func validateGoogleChatExtraParams(params map[string]any) error {
 	}
 }
 
-func (l *GoogleLLM) snapshotThoughtSignatures() map[string][]byte {
+func (l *LLM) snapshotThoughtSignatures() map[string][]byte {
 	if !googleModelRequiresThoughtSignatures(l.model) {
 		return nil
 	}
@@ -218,7 +218,7 @@ func (l *GoogleLLM) snapshotThoughtSignatures() map[string][]byte {
 	return signatures
 }
 
-func (l *GoogleLLM) thoughtSignaturesForStream() map[string][]byte {
+func (l *LLM) thoughtSignaturesForStream() map[string][]byte {
 	if !googleModelRequiresThoughtSignatures(l.model) {
 		return nil
 	}
@@ -1633,4 +1633,15 @@ func (s *googleLLMStream) Close() error {
 		}
 	})
 	return nil
+}
+
+// Deprecated: use LLM.
+type GoogleLLM = LLM
+
+// Deprecated: use LLMOption.
+type GoogleLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewGoogleLLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
+	return NewLLM(apiKey, model, opts...)
 }

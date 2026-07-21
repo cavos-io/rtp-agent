@@ -34,7 +34,7 @@ const (
 	fishAudioFallbackAPIKeyEnv  = "FISH_AUDIO_API_KEY"
 )
 
-type FishAudioTTS struct {
+type TTS struct {
 	apiKey       string
 	baseURL      string
 	model        string
@@ -48,34 +48,34 @@ type FishAudioTTS struct {
 	closed       bool
 }
 
-type FishAudioTTSOption func(*FishAudioTTS)
+type TTSOption func(*TTS)
 
-func WithFishAudioTTSBaseURL(baseURL string) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithFishAudioTTSModel(model string) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithFishAudioTTSVoice(voice string) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithFishAudioTTSOutputFormat(outputFormat string) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSOutputFormat(outputFormat string) TTSOption {
+	return func(t *TTS) {
 		if outputFormat != "" {
 			t.outputFormat = outputFormat
 			t.sampleRate = defaultFishAudioSampleRate(outputFormat)
@@ -83,31 +83,31 @@ func WithFishAudioTTSOutputFormat(outputFormat string) FishAudioTTSOption {
 	}
 }
 
-func WithFishAudioTTSSampleRate(sampleRate int) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithFishAudioTTSLatencyMode(latencyMode string) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSLatencyMode(latencyMode string) TTSOption {
+	return func(t *TTS) {
 		if latencyMode != "" {
 			t.latencyMode = latencyMode
 		}
 	}
 }
 
-func WithFishAudioTTSChunkLength(chunkLength int) FishAudioTTSOption {
-	return func(t *FishAudioTTS) {
+func WithFishAudioTTSChunkLength(chunkLength int) TTSOption {
+	return func(t *TTS) {
 		if chunkLength > 0 {
 			t.chunkLength = chunkLength
 		}
 	}
 }
 
-func NewFishAudioTTS(apiKey string, voice string, opts ...FishAudioTTSOption) *FishAudioTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(fishAudioReferenceAPIKeyEnv)
 	}
@@ -117,7 +117,7 @@ func NewFishAudioTTS(apiKey string, voice string, opts ...FishAudioTTSOption) *F
 	if apiKey == "" {
 		apiKey = os.Getenv(fishAudioFallbackAPIKeyEnv)
 	}
-	provider := &FishAudioTTS{
+	provider := &TTS{
 		apiKey:       apiKey,
 		baseURL:      defaultFishAudioBaseURL,
 		model:        defaultFishAudioModel,
@@ -148,16 +148,16 @@ func defaultFishAudioSampleRate(outputFormat string) int {
 	}
 }
 
-func (t *FishAudioTTS) Label() string { return "fishaudio.TTS" }
-func (t *FishAudioTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "fishaudio.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *FishAudioTTS) SampleRate() int  { return t.sampleRate }
-func (t *FishAudioTTS) NumChannels() int { return 1 }
-func (t *FishAudioTTS) Model() string    { return t.model }
-func (t *FishAudioTTS) Provider() string { return "FishAudio" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "FishAudio" }
 
-func (t *FishAudioTTS) UpdateOptions(opts ...FishAudioTTSOption) error {
+func (t *TTS) UpdateOptions(opts ...TTSOption) error {
 	if t == nil {
 		return nil
 	}
@@ -174,7 +174,7 @@ func (t *FishAudioTTS) UpdateOptions(opts ...FishAudioTTSOption) error {
 	return nil
 }
 
-func (t *FishAudioTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -196,7 +196,7 @@ func (t *FishAudioTTS) Close() error {
 	return closeErr
 }
 
-func (t *FishAudioTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -205,7 +205,7 @@ func (t *FishAudioTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -223,7 +223,7 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}, nil
 }
 
-func buildFishAudioTTSRequest(ctx context.Context, t *FishAudioTTS, text string) (*http.Request, error) {
+func buildFishAudioTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	packedBody, err := msgpack.Marshal(fishAudioTTSRequestPayload(t, text))
 	if err != nil {
 		return nil, err
@@ -245,7 +245,7 @@ func validateFishAudioAPIKey(apiKey string) error {
 	return nil
 }
 
-func fishAudioTTSRequestPayload(t *FishAudioTTS, text string) map[string]interface{} {
+func fishAudioTTSRequestPayload(t *TTS, text string) map[string]interface{} {
 	return map[string]interface{}{
 		"text":         text,
 		"chunk_length": t.chunkLength,
@@ -263,7 +263,7 @@ func fishAudioTTSRequestPayload(t *FishAudioTTS, text string) map[string]interfa
 	}
 }
 
-func buildFishAudioTTSWebsocketURL(t *FishAudioTTS) string {
+func buildFishAudioTTSWebsocketURL(t *TTS) string {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -271,7 +271,7 @@ func buildFishAudioTTSWebsocketURL(t *FishAudioTTS) string {
 	return baseURL + "/v1/tts/live"
 }
 
-func buildFishAudioTTSWebsocketHeaders(t *FishAudioTTS) http.Header {
+func buildFishAudioTTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	headers.Set("User-Agent", fishAudioTTSUserAgent)
@@ -279,7 +279,7 @@ func buildFishAudioTTSWebsocketHeaders(t *FishAudioTTS) http.Header {
 	return headers
 }
 
-func buildFishAudioTTSStartMessage(t *FishAudioTTS) ([]byte, error) {
+func buildFishAudioTTSStartMessage(t *TTS) ([]byte, error) {
 	return msgpack.Marshal(map[string]interface{}{
 		"event":   "start",
 		"request": fishAudioTTSRequestPayload(t, ""),
@@ -297,7 +297,7 @@ func buildFishAudioTTSSimpleEvent(event string) ([]byte, error) {
 	return msgpack.Marshal(map[string]interface{}{"event": event})
 }
 
-func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -354,7 +354,7 @@ func (t *FishAudioTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	return stream, nil
 }
 
-func (t *FishAudioTTS) registerStream(stream *fishAudioTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *fishAudioTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -371,7 +371,7 @@ func (t *FishAudioTTS) registerStream(stream *fishAudioTTSSynthesizeStream) bool
 	return true
 }
 
-func (t *FishAudioTTS) unregisterStream(stream *fishAudioTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *fishAudioTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -387,7 +387,7 @@ type fishaudioTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
 	text         string
-	opts         FishAudioTTS
+	opts         TTS
 	sampleRate   int
 	format       string
 	requested    bool
@@ -500,7 +500,7 @@ func (s *fishaudioTTSChunkedStream) Close() error {
 }
 
 type fishAudioTTSSynthesizeStream struct {
-	owner       *FishAudioTTS
+	owner       *TTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -889,4 +889,15 @@ func decodeFishAudioWAVPCM16(data []byte) (*model.AudioFrame, error) {
 		NumChannels:       uint32(channels),
 		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
 	}, nil
+}
+
+// Deprecated: use TTS.
+type FishAudioTTS = TTS
+
+// Deprecated: use TTSOption.
+type FishAudioTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewFishAudioTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

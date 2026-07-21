@@ -29,7 +29,7 @@ const (
 	basetenTTSEndSentinel        = "__END__"
 )
 
-type BasetenTTS struct {
+type TTS struct {
 	apiKey        string
 	modelEndpoint string
 	voice         string
@@ -45,7 +45,7 @@ type BasetenTTS struct {
 	streams       map[*basetenTTSSynthesizeStream]struct{}
 }
 
-type BasetenTTSOption func(*BasetenTTS)
+type TTSOption func(*TTS)
 
 type basetenTTSHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -53,69 +53,69 @@ type basetenTTSHTTPDoer interface {
 
 type basetenTTSWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithBasetenTTSModelEndpoint(endpoint string) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSModelEndpoint(endpoint string) TTSOption {
+	return func(t *TTS) {
 		if endpoint != "" {
 			t.modelEndpoint = endpoint
 		}
 	}
 }
 
-func WithBasetenTTSVoice(voice string) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithBasetenTTSLanguage(language string) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithBasetenTTSTemperature(temperature float64) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSTemperature(temperature float64) TTSOption {
+	return func(t *TTS) {
 		t.temperature = temperature
 	}
 }
 
-func WithBasetenTTSMaxTokens(maxTokens int) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSMaxTokens(maxTokens int) TTSOption {
+	return func(t *TTS) {
 		if maxTokens > 0 {
 			t.maxTokens = maxTokens
 		}
 	}
 }
 
-func WithBasetenTTSBufferSize(bufferSize int) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func WithBasetenTTSBufferSize(bufferSize int) TTSOption {
+	return func(t *TTS) {
 		if bufferSize > 0 {
 			t.bufferSize = bufferSize
 		}
 	}
 }
 
-func withBasetenTTSHTTPClient(client basetenTTSHTTPDoer) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func withBasetenTTSHTTPClient(client basetenTTSHTTPDoer) TTSOption {
+	return func(t *TTS) {
 		if client != nil {
 			t.httpClient = client
 		}
 	}
 }
 
-func withBasetenTTSWebsocketDialer(dialer basetenTTSWebsocketDialer) BasetenTTSOption {
-	return func(t *BasetenTTS) {
+func withBasetenTTSWebsocketDialer(dialer basetenTTSWebsocketDialer) TTSOption {
+	return func(t *TTS) {
 		if dialer != nil {
 			t.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*BasetenTTS, error) {
+func NewTTS(apiKey string, model string, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
@@ -133,7 +133,7 @@ func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*Base
 	} else if envEndpoint := os.Getenv(basetenModelEndpointEnv); envEndpoint != "" {
 		endpoint = envEndpoint
 	}
-	provider := &BasetenTTS{
+	provider := &TTS{
 		apiKey:        apiKey,
 		modelEndpoint: endpoint,
 		voice:         defaultBasetenTTSVoice,
@@ -155,24 +155,24 @@ func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*Base
 	return provider, nil
 }
 
-func (t *BasetenTTS) Label() string { return "baseten.TTS" }
-func (t *BasetenTTS) Model() string { return "unknown" }
-func (t *BasetenTTS) Provider() string {
+func (t *TTS) Label() string { return "baseten.TTS" }
+func (t *TTS) Model() string { return "unknown" }
+func (t *TTS) Provider() string {
 	return "Baseten"
 }
-func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return tts.TTSCapabilities{Streaming: strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://"), AlignedTranscript: false}
 }
-func (t *BasetenTTS) SampleRate() int {
+func (t *TTS) SampleRate() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sampleRate
 }
-func (t *BasetenTTS) NumChannels() int { return 1 }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *BasetenTTS) UpdateOptions(opts ...BasetenTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	if t == nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (t *BasetenTTS) UpdateOptions(opts ...BasetenTTSOption) {
 	}
 }
 
-func (t *BasetenTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -209,7 +209,7 @@ func (t *BasetenTTS) Close() error {
 	return closeErr
 }
 
-func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -236,7 +236,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}, nil
 }
 
-func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*http.Request, error) {
+func buildBasetenTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"prompt":      text,
 		"voice":       t.voice,
@@ -256,7 +256,7 @@ func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*h
 	return req, nil
 }
 
-func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -306,7 +306,7 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *BasetenTTS) registerStream(stream *basetenTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *basetenTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -323,7 +323,7 @@ func (t *BasetenTTS) registerStream(stream *basetenTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *BasetenTTS) unregisterStream(stream *basetenTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *basetenTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -339,13 +339,13 @@ func defaultBasetenTTSWebsocketDialer(ctx context.Context, endpoint string, head
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func buildBasetenTTSWebsocketHeaders(t *BasetenTTS) http.Header {
+func buildBasetenTTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Api-Key "+t.apiKey)
 	return headers
 }
 
-func buildBasetenTTSStartMessage(t *BasetenTTS) ([]byte, error) {
+func buildBasetenTTSStartMessage(t *TTS) ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
 		"voice":       t.voice,
 		"max_tokens":  t.maxTokens,
@@ -480,7 +480,7 @@ func (s *basetenTTSChunkedStream) Close() error {
 }
 
 type basetenTTSSynthesizeStream struct {
-	owner      *BasetenTTS
+	owner      *TTS
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -690,4 +690,15 @@ func basetenTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synt
 			SamplesPerChannel: uint32(len(payload) / 2),
 		},
 	}, nil
+}
+
+// Deprecated: use TTS.
+type BasetenTTS = TTS
+
+// Deprecated: use TTSOption.
+type BasetenTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewBasetenTTS(apiKey string, model string, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, model, opts...)
 }

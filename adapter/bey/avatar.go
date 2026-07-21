@@ -23,7 +23,7 @@ const (
 	beyAPIURLEnv = "BEY_API_URL"
 )
 
-type BeyAvatar struct {
+type Avatar struct {
 	apiKey         string
 	apiURL         string
 	avatarID       string
@@ -38,7 +38,7 @@ type beyHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
+func NewAvatar(apiKey string) (*Avatar, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(beyAPIKeyEnv)
 	}
@@ -49,7 +49,7 @@ func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
 	if apiURL == "" {
 		apiURL = defaultBeyAPIURL
 	}
-	return &BeyAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		apiURL:         apiURL,
 		avatarID:       defaultBeyAvatarID,
@@ -60,7 +60,7 @@ func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
 	}, nil
 }
 
-func (a *BeyAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if info, ok := agent.AvatarStartInfoFromContext(ctx); ok && info.LiveKitURL != "" && info.LiveKitToken != "" {
 		if err := a.createSession(ctx, info); err != nil {
 			return err
@@ -70,20 +70,20 @@ func (a *BeyAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *BeyAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *BeyAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return "bey"
 }
 
-func (a *BeyAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
 }
 
-func (a *BeyAvatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
+func (a *Avatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
 	endpoint, headers, body, err := buildBeySessionRequest(a, info.LiveKitURL, info.LiveKitToken)
 	if err != nil {
 		return err
@@ -106,7 +106,7 @@ func (a *BeyAvatar) createSession(ctx context.Context, info agent.AvatarStartInf
 	return nil
 }
 
-func buildBeySessionRequest(a *BeyAvatar, livekitURL, livekitToken string) (string, http.Header, []byte, error) {
+func buildBeySessionRequest(a *Avatar, livekitURL, livekitToken string) (string, http.Header, []byte, error) {
 	body, err := json.Marshal(map[string]any{
 		"avatar_id":     a.avatarID,
 		"livekit_url":   livekitURL,
@@ -118,4 +118,12 @@ func buildBeySessionRequest(a *BeyAvatar, livekitURL, livekitToken string) (stri
 	headers := make(http.Header)
 	headers.Set("x-api-key", a.apiKey)
 	return a.apiURL + "/v1/session", headers, body, nil
+}
+
+// Deprecated: use Avatar.
+type BeyAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewBeyAvatar(apiKey string) (*Avatar, error) {
+	return NewAvatar(apiKey)
 }

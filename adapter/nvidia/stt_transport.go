@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-type nvidiaSTTClientFactory func(context.Context, *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error)
+type nvidiaSTTClientFactory func(context.Context, *STT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error)
 
 func nvidiaSTTTransportCredentials(useSSL bool) credentials.TransportCredentials {
 	if useSSL {
@@ -21,7 +21,7 @@ func nvidiaSTTTransportCredentials(useSSL bool) credentials.TransportCredentials
 	return insecure.NewCredentials()
 }
 
-func newNvidiaSTTClient(_ context.Context, s *NvidiaSTT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
+func newNvidiaSTTClient(_ context.Context, s *STT) (rivapb.RivaSpeechRecognitionClient, io.Closer, error) {
 	conn, err := grpc.NewClient(s.server, grpc.WithTransportCredentials(nvidiaSTTTransportCredentials(s.useSSL)))
 	if err != nil {
 		return nil, nil, err
@@ -29,7 +29,7 @@ func newNvidiaSTTClient(_ context.Context, s *NvidiaSTT) (rivapb.RivaSpeechRecog
 	return rivapb.NewRivaSpeechRecognitionClient(conn), conn, nil
 }
 
-func nvidiaSTTStreamingConfig(s *NvidiaSTT, language string) *rivapb.StreamingRecognitionConfig {
+func nvidiaSTTStreamingConfig(s *STT, language string) *rivapb.StreamingRecognitionConfig {
 	cfg := &rivapb.RecognitionConfig{
 		Encoding:                   rivapb.AudioEncoding_LINEAR_PCM,
 		SampleRateHertz:            int32(s.sampleRate),

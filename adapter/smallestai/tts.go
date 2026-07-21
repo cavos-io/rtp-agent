@@ -33,7 +33,7 @@ const (
 	defaultSmallestAIOutputFormat  = "pcm"
 )
 
-type SmallestAITTS struct {
+type TTS struct {
 	apiKey           string
 	baseURL          string
 	model            string
@@ -49,26 +49,26 @@ type SmallestAITTS struct {
 	streamingStreams map[*smallestaiTTSSynthesizeStream]struct{}
 }
 
-type SmallestAITTSOption func(*SmallestAITTS)
+type TTSOption func(*TTS)
 
-func WithSmallestAITTSBaseURL(baseURL string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSmallestAITTSWebsocketURL(wsURL string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSWebsocketURL(wsURL string) TTSOption {
+	return func(t *TTS) {
 		if wsURL != "" {
 			t.wsURL = wsURL
 		}
 	}
 }
 
-func WithSmallestAITTSModel(model string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 			if t.voice == "" {
@@ -78,49 +78,49 @@ func WithSmallestAITTSModel(model string) SmallestAITTSOption {
 	}
 }
 
-func WithSmallestAITTSVoice(voice string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithSmallestAITTSSampleRate(sampleRate int) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithSmallestAITTSSpeed(speed float64) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
 		t.speed = speed
 	}
 }
 
-func WithSmallestAITTSLanguage(language string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithSmallestAITTSOutputFormat(outputFormat string) SmallestAITTSOption {
-	return func(t *SmallestAITTS) {
+func WithSmallestAITTSOutputFormat(outputFormat string) TTSOption {
+	return func(t *TTS) {
 		if outputFormat != "" {
 			t.outputFormat = outputFormat
 		}
 	}
 }
 
-func NewSmallestAITTS(apiKey string, voice string, opts ...SmallestAITTSOption) *SmallestAITTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(smallestAIAPIKeyEnv)
 	}
-	provider := &SmallestAITTS{
+	provider := &TTS{
 		apiKey:           apiKey,
 		baseURL:          defaultSmallestAIBaseURL,
 		model:            defaultSmallestAIModel,
@@ -142,13 +142,13 @@ func NewSmallestAITTS(apiKey string, voice string, opts ...SmallestAITTSOption) 
 	return provider
 }
 
-func (t *SmallestAITTS) Label() string { return "smallestai.TTS" }
-func (t *SmallestAITTS) Model() string { return t.model }
-func (t *SmallestAITTS) Provider() string {
+func (t *TTS) Label() string { return "smallestai.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "SmallestAI"
 }
 
-func (t *SmallestAITTS) UpdateOptions(opts ...SmallestAITTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	if t == nil {
 		return
 	}
@@ -162,13 +162,13 @@ func (t *SmallestAITTS) UpdateOptions(opts ...SmallestAITTSOption) {
 	}
 }
 
-func (t *SmallestAITTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *SmallestAITTS) SampleRate() int  { return t.sampleRate }
-func (t *SmallestAITTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -189,7 +189,7 @@ func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	return stream, nil
 }
 
-func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text string) (*http.Request, error) {
+func buildSmallestAITTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"model":         t.model,
 		"voice_id":      t.voice,
@@ -215,7 +215,7 @@ func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text strin
 	return req, nil
 }
 
-func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -245,7 +245,7 @@ func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	return stream, nil
 }
 
-func (t *SmallestAITTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -278,13 +278,13 @@ func (t *SmallestAITTS) Close() error {
 	return closeErr
 }
 
-func (t *SmallestAITTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closed
 }
 
-func (t *SmallestAITTS) registerChunkedStream(stream *smallestaiTTSChunkedStream) bool {
+func (t *TTS) registerChunkedStream(stream *smallestaiTTSChunkedStream) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -294,13 +294,13 @@ func (t *SmallestAITTS) registerChunkedStream(stream *smallestaiTTSChunkedStream
 	return true
 }
 
-func (t *SmallestAITTS) unregisterChunkedStream(stream *smallestaiTTSChunkedStream) {
+func (t *TTS) unregisterChunkedStream(stream *smallestaiTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.chunkedStreams, stream)
 }
 
-func (t *SmallestAITTS) registerStreamingStream(stream *smallestaiTTSSynthesizeStream) bool {
+func (t *TTS) registerStreamingStream(stream *smallestaiTTSSynthesizeStream) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -310,7 +310,7 @@ func (t *SmallestAITTS) registerStreamingStream(stream *smallestaiTTSSynthesizeS
 	return true
 }
 
-func (t *SmallestAITTS) unregisterStreamingStream(stream *smallestaiTTSSynthesizeStream) {
+func (t *TTS) unregisterStreamingStream(stream *smallestaiTTSSynthesizeStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streamingStreams, stream)
@@ -323,11 +323,11 @@ func validateSmallestAITTSAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildSmallestAITTSWebsocketURL(t *SmallestAITTS) string {
+func buildSmallestAITTSWebsocketURL(t *TTS) string {
 	return t.wsURL
 }
 
-func buildSmallestAITTSWebsocketHeaders(t *SmallestAITTS) http.Header {
+func buildSmallestAITTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	headers.Set("X-Source", "livekit")
@@ -335,7 +335,7 @@ func buildSmallestAITTSWebsocketHeaders(t *SmallestAITTS) http.Header {
 	return headers
 }
 
-func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, error) {
+func buildSmallestAITTSStreamMessage(t *TTS, text string) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"model":       t.model,
 		"voice_id":    t.voice,
@@ -347,7 +347,7 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 }
 
 type smallestaiTTSChunkedStream struct {
-	owner        *SmallestAITTS
+	owner        *TTS
 	ctx          context.Context
 	text         string
 	resp         *http.Response
@@ -508,7 +508,7 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 }
 
 type smallestaiTTSSynthesizeStream struct {
-	provider    *SmallestAITTS
+	provider    *TTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -701,4 +701,15 @@ func defaultSmallestAIVoice(model string) string {
 		return defaultSmallestAIProVoice
 	}
 	return defaultSmallestAIStandardVoice
+}
+
+// Deprecated: use TTS.
+type SmallestAITTS = TTS
+
+// Deprecated: use TTSOption.
+type SmallestAITTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSmallestAITTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

@@ -3392,8 +3392,11 @@ func TestDefaultConfigFromEnvSelectsLangChainLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if got := llm.Label(app.Session.LLM); got != "langchain.LangchainLLM" {
-		t.Fatalf("LLM label = %q, want langchain.LangchainLLM", got)
+	if got := llm.Label(app.Session.LLM); got != "langchain.LLM" {
+		t.Fatalf("LLM label = %q, want langchain.LLM", got)
+	}
+	if got := fmt.Sprintf("%T", app.Session.LLM); got != "*langchain.LLM" {
+		t.Fatalf("LLM type = %q, want canonical *langchain.LLM", got)
 	}
 }
 
@@ -7841,7 +7844,7 @@ func TestConfigureSTTFallbacksPassesReferenceVADToSpeechmaticsSTT(t *testing.T) 
 		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
 	}
 	speechmaticsValue := stts.Index(1).Elem()
-	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.STT"; got != want {
 		t.Fatalf("fallback STT type = %s, want %s", got, want)
 	}
 	vadField := speechmaticsValue.Elem().FieldByName("vad")
@@ -7870,7 +7873,7 @@ func TestConfigureSTTFallbacksPassesExplicitReferenceVADToSpeechmaticsSTT(t *tes
 		t.Fatalf("fallback STT count = %d, want 2", stts.Len())
 	}
 	speechmaticsValue := stts.Index(1).Elem()
-	if got, want := speechmaticsValue.Type().String(), "*speechmatics.SpeechmaticsSTT"; got != want {
+	if got, want := speechmaticsValue.Type().String(), "*speechmatics.STT"; got != want {
 		t.Fatalf("fallback STT type = %s, want %s", got, want)
 	}
 	vadField := speechmaticsValue.Elem().FieldByName("vad")
@@ -13420,19 +13423,19 @@ func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
 		keyEnv     string
 		wantAvatar string
 	}{
-		{name: "anam", provider: "anam", keyEnv: "ANAM_API_KEY", wantAvatar: "*anam.AnamAvatar"},
-		{name: "avatario", provider: "avatario", keyEnv: "AVATARIO_API_KEY", wantAvatar: "*avatario.AvatarioAvatar"},
-		{name: "avatartalk", provider: "avatartalk", keyEnv: "AVATARTALK_API_KEY", wantAvatar: "*avatartalk.AvatartalkAvatar"},
-		{name: "bey", provider: "bey", keyEnv: "BEY_API_KEY", wantAvatar: "*bey.BeyAvatar"},
-		{name: "bithuman", provider: "bithuman", keyEnv: "BITHUMAN_API_KEY", wantAvatar: "*bithuman.BithumanAvatar"},
-		{name: "did", provider: "did", keyEnv: "DID_API_KEY", wantAvatar: "*did.DIDAvatar"},
-		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.HedraAvatar"},
-		{name: "keyframe", provider: "keyframe", keyEnv: "KEYFRAME_API_KEY", wantAvatar: "*keyframe.KeyframeAgent"},
-		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.LemonsliceAvatar"},
-		{name: "liveavatar", provider: "liveavatar", keyEnv: "LIVEAVATAR_API_KEY", wantAvatar: "*liveavatar.LiveAvatar"},
-		{name: "simli", provider: "simli", keyEnv: "SIMLI_API_KEY", wantAvatar: "*simli.SimliAvatar"},
-		{name: "tavus", provider: "tavus", keyEnv: "TAVUS_API_KEY", wantAvatar: "*tavus.TavusAvatar"},
-		{name: "trugen", provider: "trugen", keyEnv: "TRUGEN_API_KEY", wantAvatar: "*trugen.TrugenAvatar"},
+		{name: "anam", provider: "anam", keyEnv: "ANAM_API_KEY", wantAvatar: "*anam.Avatar"},
+		{name: "avatario", provider: "avatario", keyEnv: "AVATARIO_API_KEY", wantAvatar: "*avatario.Avatar"},
+		{name: "avatartalk", provider: "avatartalk", keyEnv: "AVATARTALK_API_KEY", wantAvatar: "*avatartalk.Avatar"},
+		{name: "bey", provider: "bey", keyEnv: "BEY_API_KEY", wantAvatar: "*bey.Avatar"},
+		{name: "bithuman", provider: "bithuman", keyEnv: "BITHUMAN_API_KEY", wantAvatar: "*bithuman.Avatar"},
+		{name: "did", provider: "did", keyEnv: "DID_API_KEY", wantAvatar: "*did.Avatar"},
+		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.Avatar"},
+		{name: "keyframe", provider: "keyframe", keyEnv: "KEYFRAME_API_KEY", wantAvatar: "*keyframe.Avatar"},
+		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.Avatar"},
+		{name: "liveavatar", provider: "liveavatar", keyEnv: "LIVEAVATAR_API_KEY", wantAvatar: "*liveavatar.Avatar"},
+		{name: "simli", provider: "simli", keyEnv: "SIMLI_API_KEY", wantAvatar: "*simli.Avatar"},
+		{name: "tavus", provider: "tavus", keyEnv: "TAVUS_API_KEY", wantAvatar: "*tavus.Avatar"},
+		{name: "trugen", provider: "trugen", keyEnv: "TRUGEN_API_KEY", wantAvatar: "*trugen.Avatar"},
 	}
 
 	for _, tc := range cases {
@@ -13469,8 +13472,8 @@ func TestDefaultConfigFromEnvSelectsRunwayAvatarProvider(t *testing.T) {
 	if app.Agent == nil {
 		t.Fatal("Agent is nil")
 	}
-	if got := fmt.Sprintf("%T", app.Agent.Avatar); got != "*runway.RunwayAvatar" {
-		t.Fatalf("Agent Avatar type = %q, want *runway.RunwayAvatar", got)
+	if got := fmt.Sprintf("%T", app.Agent.Avatar); got != "*runway.Avatar" {
+		t.Fatalf("Agent Avatar type = %q, want *runway.Avatar", got)
 	}
 }
 

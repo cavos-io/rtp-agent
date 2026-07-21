@@ -35,7 +35,7 @@ const (
 	fireworksPCMBytesPerSample = 2
 )
 
-type FireworksSTT struct {
+type STT struct {
 	mu                     sync.Mutex
 	apiKey                 string
 	baseURL                string
@@ -54,55 +54,55 @@ type FireworksSTT struct {
 	closed                 bool
 }
 
-type FireworksSTTOption func(*FireworksSTT)
+type STTOption func(*STT)
 type fireworksSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithFireworksBaseURL(baseURL string) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithFireworksModel(model string) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksModel(model string) STTOption {
+	return func(s *STT) {
 		s.model = model
 	}
 }
 
-func WithFireworksLanguage(language string) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.language = language
 	}
 }
 
-func WithFireworksPrompt(prompt string) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksPrompt(prompt string) STTOption {
+	return func(s *STT) {
 		s.prompt = prompt
 	}
 }
 
-func WithFireworksTemperature(temperature float64) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksTemperature(temperature float64) STTOption {
+	return func(s *STT) {
 		s.temperature = &temperature
 	}
 }
 
-func WithFireworksSkipVAD(skip bool) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksSkipVAD(skip bool) STTOption {
+	return func(s *STT) {
 		s.skipVAD = &skip
 	}
 }
 
-func WithFireworksVADKwargs(vadKwargs map[string]any) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksVADKwargs(vadKwargs map[string]any) STTOption {
+	return func(s *STT) {
 		s.vadKwargs = vadKwargs
 	}
 }
 
-func WithFireworksTextTimeoutSeconds(seconds float64) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksTextTimeoutSeconds(seconds float64) STTOption {
+	return func(s *STT) {
 		if validFireworksTextTimeoutSeconds(seconds) {
 			s.textTimeoutSeconds = seconds
 		}
@@ -113,25 +113,25 @@ func validFireworksTextTimeoutSeconds(seconds float64) bool {
 	return seconds >= minTextTimeoutSeconds && seconds <= maxTextTimeoutSeconds
 }
 
-func WithFireworksTimestampGranularities(granularities []string) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func WithFireworksTimestampGranularities(granularities []string) STTOption {
+	return func(s *STT) {
 		s.timestampGranularities = granularities
 	}
 }
 
-func withFireworksSTTWebsocketDialer(dialer fireworksSTTWebsocketDialer) FireworksSTTOption {
-	return func(s *FireworksSTT) {
+func withFireworksSTTWebsocketDialer(dialer fireworksSTTWebsocketDialer) STTOption {
+	return func(s *STT) {
 		if dialer != nil {
 			s.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("FIREWORKS_API_KEY")
 	}
-	provider := &FireworksSTT{
+	provider := &STT{
 		apiKey:             apiKey,
 		baseURL:            defaultBaseURL,
 		sampleRate:         defaultSampleRate,
@@ -145,23 +145,23 @@ func NewFireworksSTT(apiKey string, opts ...FireworksSTTOption) *FireworksSTT {
 	return provider
 }
 
-func (s *FireworksSTT) Label() string { return "fireworks.STT" }
-func (s *FireworksSTT) Model() string {
+func (s *STT) Label() string { return "fireworks.STT" }
+func (s *STT) Model() string {
 	if s.model == "" {
 		return "unknown"
 	}
 	return s.model
 }
-func (s *FireworksSTT) Provider() string { return "FireworksAI" }
-func (s *FireworksSTT) InputSampleRate() uint32 {
+func (s *STT) Provider() string { return "FireworksAI" }
+func (s *STT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
 
-func (s *FireworksSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }
 
-func (s *FireworksSTT) UpdateOptions(opts ...FireworksSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -184,7 +184,7 @@ func (s *FireworksSTT) UpdateOptions(opts ...FireworksSTTOption) {
 	}
 }
 
-func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -232,7 +232,7 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 	return stream, nil
 }
 
-func (s *FireworksSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -254,7 +254,7 @@ func (s *FireworksSTT) Close() error {
 	return firstErr
 }
 
-func (s *FireworksSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -263,7 +263,7 @@ func (s *FireworksSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *FireworksSTT) registerStream(stream *fireworksStream) bool {
+func (s *STT) registerStream(stream *fireworksStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -281,7 +281,7 @@ func (s *FireworksSTT) registerStream(stream *fireworksStream) bool {
 	return true
 }
 
-func (s *FireworksSTT) unregisterStream(stream *fireworksStream) {
+func (s *STT) unregisterStream(stream *fireworksStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -294,7 +294,7 @@ func defaultFireworksSTTWebsocketDialer(ctx context.Context, endpoint string, he
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("fireworksai stt does not support batch recognition, use stream instead")
 }
 
@@ -305,18 +305,18 @@ func validateFireworksAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildFireworksStreamHeaders(s *FireworksSTT) http.Header {
+func buildFireworksStreamHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("User-Agent", "LiveKit Agents")
 	headers.Set("Authorization", s.apiKey)
 	return headers
 }
 
-func buildFireworksStreamURL(s *FireworksSTT) string {
+func buildFireworksStreamURL(s *STT) string {
 	return buildFireworksStreamURLForLanguage(s, s.language)
 }
 
-func buildFireworksStreamURLForLanguage(s *FireworksSTT, language string) string {
+func buildFireworksStreamURLForLanguage(s *STT, language string) string {
 	base := strings.TrimRight(s.baseURL, "/") + streamingPath
 	u, err := url.Parse(base)
 	if err != nil {
@@ -353,7 +353,7 @@ func setOptionalString(values url.Values, key string, value string) {
 }
 
 type fireworksStream struct {
-	owner        *FireworksSTT
+	owner        *STT
 	conn         *websocket.Conn
 	events       chan *stt.SpeechEvent
 	errCh        chan error
@@ -766,4 +766,15 @@ func latestFinal(segment fireworksSegment) bool {
 		return false
 	}
 	return segment.Words[len(segment.Words)-1].IsFinal
+}
+
+// Deprecated: use STT.
+type FireworksSTT = STT
+
+// Deprecated: use STTOption.
+type FireworksSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewFireworksSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

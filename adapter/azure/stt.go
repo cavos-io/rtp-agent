@@ -36,7 +36,7 @@ const (
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-type AzureSTT struct {
+type STT struct {
 	apiKey                 string
 	region                 string
 	speechHost             string
@@ -61,42 +61,42 @@ type AzureSTT struct {
 	reconnectOnUpdate      bool
 }
 
-type AzureSTTOption func(*AzureSTT)
+type STTOption func(*STT)
 
-func WithAzureSTTWebsocketURL(websocketURL string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTWebsocketURL(websocketURL string) STTOption {
+	return func(s *STT) {
 		if websocketURL != "" {
 			s.websocketURL = websocketURL
 		}
 	}
 }
 
-func WithAzureSTTSpeechHost(speechHost string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSpeechHost(speechHost string) STTOption {
+	return func(s *STT) {
 		if speechHost != "" {
 			s.speechHost = speechHost
 		}
 	}
 }
 
-func WithAzureSTTSpeechEndpoint(speechEndpoint string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSpeechEndpoint(speechEndpoint string) STTOption {
+	return func(s *STT) {
 		if speechEndpoint != "" {
 			s.speechEndpoint = speechEndpoint
 		}
 	}
 }
 
-func WithAzureSTTAuthToken(authToken string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTAuthToken(authToken string) STTOption {
+	return func(s *STT) {
 		if authToken != "" {
 			s.authToken = authToken
 		}
 	}
 }
 
-func WithAzureSTTLanguage(language string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 			s.languages = []string{language}
@@ -105,8 +105,8 @@ func WithAzureSTTLanguage(language string) AzureSTTOption {
 	}
 }
 
-func WithAzureSTTLanguages(languages ...string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTLanguages(languages ...string) STTOption {
+	return func(s *STT) {
 		resolved := normalizeAzureSTTLanguages(languages)
 		if len(resolved) > 0 {
 			s.languages = resolved
@@ -116,24 +116,24 @@ func WithAzureSTTLanguages(languages ...string) AzureSTTOption {
 	}
 }
 
-func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithAzureSTTNumChannels(numChannels int) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTNumChannels(numChannels int) STTOption {
+	return func(s *STT) {
 		if numChannels > 0 {
 			s.numChannels = numChannels
 		}
 	}
 }
 
-func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) STTOption {
+	return func(s *STT) {
 		if timeoutMS >= 0 {
 			s.segmentationSilence = timeoutMS
 			s.reconnectOnUpdate = true
@@ -141,8 +141,8 @@ func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	}
 }
 
-func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSegmentationMaxTime(maxTimeMS int) STTOption {
+	return func(s *STT) {
 		if maxTimeMS >= 0 {
 			s.segmentationMaxTime = maxTimeMS
 			s.reconnectOnUpdate = true
@@ -150,34 +150,34 @@ func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 	}
 }
 
-func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTSegmentationStrategy(strategy string) STTOption {
+	return func(s *STT) {
 		s.segmentationStrategy = strategy
 		s.reconnectOnUpdate = true
 	}
 }
 
-func WithAzureSTTTrueTextPostProcessing(enabled bool) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTTrueTextPostProcessing(enabled bool) STTOption {
+	return func(s *STT) {
 		s.trueTextPostProcessing = enabled
 	}
 }
 
-func WithAzureSTTExplicitPunctuation(explicit bool) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTExplicitPunctuation(explicit bool) STTOption {
+	return func(s *STT) {
 		s.explicitPunctuation = explicit
 	}
 }
 
-func WithAzureSTTProfanity(profanity string) AzureSTTOption {
-	return func(s *AzureSTT) {
+func WithAzureSTTProfanity(profanity string) STTOption {
+	return func(s *STT) {
 		if profanity != "" {
 			s.profanity = profanity
 		}
 	}
 }
 
-func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureSTT, error) {
+func NewSTT(apiKey string, region string, opts ...STTOption) (*STT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(azureSpeechKeyEnv)
 	}
@@ -185,7 +185,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
 	authToken := os.Getenv(azureSpeechAuthTokenEnv)
-	provider := &AzureSTT{
+	provider := &STT{
 		apiKey:         apiKey,
 		region:         region,
 		speechHost:     os.Getenv(azureSpeechHostEnv),
@@ -214,12 +214,12 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	return provider, nil
 }
 
-func (s *AzureSTT) Label() string { return "azure.STT" }
-func (s *AzureSTT) Model() string { return "unknown" }
-func (s *AzureSTT) Provider() string {
+func (s *STT) Label() string { return "azure.STT" }
+func (s *STT) Model() string { return "unknown" }
+func (s *STT) Provider() string {
 	return "Azure STT"
 }
-func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
+func (s *STT) UpdateOptions(language string, opts ...STTOption) {
 	if language == "" && len(opts) == 0 {
 		return
 	}
@@ -292,7 +292,7 @@ type azureSTTActiveStreamOptions struct {
 	profanity              string
 }
 
-func (s *AzureSTT) activeStreamOptions() azureSTTActiveStreamOptions {
+func (s *STT) activeStreamOptions() azureSTTActiveStreamOptions {
 	return azureSTTActiveStreamOptions{
 		language:               s.language,
 		languages:              strings.Join(s.languages, "\x00"),
@@ -308,7 +308,7 @@ func (s *AzureSTT) activeStreamOptions() azureSTTActiveStreamOptions {
 		profanity:              s.profanity,
 	}
 }
-func (s *AzureSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -333,23 +333,23 @@ func (s *AzureSTT) Close() error {
 	}
 	return closeErr
 }
-func (s *AzureSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultAzureSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
-func (s *AzureSTT) inputNumChannels() uint32 {
+func (s *STT) inputNumChannels() uint32 {
 	if s == nil || s.numChannels <= 0 {
 		return defaultAzureSTTChannels
 	}
 	return uint32(s.numChannels)
 }
-func (s *AzureSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
-func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -390,7 +390,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 	return stream, nil
 }
 
-func (s *AzureSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -399,7 +399,7 @@ func (s *AzureSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *AzureSTT) registerStream(stream *azureSTTStream) bool {
+func (s *STT) registerStream(stream *azureSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -412,13 +412,13 @@ func (s *AzureSTT) registerStream(stream *azureSTTStream) bool {
 	return true
 }
 
-func (s *AzureSTT) unregisterStream(stream *azureSTTStream) {
+func (s *STT) unregisterStream(stream *azureSTTStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
 }
 
-func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string, languages []string) (*websocket.Conn, string, error) {
+func openAzureSTTStreamConnection(ctx context.Context, provider *STT, streamURL string, languages []string) (*websocket.Conn, string, error) {
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
@@ -437,7 +437,7 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	return conn, connectionID, nil
 }
 
-func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	req, err := buildAzureSTTRecognizeRequest(ctx, s, frames, languageStr)
 	if err != nil {
 		return nil, err
@@ -484,7 +484,7 @@ type azureSTTRecognizeResponse struct {
 	} `json:"NBest"`
 }
 
-func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {
+func buildAzureSTTRecognizeRequest(ctx context.Context, s *STT, frames []*model.AudioFrame, language string) (*http.Request, error) {
 	if s == nil {
 		return nil, fmt.Errorf("azure stt provider is nil")
 	}
@@ -594,7 +594,7 @@ func defaultAzureSTTWebsocketDialer(ctx context.Context, endpoint string, header
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func buildAzureSTTStreamURL(s *AzureSTT, language string) string {
+func buildAzureSTTStreamURL(s *STT, language string) string {
 	base := s.websocketURL
 	if base == "" {
 		if s.speechEndpoint != "" {
@@ -640,11 +640,11 @@ func resolveAzureSTTLanguage(language string) string {
 	return defaultAzureSTTLanguage
 }
 
-func (s *AzureSTT) streamLanguage(language string) string {
+func (s *STT) streamLanguage(language string) string {
 	return s.streamLanguageCandidates(language)[0]
 }
 
-func (s *AzureSTT) streamLanguageCandidates(language string) []string {
+func (s *STT) streamLanguageCandidates(language string) []string {
 	if language != "" {
 		return []string{language}
 	}
@@ -668,7 +668,7 @@ func normalizeAzureSTTLanguages(languages []string) []string {
 	return resolved
 }
 
-func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
+func buildAzureSTTHeaders(s *STT, connectionID string) http.Header {
 	headers := make(http.Header)
 	if s.authToken != "" {
 		headers.Set("Authorization", "Bearer "+s.authToken)
@@ -679,7 +679,7 @@ func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 	return headers
 }
 
-func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
+func buildAzureSTTSpeechConfig(s *STT) []byte {
 	var languages []string
 	if s != nil {
 		languages = s.streamLanguageCandidates("")
@@ -687,7 +687,7 @@ func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
 	return buildAzureSTTSpeechConfigWithLanguages(s, languages)
 }
 
-func buildAzureSTTSpeechConfigWithLanguages(s *AzureSTT, languages []string) []byte {
+func buildAzureSTTSpeechConfigWithLanguages(s *STT, languages []string) []byte {
 	payload := map[string]any{
 		"context": map[string]any{
 			"system": map[string]any{
@@ -703,7 +703,7 @@ func buildAzureSTTSpeechConfigWithLanguages(s *AzureSTT, languages []string) []b
 	return b
 }
 
-func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
+func azureSTTSpeechConfigProperties(s *STT) map[string]string {
 	var languages []string
 	if s != nil {
 		languages = s.streamLanguageCandidates("")
@@ -711,7 +711,7 @@ func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
 	return azureSTTSpeechConfigPropertiesWithLanguages(s, languages)
 }
 
-func azureSTTSpeechConfigPropertiesWithLanguages(s *AzureSTT, languages []string) map[string]string {
+func azureSTTSpeechConfigPropertiesWithLanguages(s *STT, languages []string) map[string]string {
 	properties := make(map[string]string)
 	if s == nil {
 		return properties
@@ -772,7 +772,7 @@ func buildAzureSTTMessageHeaders(path string, requestID string, contentType stri
 }
 
 type azureSTTStream struct {
-	provider        *AzureSTT
+	provider        *STT
 	conn            *websocket.Conn
 	connectionID    string
 	streamURL       string
@@ -861,7 +861,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	return s.writeAudioLocked(audio)
 }
 
-func azureSTTStreamAudioContentType(provider *AzureSTT, frame *model.AudioFrame) string {
+func azureSTTStreamAudioContentType(provider *STT, frame *model.AudioFrame) string {
 	sampleRate := uint32(defaultAzureSTTSampleRate)
 	if provider != nil && provider.InputSampleRate() > 0 {
 		sampleRate = provider.InputSampleRate()
@@ -1451,4 +1451,15 @@ func splitAzureSTTMessage(payload []byte) (map[string]string, []byte) {
 		}
 	}
 	return headers, body
+}
+
+// Deprecated: use STT.
+type AzureSTT = STT
+
+// Deprecated: use STTOption.
+type AzureSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewAzureSTT(apiKey string, region string, opts ...STTOption) (*STT, error) {
+	return NewSTT(apiKey, region, opts...)
 }

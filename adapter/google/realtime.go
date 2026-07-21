@@ -96,7 +96,10 @@ type RealtimeModel struct {
 	sessions                  map[*googleRealtimeSession]struct{}
 }
 
-type GoogleRealtimeOption func(*googleRealtimeOptions)
+type RealtimeOption func(*googleRealtimeOptions)
+
+// Deprecated: use RealtimeOption.
+type GoogleRealtimeOption = RealtimeOption
 
 type googleRealtimeOptions struct {
 	model                     string
@@ -163,217 +166,217 @@ type googleRealtimeLiveSession interface {
 	Close() error
 }
 
-func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
+func WithGoogleRealtimeModel(model string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.model = model
 		options.modelSet = true
 	}
 }
 
-func WithGoogleRealtimeInstructions(instructions string) GoogleRealtimeOption {
+func WithGoogleRealtimeInstructions(instructions string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.instructions = instructions
 		options.instructionsSet = true
 	}
 }
 
-func WithGoogleRealtimeVoice(voice string) GoogleRealtimeOption {
+func WithGoogleRealtimeVoice(voice string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.voice = voice
 		options.voiceSet = true
 	}
 }
 
-func WithGoogleRealtimeLanguage(language string) GoogleRealtimeOption {
+func WithGoogleRealtimeLanguage(language string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.language = language
 	}
 }
 
-func WithGoogleRealtimeVertexAI(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeVertexAI(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.vertexAI = &enabled
 	}
 }
 
-func WithGoogleRealtimeProject(project string) GoogleRealtimeOption {
+func WithGoogleRealtimeProject(project string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.project = project
 		options.projectSet = true
 	}
 }
 
-func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
+func WithGoogleRealtimeLocation(location string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.location = location
 		options.locationSet = true
 	}
 }
 
-func WithGoogleRealtimeModalities(modalities []string) GoogleRealtimeOption {
+func WithGoogleRealtimeModalities(modalities []string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.modalities = append([]string(nil), modalities...)
 		options.modalitiesSet = true
 	}
 }
 
-func WithGoogleRealtimeTurnDetection(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeTurnDetection(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.turnDetection = &enabled
 	}
 }
 
-func WithGoogleRealtimeInputAudioTranscription(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeInputAudioTranscription(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.inputAudioTranscription = &enabled
 	}
 }
 
-func WithGoogleRealtimeOutputAudioTranscription(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeOutputAudioTranscription(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.outputAudioTranscription = &enabled
 	}
 }
 
-func WithGoogleRealtimeCandidateCount(count int) GoogleRealtimeOption {
+func WithGoogleRealtimeCandidateCount(count int) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.candidateCount = count
 	}
 }
 
-func WithGoogleRealtimeMaxOutputTokens(tokens int) GoogleRealtimeOption {
+func WithGoogleRealtimeMaxOutputTokens(tokens int) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.maxOutputTokens = tokens
 		options.maxOutputTokensSet = true
 	}
 }
 
-func WithGoogleRealtimeTopP(topP float64) GoogleRealtimeOption {
+func WithGoogleRealtimeTopP(topP float64) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.topP = topP
 		options.topPSet = true
 	}
 }
 
-func WithGoogleRealtimeTopK(topK int) GoogleRealtimeOption {
+func WithGoogleRealtimeTopK(topK int) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.topK = topK
 		options.topKSet = true
 	}
 }
 
-func WithGoogleRealtimePresencePenalty(penalty float64) GoogleRealtimeOption {
+func WithGoogleRealtimePresencePenalty(penalty float64) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.presencePenalty = penalty
 		options.presencePenaltySet = true
 	}
 }
 
-func WithGoogleRealtimeFrequencyPenalty(penalty float64) GoogleRealtimeOption {
+func WithGoogleRealtimeFrequencyPenalty(penalty float64) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.frequencyPenalty = penalty
 		options.frequencyPenaltySet = true
 	}
 }
 
-func WithGoogleRealtimeTemperature(temperature float64) GoogleRealtimeOption {
+func WithGoogleRealtimeTemperature(temperature float64) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.temperature = temperature
 		options.temperatureSet = true
 	}
 }
 
-func WithGoogleRealtimeToolBehavior(behavior any) GoogleRealtimeOption {
+func WithGoogleRealtimeToolBehavior(behavior any) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.toolBehavior = behavior
 		options.toolBehaviorSet = true
 	}
 }
 
-func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOption {
+func WithGoogleRealtimeToolResponseScheduling(scheduling any) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.toolResponseScheduling = scheduling
 		options.toolResponseSchedulingSet = true
 	}
 }
 
-func WithGoogleRealtimeProactivity(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeProactivity(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.proactivity = enabled
 		options.proactivitySet = true
 	}
 }
 
-func WithGoogleRealtimeAffectiveDialog(enabled bool) GoogleRealtimeOption {
+func WithGoogleRealtimeAffectiveDialog(enabled bool) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.affectiveDialog = enabled
 		options.affectiveDialogSet = true
 	}
 }
 
-func WithGoogleRealtimeContextWindowCompression(config *genai.ContextWindowCompressionConfig) GoogleRealtimeOption {
+func WithGoogleRealtimeContextWindowCompression(config *genai.ContextWindowCompressionConfig) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.contextWindowCompression = config
 	}
 }
 
-func WithGoogleRealtimeThinkingConfig(config *genai.ThinkingConfig) GoogleRealtimeOption {
+func WithGoogleRealtimeThinkingConfig(config *genai.ThinkingConfig) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.thinkingConfig = config
 	}
 }
 
-func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) GoogleRealtimeOption {
+func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.mediaResolution = resolution
 	}
 }
 
-func WithGoogleRealtimeImageEncodeOptions(encodeOptions images.EncodeOptions) GoogleRealtimeOption {
+func WithGoogleRealtimeImageEncodeOptions(encodeOptions images.EncodeOptions) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.imageEncodeOptions = encodeOptions
 		options.imageEncodeOptionsSet = true
 	}
 }
 
-func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtimeOption {
+func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.httpOptions = httpOptions
 	}
 }
 
-func WithGoogleRealtimeAPIVersion(apiVersion string) GoogleRealtimeOption {
+func WithGoogleRealtimeAPIVersion(apiVersion string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.apiVersion = apiVersion
 		options.apiVersionSet = true
 	}
 }
 
-func WithGoogleRealtimeConnectOptions(connectOptions llm.APIConnectOptions) GoogleRealtimeOption {
+func WithGoogleRealtimeConnectOptions(connectOptions llm.APIConnectOptions) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connectOptions = &connectOptions
 	}
 }
 
-func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
+func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
 	}
 }
 
-func WithGoogleRealtimeSessionResumptionHandle(handle string) GoogleRealtimeOption {
+func WithGoogleRealtimeSessionResumptionHandle(handle string) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.sessionResumptionHandle = handle
 	}
 }
 
-func WithGoogleRealtimeConnector(connector googleRealtimeConnector) GoogleRealtimeOption {
+func WithGoogleRealtimeConnector(connector googleRealtimeConnector) RealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connector = connector
 	}
 }
 
-func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeModel, error) {
+func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, error) {
 	options := googleRealtimeOptions{}
 	for _, opt := range opts {
 		opt(&options)
@@ -517,7 +520,7 @@ func googleRealtimeImageEncodeOptions(options googleRealtimeOptions) images.Enco
 	return images.NewEncodeOptions()
 }
 
-func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
+func (m *RealtimeModel) UpdateOptions(opts ...RealtimeOption) {
 	if m == nil {
 		return
 	}

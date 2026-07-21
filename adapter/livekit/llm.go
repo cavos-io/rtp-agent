@@ -54,7 +54,7 @@ func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Respons
 	return base.Do(cloned)
 }
 
-type LiveKitInferenceLLM struct {
+type LLM struct {
 	model          string
 	apiKey         string
 	apiSecret      string
@@ -65,37 +65,37 @@ type LiveKitInferenceLLM struct {
 	extraParams    map[string]any
 }
 
-var _ llm.LLM = (*LiveKitInferenceLLM)(nil)
+var _ llm.LLM = (*LLM)(nil)
 
-type LiveKitInferenceLLMOption func(*LiveKitInferenceLLM)
+type LLMOption func(*LLM)
 
-func WithLiveKitInferenceLLMModel(model string) LiveKitInferenceLLMOption {
-	return func(l *LiveKitInferenceLLM) {
+func WithLiveKitInferenceLLMModel(model string) LLMOption {
+	return func(l *LLM) {
 		if model != "" {
 			l.model = model
 		}
 	}
 }
 
-func WithLiveKitInferenceLLMProvider(provider string) LiveKitInferenceLLMOption {
-	return func(l *LiveKitInferenceLLM) {
+func WithLiveKitInferenceLLMProvider(provider string) LLMOption {
+	return func(l *LLM) {
 		l.provider = provider
 	}
 }
 
-func WithLiveKitInferenceLLMClass(inferenceClass string) LiveKitInferenceLLMOption {
-	return func(l *LiveKitInferenceLLM) {
+func WithLiveKitInferenceLLMClass(inferenceClass string) LLMOption {
+	return func(l *LLM) {
 		l.inferenceClass = inferenceClass
 	}
 }
 
-func WithLiveKitInferenceLLMExtraParams(params map[string]any) LiveKitInferenceLLMOption {
-	return func(l *LiveKitInferenceLLM) {
+func WithLiveKitInferenceLLMExtraParams(params map[string]any) LLMOption {
+	return func(l *LLM) {
 		l.extraParams = cloneLiveKitInferenceLLMExtraParams(params)
 	}
 }
 
-func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...LiveKitInferenceLLMOption) (*LiveKitInferenceLLM, error) {
+func NewLLM(model string, apiKey, apiSecret string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -117,7 +117,7 @@ func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...Live
 	if apiSecret == "" {
 		return nil, fmt.Errorf("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable")
 	}
-	provider := &LiveKitInferenceLLM{
+	provider := &LLM{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
@@ -143,21 +143,21 @@ func liveKitInferenceUserAgent() string {
 	return fmt.Sprintf("LiveKit Agents/Go (go %s)", runtime.Version())
 }
 
-func (l *LiveKitInferenceLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
-func (l *LiveKitInferenceLLM) Provider() string {
+func (l *LLM) Provider() string {
 	return "livekit"
 }
 
-func (l *LiveKitInferenceLLM) UpdateOptions(opts ...LiveKitInferenceLLMOption) {
+func (l *LLM) UpdateOptions(opts ...LLMOption) {
 	for _, opt := range opts {
 		opt(l)
 	}
 }
 
-func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	token, err := CreateAccessToken(l.apiKey, l.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
@@ -282,4 +282,15 @@ func cloneLiveKitInferenceLLMExtraParams(params map[string]any) map[string]any {
 		clone[key] = value
 	}
 	return clone
+}
+
+// Deprecated: use LLM.
+type LiveKitInferenceLLM = LLM
+
+// Deprecated: use LLMOption.
+type LiveKitInferenceLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...LLMOption) (*LLM, error) {
+	return NewLLM(model, apiKey, apiSecret, opts...)
 }

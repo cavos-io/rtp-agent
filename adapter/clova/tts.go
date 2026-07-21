@@ -13,31 +13,31 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
-type ClovaTTS struct {
+type TTS struct {
 	clientID     string
 	clientSecret string
 	voice        string
 }
 
-func NewClovaTTS(clientID, clientSecret, voice string) *ClovaTTS {
+func NewTTS(clientID, clientSecret, voice string) *TTS {
 	if voice == "" {
 		voice = "nara"
 	}
-	return &ClovaTTS{
+	return &TTS{
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		voice:        voice,
 	}
 }
 
-func (t *ClovaTTS) Label() string { return "clova.TTS" }
-func (t *ClovaTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "clova.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *ClovaTTS) SampleRate() int  { return 24000 }
-func (t *ClovaTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return 24000 }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	apiURL := "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
 
 	data := url.Values{}
@@ -73,7 +73,7 @@ func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	}, nil
 }
 
-func (t *ClovaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming tts not natively supported by clova rest api")
 }
 
@@ -131,4 +131,12 @@ func (s *clovaTTSChunkedStream) Close() error {
 		_ = s.decoder.Close()
 	}
 	return s.resp.Body.Close()
+}
+
+// Deprecated: use TTS.
+type ClovaTTS = TTS
+
+// Deprecated: use NewTTS.
+func NewClovaTTS(clientID, clientSecret, voice string) *TTS {
+	return NewTTS(clientID, clientSecret, voice)
 }

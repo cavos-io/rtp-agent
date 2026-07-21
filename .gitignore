@@ -13,8 +13,11 @@ __pycache__
 worktrees/
 
 # Agent files
-.claude
-.codex
-.agents
-.gemini
-.pi
+.agents/
+.claude/
+.codex/
+.gemini/
+.junie/
+.pi/
+.superpowers/
+docs/superpowers/

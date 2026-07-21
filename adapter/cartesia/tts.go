@@ -29,7 +29,7 @@ const (
 	cartesiaTTSExperimentalAPIVersion = "2024-11-13"
 )
 
-type CartesiaTTS struct {
+type TTS struct {
 	apiKey              string
 	baseURL             string
 	voiceID             string
@@ -49,32 +49,32 @@ type CartesiaTTS struct {
 	closed              bool
 }
 
-type CartesiaTTSOption func(*CartesiaTTS)
+type TTSOption func(*TTS)
 
-func WithCartesiaBaseURL(baseURL string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithCartesiaLanguage(language string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
-func WithCartesiaModel(model string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithCartesiaVoiceID(voiceID string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaVoiceID(voiceID string) TTSOption {
+	return func(t *TTS) {
 		if voiceID != "" {
 			t.voiceID = voiceID
 			t.voiceEmbedding = nil
@@ -82,8 +82,8 @@ func WithCartesiaVoiceID(voiceID string) CartesiaTTSOption {
 	}
 }
 
-func WithCartesiaAudioFormat(encoding string, sampleRate int) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaAudioFormat(encoding string, sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 		}
@@ -93,51 +93,51 @@ func WithCartesiaAudioFormat(encoding string, sampleRate int) CartesiaTTSOption 
 	}
 }
 
-func WithCartesiaAPIVersion(apiVersion string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaAPIVersion(apiVersion string) TTSOption {
+	return func(t *TTS) {
 		if apiVersion != "" {
 			t.apiVersion = apiVersion
 		}
 	}
 }
 
-func WithCartesiaWordTimestamps(wordTimestamps bool) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaWordTimestamps(wordTimestamps bool) TTSOption {
+	return func(t *TTS) {
 		t.wordTimestamps = wordTimestamps
 	}
 }
 
-func WithCartesiaVoiceEmbedding(embedding []float64) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaVoiceEmbedding(embedding []float64) TTSOption {
+	return func(t *TTS) {
 		t.voiceEmbedding = append([]float64(nil), embedding...)
 	}
 }
 
-func WithCartesiaSpeed(speed any) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaSpeed(speed any) TTSOption {
+	return func(t *TTS) {
 		t.speed = speed
 	}
 }
 
-func WithCartesiaEmotion(emotion string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaEmotion(emotion string) TTSOption {
+	return func(t *TTS) {
 		t.emotion = emotion
 	}
 }
 
-func WithCartesiaVolume(volume float64) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaVolume(volume float64) TTSOption {
+	return func(t *TTS) {
 		t.volume = &volume
 	}
 }
 
-func WithCartesiaPronunciationDictID(id string) CartesiaTTSOption {
-	return func(t *CartesiaTTS) {
+func WithCartesiaPronunciationDictID(id string) TTSOption {
+	return func(t *TTS) {
 		t.pronunciationDictID = id
 	}
 }
 
-func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...CartesiaTTSOption) *CartesiaTTS {
+func NewTTS(apiKey string, voiceID string, model string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("CARTESIA_API_KEY")
 	}
@@ -147,7 +147,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 	if model == "" {
 		model = "sonic-3"
 	}
-	provider := &CartesiaTTS{
+	provider := &TTS{
 		apiKey:         apiKey,
 		baseURL:        defaultCartesiaTTSBaseURL,
 		voiceID:        voiceID,
@@ -165,19 +165,19 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 	return provider
 }
 
-func (t *CartesiaTTS) Label() string { return "cartesia.TTS" }
-func (t *CartesiaTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "cartesia.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: t.wordTimestamps}
 }
-func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
-func (t *CartesiaTTS) NumChannels() int { return 1 }
-func (t *CartesiaTTS) Model() string    { return t.model }
-func (t *CartesiaTTS) Provider() string { return "Cartesia" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "Cartesia" }
 
-func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	candidate := &CartesiaTTS{
+	candidate := &TTS{
 		baseURL:             t.baseURL,
 		voiceID:             t.voiceID,
 		voiceEmbedding:      append([]float64(nil), t.voiceEmbedding...),
@@ -206,7 +206,7 @@ func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
 	t.pronunciationDictID = candidate.pronunciationDictID
 }
 
-func (t *CartesiaTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -227,7 +227,7 @@ func (t *CartesiaTTS) Close() error {
 	return closeErr
 }
 
-func (t *CartesiaTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -236,7 +236,7 @@ func (t *CartesiaTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -258,14 +258,14 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}, nil
 }
 
-func buildCartesiaSynthesizeRequest(t *CartesiaTTS, text string) (string, []byte, error) {
+func buildCartesiaSynthesizeRequest(t *TTS, text string) (string, []byte, error) {
 	reqBody := buildCartesiaOptions(t, false)
 	reqBody["transcript"] = text
 	jsonBody, err := json.Marshal(reqBody)
 	return strings.TrimRight(t.baseURL, "/") + "/tts/bytes", jsonBody, err
 }
 
-func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{} {
+func buildCartesiaOptions(t *TTS, streaming bool) map[string]interface{} {
 	voice := map[string]interface{}{
 		"mode": "id",
 		"id":   t.voiceID,
@@ -432,7 +432,7 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 	return body.Close()
 }
 
-func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -465,7 +465,7 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	return stream, nil
 }
 
-func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) bool {
+func (t *TTS) registerStream(stream *cartesiaTTSStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -481,7 +481,7 @@ func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) bool {
 	return true
 }
 
-func (t *CartesiaTTS) unregisterStream(stream *cartesiaTTSStream) {
+func (t *TTS) unregisterStream(stream *cartesiaTTSStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -497,7 +497,7 @@ func validateCartesiaTTSAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildCartesiaStreamURL(t *CartesiaTTS) string {
+func buildCartesiaStreamURL(t *TTS) string {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -512,7 +512,7 @@ func buildCartesiaStreamURL(t *CartesiaTTS) string {
 	return u.String()
 }
 
-func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
+func buildCartesiaStreamHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("X-API-Key", t.apiKey)
 	headers.Set("User-Agent", cartesiaTTSUserAgent)
@@ -520,7 +520,7 @@ func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
 }
 
 type cartesiaTTSStream struct {
-	provider *CartesiaTTS
+	provider *TTS
 	ctx      context.Context
 	conn     *websocket.Conn
 	audio    chan *tts.SynthesizedAudio
@@ -759,7 +759,7 @@ func (s *cartesiaTTSStream) streamPacketLocked() map[string]interface{} {
 	return msg
 }
 
-func cartesiaTTSStreamOptions(t *CartesiaTTS) map[string]interface{} {
+func cartesiaTTSStreamOptions(t *TTS) map[string]interface{} {
 	options := buildCartesiaOptions(t, true)
 	options["max_buffer_delay_ms"] = 0
 	return options
@@ -925,4 +925,15 @@ func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return nil, err
 	}
+}
+
+// Deprecated: use TTS.
+type CartesiaTTS = TTS
+
+// Deprecated: use TTSOption.
+type CartesiaTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voiceID, model, opts...)
 }

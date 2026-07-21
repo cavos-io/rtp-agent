@@ -15,18 +15,18 @@ const (
 	lemonSliceAPIKeyEnv        = "LEMONSLICE_API_KEY"
 )
 
-type LemonsliceAvatar struct {
+type Avatar struct {
 	apiKey         string
 	apiURL         string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewLemonsliceAvatar(apiKey string) *LemonsliceAvatar {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(lemonSliceAPIKeyEnv)
 	}
-	return &LemonsliceAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		apiURL:         defaultAPIURL,
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -34,19 +34,27 @@ func NewLemonsliceAvatar(apiKey string) *LemonsliceAvatar {
 	}
 }
 
-func (a *LemonsliceAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *LemonsliceAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *LemonsliceAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *LemonsliceAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type LemonsliceAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewLemonsliceAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

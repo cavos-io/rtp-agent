@@ -18,13 +18,13 @@ const (
 	defaultXaiRealtimeVoice   = "Ara"
 )
 
-type XaiRealtimeModel struct {
+type RealtimeModel struct {
 	apiKey string
 	model  string
 	inner  *adapteropenai.RealtimeModel
 }
 
-type XaiRealtimeOption func(*xaiRealtimeOptions)
+type RealtimeOption func(*xaiRealtimeOptions)
 
 type xaiRealtimeOptions struct {
 	model            string
@@ -37,7 +37,7 @@ type xaiRealtimeOptions struct {
 	turnDetectionSet bool
 }
 
-func WithXaiRealtimeModel(model string) XaiRealtimeOption {
+func WithXaiRealtimeModel(model string) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		if model != "" {
 			options.model = model
@@ -45,7 +45,7 @@ func WithXaiRealtimeModel(model string) XaiRealtimeOption {
 	}
 }
 
-func WithXaiRealtimeVoice(voice string) XaiRealtimeOption {
+func WithXaiRealtimeVoice(voice string) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		if voice != "" {
 			options.voice = voice
@@ -53,7 +53,7 @@ func WithXaiRealtimeVoice(voice string) XaiRealtimeOption {
 	}
 }
 
-func WithXaiRealtimeBaseURL(baseURL string) XaiRealtimeOption {
+func WithXaiRealtimeBaseURL(baseURL string) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		if baseURL != "" {
 			options.baseURL = baseURL
@@ -61,32 +61,32 @@ func WithXaiRealtimeBaseURL(baseURL string) XaiRealtimeOption {
 	}
 }
 
-func WithXaiRealtimeWebsocketDialer(dialer func(string, http.Header) (*websocket.Conn, *http.Response, error)) XaiRealtimeOption {
+func WithXaiRealtimeWebsocketDialer(dialer func(string, http.Header) (*websocket.Conn, *http.Response, error)) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		options.dialWebsocket = dialer
 	}
 }
 
-func WithXaiRealtimeTurnDetection(turnDetection any) XaiRealtimeOption {
+func WithXaiRealtimeTurnDetection(turnDetection any) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		options.turnDetection = turnDetection
 		options.turnDetectionSet = true
 	}
 }
 
-func WithXaiRealtimeMaxSessionDuration(duration time.Duration) XaiRealtimeOption {
+func WithXaiRealtimeMaxSessionDuration(duration time.Duration) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		options.maxSession = duration
 	}
 }
 
-func WithXaiRealtimeConnectOptions(connectOptions llm.APIConnectOptions) XaiRealtimeOption {
+func WithXaiRealtimeConnectOptions(connectOptions llm.APIConnectOptions) RealtimeOption {
 	return func(options *xaiRealtimeOptions) {
 		options.connect = &connectOptions
 	}
 }
 
-func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeModel {
+func NewRealtimeModel(apiKey string, opts ...RealtimeOption) *RealtimeModel {
 	if apiKey == "" {
 		apiKey = os.Getenv(xaiAPIKeyEnv)
 	}
@@ -117,7 +117,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 	if options.turnDetectionSet {
 		turnDetection = options.turnDetection
 	}
-	innerOptions := []adapteropenai.OpenAIRealtimeOption{
+	innerOptions := []adapteropenai.RealtimeOption{
 		adapteropenai.WithOpenAIRealtimeBaseURL(baseURL),
 		adapteropenai.WithOpenAIRealtimeWebsocketDialer(options.dialWebsocket),
 		adapteropenai.WithOpenAIRealtimeToolFormatter(xaiRealtimeTools),
@@ -137,7 +137,7 @@ func NewXaiRealtimeModel(apiKey string, opts ...XaiRealtimeOption) *XaiRealtimeM
 		innerOptions = append(innerOptions, adapteropenai.WithOpenAIRealtimeConnectOptions(*options.connect))
 	}
 	inner := adapteropenai.NewRealtimeModel(apiKey, model, innerOptions...)
-	return &XaiRealtimeModel{
+	return &RealtimeModel{
 		apiKey: apiKey,
 		model:  model,
 		inner:  inner,
@@ -208,28 +208,39 @@ func xaiRealtimeSessionCloseMetrics(model string, duration time.Duration) *telem
 	}
 }
 
-func (m *XaiRealtimeModel) Model() string { return m.model }
-func (m *XaiRealtimeModel) Provider() string {
+func (m *RealtimeModel) Model() string { return m.model }
+func (m *RealtimeModel) Provider() string {
 	return "xAI Realtime API"
 }
 
-func (m *XaiRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	caps := m.inner.Capabilities()
 	caps.PerResponseToolChoice = false
 	return caps
 }
 
-func (m *XaiRealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
+func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	return m.inner.UpdateOptions(options)
 }
 
-func (m *XaiRealtimeModel) Session() (llm.RealtimeSession, error) {
+func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("xAI API key is required, either as argument or set XAI_API_KEY environment variable")
 	}
 	return m.inner.Session()
 }
 
-func (m *XaiRealtimeModel) Close() error {
+func (m *RealtimeModel) Close() error {
 	return m.inner.Close()
+}
+
+// Deprecated: use RealtimeModel.
+type XaiRealtimeModel = RealtimeModel
+
+// Deprecated: use RealtimeOption.
+type XaiRealtimeOption = RealtimeOption
+
+// Deprecated: use NewRealtimeModel.
+func NewXaiRealtimeModel(apiKey string, opts ...RealtimeOption) *RealtimeModel {
+	return NewRealtimeModel(apiKey, opts...)
 }

@@ -20,7 +20,7 @@ const (
 	avatarTalkEmotionEnv          = "AVATARTALK_EMOTION"
 )
 
-type AvatartalkAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatar         string
 	emotion        string
@@ -30,7 +30,7 @@ type AvatartalkAvatar struct {
 	started        bool
 }
 
-func NewAvatartalkAvatar(apiKey string) *AvatartalkAvatar {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(avatarTalkAPIKeyEnv)
 	}
@@ -42,7 +42,7 @@ func NewAvatartalkAvatar(apiKey string) *AvatartalkAvatar {
 	if emotion == "" {
 		emotion = defaultAvatarEmotion
 	}
-	return &AvatartalkAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		avatar:         avatar,
 		emotion:        emotion,
@@ -52,11 +52,11 @@ func NewAvatartalkAvatar(apiKey string) *AvatartalkAvatar {
 	}
 }
 
-func (a *AvatartalkAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *AvatartalkAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("AvatarTalk API key is required, either as argument or set AVATARTALK_API_KEY environment variable")
 	}
@@ -64,7 +64,15 @@ func (a *AvatartalkAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AvatartalkAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
+}
+
+// Deprecated: use Avatar.
+type AvatartalkAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewAvatartalkAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

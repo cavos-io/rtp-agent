@@ -36,7 +36,7 @@ const (
 	xaiSTTUsageReportInterval = 5 * time.Second
 )
 
-type XaiSTT struct {
+type STT struct {
 	mu                   sync.Mutex
 	apiKey               string
 	restURL              string
@@ -50,65 +50,65 @@ type XaiSTT struct {
 	closed               bool
 }
 
-type XaiSTTOption func(*XaiSTT)
+type STTOption func(*STT)
 
-func WithXaiSTTRestURL(restURL string) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTRestURL(restURL string) STTOption {
+	return func(s *STT) {
 		if restURL != "" {
 			s.restURL = restURL
 		}
 	}
 }
 
-func WithXaiSTTWebsocketURL(websocketURL string) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTWebsocketURL(websocketURL string) STTOption {
+	return func(s *STT) {
 		if websocketURL != "" {
 			s.websocketURL = websocketURL
 		}
 	}
 }
 
-func WithXaiSTTSampleRate(sampleRate int) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithXaiSTTLanguage(language string) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithXaiSTTInterimResults(enabled bool) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTInterimResults(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableInterimResults = enabled
 	}
 }
 
-func WithXaiSTTDiarization(enabled bool) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTDiarization(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableDiarization = enabled
 	}
 }
 
-func WithXaiSTTEndpointing(endpointing int) XaiSTTOption {
-	return func(s *XaiSTT) {
+func WithXaiSTTEndpointing(endpointing int) STTOption {
+	return func(s *STT) {
 		if endpointing >= 0 {
 			s.endpointing = endpointing
 		}
 	}
 }
 
-func NewXaiSTT(apiKey string, opts ...XaiSTTOption) *XaiSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(xaiAPIKeyEnv)
 	}
-	provider := &XaiSTT{
+	provider := &STT{
 		apiKey:               apiKey,
 		restURL:              defaultXaiSTTRestURL,
 		websocketURL:         defaultXaiSTTWebsocketURL,
@@ -124,11 +124,11 @@ func NewXaiSTT(apiKey string, opts ...XaiSTTOption) *XaiSTT {
 	return provider
 }
 
-func (s *XaiSTT) Label() string { return "xai.STT" }
-func (s *XaiSTT) InputSampleRate() uint32 {
+func (s *STT) Label() string { return "xai.STT" }
+func (s *STT) InputSampleRate() uint32 {
 	return uint32(s.sampleRate)
 }
-func (s *XaiSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    s.enableInterimResults,
@@ -138,7 +138,7 @@ func (s *XaiSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *XaiSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -164,7 +164,7 @@ func (s *XaiSTT) Close() error {
 	return closeErr
 }
 
-func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	s.mu.Lock()
 	for _, opt := range opts {
 		opt(s)
@@ -185,7 +185,7 @@ func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
 	}
 }
 
-func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -230,7 +230,7 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	return stream, nil
 }
 
-func (s *XaiSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -239,7 +239,7 @@ func (s *XaiSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *XaiSTT) registerStream(stream *xaiSTTStream) bool {
+func (s *STT) registerStream(stream *xaiSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -255,7 +255,7 @@ func (s *XaiSTT) registerStream(stream *xaiSTTStream) bool {
 	return true
 }
 
-func (s *XaiSTT) unregisterStream(stream *xaiSTTStream) {
+func (s *STT) unregisterStream(stream *xaiSTTStream) {
 	if s == nil {
 		return
 	}
@@ -264,7 +264,7 @@ func (s *XaiSTT) unregisterStream(stream *xaiSTTStream) {
 	delete(s.streams, stream)
 }
 
-func (s *XaiSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := validateXaiAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func xaiSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32) []byte
 	return wav.Bytes()
 }
 
-func buildXaiSTTRecognizeRequest(ctx context.Context, s *XaiSTT, audio []byte, language string) (*http.Request, error) {
+func buildXaiSTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	header := make(textproto.MIMEHeader)
@@ -366,7 +366,7 @@ func buildXaiSTTRecognizeRequest(ctx context.Context, s *XaiSTT, audio []byte, l
 	return req, nil
 }
 
-func buildXaiSTTStreamURL(s *XaiSTT, language string) string {
+func buildXaiSTTStreamURL(s *STT, language string) string {
 	return buildXaiSTTStreamURLWithOptions(
 		s.websocketURL,
 		s.sampleRate,
@@ -390,7 +390,7 @@ func buildXaiSTTStreamURLWithOptions(websocketURL string, sampleRate int, interi
 	return u.String()
 }
 
-func buildXaiSTTHeaders(s *XaiSTT) http.Header {
+func buildXaiSTTHeaders(s *STT) http.Header {
 	return buildXaiSTTHeadersWithAPIKey(s.apiKey)
 }
 
@@ -400,7 +400,7 @@ func buildXaiSTTHeadersWithAPIKey(apiKey string) http.Header {
 	return headers
 }
 
-func resolveXaiSTTLanguage(s *XaiSTT, language string) string {
+func resolveXaiSTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -408,7 +408,7 @@ func resolveXaiSTTLanguage(s *XaiSTT, language string) string {
 }
 
 type xaiSTTStream struct {
-	owner              *XaiSTT
+	owner              *STT
 	apiKey             string
 	websocketURL       string
 	sampleRate         int
@@ -1006,4 +1006,15 @@ func payloadInt(payload map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// Deprecated: use STT.
+type XaiSTT = STT
+
+// Deprecated: use STTOption.
+type XaiSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewXaiSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

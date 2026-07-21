@@ -31,7 +31,7 @@ const (
 	mistralAISTTRealtimeChunkSize = defaultMistralAISTTSampleRate / 20 * 2
 )
 
-type MistralAISTT struct {
+type STT struct {
 	apiKey                 string
 	baseURL                string
 	model                  string
@@ -46,53 +46,53 @@ type MistralAISTT struct {
 	activeStreams map[*mistralAISTTRealtimeStream]struct{}
 }
 
-type MistralAISTTOption func(*MistralAISTT)
+type STTOption func(*STT)
 
-func WithMistralAISTTBaseURL(baseURL string) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithMistralAISTTModel(model string) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithMistralAISTTLanguage(language string) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.language = language
 	}
 }
 
-func WithMistralAISTTContextBias(contextBias []string) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTContextBias(contextBias []string) STTOption {
+	return func(s *STT) {
 		s.contextBias = contextBias
 	}
 }
 
-func WithMistralAISTTTargetStreamingDelay(delayMS int) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTTargetStreamingDelay(delayMS int) STTOption {
+	return func(s *STT) {
 		s.targetStreamingDelayMS = &delayMS
 	}
 }
 
-func WithMistralAISTTVAD(v vad.VAD) MistralAISTTOption {
-	return func(s *MistralAISTT) {
+func WithMistralAISTTVAD(v vad.VAD) STTOption {
+	return func(s *STT) {
 		s.vad = v
 	}
 }
 
-func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("MISTRAL_API_KEY")
 	}
-	provider := &MistralAISTT{
+	provider := &STT{
 		apiKey:     apiKey,
 		baseURL:    defaultMistralAISTTBaseURL,
 		model:      defaultMistralAISTTModel,
@@ -105,18 +105,18 @@ func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
 	return provider
 }
 
-func (s *MistralAISTT) Label() string { return "mistralai.STT" }
-func (s *MistralAISTT) Model() string { return s.model }
-func (s *MistralAISTT) Provider() string {
+func (s *STT) Label() string { return "mistralai.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "MistralAI"
 }
-func (s *MistralAISTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultMistralAISTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
-func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	realtime := mistralAISTTIsRealtime(s.model)
 	return stt.STTCapabilities{
 		Streaming:         realtime,
@@ -127,9 +127,9 @@ func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *MistralAISTT) UpdateOptions(opts ...MistralAISTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	beforeDelay := cloneIntPtr(s.targetStreamingDelayMS)
-	candidate := &MistralAISTT{
+	candidate := &STT{
 		apiKey:                 s.apiKey,
 		baseURL:                s.baseURL,
 		model:                  s.model,
@@ -155,7 +155,7 @@ func (s *MistralAISTT) UpdateOptions(opts ...MistralAISTTOption) {
 	}
 }
 
-func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateMistralAISTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -232,7 +232,7 @@ func intPtrsEqual(left *int, right *int) bool {
 	return *left == *right
 }
 
-func (s *MistralAISTT) registerRealtimeStream(stream *mistralAISTTRealtimeStream) {
+func (s *STT) registerRealtimeStream(stream *mistralAISTTRealtimeStream) {
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 	if s.activeStreams == nil {
@@ -241,13 +241,13 @@ func (s *MistralAISTT) registerRealtimeStream(stream *mistralAISTTRealtimeStream
 	s.activeStreams[stream] = struct{}{}
 }
 
-func (s *MistralAISTT) unregisterRealtimeStream(stream *mistralAISTTRealtimeStream) {
+func (s *STT) unregisterRealtimeStream(stream *mistralAISTTRealtimeStream) {
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 	delete(s.activeStreams, stream)
 }
 
-func (s *MistralAISTT) snapshotRealtimeStreams() []*mistralAISTTRealtimeStream {
+func (s *STT) snapshotRealtimeStreams() []*mistralAISTTRealtimeStream {
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 	streams := make([]*mistralAISTTRealtimeStream, 0, len(s.activeStreams))
@@ -257,7 +257,7 @@ func (s *MistralAISTT) snapshotRealtimeStreams() []*mistralAISTTRealtimeStream {
 	return streams
 }
 
-func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := validateMistralAISTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func mistralAISTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, 
 	return wav.Bytes()
 }
 
-func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, audio []byte, language string) (*http.Request, error) {
+func buildMistralAISTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	header := make(textproto.MIMEHeader)
@@ -373,7 +373,7 @@ func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, aud
 	return req, nil
 }
 
-func buildMistralAISTTRealtimeURL(s *MistralAISTT) string {
+func buildMistralAISTTRealtimeURL(s *STT) string {
 	base := strings.TrimRight(s.baseURL, "/")
 	if !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
@@ -392,7 +392,7 @@ func buildMistralAISTTRealtimeURL(s *MistralAISTT) string {
 	return u.String()
 }
 
-func buildMistralAISTTRealtimeHeaders(s *MistralAISTT) http.Header {
+func buildMistralAISTTRealtimeHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+s.apiKey)
 	return headers
@@ -774,7 +774,7 @@ func validateMistralAISTTAPIKey(apiKey string) error {
 	return nil
 }
 
-func resolveMistralAISTTLanguage(s *MistralAISTT, language string) string {
+func resolveMistralAISTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -844,4 +844,15 @@ func mistralAISTTTimedStrings(segments []mistralAISTTSegment) []stt.TimedString 
 		})
 	}
 	return timed
+}
+
+// Deprecated: use STT.
+type MistralAISTT = STT
+
+// Deprecated: use STTOption.
+type MistralAISTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewMistralAISTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

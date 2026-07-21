@@ -30,7 +30,7 @@ const (
 	mistralAITTSNumChannels           = 1
 )
 
-type MistralAITTS struct {
+type TTS struct {
 	apiKey         string
 	baseURL        string
 	model          string
@@ -39,49 +39,49 @@ type MistralAITTS struct {
 	responseFormat string
 }
 
-type MistralAITTSOption func(*MistralAITTS)
+type TTSOption func(*TTS)
 
-func WithMistralAITTSBaseURL(baseURL string) MistralAITTSOption {
-	return func(t *MistralAITTS) {
+func WithMistralAITTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithMistralAITTSModel(model string) MistralAITTSOption {
-	return func(t *MistralAITTS) {
+func WithMistralAITTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithMistralAITTSVoice(voice string) MistralAITTSOption {
-	return func(t *MistralAITTS) {
+func WithMistralAITTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		t.voice = voice
 	}
 }
 
-func WithMistralAITTSRefAudio(refAudio string) MistralAITTSOption {
-	return func(t *MistralAITTS) {
+func WithMistralAITTSRefAudio(refAudio string) TTSOption {
+	return func(t *TTS) {
 		t.refAudio = refAudio
 	}
 }
 
-func WithMistralAITTSResponseFormat(responseFormat string) MistralAITTSOption {
-	return func(t *MistralAITTS) {
+func WithMistralAITTSResponseFormat(responseFormat string) TTSOption {
+	return func(t *TTS) {
 		if responseFormat != "" {
 			t.responseFormat = responseFormat
 		}
 	}
 }
 
-func NewMistralAITTS(apiKey string, voice string, opts ...MistralAITTSOption) (*MistralAITTS, error) {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("MISTRAL_API_KEY")
 	}
-	provider := &MistralAITTS{
+	provider := &TTS{
 		apiKey:         apiKey,
 		baseURL:        defaultMistralAITTSBaseURL,
 		model:          defaultMistralAITTSModel,
@@ -103,16 +103,16 @@ func NewMistralAITTS(apiKey string, voice string, opts ...MistralAITTSOption) (*
 	return provider, nil
 }
 
-func (t *MistralAITTS) Label() string { return "mistralai.TTS" }
-func (t *MistralAITTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "mistralai.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *MistralAITTS) SampleRate() int  { return mistralAITTSSampleRate }
-func (t *MistralAITTS) NumChannels() int { return mistralAITTSNumChannels }
-func (t *MistralAITTS) Model() string    { return t.model }
-func (t *MistralAITTS) Provider() string { return "MistralAI" }
+func (t *TTS) SampleRate() int  { return mistralAITTSSampleRate }
+func (t *TTS) NumChannels() int { return mistralAITTSNumChannels }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "MistralAI" }
 
-func (t *MistralAITTS) UpdateOptions(opts ...MistralAITTSOption) error {
+func (t *TTS) UpdateOptions(opts ...TTSOption) error {
 	updated := *t
 	voiceUpdated := false
 	refAudioUpdated := false
@@ -141,7 +141,7 @@ func (t *MistralAITTS) UpdateOptions(opts ...MistralAITTSOption) error {
 	return nil
 }
 
-func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if _, err := buildMistralAITTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
@@ -154,11 +154,11 @@ func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}, nil
 }
 
-func (t *MistralAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("mistralai streaming tts is exposed through Synthesize")
 }
 
-func buildMistralAITTSRequest(ctx context.Context, t *MistralAITTS, text string) (*http.Request, error) {
+func buildMistralAITTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	body := map[string]any{
 		"model":           t.model,
 		"input":           text,
@@ -194,7 +194,7 @@ type mistralAITTSChunkedStream struct {
 	closer         io.Closer
 	ctx            context.Context
 	text           string
-	opts           MistralAITTS
+	opts           TTS
 	scanner        *bufio.Scanner
 	responseFormat string
 	requested      bool
@@ -463,4 +463,15 @@ func decodeMistralAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
 		NumChannels:       uint32(channels),
 		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
 	}, nil
+}
+
+// Deprecated: use TTS.
+type MistralAITTS = TTS
+
+// Deprecated: use TTSOption.
+type MistralAITTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewMistralAITTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, voice, opts...)
 }

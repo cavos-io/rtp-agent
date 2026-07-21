@@ -156,8 +156,8 @@ type appGoogleLLMConfig struct {
 	locationSet bool
 }
 
-func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
-	opts := []adaptergoogle.GoogleLLMOption{}
+func (c appGoogleLLMConfig) options() []adaptergoogle.LLMOption {
+	opts := []adaptergoogle.LLMOption{}
 	if c.vertexAI != nil {
 		opts = append(opts, adaptergoogle.WithGoogleLLMVertexAI(*c.vertexAI))
 	}
@@ -204,8 +204,8 @@ type appGoogleRealtimeConfig struct {
 	toolBehavior             genai.Behavior
 }
 
-func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
-	opts := []adaptergoogle.GoogleRealtimeOption{adaptergoogle.WithGoogleRealtimeModel(model)}
+func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.RealtimeOption {
+	opts := []adaptergoogle.RealtimeOption{adaptergoogle.WithGoogleRealtimeModel(model)}
 	if c.vertexAI != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeVertexAI(*c.vertexAI))
 	}
@@ -326,7 +326,7 @@ type appGoogleSTTConfig struct {
 }
 
 var appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
-	return adaptergoogle.NewGoogleLLM(apiKey, model, cfg.options()...)
+	return adaptergoogle.NewLLM(apiKey, model, cfg.options()...)
 }
 
 var appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
@@ -334,7 +334,7 @@ var appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealti
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
-	sttOpts := []adaptergoogle.GoogleSTTOption{}
+	sttOpts := []adaptergoogle.STTOption{}
 	if cfg.model != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
 	}
@@ -401,11 +401,11 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	if cfg.endpointingSensitivity != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTEndpointingSensitivity(cfg.endpointingSensitivity))
 	}
-	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
+	return adaptergoogle.NewSTT(credentialsFile, sttOpts...)
 }
 
 var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (coretts.TTS, error) {
-	ttsOpts := []adaptergoogle.GoogleTTSOption{}
+	ttsOpts := []adaptergoogle.TTSOption{}
 	if cfg.languageSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
 	}
@@ -457,7 +457,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.customPronunciations != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSCustomPronunciations(cfg.customPronunciations))
 	}
-	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
+	return adaptergoogle.NewTTS(credentialsFile, ttsOpts...)
 }
 
 func init() {
@@ -2462,41 +2462,41 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 	case "":
 		return nil
 	case providerAnam:
-		a.Avatar = anam.NewAnamAvatar(cfg.AnamAPIKey)
+		a.Avatar = anam.NewAvatar(cfg.AnamAPIKey)
 		return nil
 	case providerAvatario:
-		a.Avatar = avatario.NewAvatarioAvatar(cfg.AvatarioAPIKey)
+		a.Avatar = avatario.NewAvatar(cfg.AvatarioAPIKey)
 		return nil
 	case providerAvatarTalk:
-		a.Avatar = avatartalk.NewAvatartalkAvatar(cfg.AvatarTalkAPIKey)
+		a.Avatar = avatartalk.NewAvatar(cfg.AvatarTalkAPIKey)
 		return nil
 	case providerBey:
-		avatar, err := bey.NewBeyAvatar(cfg.BeyAPIKey)
+		avatar, err := bey.NewAvatar(cfg.BeyAPIKey)
 		if err != nil {
 			return err
 		}
 		a.Avatar = avatar
 		return nil
 	case providerBitHuman:
-		a.Avatar = bithuman.NewBithumanAvatar(cfg.BitHumanAPIKey)
+		a.Avatar = bithuman.NewAvatar(cfg.BitHumanAPIKey)
 		return nil
 	case providerDID:
-		a.Avatar = did.NewDIDAvatar(cfg.DIDAgentID, cfg.DIDAPIKey)
+		a.Avatar = did.NewAvatar(cfg.DIDAgentID, cfg.DIDAPIKey)
 		return nil
 	case providerHedra:
-		a.Avatar = hedra.NewHedraAvatar(cfg.HedraAPIKey)
+		a.Avatar = hedra.NewAvatar(cfg.HedraAPIKey)
 		return nil
 	case providerKeyframe:
-		a.Avatar = keyframe.NewKeyframeAgent(cfg.KeyframeAPIKey)
+		a.Avatar = keyframe.NewAvatar(cfg.KeyframeAPIKey)
 		return nil
 	case providerLemonSlice:
-		a.Avatar = lemonslice.NewLemonsliceAvatar(cfg.LemonSliceAPIKey)
+		a.Avatar = lemonslice.NewAvatar(cfg.LemonSliceAPIKey)
 		return nil
 	case providerLiveAvatar:
-		a.Avatar = liveavatar.NewLiveAvatar(cfg.LiveAvatarAPIKey)
+		a.Avatar = liveavatar.NewAvatar(cfg.LiveAvatarAPIKey)
 		return nil
 	case providerRunway:
-		opts := []runway.RunwayAvatarOption{}
+		opts := []runway.AvatarOption{}
 		if cfg.RunwayAvatarID != "" {
 			opts = append(opts, runway.WithRunwayAvatarID(cfg.RunwayAvatarID))
 		}
@@ -2506,20 +2506,20 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 		if cfg.RunwayMaxDuration != nil {
 			opts = append(opts, runway.WithRunwayMaxDuration(*cfg.RunwayMaxDuration))
 		}
-		avatar, err := runway.NewRunwayAvatar(cfg.RunwayAPISecret, opts...)
+		avatar, err := runway.NewAvatar(cfg.RunwayAPISecret, opts...)
 		if err != nil {
 			return err
 		}
 		a.Avatar = avatar
 		return nil
 	case providerSimli:
-		a.Avatar = simli.NewSimliAvatar(cfg.SimliAPIKey)
+		a.Avatar = simli.NewAvatar(cfg.SimliAPIKey)
 		return nil
 	case providerTavus:
-		a.Avatar = tavus.NewTavusAvatar(cfg.TavusAPIKey)
+		a.Avatar = tavus.NewAvatar(cfg.TavusAPIKey)
 		return nil
 	case providerTrugen:
-		a.Avatar = trugen.NewTrugenAvatar(cfg.TrugenAPIKey)
+		a.Avatar = trugen.NewAvatar(cfg.TrugenAPIKey)
 		return nil
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_AVATAR_PROVIDER %q", cfg.AvatarProvider)
@@ -2530,7 +2530,7 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	switch normalizeProvider(cfg.VADProvider) {
 	case "":
 		if appConfigUsesSpeechmaticsExternalSTT(cfg) {
-			a.VAD = silero.NewSileroVAD()
+			a.VAD = silero.NewVAD()
 		}
 		return nil
 	case providerSilero:
@@ -2563,10 +2563,10 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 			vadOpts = append(vadOpts, silero.WithUpdateInterval(*cfg.VADUpdateInterval))
 		}
 		if len(vadOpts) == 0 {
-			a.VAD = silero.NewSileroVAD()
+			a.VAD = silero.NewVAD()
 			return nil
 		}
-		detector, err := silero.NewSileroVADWithOptions(vadOpts...)
+		detector, err := silero.NewVADWithOptions(vadOpts...)
 		if err != nil {
 			return err
 		}
@@ -2727,12 +2727,12 @@ func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
-func awsLLMFromConfig(cfg AppConfig) (*adapteraws.AWSLLM, error) {
-	return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel, awsLLMOptionsFromConfig(cfg)...)
+func awsLLMFromConfig(cfg AppConfig) (*adapteraws.LLM, error) {
+	return adapteraws.NewLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel, awsLLMOptionsFromConfig(cfg)...)
 }
 
-func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.AWSLLMOption {
-	llmOpts := []adapteraws.AWSLLMOption{}
+func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.LLMOption {
+	llmOpts := []adapteraws.LLMOption{}
 	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
 		llmOpts = append(llmOpts, adapteraws.WithAWSLLMMaxOutputTokens(int32(maxOutputTokens)))
 	}
@@ -2757,8 +2757,8 @@ func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.AWSLLMOption {
 	return llmOpts
 }
 
-func anthropicLLMOptionsFromConfig(cfg AppConfig) []anthropic.AnthropicOption {
-	llmOpts := []anthropic.AnthropicOption{}
+func anthropicLLMOptionsFromConfig(cfg AppConfig) []anthropic.LLMOption {
+	llmOpts := []anthropic.LLMOption{}
 	if cfg.LLMBaseURL != "" {
 		llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
 	}
@@ -2801,21 +2801,21 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerAzure:
 		return azureLLMFromConfig(cfg)
 	case providerCerebras:
-		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
+		return cerebras.NewLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
-		return fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
+		return fireworksai.NewLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
 	case providerAnthropic:
-		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
+		return anthropic.NewLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
 	case providerGoogle:
 		return appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 	case providerBaseten:
-		return baseten.NewBasetenLLM("", cfg.LLMModel)
+		return baseten.NewLLM("", cfg.LLMModel)
 	case providerLangChain:
-		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
+		return langchain.NewLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
-		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
+		return mistralai.NewLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
-		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+		return openai.NewLLM(cfg.OpenAIAPIKey, cfg.LLMModel)
 	case providerDeepSeek:
 		return openai.NewDeepSeekOpenAILLM(cfg.LLMModel, cfg.DeepSeekAPIKey)
 	case providerCometAPI:
@@ -2835,9 +2835,9 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerSambaNova:
 		return openai.NewSambaNovaOpenAILLM(cfg.LLMModel, cfg.SambaNovaAPIKey)
 	case providerPerplexity:
-		return perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel), nil
+		return perplexity.NewLLM(cfg.PerplexityAPIKey, cfg.LLMModel), nil
 	case providerSarvam:
-		llmOpts := []sarvam.SarvamLLMOption{}
+		llmOpts := []sarvam.LLMOption{}
 		if cfg.LLMBaseURL != "" {
 			llmOpts = append(llmOpts, sarvam.WithSarvamLLMBaseURL(cfg.LLMBaseURL))
 		}
@@ -2847,7 +2847,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		if len(cfg.LLMExtraBody) > 0 {
 			llmOpts = append(llmOpts, sarvam.WithSarvamLLMExtraBody(cfg.LLMExtraBody))
 		}
-		provider := sarvam.NewSarvamLLM(cfg.SarvamAPIKey, cfg.LLMModel, llmOpts...)
+		provider := sarvam.NewLLM(cfg.SarvamAPIKey, cfg.LLMModel, llmOpts...)
 		if provider == nil {
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
@@ -2857,11 +2857,11 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerGroq:
 		return groqLLMFromConfig(cfg), nil
 	case providerXAI:
-		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
+		return xai.NewLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
 	case providerTogether:
 		return openai.NewTogetherOpenAILLM(cfg.LLMModel, cfg.TogetherAPIKey)
 	case providerLiveKit:
-		return adapterlivekit.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		return adapterlivekit.NewLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry %q", provider)
 	}
@@ -2934,7 +2934,7 @@ func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
 		return deepgram.NewDeepgramSTTv2("", sttOpts...)
 	}
 
-	sttOpts := []deepgram.DeepgramSTTOption{}
+	sttOpts := []deepgram.STTOption{}
 	if cfg.STTBaseURL != "" {
 		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
 	}
@@ -2995,7 +2995,7 @@ func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
 	if len(cfg.STTTags) > 0 {
 		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
 	}
-	return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
+	return deepgram.NewSTT("", cfg.STTModel, sttOpts...)
 }
 
 func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
@@ -3013,13 +3013,13 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 	case providerGroq:
 		return groqSTTFromConfig(cfg)
 	case providerSpitch:
-		return spitch.NewSpitchSTT(cfg.SpitchAPIKey), nil
+		return spitch.NewSTT(cfg.SpitchAPIKey), nil
 	case providerDeepgram:
 		return deepgramSTTFromConfig(cfg), nil
 	case providerCavos:
 		return cavosSTTFromConfig(cfg), nil
 	case providerOpenAI:
-		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
+		sttOpts := []openai.STTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
 		}
@@ -3032,9 +3032,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
-		return openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+		return openai.NewSTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
 	case providerOVHCloud:
-		sttOpts := []openai.OpenAISTTOption{}
+		sttOpts := []openai.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
 		}
@@ -3049,7 +3049,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		}
 		return openai.NewOVHCloudOpenAISTT(cfg.STTModel, cfg.OVHCloudAPIKey, sttOpts...)
 	case providerBaseten:
-		sttOpts := []baseten.BasetenSTTOption{}
+		sttOpts := []baseten.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTModelEndpoint(cfg.STTBaseURL))
 		}
@@ -3071,9 +3071,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
 		}
-		return baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
+		return baseten.NewSTT("", cfg.STTModel, sttOpts...)
 	case providerCartesia:
-		sttOpts := []cartesia.CartesiaSTTOption{}
+		sttOpts := []cartesia.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3092,18 +3092,18 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTAudioChunkDurationMS != nil {
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
 		}
-		return cartesia.NewCartesiaSTT("", sttOpts...), nil
+		return cartesia.NewSTT("", sttOpts...), nil
 	case providerClova:
-		sttOpts := []clova.ClovaSTTOption{}
+		sttOpts := []clova.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, clova.WithClovaSTTLanguage(cfg.STTLanguage))
 		}
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
 		}
-		return clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), nil
+		return clova.NewSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), nil
 	case providerElevenLabs:
-		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
+		sttOpts := []elevenlabs.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3133,9 +3133,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
 		}
-		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+		return elevenlabs.NewSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
 	case providerFireworks:
-		sttOpts := []fireworksai.FireworksSTTOption{}
+		sttOpts := []fireworksai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, fireworksai.WithFireworksBaseURL(cfg.STTBaseURL))
 		}
@@ -3163,9 +3163,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if len(cfg.STTTimestampGranularities) > 0 {
 			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
 		}
-		return fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...), nil
+		return fireworksai.NewSTT(cfg.FireworksAPIKey, sttOpts...), nil
 	case providerGladia:
-		sttOpts := []gladia.GladiaSTTOption{}
+		sttOpts := []gladia.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, gladia.WithGladiaBaseURL(cfg.STTBaseURL))
 		}
@@ -3242,9 +3242,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 			}
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
-		return gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...), nil
+		return gladia.NewSTT(cfg.GladiaAPIKey, sttOpts...), nil
 	case providerInworld:
-		sttOpts := []inworld.InworldSTTOption{}
+		sttOpts := []inworld.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3275,9 +3275,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTEndOfTurnConfidenceThreshold != nil {
 			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
 		}
-		return inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...), nil
+		return inworld.NewSTT(cfg.InworldAPIKey, sttOpts...), nil
 	case providerMistralAI:
-		sttOpts := []mistralai.MistralAISTTOption{}
+		sttOpts := []mistralai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3290,12 +3290,12 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
 		}
-		return mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...), nil
+		return mistralai.NewSTT(cfg.MistralAPIKey, sttOpts...), nil
 	case providerNvidia:
 		sttOpts := nvidiaSTTOptionsFromConfig(cfg)
-		return nvidia.NewNvidiaSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
+		return nvidia.NewSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
 	case providerGradium:
-		sttOpts := []gradium.GradiumSTTOption{}
+		sttOpts := []gradium.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
 		}
@@ -3317,7 +3317,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTBufferSizeSeconds != nil {
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
-		return gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...), nil
+		return gradium.NewSTT(cfg.GradiumAPIKey, sttOpts...), nil
 	case providerGnani:
 		sttOpts := []gnani.STTOption{}
 		if cfg.STTBaseURL != "" {
@@ -3337,7 +3337,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		}
 		return gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...), nil
 	case providerSmallestAI:
-		sttOpts := []smallestai.SmallestAISTTOption{}
+		sttOpts := []smallestai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3362,9 +3362,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTEndpointingMS != nil {
 			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
 		}
-		return smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...), nil
+		return smallestai.NewSTT(cfg.SmallestAIAPIKey, sttOpts...), nil
 	case providerSoniox:
-		sttOpts := []soniox.SonioxSTTOption{}
+		sttOpts := []soniox.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, soniox.WithSonioxBaseURL(cfg.STTBaseURL))
 		}
@@ -3407,9 +3407,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		} else if len(cfg.STTTranslationTargetLanguages) > 0 {
 			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
 		}
-		return soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...), nil
+		return soniox.NewSTT(cfg.SonioxAPIKey, sttOpts...), nil
 	case providerSpeechmatics:
-		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		sttOpts := []speechmatics.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
 		}
@@ -3483,9 +3483,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTPreferCurrentSpeaker != nil {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
-		return speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
+		return speechmatics.NewSTT(cfg.SpeechmaticsAPIKey, sttOpts...), nil
 	case providerTelnyx:
-		sttOpts := []telnyx.TelnyxSTTOption{}
+		sttOpts := []telnyx.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3501,9 +3501,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
 		}
-		return telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...), nil
+		return telnyx.NewSTT(cfg.TelnyxAPIKey, sttOpts...), nil
 	case providerXAI:
-		sttOpts := []xai.XaiSTTOption{}
+		sttOpts := []xai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
 		}
@@ -3525,7 +3525,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTEndpointingMS != nil {
 			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
 		}
-		return xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...), nil
+		return xai.NewSTT(cfg.XAIAPIKey, sttOpts...), nil
 	case providerSarvam:
 		sttOpts := []sarvam.SarvamSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -3594,7 +3594,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		}
 		return provider, nil
 	case providerRtzr:
-		sttOpts := []rtzr.RtzrSTTOption{}
+		sttOpts := []rtzr.STTOption{}
 		if cfg.RtzrClientSecret != "" {
 			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
 		}
@@ -3634,9 +3634,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
 		}
-		return rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...), nil
+		return rtzr.NewSTT(cfg.RtzrClientID, sttOpts...), nil
 	case providerAssemblyAI:
-		sttOpts := []assemblyai.AssemblyAISTTOption{}
+		sttOpts := []assemblyai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3685,9 +3685,9 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTDomain != "" {
 			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTDomain(cfg.STTDomain))
 		}
-		return assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...), nil
+		return assemblyai.NewSTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...), nil
 	case providerSimplismart:
-		sttOpts := []simplismart.SimplismartSTTOption{}
+		sttOpts := []simplismart.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -3712,7 +3712,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 		if cfg.STTMaxSpeakers != nil {
 			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
 		}
-		return simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...), nil
+		return simplismart.NewSTT(cfg.SimplismartAPIKey, sttOpts...), nil
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
@@ -3783,11 +3783,11 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 	}
 }
 
-func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
+func azureSTTFromConfig(cfg AppConfig) (*azure.STT, error) {
 	if err := validateAzureSTTConfig(cfg); err != nil {
 		return nil, err
 	}
-	sttOpts := []azure.AzureSTTOption{}
+	sttOpts := []azure.STTOption{}
 	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
 	}
@@ -3831,15 +3831,15 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if profanity := azureSTTModelOption(cfg.STTModelOptions, "profanity"); profanity != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTProfanity(profanity))
 	}
-	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
+	return azure.NewSTT("", cfg.STTRegion, sttOpts...)
 }
 
-var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
-	return azure.NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
+var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
+	return azure.NewLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
 
 func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
-	llmOpts := []azure.AzureLLMOption{}
+	llmOpts := []azure.LLMOption{}
 	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
 		llmOpts = append(llmOpts, azure.WithAzureLLMMaxOutputTokens(maxOutputTokens))
 	}
@@ -3977,8 +3977,8 @@ func azureTTSSpeechEndpointFromConfig(cfg AppConfig) string {
 	return ""
 }
 
-func azureTTSOptionsFromConfig(cfg AppConfig) []azure.AzureTTSOption {
-	ttsOpts := []azure.AzureTTSOption{}
+func azureTTSOptionsFromConfig(cfg AppConfig) []azure.TTSOption {
+	ttsOpts := []azure.TTSOption{}
 	if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
 		ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
 	}
@@ -4064,8 +4064,8 @@ func azureTTSModelOption(options map[string]any, key string) string {
 	return modelOptionString(setting, key)
 }
 
-func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
-	sttOpts := []adapteraws.AWSSTTOption{}
+func awsSTTFromConfig(cfg AppConfig) (*adapteraws.STT, error) {
+	sttOpts := []adapteraws.STTOption{}
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
 	}
@@ -4120,11 +4120,11 @@ func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 	if cfg.STTVocabularyFilterNames != "" {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterNames(cfg.STTVocabularyFilterNames))
 	}
-	return adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
+	return adapteraws.NewSTT(context.Background(), cfg.AWSRegion, sttOpts...)
 }
 
-func falSTTFromConfig(cfg AppConfig) *fal.FalSTT {
-	sttOpts := []fal.FalSTTOption{}
+func falSTTFromConfig(cfg AppConfig) *fal.STT {
+	sttOpts := []fal.STTOption{}
 	if cfg.STTLanguage != "" {
 		sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
 	}
@@ -4137,11 +4137,11 @@ func falSTTFromConfig(cfg AppConfig) *fal.FalSTT {
 	if cfg.STTVersion != "" {
 		sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
 	}
-	return fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
+	return fal.NewSTT(cfg.FalAPIKey, sttOpts...)
 }
 
-func groqSTTFromConfig(cfg AppConfig) (*groq.GroqSTT, error) {
-	sttOpts := []groq.GroqSTTOption{}
+func groqSTTFromConfig(cfg AppConfig) (*groq.STT, error) {
+	sttOpts := []groq.STTOption{}
 	if cfg.STTBaseURL != "" {
 		sttOpts = append(sttOpts, groq.WithGroqSTTBaseURL(cfg.STTBaseURL))
 	}
@@ -4154,11 +4154,11 @@ func groqSTTFromConfig(cfg AppConfig) (*groq.GroqSTT, error) {
 	if cfg.STTPrompt != "" {
 		sttOpts = append(sttOpts, groq.WithGroqSTTPrompt(cfg.STTPrompt))
 	}
-	return groq.NewGroqSTT(cfg.GroqAPIKey, cfg.STTModel, sttOpts...)
+	return groq.NewSTT(cfg.GroqAPIKey, cfg.STTModel, sttOpts...)
 }
 
-func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
-	llmOpts := []groq.GroqLLMOption{}
+func groqLLMFromConfig(cfg AppConfig) *groq.LLM {
+	llmOpts := []groq.LLMOption{}
 	if cfg.LLMBaseURL != "" {
 		llmOpts = append(llmOpts, groq.WithGroqLLMBaseURL(cfg.LLMBaseURL))
 	}
@@ -4171,22 +4171,22 @@ func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
 	if openAIOpts := groqOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
 		llmOpts = append(llmOpts, groq.WithGroqLLMOptions(openAIOpts...))
 	}
-	return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
+	return groq.NewLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
 }
 
-func telnyxLLMFromConfig(cfg AppConfig) *telnyx.TelnyxLLM {
-	llmOpts := []telnyx.TelnyxLLMOption{}
+func telnyxLLMFromConfig(cfg AppConfig) *telnyx.LLM {
+	llmOpts := []telnyx.LLMOption{}
 	if cfg.LLMBaseURL != "" {
 		llmOpts = append(llmOpts, telnyx.WithTelnyxLLMBaseURL(cfg.LLMBaseURL))
 	}
 	if openAIOpts := telnyxOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
 		llmOpts = append(llmOpts, telnyx.WithTelnyxLLMOptions(openAIOpts...))
 	}
-	return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel, llmOpts...)
+	return telnyx.NewLLM(cfg.TelnyxAPIKey, cfg.LLMModel, llmOpts...)
 }
 
-func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
-	opts := []openai.OpenAILLMOption{}
+func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.LLMOption {
+	opts := []openai.LLMOption{}
 	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
 		opts = append(opts, openai.WithOpenAILLMTemperature(*temperature))
 	}
@@ -4226,8 +4226,8 @@ func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
 	return opts
 }
 
-func telnyxOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
-	opts := []openai.OpenAILLMOption{}
+func telnyxOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.LLMOption {
+	opts := []openai.LLMOption{}
 	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
 		opts = append(opts, openai.WithOpenAILLMTemperature(*temperature))
 	}
@@ -4293,8 +4293,8 @@ func appTTSSpeedConfigured(cfg AppConfig) bool {
 	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
 }
 
-func elevenLabsTTSOptionsFromConfig(cfg AppConfig) []elevenlabs.ElevenLabsTTSOption {
-	ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
+func elevenLabsTTSOptionsFromConfig(cfg AppConfig) []elevenlabs.TTSOption {
+	ttsOpts := []elevenlabs.TTSOption{}
 	if cfg.TTSBaseURL != "" {
 		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
 	}
@@ -4872,8 +4872,8 @@ func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, err
 	return ttsOpts, nil
 }
 
-func rimeTTSOptionsFromConfig(cfg AppConfig) []rime.RimeTTSOption {
-	ttsOpts := []rime.RimeTTSOption{}
+func rimeTTSOptionsFromConfig(cfg AppConfig) []rime.TTSOption {
+	ttsOpts := []rime.TTSOption{}
 	if cfg.TTSBaseURL != "" {
 		ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
 	}
@@ -4925,7 +4925,7 @@ func rimeTTSOptionsFromConfig(cfg AppConfig) []rime.RimeTTSOption {
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
 	switch normalizeProvider(provider) {
 	case providerOpenAI:
-		ttsOpts := []openai.OpenAITTSOption{}
+		ttsOpts := []openai.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSModel(goopenai.SpeechModel(cfg.TTSModel)))
 		}
@@ -4946,9 +4946,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
 		}
-		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+		return openai.NewTTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
 	case providerAWS:
-		ttsOpts := []adapteraws.AWSTTSOption{}
+		ttsOpts := []adapteraws.TTSOption{}
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSVoice(awspollytypes.VoiceId(cfg.TTSVoice)))
 		}
@@ -4964,12 +4964,12 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+		return adapteraws.NewTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
 		ttsOpts := azureTTSOptionsFromConfig(cfg)
 		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 	case providerBaseten:
-		ttsOpts := []baseten.BasetenTTSOption{}
+		ttsOpts := []baseten.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSModelEndpoint(cfg.TTSBaseURL))
 		}
@@ -4988,9 +4988,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSBufferSize != nil {
 			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
 		}
-		return baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
+		return baseten.NewTTS("", cfg.TTSModel, ttsOpts...)
 	case providerAsyncAI:
-		ttsOpts := []asyncai.AsyncAITTSOption{}
+		ttsOpts := []asyncai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5009,9 +5009,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSSampleRate(*cfg.TTSSampleRate))
 		}
-		return asyncai.NewAsyncAITTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...), nil
+		return asyncai.NewTTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...), nil
 	case providerCambai:
-		ttsOpts := []cambai.CambaiTTSOption{}
+		ttsOpts := []cambai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5035,9 +5035,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSEnhanceNamedEntities != nil {
 			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSEnhanceNamedEntities(*cfg.TTSEnhanceNamedEntities))
 		}
-		return cambai.NewCambaiTTS("", "", ttsOpts...)
+		return cambai.NewTTS("", "", ttsOpts...)
 	case providerCartesia:
-		ttsOpts := []cartesia.CartesiaTTSOption{}
+		ttsOpts := []cartesia.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaBaseURL(cfg.TTSBaseURL))
 		}
@@ -5072,11 +5072,11 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSPronunciationDictID != "" {
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
-		return cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
+		return cartesia.NewTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
 	case providerCavos:
 		return cavosTTSFromConfig(cfg), nil
 	case providerDeepgram:
-		ttsOpts := []deepgram.DeepgramTTSOption{}
+		ttsOpts := []deepgram.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5090,11 +5090,11 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			}
 			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
 		}
-		return deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...), nil
+		return deepgram.NewTTS("", cfg.TTSModel, ttsOpts...), nil
 	case providerElevenLabs:
-		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
+		return elevenlabs.NewTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
 	case providerFishAudio:
-		ttsOpts := []fishaudio.FishAudioTTSOption{}
+		ttsOpts := []fishaudio.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5118,7 +5118,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSChunkLength != nil {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
 		}
-		return fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGnani:
 		ttsOpts := []gnani.Option{}
 		if cfg.TTSBaseURL != "" {
@@ -5150,7 +5150,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...), nil
 	case providerGradium:
-		ttsOpts := []gradium.GradiumTTSOption{}
+		ttsOpts := []gradium.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelEndpoint(cfg.TTSBaseURL))
 		}
@@ -5166,9 +5166,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if len(cfg.TTSJSONConfig) > 0 {
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
 		}
-		return gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return gradium.NewTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerHume:
-		ttsOpts := []hume.HumeTTSOption{}
+		ttsOpts := []hume.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5202,9 +5202,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		} else if len(cfg.TTSContextUtterances) > 0 {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
 		}
-		return hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...), nil
+		return hume.NewTTS(cfg.HumeAPIKey, "", ttsOpts...), nil
 	case providerInworld:
-		ttsOpts := []inworld.InworldTTSOption{}
+		ttsOpts := []inworld.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5253,9 +5253,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSMaxBufferDelayMS != nil {
 			ttsOpts = append(ttsOpts, inworld.WithInworldTTSMaxBufferDelayMS(*cfg.TTSMaxBufferDelayMS))
 		}
-		return inworld.NewInworldTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return inworld.NewTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGroq:
-		ttsOpts := []groq.GroqTTSOption{}
+		ttsOpts := []groq.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5265,9 +5265,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
-		return groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return groq.NewTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNvidia:
-		ttsOpts := []nvidia.NvidiaTTSOption{}
+		ttsOpts := []nvidia.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
 		}
@@ -5280,9 +5280,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
 		}
-		return nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
+		return nvidia.NewTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMistralAI:
-		ttsOpts := []mistralai.MistralAITTSOption{}
+		ttsOpts := []mistralai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5299,9 +5299,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		} else {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat("pcm"))
 		}
-		return mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
+		return mistralai.NewTTS(cfg.MistralAPIKey, "", ttsOpts...)
 	case providerLMNT:
-		ttsOpts := []lmnt.LMNTTTSOption{}
+		ttsOpts := []lmnt.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSModel(cfg.TTSModel))
 		}
@@ -5325,9 +5325,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSTopP != nil {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
 		}
-		return lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...), nil
+		return lmnt.NewTTS(cfg.LMNTAPIKey, "", ttsOpts...), nil
 	case providerMinimax:
-		ttsOpts := []minimax.MinimaxTTSOption{}
+		ttsOpts := []minimax.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5363,9 +5363,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSTextNormalization != nil {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
-		return minimax.NewMinimaxTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return minimax.NewTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerNeuphonic:
-		ttsOpts := []neuphonic.NeuphonicTTSOption{}
+		ttsOpts := []neuphonic.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5384,9 +5384,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSpeed != 0 {
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
 		}
-		return neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...), nil
+		return neuphonic.NewTTS(cfg.NeuphonicAPIKey, "", ttsOpts...), nil
 	case providerResemble:
-		ttsOpts := []resemble.ResembleTTSOption{}
+		ttsOpts := []resemble.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, resemble.WithResembleTTSModel(cfg.TTSModel))
 		}
@@ -5396,9 +5396,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, resemble.WithResembleTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		return resemble.NewResembleTTS(cfg.ResembleAPIKey, "", ttsOpts...), nil
+		return resemble.NewTTS(cfg.ResembleAPIKey, "", ttsOpts...), nil
 	case providerRespeecher:
-		ttsOpts := []respeecher.RespeecherTTSOption{}
+		ttsOpts := []respeecher.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5414,9 +5414,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if len(cfg.TTSJSONConfig) > 0 {
 			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSSamplingParams(cfg.TTSJSONConfig))
 		}
-		return respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...), nil
+		return respeecher.NewTTS(cfg.RespeecherAPIKey, "", ttsOpts...), nil
 	case providerRime:
-		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...), nil
+		return rime.NewTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...), nil
 	case providerSarvam:
 		ttsOpts := []sarvam.SarvamTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5472,7 +5472,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...), nil
 	case providerMurf:
-		ttsOpts := []murf.MurfTTSOption{}
+		ttsOpts := []murf.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5500,9 +5500,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
 		}
-		return murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return murf.NewTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSpeechify:
-		ttsOpts := []speechify.SpeechifyTTSOption{}
+		ttsOpts := []speechify.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5526,9 +5526,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSTextNormalization != nil {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
-		return speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return speechify.NewTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSimplismart:
-		ttsOpts := []simplismart.SimplismartTTSOption{}
+		ttsOpts := []simplismart.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5553,9 +5553,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
 		}
-		return simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return simplismart.NewTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSmallestAI:
-		ttsOpts := []smallestai.SmallestAITTSOption{}
+		ttsOpts := []smallestai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5580,9 +5580,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
 		}
-		return smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...), nil
+		return smallestai.NewTTS(cfg.SmallestAIAPIKey, "", ttsOpts...), nil
 	case providerSoniox:
-		ttsOpts := []soniox.SonioxTTSOption{}
+		ttsOpts := []soniox.TTSOption{}
 		if cfg.TTSWebsocketURL != "" {
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSWebsocketURL(cfg.TTSWebsocketURL))
 		}
@@ -5604,9 +5604,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSBitRate != nil {
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
 		}
-		return soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...), nil
+		return soniox.NewTTS(cfg.SonioxAPIKey, ttsOpts...), nil
 	case providerSpeechmatics:
-		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		ttsOpts := []speechmatics.TTSOption{}
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
 		}
@@ -5616,9 +5616,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
 		}
-		return speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...), nil
+		return speechmatics.NewTTS(cfg.SpeechmaticsAPIKey, ttsOpts...), nil
 	case providerSpitch:
-		ttsOpts := []spitch.SpitchTTSOption{}
+		ttsOpts := []spitch.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -5636,22 +5636,22 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		return spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return spitch.NewTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerUpliftAI:
-		ttsOpts := []upliftai.UpliftAITTSOption{}
+		ttsOpts := []upliftai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, upliftai.WithUpliftAIBaseURL(cfg.TTSBaseURL))
 		}
-		return upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return upliftai.NewTTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerXAI:
-		ttsOpts := []xai.XaiTTSOption{}
+		ttsOpts := []xai.TTSOption{}
 		if cfg.TTSWebsocketURL != "" {
 			ttsOpts = append(ttsOpts, xai.WithXaiTTSWebsocketURL(cfg.TTSWebsocketURL))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, xai.WithXaiTTSLanguage(cfg.TTSLanguage))
 		}
-		return xai.NewXaiTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return xai.NewTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -5684,11 +5684,11 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
 	case providerTelnyx:
-		ttsOpts := []telnyx.TelnyxTTSOption{}
+		ttsOpts := []telnyx.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
-		return telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return telnyx.NewTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerLiveKit:
 		ttsOpts, err := liveKitTTSOptionsFromConfig(cfg)
 		if err != nil {
@@ -5716,7 +5716,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerBaseten:
-		provider, err := baseten.NewBasetenLLM("", cfg.LLMModel)
+		provider, err := baseten.NewLLM("", cfg.LLMModel)
 		if err != nil {
 			return nil, err
 		}
@@ -5730,11 +5730,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerGroq:
 		a.LLM = groqLLMFromConfig(cfg)
 	case providerLangChain:
-		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
+		a.LLM = langchain.NewLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerMistralAI:
-		a.LLM = mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel)
+		a.LLM = mistralai.NewLLM(cfg.MistralAPIKey, cfg.LLMModel)
 	case providerSarvam:
-		llmOpts := []sarvam.SarvamLLMOption{}
+		llmOpts := []sarvam.LLMOption{}
 		if cfg.LLMBaseURL != "" {
 			llmOpts = append(llmOpts, sarvam.WithSarvamLLMBaseURL(cfg.LLMBaseURL))
 		}
@@ -5744,7 +5744,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.LLMExtraBody) > 0 {
 			llmOpts = append(llmOpts, sarvam.WithSarvamLLMExtraBody(cfg.LLMExtraBody))
 		}
-		provider := sarvam.NewSarvamLLM(cfg.SarvamAPIKey, cfg.LLMModel, llmOpts...)
+		provider := sarvam.NewLLM(cfg.SarvamAPIKey, cfg.LLMModel, llmOpts...)
 		if provider == nil {
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
@@ -5752,19 +5752,19 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerTelnyx:
 		a.LLM = telnyxLLMFromConfig(cfg)
 	case providerXAI:
-		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
+		a.LLM = xai.NewLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
-		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
+		a.LLM = cerebras.NewLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFireworks:
-		a.LLM = fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel)
+		a.LLM = fireworksai.NewLLM(cfg.FireworksAPIKey, cfg.LLMModel)
 	case providerAnthropic:
-		provider, err := anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
+		provider, err := anthropic.NewLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
 		if err != nil {
 			return nil, err
 		}
 		a.LLM = provider
 	case providerOpenAI:
-		provider, err := openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+		provider, err := openai.NewLLM(cfg.OpenAIAPIKey, cfg.LLMModel)
 		if err != nil {
 			return nil, err
 		}
@@ -5826,9 +5826,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerPerplexity:
-		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
+		a.LLM = perplexity.NewLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:
-		provider, err := adapterlivekit.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		provider, err := adapterlivekit.NewLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 		if err != nil {
 			return nil, err
 		}
@@ -5855,7 +5855,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerBaseten:
-		sttOpts := []baseten.BasetenSTTOption{}
+		sttOpts := []baseten.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTModelEndpoint(cfg.STTBaseURL))
 		}
@@ -5877,7 +5877,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
 		}
-		provider, err := baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
+		provider, err := baseten.NewSTT("", cfg.STTModel, sttOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -5889,7 +5889,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerElevenLabs:
-		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
+		sttOpts := []elevenlabs.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -5919,9 +5919,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
 		}
-		a.STT = elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...)
+		a.STT = elevenlabs.NewSTT(cfg.ElevenLabsAPIKey, sttOpts...)
 	case providerCartesia:
-		sttOpts := []cartesia.CartesiaSTTOption{}
+		sttOpts := []cartesia.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -5940,22 +5940,22 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTAudioChunkDurationMS != nil {
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
 		}
-		a.STT = cartesia.NewCartesiaSTT("", sttOpts...)
+		a.STT = cartesia.NewSTT("", sttOpts...)
 	case providerClova:
-		sttOpts := []clova.ClovaSTTOption{}
+		sttOpts := []clova.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, clova.WithClovaSTTLanguage(cfg.STTLanguage))
 		}
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
 		}
-		a.STT = ensureSTTStreaming(clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), a.VAD)
+		a.STT = ensureSTTStreaming(clova.NewSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), a.VAD)
 	case providerDeepgram:
 		a.STT = deepgramSTTFromConfig(cfg)
 	case providerFal:
 		a.STT = falSTTFromConfig(cfg)
 	case providerFireworks:
-		sttOpts := []fireworksai.FireworksSTTOption{}
+		sttOpts := []fireworksai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, fireworksai.WithFireworksBaseURL(cfg.STTBaseURL))
 		}
@@ -5983,9 +5983,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.STTTimestampGranularities) > 0 {
 			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
 		}
-		a.STT = fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...)
+		a.STT = fireworksai.NewSTT(cfg.FireworksAPIKey, sttOpts...)
 	case providerGladia:
-		sttOpts := []gladia.GladiaSTTOption{}
+		sttOpts := []gladia.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, gladia.WithGladiaBaseURL(cfg.STTBaseURL))
 		}
@@ -6062,7 +6062,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			}
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
-		a.STT = gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...)
+		a.STT = gladia.NewSTT(cfg.GladiaAPIKey, sttOpts...)
 	case providerGnani:
 		sttOpts := []gnani.STTOption{}
 		if cfg.STTBaseURL != "" {
@@ -6082,7 +6082,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...)
 	case providerGradium:
-		sttOpts := []gradium.GradiumSTTOption{}
+		sttOpts := []gradium.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
 		}
@@ -6104,9 +6104,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTBufferSizeSeconds != nil {
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
-		a.STT = gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...)
+		a.STT = gradium.NewSTT(cfg.GradiumAPIKey, sttOpts...)
 	case providerInworld:
-		sttOpts := []inworld.InworldSTTOption{}
+		sttOpts := []inworld.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6137,9 +6137,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTEndOfTurnConfidenceThreshold != nil {
 			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
 		}
-		a.STT = inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...)
+		a.STT = inworld.NewSTT(cfg.InworldAPIKey, sttOpts...)
 	case providerMistralAI:
-		sttOpts := []mistralai.MistralAISTTOption{}
+		sttOpts := []mistralai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6152,10 +6152,10 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
 		}
-		a.STT = mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...)
+		a.STT = mistralai.NewSTT(cfg.MistralAPIKey, sttOpts...)
 	case providerNvidia:
 		sttOpts := nvidiaSTTOptionsFromConfig(cfg)
-		provider, err := nvidia.NewNvidiaSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
+		provider, err := nvidia.NewSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -6284,7 +6284,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerRtzr:
-		sttOpts := []rtzr.RtzrSTTOption{}
+		sttOpts := []rtzr.STTOption{}
 		if cfg.RtzrClientSecret != "" {
 			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
 		}
@@ -6324,9 +6324,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
 		}
-		a.STT = rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...)
+		a.STT = rtzr.NewSTT(cfg.RtzrClientID, sttOpts...)
 	case providerSimplismart:
-		sttOpts := []simplismart.SimplismartSTTOption{}
+		sttOpts := []simplismart.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6351,9 +6351,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTMaxSpeakers != nil {
 			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
 		}
-		a.STT = simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...)
+		a.STT = simplismart.NewSTT(cfg.SimplismartAPIKey, sttOpts...)
 	case providerSmallestAI:
-		sttOpts := []smallestai.SmallestAISTTOption{}
+		sttOpts := []smallestai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6378,9 +6378,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTEndpointingMS != nil {
 			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
 		}
-		a.STT = smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...)
+		a.STT = smallestai.NewSTT(cfg.SmallestAIAPIKey, sttOpts...)
 	case providerSoniox:
-		sttOpts := []soniox.SonioxSTTOption{}
+		sttOpts := []soniox.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, soniox.WithSonioxBaseURL(cfg.STTBaseURL))
 		}
@@ -6423,9 +6423,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		} else if len(cfg.STTTranslationTargetLanguages) > 0 {
 			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
 		}
-		a.STT = soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...)
+		a.STT = soniox.NewSTT(cfg.SonioxAPIKey, sttOpts...)
 	case providerSpeechmatics:
-		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		sttOpts := []speechmatics.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
 		}
@@ -6499,11 +6499,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if speechmaticsShouldUseAppVAD(cfg, a.VAD) {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTVAD(a.VAD))
 		}
-		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
+		a.STT = speechmatics.NewSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
 	case providerSpitch:
-		a.STT = spitch.NewSpitchSTT(cfg.SpitchAPIKey)
+		a.STT = spitch.NewSTT(cfg.SpitchAPIKey)
 	case providerTelnyx:
-		sttOpts := []telnyx.TelnyxSTTOption{}
+		sttOpts := []telnyx.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6519,9 +6519,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTSampleRate != nil {
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
 		}
-		a.STT = telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...)
+		a.STT = telnyx.NewSTT(cfg.TelnyxAPIKey, sttOpts...)
 	case providerXAI:
-		sttOpts := []xai.XaiSTTOption{}
+		sttOpts := []xai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
 		}
@@ -6543,9 +6543,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTEndpointingMS != nil {
 			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
 		}
-		a.STT = xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...)
+		a.STT = xai.NewSTT(cfg.XAIAPIKey, sttOpts...)
 	case providerAssemblyAI:
-		sttOpts := []assemblyai.AssemblyAISTTOption{}
+		sttOpts := []assemblyai.STTOption{}
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTBaseURL(cfg.STTBaseURL))
 		}
@@ -6594,7 +6594,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTDomain != "" {
 			sttOpts = append(sttOpts, assemblyai.WithAssemblyAISTTDomain(cfg.STTDomain))
 		}
-		a.STT = assemblyai.NewAssemblyAISTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
+		a.STT = assemblyai.NewSTT(os.Getenv("ASSEMBLYAI_API_KEY"), sttOpts...)
 	case providerCavos:
 		a.STT = ensureSTTStreaming(cavosSTTFromConfig(cfg), a.VAD)
 	case providerGroq:
@@ -6604,7 +6604,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerOpenAI:
-		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
+		sttOpts := []openai.STTOption{openai.WithOpenAISTTRealtime(true)}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
 		}
@@ -6617,13 +6617,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTBaseURL != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
 		}
-		provider, err := openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+		provider, err := openai.NewSTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
 		if err != nil {
 			return nil, err
 		}
 		a.STT = provider
 	case providerOVHCloud:
-		sttOpts := []openai.OpenAISTTOption{}
+		sttOpts := []openai.STTOption{}
 		if cfg.STTLanguage != "" {
 			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
 		}
@@ -6660,7 +6660,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	switch normalizeProvider(cfg.TTSProvider) {
 	case "":
 	case providerAWS:
-		ttsOpts := []adapteraws.AWSTTSOption{}
+		ttsOpts := []adapteraws.TTSOption{}
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSVoice(awspollytypes.VoiceId(cfg.TTSVoice)))
 		}
@@ -6676,7 +6676,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		provider, err := adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+		provider, err := adapteraws.NewTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -6689,7 +6689,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = ensureTTSStreaming(provider)
 	case providerBaseten:
-		ttsOpts := []baseten.BasetenTTSOption{}
+		ttsOpts := []baseten.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSModelEndpoint(cfg.TTSBaseURL))
 		}
@@ -6708,7 +6708,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSBufferSize != nil {
 			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
 		}
-		provider, err := baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
+		provider, err := baseten.NewTTS("", cfg.TTSModel, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -6720,13 +6720,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerElevenLabs:
-		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
+		provider, err := elevenlabs.NewTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
 		if err != nil {
 			return nil, err
 		}
 		a.TTS = provider
 	case providerGroq:
-		ttsOpts := []groq.GroqTTSOption{}
+		ttsOpts := []groq.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6736,10 +6736,10 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
-		provider := groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+		provider := groq.NewTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
 		a.TTS = ensureTTSStreaming(provider)
 	case providerCartesia:
-		ttsOpts := []cartesia.CartesiaTTSOption{}
+		ttsOpts := []cartesia.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaBaseURL(cfg.TTSBaseURL))
 		}
@@ -6774,13 +6774,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSPronunciationDictID != "" {
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
-		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+		a.TTS = cartesia.NewTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerCavos:
 		a.TTS = ensureTTSStreaming(cavosTTSFromConfig(cfg))
 	case providerClova:
-		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
+		a.TTS = clova.NewTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
 	case providerDeepgram:
-		ttsOpts := []deepgram.DeepgramTTSOption{}
+		ttsOpts := []deepgram.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6794,9 +6794,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			}
 			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
 		}
-		a.TTS = deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...)
+		a.TTS = deepgram.NewTTS("", cfg.TTSModel, ttsOpts...)
 	case providerFishAudio:
-		ttsOpts := []fishaudio.FishAudioTTSOption{}
+		ttsOpts := []fishaudio.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6820,7 +6820,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSChunkLength != nil {
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
 		}
-		a.TTS = fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerGnani:
 		ttsOpts := []gnani.Option{}
 		if cfg.TTSBaseURL != "" {
@@ -6852,7 +6852,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...)
 	case providerGradium:
-		ttsOpts := []gradium.GradiumTTSOption{}
+		ttsOpts := []gradium.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelEndpoint(cfg.TTSBaseURL))
 		}
@@ -6868,9 +6868,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.TTSJSONConfig) > 0 {
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
 		}
-		a.TTS = gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = gradium.NewTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerHume:
-		ttsOpts := []hume.HumeTTSOption{}
+		ttsOpts := []hume.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6904,9 +6904,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		} else if len(cfg.TTSContextUtterances) > 0 {
 			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
 		}
-		a.TTS = hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...)
+		a.TTS = hume.NewTTS(cfg.HumeAPIKey, "", ttsOpts...)
 	case providerInworld:
-		ttsOpts := []inworld.InworldTTSOption{}
+		ttsOpts := []inworld.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6955,9 +6955,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSMaxBufferDelayMS != nil {
 			ttsOpts = append(ttsOpts, inworld.WithInworldTTSMaxBufferDelayMS(*cfg.TTSMaxBufferDelayMS))
 		}
-		a.TTS = inworld.NewInworldTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = inworld.NewTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMinimax:
-		ttsOpts := []minimax.MinimaxTTSOption{}
+		ttsOpts := []minimax.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -6993,9 +6993,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSTextNormalization != nil {
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
-		a.TTS = minimax.NewMinimaxTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = minimax.NewTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerMistralAI:
-		ttsOpts := []mistralai.MistralAITTSOption{}
+		ttsOpts := []mistralai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7012,13 +7012,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		} else {
 			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat("pcm"))
 		}
-		provider, err := mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
+		provider, err := mistralai.NewTTS(cfg.MistralAPIKey, "", ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
 		a.TTS = provider
 	case providerMurf:
-		ttsOpts := []murf.MurfTTSOption{}
+		ttsOpts := []murf.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7046,9 +7046,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSEncoding != "" {
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSEncoding(cfg.TTSEncoding))
 		}
-		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = murf.NewTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerNvidia:
-		ttsOpts := []nvidia.NvidiaTTSOption{}
+		ttsOpts := []nvidia.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSServer(cfg.TTSBaseURL))
 		}
@@ -7061,13 +7061,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if useSSL := modelOptionBool(cfg.TTSModelOptions, "use_ssl"); useSSL != nil {
 			ttsOpts = append(ttsOpts, nvidia.WithNvidiaTTSUseSSL(*useSSL))
 		}
-		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
+		provider, err := nvidia.NewTTS(cfg.NvidiaAPIKey, cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
 		a.TTS = provider
 	case providerLMNT:
-		ttsOpts := []lmnt.LMNTTTSOption{}
+		ttsOpts := []lmnt.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSModel(cfg.TTSModel))
 		}
@@ -7091,9 +7091,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSTopP != nil {
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
 		}
-		a.TTS = lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...)
+		a.TTS = lmnt.NewTTS(cfg.LMNTAPIKey, "", ttsOpts...)
 	case providerNeuphonic:
-		ttsOpts := []neuphonic.NeuphonicTTSOption{}
+		ttsOpts := []neuphonic.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7112,9 +7112,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSpeed != 0 {
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
 		}
-		a.TTS = neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...)
+		a.TTS = neuphonic.NewTTS(cfg.NeuphonicAPIKey, "", ttsOpts...)
 	case providerResemble:
-		ttsOpts := []resemble.ResembleTTSOption{}
+		ttsOpts := []resemble.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, resemble.WithResembleTTSModel(cfg.TTSModel))
 		}
@@ -7124,9 +7124,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, resemble.WithResembleTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		a.TTS = resemble.NewResembleTTS(cfg.ResembleAPIKey, "", ttsOpts...)
+		a.TTS = resemble.NewTTS(cfg.ResembleAPIKey, "", ttsOpts...)
 	case providerRespeecher:
-		ttsOpts := []respeecher.RespeecherTTSOption{}
+		ttsOpts := []respeecher.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7142,9 +7142,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if len(cfg.TTSJSONConfig) > 0 {
 			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSSamplingParams(cfg.TTSJSONConfig))
 		}
-		a.TTS = respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...)
+		a.TTS = respeecher.NewTTS(cfg.RespeecherAPIKey, "", ttsOpts...)
 	case providerRime:
-		a.TTS = rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...)
+		a.TTS = rime.NewTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...)
 	case providerSarvam:
 		ttsOpts := []sarvam.SarvamTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -7200,7 +7200,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...)
 	case providerSimplismart:
-		ttsOpts := []simplismart.SimplismartTTSOption{}
+		ttsOpts := []simplismart.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7225,9 +7225,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if leadingSilence := modelOptionBool(cfg.TTSModelOptions, "leading_silence"); leadingSilence != nil {
 			ttsOpts = append(ttsOpts, simplismart.WithSimplismartTTSLeadingSilence(*leadingSilence))
 		}
-		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = simplismart.NewTTS(cfg.SimplismartAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSmallestAI:
-		ttsOpts := []smallestai.SmallestAITTSOption{}
+		ttsOpts := []smallestai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7252,9 +7252,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSResponseFormat != "" {
 			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
 		}
-		a.TTS = smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...)
+		a.TTS = smallestai.NewTTS(cfg.SmallestAIAPIKey, "", ttsOpts...)
 	case providerSoniox:
-		ttsOpts := []soniox.SonioxTTSOption{}
+		ttsOpts := []soniox.TTSOption{}
 		if cfg.TTSWebsocketURL != "" {
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSWebsocketURL(cfg.TTSWebsocketURL))
 		}
@@ -7276,9 +7276,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSBitRate != nil {
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
 		}
-		a.TTS = soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...)
+		a.TTS = soniox.NewTTS(cfg.SonioxAPIKey, ttsOpts...)
 	case providerSpeechify:
-		ttsOpts := []speechify.SpeechifyTTSOption{}
+		ttsOpts := []speechify.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7302,9 +7302,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSTextNormalization != nil {
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
-		a.TTS = speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = speechify.NewTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSpeechmatics:
-		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		ttsOpts := []speechmatics.TTSOption{}
 		if cfg.TTSVoice != "" {
 			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
 		}
@@ -7314,9 +7314,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
 		}
-		a.TTS = speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...)
+		a.TTS = speechmatics.NewTTS(cfg.SpeechmaticsAPIKey, ttsOpts...)
 	case providerSpitch:
-		ttsOpts := []spitch.SpitchTTSOption{}
+		ttsOpts := []spitch.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7334,28 +7334,28 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		a.TTS = spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = spitch.NewTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerTelnyx:
-		ttsOpts := []telnyx.TelnyxTTSOption{}
+		ttsOpts := []telnyx.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
-		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = telnyx.NewTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerUpliftAI:
-		ttsOpts := []upliftai.UpliftAITTSOption{}
+		ttsOpts := []upliftai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, upliftai.WithUpliftAIBaseURL(cfg.TTSBaseURL))
 		}
-		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = upliftai.NewTTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerXAI:
-		ttsOpts := []xai.XaiTTSOption{}
+		ttsOpts := []xai.TTSOption{}
 		if cfg.TTSWebsocketURL != "" {
 			ttsOpts = append(ttsOpts, xai.WithXaiTTSWebsocketURL(cfg.TTSWebsocketURL))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, xai.WithXaiTTSLanguage(cfg.TTSLanguage))
 		}
-		a.TTS = xai.NewXaiTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = xai.NewTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -7388,7 +7388,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...)
 	case providerCambai:
-		ttsOpts := []cambai.CambaiTTSOption{}
+		ttsOpts := []cambai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7412,13 +7412,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSEnhanceNamedEntities != nil {
 			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSEnhanceNamedEntities(*cfg.TTSEnhanceNamedEntities))
 		}
-		provider, err := cambai.NewCambaiTTS("", "", ttsOpts...)
+		provider, err := cambai.NewTTS("", "", ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
 		a.TTS = provider
 	case providerAsyncAI:
-		ttsOpts := []asyncai.AsyncAITTSOption{}
+		ttsOpts := []asyncai.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSBaseURL(cfg.TTSBaseURL))
 		}
@@ -7437,9 +7437,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSSampleRate(*cfg.TTSSampleRate))
 		}
-		a.TTS = asyncai.NewAsyncAITTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...)
+		a.TTS = asyncai.NewTTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...)
 	case providerOpenAI:
-		ttsOpts := []openai.OpenAITTSOption{}
+		ttsOpts := []openai.TTSOption{}
 		if cfg.TTSModel != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSModel(goopenai.SpeechModel(cfg.TTSModel)))
 		}
@@ -7460,7 +7460,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
 		}
-		provider, err := openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+		provider, err := openai.NewTTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -7486,11 +7486,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerGoogle:
 		return appNewGoogleRealtime(cfg.GoogleAPIKey, cfg.RealtimeModel, googleRealtimeConfigFromAppConfig(cfg))
 	case providerXAI:
-		opts := []xai.XaiRealtimeOption{}
+		opts := []xai.RealtimeOption{}
 		if cfg.RealtimeModel != "" {
 			opts = append(opts, xai.WithXaiRealtimeModel(cfg.RealtimeModel))
 		}
-		return xai.NewXaiRealtimeModel(cfg.XAIAPIKey, opts...), nil
+		return xai.NewRealtimeModel(cfg.XAIAPIKey, opts...), nil
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	case providerUltravox:
@@ -7508,7 +7508,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.RealtimeGenerateReplyTimeoutSeconds != nil {
 			opts = append(opts, adapteraws.WithAWSRealtimeGenerateReplyTimeout(time.Duration(*cfg.RealtimeGenerateReplyTimeoutSeconds*float64(time.Second))))
 		}
-		return adapteraws.NewAWSRealtimeModel(cfg.RealtimeModel, opts...), nil
+		return adapteraws.NewRealtimeModel(cfg.RealtimeModel, opts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
@@ -7537,8 +7537,8 @@ func speechmaticsRealtimeOptionsFromConfig(cfg AppConfig) []speechmatics.Realtim
 	return opts
 }
 
-func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.AWSRealtimeOption {
-	opts := []adapteraws.AWSRealtimeOption{
+func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.RealtimeOption {
+	opts := []adapteraws.RealtimeOption{
 		adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
 	}
 	if maxTokens := modelOptionInt(cfg.RealtimeModelOptions, "max_tokens"); maxTokens > 0 {
@@ -7600,8 +7600,8 @@ func ultravoxRealtimeOptionsFromConfig(cfg AppConfig) []ultravox.RealtimeOption 
 	return opts
 }
 
-func nvidiaSTTOptionsFromConfig(cfg AppConfig) []nvidia.NvidiaSTTOption {
-	sttOpts := []nvidia.NvidiaSTTOption{}
+func nvidiaSTTOptionsFromConfig(cfg AppConfig) []nvidia.STTOption {
+	sttOpts := []nvidia.STTOption{}
 	if cfg.STTBaseURL != "" {
 		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTServer(cfg.STTBaseURL))
 	}
@@ -8543,14 +8543,14 @@ func speechmaticsShouldUseAppVAD(cfg AppConfig, detector corevad.VAD) bool {
 	return speechmaticsExternalTurnDetectionMode(cfg.STTTurnDetectionMode) || normalizeProvider(cfg.VADProvider) != ""
 }
 
-func speechmaticsTurnDetectionOptionFromConfig(cfg AppConfig) (speechmatics.SpeechmaticsSTTOption, error) {
+func speechmaticsTurnDetectionOptionFromConfig(cfg AppConfig) (speechmatics.STTOption, error) {
 	if normalizeProvider(cfg.VADProvider) != "" {
 		return nil, nil
 	}
 	return speechmaticsTurnDetectionOption(cfg.STTTurnDetectionMode)
 }
 
-func speechmaticsTurnDetectionOption(mode string) (speechmatics.SpeechmaticsSTTOption, error) {
+func speechmaticsTurnDetectionOption(mode string) (speechmatics.STTOption, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
 		return nil, nil

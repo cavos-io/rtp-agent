@@ -31,7 +31,7 @@ const (
 	defaultSTTLanguage      = "en"
 )
 
-type GradiumSTT struct {
+type STT struct {
 	apiKey            string
 	modelEndpoint     string
 	modelName         string
@@ -48,7 +48,7 @@ type GradiumSTT struct {
 	streams           map[*gradiumSTTStream]struct{}
 }
 
-type GradiumSTTOption func(*GradiumSTT)
+type STTOption func(*STT)
 type GradiumSTTUpdateOption func(*gradiumSTTUpdateOptions)
 
 type gradiumSTTUpdateOptions struct {
@@ -57,50 +57,50 @@ type gradiumSTTUpdateOptions struct {
 
 type gradiumSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithGradiumSTTModelEndpoint(endpoint string) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTModelEndpoint(endpoint string) STTOption {
+	return func(s *STT) {
 		if endpoint != "" {
 			s.modelEndpoint = strings.TrimRight(endpoint, "/")
 		}
 	}
 }
 
-func WithGradiumSTTModelName(modelName string) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTModelName(modelName string) STTOption {
+	return func(s *STT) {
 		if modelName != "" {
 			s.modelName = modelName
 		}
 	}
 }
 
-func WithGradiumSTTLanguage(language string) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithGradiumSTTTemperature(temperature float64) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTTemperature(temperature float64) STTOption {
+	return func(s *STT) {
 		s.temperature = &temperature
 	}
 }
 
-func WithGradiumSTTVADBucket(bucket *int) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTVADBucket(bucket *int) STTOption {
+	return func(s *STT) {
 		s.vadBucket = bucket
 	}
 }
 
-func WithGradiumSTTVADFlush(enabled bool) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTVADFlush(enabled bool) STTOption {
+	return func(s *STT) {
 		s.vadFlush = enabled
 	}
 }
 
-func WithGradiumSTTBufferSizeSeconds(seconds float64) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func WithGradiumSTTBufferSizeSeconds(seconds float64) STTOption {
+	return func(s *STT) {
 		if seconds > 0 {
 			s.bufferSizeSeconds = seconds
 		}
@@ -113,17 +113,17 @@ func WithGradiumSTTUpdateBufferSizeSeconds(seconds float64) GradiumSTTUpdateOpti
 	}
 }
 
-func withGradiumSTTWebsocketDialer(dialer gradiumSTTWebsocketDialer) GradiumSTTOption {
-	return func(s *GradiumSTT) {
+func withGradiumSTTWebsocketDialer(dialer gradiumSTTWebsocketDialer) STTOption {
+	return func(s *STT) {
 		if dialer != nil {
 			s.dialWebsocket = dialer
 		}
 	}
 }
 
-func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	bucket := defaultSTTVADBucket
-	provider := &GradiumSTT{
+	provider := &STT{
 		apiKey:            resolveGradiumAPIKey(apiKey),
 		modelEndpoint:     defaultSTTModelEndpoint,
 		modelName:         defaultSTTModelName,
@@ -143,19 +143,19 @@ func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 	return provider
 }
 
-func (s *GradiumSTT) Label() string { return "gradium.STT" }
-func (s *GradiumSTT) Model() string { return "unknown" }
-func (s *GradiumSTT) Provider() string {
+func (s *STT) Label() string { return "gradium.STT" }
+func (s *STT) Model() string { return "unknown" }
+func (s *STT) Provider() string {
 	return "Gradium"
 }
-func (s *GradiumSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	return defaultSTTSampleRate
 }
-func (s *GradiumSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
 }
 
-func (s *GradiumSTT) UpdateOptions(opts ...GradiumSTTUpdateOption) {
+func (s *STT) UpdateOptions(opts ...GradiumSTTUpdateOption) {
 	var update gradiumSTTUpdateOptions
 	for _, opt := range opts {
 		if opt != nil {
@@ -178,7 +178,7 @@ func (s *GradiumSTT) UpdateOptions(opts ...GradiumSTTUpdateOption) {
 	}
 }
 
-func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateGradiumAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	return stream, nil
 }
 
-func (s *GradiumSTT) registerStream(stream *gradiumSTTStream) {
+func (s *STT) registerStream(stream *gradiumSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -233,7 +233,7 @@ func (s *GradiumSTT) registerStream(stream *gradiumSTTStream) {
 	s.streams[stream] = struct{}{}
 }
 
-func (s *GradiumSTT) unregisterStream(stream *gradiumSTTStream) {
+func (s *STT) unregisterStream(stream *gradiumSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -246,22 +246,22 @@ func defaultGradiumSTTWebsocketDialer(ctx context.Context, endpoint string, head
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func (s *GradiumSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func buildGradiumSTTHeaders(s *GradiumSTT) http.Header {
+func buildGradiumSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("x-api-key", s.apiKey)
 	headers.Set("x-api-source", "livekit")
 	return headers
 }
 
-func buildGradiumSTTSetup(s *GradiumSTT) map[string]any {
+func buildGradiumSTTSetup(s *STT) map[string]any {
 	return buildGradiumSTTSetupForLanguage(s, s.language)
 }
 
-func buildGradiumSTTSetupForLanguage(s *GradiumSTT, language string) map[string]any {
+func buildGradiumSTTSetupForLanguage(s *STT, language string) map[string]any {
 	jsonConfig := map[string]any{"language": language}
 	if s.temperature != nil {
 		jsonConfig["temp"] = *s.temperature
@@ -294,7 +294,7 @@ func writeGradiumSTTMessage(conn *websocket.Conn, message map[string]any) error 
 }
 
 type gradiumSTTStream struct {
-	provider        *GradiumSTT
+	provider        *STT
 	conn            *websocket.Conn
 	events          chan *stt.SpeechEvent
 	errCh           chan error
@@ -729,4 +729,15 @@ func intValue(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// Deprecated: use STT.
+type GradiumSTT = STT
+
+// Deprecated: use STTOption.
+type GradiumSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewGradiumSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

@@ -14,7 +14,7 @@ import (
 func TestNewAnamAvatarUsesExplicitAPIKeyAndReferenceMetadata(t *testing.T) {
 	t.Setenv("ANAM_API_KEY", "env-key")
 
-	avatar := NewAnamAvatar("explicit-key")
+	avatar := NewAvatar("explicit-key")
 
 	if avatar.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", avatar.apiKey)
@@ -36,7 +36,7 @@ func TestNewAnamAvatarUsesExplicitAPIKeyAndReferenceMetadata(t *testing.T) {
 func TestNewAnamAvatarFallsBackToEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("ANAM_API_KEY", "env-key")
 
-	avatar := NewAnamAvatar("")
+	avatar := NewAvatar("")
 
 	if avatar.apiKey != "env-key" {
 		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
@@ -45,7 +45,7 @@ func TestNewAnamAvatarFallsBackToEnvironmentAPIKey(t *testing.T) {
 
 func TestAnamAvatarStartRequiresAPIKey(t *testing.T) {
 	t.Setenv("ANAM_API_KEY", "")
-	avatar := NewAnamAvatar("")
+	avatar := NewAvatar("")
 
 	err := avatar.Start(context.Background())
 
@@ -58,7 +58,7 @@ func TestAnamAvatarStartRequiresAPIKey(t *testing.T) {
 }
 
 func TestAnamAvatarStartAndUpdateState(t *testing.T) {
-	avatar := NewAnamAvatar("explicit-key")
+	avatar := NewAvatar("explicit-key")
 
 	if err := avatar.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -122,7 +122,7 @@ func TestAnamAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 	})
 	t.Setenv(anamAPIURLEnv, "https://anam.test")
 
-	avatar := NewAnamAvatar("explicit-key", persona)
+	avatar := NewAvatar("explicit-key", persona)
 	ctx := agent.ContextWithAvatarStartInfo(context.Background(), agent.AvatarStartInfo{
 		LiveKitURL:   "wss://livekit.example",
 		LiveKitToken: "livekit-token",
@@ -154,7 +154,7 @@ func TestNewAnamAvatarUsesReferenceAPIURLAndPersonaConfig(t *testing.T) {
 		AvatarModel: "anam-model",
 	}
 
-	avatar := NewAnamAvatar("explicit-key", persona)
+	avatar := NewAvatar("explicit-key", persona)
 
 	if avatar.apiURL != defaultAnamAPIURL {
 		t.Fatalf("apiURL = %q, want reference default", avatar.apiURL)
@@ -173,7 +173,7 @@ func TestNewAnamAvatarUsesReferenceAPIURLAndPersonaConfig(t *testing.T) {
 func TestNewAnamAvatarUsesEnvironmentAPIURL(t *testing.T) {
 	t.Setenv(anamAPIURLEnv, "https://anam.local")
 
-	avatar := NewAnamAvatar("explicit-key", PersonaConfig{Name: "Support", AvatarID: "avatar-123"})
+	avatar := NewAvatar("explicit-key", PersonaConfig{Name: "Support", AvatarID: "avatar-123"})
 
 	if avatar.apiURL != "https://anam.local" {
 		t.Fatalf("apiURL = %q, want env value", avatar.apiURL)

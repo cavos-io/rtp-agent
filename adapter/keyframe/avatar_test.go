@@ -19,7 +19,7 @@ func TestKeyframePluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 }
 
 func TestNewKeyframeAgentUsesReferenceDefaults(t *testing.T) {
-	avatar := NewKeyframeAgent("test-key")
+	avatar := NewAvatar("test-key")
 
 	if avatar.apiKey != "test-key" {
 		t.Fatalf("apiKey = %q, want explicit API key", avatar.apiKey)
@@ -42,7 +42,7 @@ func TestNewKeyframeAgentUsesEnvironmentConfig(t *testing.T) {
 	t.Setenv("KEYFRAME_API_KEY", "env-key")
 	t.Setenv("KEYFRAME_API_URL", "https://keyframe.example")
 
-	avatar := NewKeyframeAgent("")
+	avatar := NewAvatar("")
 
 	if avatar.apiKey != "env-key" {
 		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
@@ -51,14 +51,14 @@ func TestNewKeyframeAgentUsesEnvironmentConfig(t *testing.T) {
 		t.Fatalf("apiURL = %q, want env API URL", avatar.apiURL)
 	}
 
-	explicit := NewKeyframeAgent("explicit-key")
+	explicit := NewAvatar("explicit-key")
 	if explicit.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", explicit.apiKey)
 	}
 }
 
 func TestKeyframeAgentUpdateStateRecordsReferenceState(t *testing.T) {
-	avatar := NewKeyframeAgent("test-key")
+	avatar := NewAvatar("test-key")
 
 	if err := avatar.UpdateState(agent.AvatarStateSpeaking); err != nil {
 		t.Fatalf("UpdateState speaking error = %v", err)

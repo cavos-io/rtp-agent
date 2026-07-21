@@ -33,7 +33,7 @@ const (
 	defaultMinimaxAudioFormat = "mp3"
 )
 
-type MinimaxTTS struct {
+type TTS struct {
 	mu                sync.Mutex
 	apiKey            string
 	baseURL           string
@@ -55,116 +55,116 @@ type MinimaxTTS struct {
 	closed            bool
 }
 
-type MinimaxTTSOption func(*MinimaxTTS)
+type TTSOption func(*TTS)
 
-func WithMinimaxTTSBaseURL(baseURL string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithMinimaxTTSModel(model string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithMinimaxTTSVoice(voice string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithMinimaxTTSSampleRate(sampleRate int) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithMinimaxTTSBitrate(bitrate int) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSBitrate(bitrate int) TTSOption {
+	return func(t *TTS) {
 		if bitrate > 0 {
 			t.bitrate = bitrate
 		}
 	}
 }
 
-func WithMinimaxTTSAudioFormat(audioFormat string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSAudioFormat(audioFormat string) TTSOption {
+	return func(t *TTS) {
 		if audioFormat != "" {
 			t.audioFormat = audioFormat
 		}
 	}
 }
 
-func WithMinimaxTTSEmotion(emotion string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSEmotion(emotion string) TTSOption {
+	return func(t *TTS) {
 		t.emotion = emotion
 	}
 }
 
-func WithMinimaxTTSSpeed(speed float64) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
 		t.speed = speed
 	}
 }
 
-func WithMinimaxTTSVolume(vol float64) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSVolume(vol float64) TTSOption {
+	return func(t *TTS) {
 		t.vol = vol
 	}
 }
 
-func WithMinimaxTTSPitch(pitch int) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSPitch(pitch int) TTSOption {
+	return func(t *TTS) {
 		t.pitch = pitch
 	}
 }
 
-func WithMinimaxTTSIntensity(intensity int) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSIntensity(intensity int) TTSOption {
+	return func(t *TTS) {
 		t.intensity = &intensity
 	}
 }
 
-func WithMinimaxTTSTimbre(timbre int) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSTimbre(timbre int) TTSOption {
+	return func(t *TTS) {
 		t.timbre = &timbre
 	}
 }
 
-func WithMinimaxTTSLanguageBoost(languageBoost string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSLanguageBoost(languageBoost string) TTSOption {
+	return func(t *TTS) {
 		t.languageBoost = languageBoost
 	}
 }
 
-func WithMinimaxTTSPronunciationDict(pronunciationDict map[string][]string) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSPronunciationDict(pronunciationDict map[string][]string) TTSOption {
+	return func(t *TTS) {
 		t.pronunciationDict = pronunciationDict
 	}
 }
 
-func WithMinimaxTTSTextNormalization(enabled bool) MinimaxTTSOption {
-	return func(t *MinimaxTTS) {
+func WithMinimaxTTSTextNormalization(enabled bool) TTSOption {
+	return func(t *TTS) {
 		t.textNormalization = enabled
 	}
 }
 
-func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *MinimaxTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	baseURL := os.Getenv("MINIMAX_BASE_URL")
 	if baseURL == "" {
 		baseURL = defaultMinimaxBaseURL
 	}
-	provider := &MinimaxTTS{
+	provider := &TTS{
 		apiKey:      resolveMinimaxAPIKey(apiKey),
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		model:       defaultMinimaxModel,
@@ -184,19 +184,19 @@ func NewMinimaxTTS(apiKey string, voice string, opts ...MinimaxTTSOption) *Minim
 	return provider
 }
 
-func (t *MinimaxTTS) Label() string { return "minimax.TTS" }
-func (t *MinimaxTTS) Model() string { return t.model }
-func (t *MinimaxTTS) Provider() string {
+func (t *TTS) Label() string { return "minimax.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "MiniMax"
 }
 
-func (t *MinimaxTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *MinimaxTTS) SampleRate() int  { return t.sampleRate }
-func (t *MinimaxTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -216,7 +216,7 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}, nil
 }
 
-func buildMinimaxTTSRequest(ctx context.Context, t *MinimaxTTS, text string) (*http.Request, error) {
+func buildMinimaxTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	if err := validateMinimaxTTSOptions(t); err != nil {
 		return nil, err
 	}
@@ -240,7 +240,7 @@ func buildMinimaxTTSRequest(ctx context.Context, t *MinimaxTTS, text string) (*h
 	return req, nil
 }
 
-func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
+func minimaxOptions(t *TTS) map[string]interface{} {
 	voiceSetting := map[string]interface{}{
 		"voice_id": t.voice,
 		"speed":    t.speed,
@@ -281,7 +281,7 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 	return payload
 }
 
-func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -334,7 +334,7 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *MinimaxTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*minimaxTTSSynthesizeStream, 0, len(t.streams))
@@ -352,7 +352,7 @@ func (t *MinimaxTTS) Close() error {
 	return firstErr
 }
 
-func (t *MinimaxTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -361,7 +361,7 @@ func (t *MinimaxTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *MinimaxTTS) registerStream(stream *minimaxTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *minimaxTTSSynthesizeStream) bool {
 	if stream == nil {
 		return false
 	}
@@ -378,7 +378,7 @@ func (t *MinimaxTTS) registerStream(stream *minimaxTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *MinimaxTTS) unregisterStream(stream *minimaxTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *minimaxTTSSynthesizeStream) {
 	if stream == nil {
 		return
 	}
@@ -394,7 +394,7 @@ func validateMinimaxAPIKey(apiKey string) error {
 	return nil
 }
 
-func validateMinimaxTTSOptions(t *MinimaxTTS) error {
+func validateMinimaxTTSOptions(t *TTS) error {
 	if t.speed < 0.5 || t.speed > 2.0 {
 		return fmt.Errorf("speed must be between 0.5 and 2.0, but got %g", t.speed)
 	}
@@ -412,7 +412,7 @@ func validateMinimaxTTSOptions(t *MinimaxTTS) error {
 
 type minimaxTTSChunkedStream struct {
 	ctx           context.Context
-	provider      *MinimaxTTS
+	provider      *TTS
 	text          string
 	resp          *http.Response
 	audioFormat   string
@@ -612,7 +612,7 @@ func minimaxAudioFromSSELine(line string, fallbackTraceID string) ([]byte, error
 	return audio, nil
 }
 
-func buildMinimaxTTSWebsocketURL(t *MinimaxTTS) *url.URL {
+func buildMinimaxTTSWebsocketURL(t *TTS) *url.URL {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -624,13 +624,13 @@ func buildMinimaxTTSWebsocketURL(t *MinimaxTTS) *url.URL {
 	return wsURL
 }
 
-func buildMinimaxTTSWebsocketHeaders(t *MinimaxTTS) http.Header {
+func buildMinimaxTTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	return headers
 }
 
-func buildMinimaxTTSTaskStartMessage(t *MinimaxTTS) ([]byte, error) {
+func buildMinimaxTTSTaskStartMessage(t *TTS) ([]byte, error) {
 	message := minimaxOptions(t)
 	message["event"] = "task_start"
 	return json.Marshal(message)
@@ -651,7 +651,7 @@ type minimaxTTSSynthesizeStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
-	provider    *MinimaxTTS
+	provider    *TTS
 	sampleRate  int
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
@@ -972,4 +972,15 @@ func minimaxTTSAudioFrame(audio []byte, sampleRate int, requestID string) *tts.S
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+// Deprecated: use TTS.
+type MinimaxTTS = TTS
+
+// Deprecated: use TTSOption.
+type MinimaxTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewMinimaxTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

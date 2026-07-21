@@ -13,15 +13,15 @@ const (
 	defaultInitialAvatarState  = agent.AvatarStateIdle
 )
 
-type TrugenAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatarID       string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewTrugenAvatar(apiKey string) *TrugenAvatar {
-	return &TrugenAvatar{
+func NewAvatar(apiKey string) *Avatar {
+	return &Avatar{
 		apiKey:         resolveTrugenAPIKey(apiKey),
 		avatarID:       defaultAvatarID,
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -29,19 +29,27 @@ func NewTrugenAvatar(apiKey string) *TrugenAvatar {
 	}
 }
 
-func (a *TrugenAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *TrugenAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *TrugenAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *TrugenAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type TrugenAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewTrugenAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }
