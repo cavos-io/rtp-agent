@@ -510,10 +510,8 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 
 	var roomIO jobSessionRoomIO
-	var createdRoomIO *RoomIO
 	if c.Room == nil {
-		createdRoomIO = livekitNewRoomIO(nil, session, roomOptions)
-		roomIO = createdRoomIO
+		roomIO = livekitNewRoomIO(nil, session, roomOptions)
 		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
 		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
@@ -525,8 +523,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	if c.Room != nil {
 		session.Room = c.Room
 		if roomIO == nil {
-			createdRoomIO = livekitNewRoomIO(c.Room, session, roomOptions)
-			roomIO = createdRoomIO
+			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
 		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
