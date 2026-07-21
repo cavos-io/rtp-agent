@@ -13,7 +13,6 @@ __pycache__
 worktrees/
 
 # Agent files
-.agents/
 .claude/
 .codex/
 .gemini/

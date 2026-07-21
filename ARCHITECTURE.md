@@ -1,279 +1,140 @@
-# New Go Arch
+# RTP Agent Architecture
 
-# Go Service Architecture
+## Purpose and authority
 
-This document defines a reusable Go service architecture based on layered ports-and-adapters design. Transport adapters sit at the edge, business logic lives in `core`, infrastructure adapters implement core-defined interfaces, and one composition root wires the application together.
+RTP Agent is a Go-first runtime for realtime voice and multimodal agents. It combines provider-neutral agent behavior with pluggable VAD, STT, LLM, TTS, avatar, computer-tool, and realtime-model integrations.
 
-## Directory Structure
+This document explains the repository's architectural intent and runtime ownership. [`.architecture.yaml`](.architecture.yaml) is the executable definition of package boundaries, dependency rules, and adapter file contracts. Keep both files synchronized whenever those rules change.
 
-```text
-/adapter
-  /postgresql
-    /entities
-      domain_entity.go
-    domain_repository.go
-  /s3
-    object_storage_repository.go
-  /external_service
-    external_repository.go
-
-/cmd
-  /service-name
-    main.go
-  /data-migrator
-    main.go
-    properties.yml
-
-/core
-  /domain
-    /model
-      domain_model.go
-    repository.go
-    service.go
-    error.go
-    constant.go
-    service_test.go
-    repository_mock_test.go
-    service_mock_test.go
-
-/db
-  /migration
-    atlas.sum
-    YYYYMMDDHHMMSS_change_name.sql
-  /data-migrator
-    atlas.sum
-    YYYYMMDDHHMMSS_seed_name.sql
-
-/interface
-  /http
-    controller.go
-    error_mapping.go
-    domain_handler.go
-    /dto
-      domain_dto.go
-      error_dto.go
-      success_dto.go
-  /grpc
-    domain_grpc.go
-    domain_mapper.go
-    /spec
-      domain_service.proto
-
-/library
-  middleware.go
-  helper.go
-
-app.go
-properties.yml
-Dockerfile
-Makefile
-README.md
-```
-
-## Layer Responsibilities
-
-### `/cmd`
-
-Contains executable entry points only. The normal service entry point should:
-
-
-1. Load configuration from `properties.yml`.
-2. Create the application config struct.
-3. Call `app.Init(...)`.
-
-Do not put dependency wiring or business logic here. That responsibility belongs to `app.go`.
-
-### `app.go`
-
-Application composition root. It owns startup wiring:
-
-* observability setup: logging, tracing, metrics
-* database clients, object storage clients, gRPC clients, external API clients
-* adapter construction
-* core service construction
-* HTTP controller construction
-* gRPC server registration
-* graceful shutdown
-
-This file may know concrete implementations. Core services should not.
-
-### `/interface`
-
-Primary/input adapters. These translate external requests into core service calls.
-
-* `/interface/http`: Echo handlers, route registration, auth middleware, DTO parsing, response/error mapping.
-* `/interface/grpc`: gRPC server implementations, protobuf mappers, service registration.
-* Other input adapters such as WebSocket, Kafka consumers, or workers can be added when the service actually needs them.
-
-Interface code should not contain business rules beyond request validation, authentication extraction, and response mapping.
-
-### `/core`
-
-Business logic layer. Each domain owns its own package:
-
-* `service.go`: use cases and business rules
-* `repository.go`: outbound port interfaces required by the service
-* `/model`: domain models and lifecycle/state helpers
-* `error.go`: domain errors used by services and mapped by interfaces
-* tests and generated mocks close to the domain they cover
-
-Core code depends on interfaces, not concrete adapters. It can orchestrate multiple outbound ports when a use case requires it.
-
-### `/adapter`
-
-Secondary/output adapters. These implement interfaces defined in `core`.
-
-Common adapter examples:
-
-* `adapter/postgresql`: GORM repositories and database entities
-* `adapter/identity_provider`: identity, realm, organization, group, account adapters
-* `adapter/s3`: object storage adapter
-* `adapter/external_service`: outbound gRPC or HTTP client adapter
-* `adapter/message_broker`: event publishing adapter
-
-Adapter DTOs/entities should be converted to core models at the adapter boundary.
-
-### `/db`
-
-Database migration and seed data.
-
-* Use `db/migration` for current schema migrations.
-* Use `db/data-migrator` for seed/data migration scripts.
-* If a legacy `migrations/` directory exists, keep it only for historical compatibility and do not add new migrations there.
-
-### `/library`
-
-Shared helpers that are not domain-specific, such as session middleware, request helpers, or small common utilities. Keep this package small; domain logic belongs in `core`.
-
-## Dependency Direction
-
-```mermaid
-flowchart TB
-    subgraph Composition["Composition Root"]
-        App["app.go"]
-    end
-
-    subgraph Interface["Input Adapters: /interface"]
-        HTTP["HTTP handlers"]
-        GRPC["gRPC servers"]
-        Worker["Workers / consumers"]
-    end
-
-    subgraph Core["Core: /core"]
-        Service["Domain services"]
-        Port["Outbound port interfaces"]
-        Model["Domain models"]
-    end
-
-    subgraph Adapter["Output Adapters: /adapter"]
-        DB["PostgreSQL repository"]
-        Storage["Object storage adapter"]
-        External["External service client"]
-        Broker["Message broker adapter"]
-    end
-
-    subgraph ExternalSystems["External Systems"]
-        PostgreSQL[("PostgreSQL")]
-        ObjectStorage[("Object Storage")]
-        API["External API / gRPC"]
-        Queue["Message Broker"]
-    end
-
-    App -. wires .-> HTTP
-    App -. wires .-> GRPC
-    App -. wires .-> Worker
-    App -. wires .-> Service
-    App -. wires .-> DB
-    App -. wires .-> Storage
-    App -. wires .-> External
-    App -. wires .-> Broker
-
-    HTTP --> Service
-    GRPC --> Service
-    Worker --> Service
-
-    Service --> Model
-    Service --> Port
-
-    DB -. implements .-> Port
-    Storage -. implements .-> Port
-    External -. implements .-> Port
-    Broker -. implements .-> Port
-
-    DB --> PostgreSQL
-    Storage --> ObjectStorage
-    External --> API
-    Broker --> Queue
-```
-
-The direction is:
-
-
-1. Interface adapters call core services.
-2. Core services call repository/client interfaces defined in `core`.
-3. Infrastructure adapters implement those interfaces.
-4. `app.go` wires concrete adapters into core services.
-
-## Request Flow Example
+## Repository structure
 
 ```text
-HTTP request
-  -> interface/http handler
-  -> parse DTO and extract session claims
-  -> core/domain service method
-  -> core validates business rules
-  -> core calls outbound repository/client ports
-  -> adapter persists data or calls external service
-  -> handler maps result or domain error to response
+cmd/             Executable entry points
+app/             Application composition and provider selection
+interface/cli/   CLI commands and local developer interaction
+interface/worker Worker, job, room, and transport lifecycles
+core/            Provider-neutral agent runtime and capability contracts
+core/**/model/   Low-level models with stricter dependency isolation
+adapter/         Provider integrations and capability implementations
+library/         Shared, domain-neutral utilities
+examples/        Example consumers; outside the enforced component graph
 ```
 
-For gRPC:
+## Component responsibilities
+
+### `cmd`
+
+Keep executable entry points thin. Parse process-level inputs, then delegate startup to `app` or `interface/cli`. Do not place provider behavior or agent orchestration here.
+
+### `app`
+
+The composition layer may know concrete adapters. It selects providers, builds dependencies, configures the runtime, and connects CLI or worker entry points to core behavior.
+
+### `interface/cli`
+
+Own command parsing and local developer workflows. It may invoke worker and core APIs, but provider-specific protocols belong in adapters.
+
+### `interface/worker`
+
+Own worker, job, room, participant, and media-transport lifecycles. LiveKit, Agora, and IPC implementations translate transport events into core operations. They do not own provider capability behavior.
+
+### `core`
+
+Own provider-neutral contracts and runtime behavior, including agents, sessions, audio, VAD, STT, LLM, TTS, evaluation, and beta workflows. Core packages depend inward on other core packages and models, never on concrete providers.
+
+Packages matched by `core/**/model` contain low-level models. Their stricter boundary allows dependencies only on other model packages and the common library component.
+
+### `adapter`
+
+Own provider integrations. Adapters implement core capability contracts, translate provider events and payloads, and contain provider-specific authentication, configuration, transport, and error mapping. They must not redefine provider-neutral interfaces.
+
+### `library`
+
+Own reusable, domain-neutral utilities. `library` is a common component available to every architectural component, but it must not become a home for agent rules or provider behavior.
+
+## Enforced dependency direction
+
+The following table mirrors `.architecture.yaml`:
+
+| Component | May depend on |
+| --- | --- |
+| `cmd` | `app`, `interface_cli` |
+| `app` | `adapter`, `core`, `core_model`, `interface_cli`, `interface_worker` |
+| `interface_cli` | `interface_cli`, `interface_worker`, `core`, `core_model` |
+| `interface_worker` | `interface_worker`, `core`, `core_model` |
+| `adapter` | `adapter`, `core`, `core_model` |
+| `core` | `core`, `core_model` |
+| `core_model` | `core_model` |
+| `library` | `library` |
+
+Because `library` is configured as a common component, every component may also depend on it. Dependencies not listed above are forbidden. `examples` are consumers rather than architecture components and are not included in this enforced graph.
+
+## Runtime composition and streaming flow
+
+The typical runtime flow is:
 
 ```text
-gRPC request
-  -> interface/grpc server method
-  -> protobuf mapper
-  -> core/domain service method
-  -> adapter through core port
-  -> protobuf response mapper
+cmd
+  -> app or interface/cli
+  -> interface/worker and core agent/session runtime
+  -> core capability contract
+  -> provider adapter
+  -> external provider
 ```
 
-## Configuration
+Provider events and media flow back through the adapter into the core runtime, then through the worker transport to the room or client.
 
-Use a typed application config struct in `app.go`, loaded by the executable in `cmd`. Configuration should include only runtime concerns such as:
+Streaming ownership follows component boundaries:
 
-* environment and app name
-* HTTP/gRPC ports
-* trace/log exporters
-* database connection
-* object storage
-* auth/JWKS settings
-* external service hosts
+- Core owns capability contracts, agent/session state, and provider-neutral lifecycle decisions.
+- Adapters own provider connections, wire protocols, event translation, and provider-specific retries or errors.
+- Workers own job and room transport lifecycles, participant I/O, and delivery to or from the core runtime.
+- Cancellation must propagate through `context.Context`. A component closes only channels, streams, and goroutines it creates, and must preserve ordering and backpressure without blocking transport callbacks indefinitely.
 
-Core services should receive already-constructed dependencies, not raw global configuration.
+## Adapter contracts
 
-## Testing Guidance
+Every directory matched by `adapter/*` must contain `plugin.go` with:
 
-* Unit-test `core` services with mocks for repository/client interfaces.
-* Test adapter behavior separately when query mapping, external protocol behavior, or persistence details are non-trivial.
-* Keep handler tests focused on transport concerns: parsing, auth extraction, status codes, and error mapping.
+- `PluginTitle`, matching `rtp-agent.plugins.<package>`
+- `PluginVersion`, using a `vMAJOR.MINOR.PATCH` value
+- `PluginPackage`, matching `rtp-agent.plugins.<package>`
 
-## Naming Conventions
+A provider adapter must implement at least one capability file unless it is one of the explicitly exempt utility adapters: `blingfire`, `browser`, `hamming`, `krisp`, `nltk`, or `pipecat`.
 
-* Prefer `/interface/http`, not `/interface/web`, for REST APIs.
-* Keep domain models under `/core/<domain>/model`.
-* Keep transport DTOs under `/interface/http/dto`.
-* Keep database entities under `/adapter/postgresql/entities`.
-* Use `library`, not `libary`.
-* Use one consistent configuration filename, such as `properties.yml`.
+Capability files use canonical public names and have a same-name test file:
 
-## Implementation Notes
+| File | Canonical struct | Constructor | Option type | Test file |
+| --- | --- | --- | --- | --- |
+| `vad.go` | `VAD` | `NewVAD` | `VADOption` | `vad_test.go` |
+| `stt.go` | `STT` | `NewSTT` | `STTOption` | `stt_test.go` |
+| `llm.go` | `LLM` | `NewLLM` | `LLMOption` | `llm_test.go` |
+| `tts.go` | `TTS` | `NewTTS` | `TTSOption` | `tts_test.go` |
+| `avatar.go` | `Avatar` | `NewAvatar` | `AvatarOption` | `avatar_test.go` |
+| `computer_tool.go` | `ComputerTool` | `NewComputerTool` | none | `computer_tool_test.go` |
+| `realtime.go` | `RealtimeModel` | `NewRealtimeModel` | `RealtimeOption` | `realtime_test.go` |
 
-Use these conventions consistently across services:
+Capability files must not declare exported interfaces or provider-prefixed canonical structs. Core defines the interfaces; adapters provide implementations. Deprecated provider-prefixed aliases may remain temporarily for source compatibility, but new code must use the canonical names.
 
-* `app.go` is the real dependency injection and server startup point.
-* `cmd/main.go` is intentionally thin.
-* HTTP and gRPC can coexist under `/interface`.
-* Core services own lifecycle rules and authorization decisions.
-* PostgreSQL, identity providers, object storage, message brokers, and outbound gRPC/HTTP clients are all adapters behind core interfaces.
-* Atlas migrations live in `db/migration`; legacy migration directories should not receive new schema work.
+The executable contract contains narrow compatibility exceptions:
+
+- Spitch STT and Clova TTS do not require an option type.
+- `LLMOption` is required only for adapters whose current API uses explicit options: Anthropic, AWS, Google, Groq, LiveKit, Mistral AI, OpenAI, Sarvam, and Telnyx.
+- Azure's LLM API uses canonical aliases and delegates construction to the OpenAI-compatible implementation.
+- `AvatarOption` is currently required only for Runway.
+
+These exceptions describe current APIs; do not generalize them to new adapters.
+
+## Testing and parity guidance
+
+- Every capability file requires its contract test file. Constructor tests should verify meaningful defaults, option application, or interface conformance rather than constructor existence alone.
+- Keep unit tests deterministic and offline. Provider network behavior belongs in explicitly scoped integration tests.
+- Use `refs/agents/livekit-agents` and `refs/agents/livekit-plugins` as behavioral references when migrating capabilities. Match required behavior, lifecycle, and event semantics; do not copy structure merely for symbol parity.
+- Run `go tool go-file-arch -config .architecture.yaml ./...` after structural changes. Run the relevant package tests, and use `scripts/go-test-all.sh` for repository-wide verification when code changes cross packages.
+
+## Change rules
+
+1. Keep changes within the dependency graph and component responsibilities above.
+2. Update `.architecture.yaml` and this document together when an enforced boundary or adapter contract changes.
+3. Add new provider behavior in `adapter`; add provider-neutral contracts or lifecycle behavior in `core`; compose concrete implementations in `app`.
+4. Preserve compatibility with deprecated aliases only while migration requires it. Do not use deprecated names in new code.
+5. Prefer incremental capability-batched migrations with focused tests over unrelated repository-wide rewrites.
