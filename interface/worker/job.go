@@ -419,9 +419,6 @@ type StartSessionOptions struct {
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
 	SessionContext context.Context
-	SkipRecorder   bool
-	AfterConnect   func(ctx context.Context) error
-	OnRoomIO       func(roomIO *RoomIO)
 }
 
 type jobSessionRoomIO interface {
@@ -531,16 +528,13 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			createdRoomIO = livekitNewRoomIO(c.Room, session, roomOptions)
 			roomIO = createdRoomIO
 		}
-		if opts.OnRoomIO != nil && createdRoomIO != nil {
-			opts.OnRoomIO(createdRoomIO)
-		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
 			_ = roomIO.Close()
 		}); err != nil {
 			logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
 		}
-		if !opts.SkipRecorder && c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+		if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
 			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
 				return err
 			}
@@ -549,12 +543,6 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			if err := roomIO.Start(ctx); err != nil {
 				return err
 			}
-		}
-	}
-
-	if opts.AfterConnect != nil {
-		if err := opts.AfterConnect(ctx); err != nil {
-			return err
 		}
 	}
 
