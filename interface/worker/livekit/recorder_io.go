@@ -91,8 +91,6 @@ func (r *RecorderIO) PopulateSessionReport(report *agent.SessionReport) {
 	if startedAt != nil {
 		startedAtSeconds := float64(startedAt.UnixNano()) / 1e9
 		report.AudioRecordingStartedAt = &startedAtSeconds
-		duration := report.Timestamp - startedAtSeconds
-		report.Duration = &duration
 	}
 }
 

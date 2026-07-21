@@ -441,6 +441,24 @@ func TestJobContextMakeSessionReportIncludesSessionStartedAt(t *testing.T) {
 	}
 }
 
+func TestJobContextMakeSessionReportCalculatesRecordingDuration(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recording_duration"}, "", "", "")
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	startedAt := float64(time.Now().Add(-time.Minute).UnixNano()) / 1e9
+	ctx.Report.AudioRecordingStartedAt = &startedAt
+
+	report, err := ctx.MakeSessionReport(session)
+	if err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+	if report.Duration == nil {
+		t.Fatal("report Duration = nil, want timestamp minus recording start")
+	}
+	if want := report.Timestamp - startedAt; *report.Duration != want {
+		t.Fatalf("report Duration = %v, want %v", *report.Duration, want)
+	}
+}
+
 func TestJobContextMakeSessionReportRequiresSession(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_report_no_session"}, "", "", "")
 
