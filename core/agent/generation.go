@@ -318,6 +318,13 @@ type TTSGenerationData struct {
 	StoppedSpeakingAt float64
 }
 
+type TextOutputTiming struct {
+	SourceFirstAt  time.Time
+	SourceClosedAt time.Time
+	FirstCaptureAt time.Time
+	FlushedAt      time.Time
+}
+
 type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
 	TextReplacements        map[string]string

@@ -1171,6 +1171,111 @@ func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T
 	}
 }
 
+type channelTextOutput struct {
+	captured chan TextOutputChunk
+	flushed  chan struct{}
+}
+
+func (o *channelTextOutput) CaptureText(_ context.Context, chunk TextOutputChunk) error {
+	o.captured <- chunk
+	return nil
+}
+
+func (o *channelTextOutput) Flush() {
+	select {
+	case <-o.flushed:
+	default:
+		close(o.flushed)
+	}
+}
+
+func TestPipelineAgentTextOutputDoesNotWaitForTTSAudio(t *testing.T) {
+	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 1),
+		flushed:  make(chan struct{}),
+	}
+	input := make(chan string, 1)
+	input <- "hello"
+	close(input)
+	timing := &TextOutputTiming{}
+
+	ttsInput, done, err := agent.forwardTextOutput(
+		context.Background(),
+		passthroughTranscriptionNode,
+		output,
+		input,
+		timing,
+	)
+	if err != nil {
+		t.Fatalf("forwardTextOutput error = %v", err)
+	}
+
+	select {
+	case chunk := <-output.captured:
+		if chunk.Text != "hello" {
+			t.Fatalf("captured text = %q, want hello", chunk.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("text output waited for TTS input consumption")
+	}
+
+	if got := <-ttsInput; got != "hello" {
+		t.Fatalf("TTS input = %q, want hello", got)
+	}
+	<-done
+}
+
+func TestPipelineAgentStreamsSessionTextOutput(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello "}},
+				{Delta: &llm.ChoiceDelta{Content: "world"}},
+			},
+		},
+	}
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 2),
+		flushed:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetTextOutput(output)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	var got strings.Builder
+	for range 2 {
+		select {
+		case chunk := <-output.captured:
+			got.WriteString(chunk.Text)
+		case <-time.After(time.Second):
+			t.Fatal("session text output did not receive generated text")
+		}
+	}
+	if got.String() != "hello world" {
+		t.Fatalf("session text output = %q, want hello world", got.String())
+	}
+	select {
+	case <-output.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("session text output was not flushed")
+	}
+}
+
 func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
