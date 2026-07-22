@@ -10,6 +10,21 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+func TestAgentResolveTranscriptionNodeDefaultsToPassthrough(t *testing.T) {
+	agent := NewAgent("test")
+	input := make(chan TextOutputChunk, 1)
+	input <- TextOutputChunk{Text: "hello"}
+	close(input)
+
+	output, err := agent.ResolveTranscriptionNode()(context.Background(), input)
+	if err != nil {
+		t.Fatalf("default transcription node error = %v", err)
+	}
+	if got := <-output; got.Text != "hello" {
+		t.Fatalf("default transcription node text = %q, want hello", got.Text)
+	}
+}
+
 type agentTestTool struct {
 	id    string
 	name  string
