@@ -1840,6 +1840,25 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 	} else {
 		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync, published)
 		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(ctx, input, transcriptSync)
+		node := passthroughTranscriptionNode
+		var output TextOutput
+		if session != nil {
+			output = session.TextOutput()
+			if session.Agent != nil && session.Agent.GetAgent() != nil {
+				node = session.Agent.GetAgent().ResolveTranscriptionNode()
+			}
+		}
+		var textOutputDone <-chan struct{}
+		var err error
+		ttsTextCh, textOutputDone, err = va.forwardTextOutput(ctx, node, output, ttsTextCh, &TextOutputTiming{})
+		if err != nil {
+			close(input)
+			<-textForwardDone
+			transcriptSync.Close()
+			<-transcriptionDone
+			return nil, err
+		}
+		transcriptionDone = combineDone(transcriptionDone, textOutputDone)
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
@@ -2275,6 +2294,7 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	ttsTextCh := textCh
 	cancelTextForward := func() {}
 	textForwardDone := closedChannel()
+	textOutputDone := closedChannel()
 	if useAlignedTranscript {
 		transcriptionDone = closedChannel()
 	} else {
@@ -2282,14 +2302,37 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 		forwardCtx, cancel := context.WithCancel(ctx)
 		cancelTextForward = cancel
 		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(forwardCtx, textCh, transcriptSync)
+		node := passthroughTranscriptionNode
+		if session != nil && session.Agent != nil && session.Agent.GetAgent() != nil {
+			node = session.Agent.GetAgent().ResolveTranscriptionNode()
+		}
+		var err error
+		var output TextOutput
+		if session != nil {
+			output = session.TextOutput()
+		}
+		ttsTextCh, textOutputDone, err = va.forwardTextOutput(forwardCtx, node, output, ttsTextCh, &TextOutputTiming{})
+		if err != nil {
+			cancelTextForward()
+			<-textForwardDone
+			transcriptSync.Close()
+			<-transcriptionDone
+			return nil, err
+		}
 	}
 	cleanupTextForward := func() {
+		<-textForwardDone
+		<-textOutputDone
+		cancelTextForward()
+	}
+	abortTextForward := func() {
 		cancelTextForward()
 		<-textForwardDone
+		<-textOutputDone
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
-		cleanupTextForward()
+		abortTextForward()
 		transcriptSync.Close()
 		<-transcriptionDone
 		return nil, err
@@ -2474,6 +2517,100 @@ func singleTextChannel(text string) <-chan string {
 	return ch
 }
 
+func (va *PipelineAgent) forwardTextOutput(
+	ctx context.Context,
+	node TranscriptionNode,
+	output TextOutput,
+	input <-chan string,
+	timing *TextOutputTiming,
+) (<-chan string, <-chan struct{}, error) {
+	if node == nil {
+		node = passthroughTranscriptionNode
+	}
+	if timing == nil {
+		timing = &TextOutputTiming{}
+	}
+	ttsInput := make(chan string, 100)
+	sourceChunks := make(chan TextOutputChunk, 100)
+	transcription, err := node(ctx, sourceChunks)
+	if err != nil {
+		return nil, nil, err
+	}
+	if transcription == nil {
+		return nil, nil, errors.New("transcription node returned nil output")
+	}
+
+	done := make(chan struct{})
+	nodeDone := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		defer close(ttsInput)
+		defer close(sourceChunks)
+		defer func() { timing.SourceClosedAt = time.Now() }()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case text, ok := <-input:
+				if !ok {
+					return
+				}
+				if timing.SourceFirstAt.IsZero() {
+					timing.SourceFirstAt = time.Now()
+				}
+				select {
+				case ttsInput <- text:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case sourceChunks <- TextOutputChunk{Text: text}:
+				case <-nodeDone:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		defer close(nodeDone)
+		defer func() {
+			if output != nil {
+				output.Flush()
+				timing.FlushedAt = time.Now()
+			}
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case chunk, ok := <-transcription:
+				if !ok {
+					return
+				}
+				if chunk.Text == "" || output == nil {
+					continue
+				}
+				if err := output.CaptureText(ctx, chunk); err != nil {
+					va.emitError(err, output)
+					return
+				}
+				if timing.FirstCaptureAt.IsZero() {
+					timing.FirstCaptureAt = time.Now()
+				}
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	return ttsInput, done, nil
+}
+
 func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) (<-chan string, <-chan struct{}) {
 	out := make(chan string, 100)
 	done := make(chan struct{})
@@ -2565,6 +2702,19 @@ func closedChannel() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
+}
+
+func combineDone(channels ...<-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, channel := range channels {
+			if channel != nil {
+				<-channel
+			}
+		}
+	}()
+	return done
 }
 
 func sessionRegisteredTools(ctx context.Context, session *AgentSession) ([]llm.Tool, error) {
