@@ -290,6 +290,35 @@ func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T
 	}
 }
 
+func TestAgentSessionEmptyFinalTranscriptDoesNotResetAway(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		filter     func(string) string
+	}{
+		{name: "empty"},
+		{name: "whitespace", transcript: " \t\n "},
+		{name: "filtered empty", transcript: "noise", filter: func(string) string { return "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			session.UserTranscriptFilter = tt.filter
+			session.UpdateUserState(UserStateAway)
+
+			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+				Transcript: tt.transcript,
+				IsFinal:    true,
+			})
+
+			if got := session.UserState(); got != UserStateAway {
+				t.Fatalf("UserState() = %q, want %q", got, UserStateAway)
+			}
+		})
+	}
+}
+
 func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ch := session.UserInputTranscribedEvents()

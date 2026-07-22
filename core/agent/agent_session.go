@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -1361,7 +1362,7 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	s.mu.Lock()
 	userState := s.userState
 	s.mu.Unlock()
-	if ev.IsFinal && userState == UserStateAway {
+	if ev.IsFinal && strings.TrimSpace(ev.Transcript) != "" && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
 	}
 	s.recordEvent(&ev)
