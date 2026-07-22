@@ -169,6 +169,40 @@ func TestResampleAudioFramePreservesParticipantID(t *testing.T) {
 	}
 }
 
+func TestStreamingResamplerPreservesFrameBoundaryContinuity(t *testing.T) {
+	whole, err := NewStreamingResampler(4, 8, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wholeFrame, err := whole.Push(audioFrameFromInt16(4, 1, []int16{0, 1000, 2000, 3000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wholeTail := whole.Flush()
+
+	chunked, err := NewStreamingResampler(4, 8, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := chunked.Push(audioFrameFromInt16(4, 1, []int16{0, 1000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := chunked.Push(audioFrameFromInt16(4, 1, []int16{2000, 3000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkedTail := chunked.Flush()
+
+	wholePCM := append(append([]byte{}, wholeFrame.Data...), wholeTail.Data...)
+	chunkedPCM := append([]byte{}, first.Data...)
+	chunkedPCM = append(chunkedPCM, second.Data...)
+	chunkedPCM = append(chunkedPCM, chunkedTail.Data...)
+	if string(chunkedPCM) != string(wholePCM) {
+		t.Fatalf("chunked resampling differs from continuous resampling: %v != %v", chunkedPCM, wholePCM)
+	}
+}
+
 func TestAudioArrayBufferPushReadShiftAndReset(t *testing.T) {
 	buffer := NewAudioArrayBuffer(4, 16000)
 	frame := audioFrameFromInt16(16000, 1, []int16{1, 2, 3})

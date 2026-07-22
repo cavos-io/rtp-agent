@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -217,6 +218,89 @@ func ResampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 		SamplesPerChannel: outSamples,
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+// StreamingResampler preserves interpolation state across frame boundaries.
+// Create one per continuous audio segment and call Flush at the segment end.
+type StreamingResampler struct {
+	inputRate  uint32
+	outputRate uint32
+	channels   uint32
+	// ponytail: voice utterances are short; use a rolling window if this is reused for long-form audio.
+	samples    []int16
+	nextOutput uint64
+}
+
+func NewStreamingResampler(inputRate, outputRate, channels uint32) (*StreamingResampler, error) {
+	if inputRate == 0 || outputRate == 0 || channels == 0 {
+		return nil, fmt.Errorf("resampler rates and channels must be non-zero")
+	}
+	return &StreamingResampler{inputRate: inputRate, outputRate: outputRate, channels: channels}, nil
+}
+
+func (r *StreamingResampler) Push(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	if frame.SampleRate != r.inputRate || frame.NumChannels != r.channels {
+		return nil, fmt.Errorf("audio format changed from %d Hz/%d channels to %d Hz/%d channels", r.inputRate, r.channels, frame.SampleRate, frame.NumChannels)
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	wantBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < wantBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	for i := 0; i < wantBytes; i += 2 {
+		r.samples = append(r.samples, int16(binary.LittleEndian.Uint16(frame.Data[i:i+2])))
+	}
+	return r.output(false, frame.ParticipantID), nil
+}
+
+func (r *StreamingResampler) Flush() *model.AudioFrame {
+	return r.output(true, "")
+}
+
+func (r *StreamingResampler) output(flush bool, participantID string) *model.AudioFrame {
+	inputSamples := uint64(len(r.samples)) / uint64(r.channels)
+	start := r.nextOutput
+	for {
+		position := r.nextOutput * uint64(r.inputRate)
+		index := position / uint64(r.outputRate)
+		if index >= inputSamples || (!flush && index+1 >= inputSamples) {
+			break
+		}
+		r.nextOutput++
+	}
+	count := r.nextOutput - start
+	if count == 0 {
+		return nil
+	}
+	data := make([]byte, int(count)*int(r.channels)*2)
+	for outputIndex := uint64(0); outputIndex < count; outputIndex++ {
+		position := (start + outputIndex) * uint64(r.inputRate)
+		index := position / uint64(r.outputRate)
+		remainder := position % uint64(r.outputRate)
+		next := index + 1
+		if next >= inputSamples {
+			next = index
+		}
+		for channel := uint64(0); channel < uint64(r.channels); channel++ {
+			a := int64(r.samples[index*uint64(r.channels)+channel])
+			b := int64(r.samples[next*uint64(r.channels)+channel])
+			value := a + (b-a)*int64(remainder)/int64(r.outputRate)
+			offset := (outputIndex*uint64(r.channels) + channel) * 2
+			binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(int16(value)))
+		}
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        r.outputRate,
+		NumChannels:       r.channels,
+		SamplesPerChannel: uint32(count),
+		ParticipantID:     participantID,
+	}
 }
 
 func minUint32(a, b uint32) uint32 {
