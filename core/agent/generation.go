@@ -614,6 +614,13 @@ type TTSGenerationData struct {
 	stopPlaybackTiming  func()
 }
 
+type TextOutputTiming struct {
+	SourceFirstAt  time.Time
+	SourceClosedAt time.Time
+	FirstCaptureAt time.Time
+	FlushedAt      time.Time
+}
+
 type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
 	TextTransforms          []tts.TextTransform
