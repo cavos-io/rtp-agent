@@ -3887,6 +3887,35 @@ func TestRoomIOAgentTranscriptionDeltaStreamAppendsToSingleStream(t *testing.T) 
 	}
 }
 
+func TestRoomIOAgentTextOutputAppendsAndFlushesSingleStream(t *testing.T) {
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		audioTrackID:                     "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string { return "agent-local" },
+		transcriptionPacketPublisher:     func(*livekit.Transcription) error { return nil },
+		agentTextStreamOpener:            factory.open,
+	}
+	output := &roomIOAgentTextOutput{rio: rio}
+
+	if err := output.CaptureText(context.Background(), agent.TextOutputChunk{Text: "halo "}); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.CaptureText(context.Background(), agent.TextOutputChunk{Text: "dunia"}); err != nil {
+		t.Fatal(err)
+	}
+	output.Flush()
+
+	if len(factory.streams) != 1 {
+		t.Fatalf("opened streams = %d, want 1", len(factory.streams))
+	}
+	if got := factory.streams[0].writes; !reflect.DeepEqual(got, []string{"halo ", "dunia"}) {
+		t.Fatalf("stream writes = %#v, want ordered deltas", got)
+	}
+	if !factory.streams[0].closed {
+		t.Fatal("stream was not closed by Flush")
+	}
+}
+
 func TestRoomIOAgentTranscriptionDeltaStreamLoneFinalWritesFullText(t *testing.T) {
 	factory := &fakeTextStreamFactory{}
 	rio := &RoomIO{

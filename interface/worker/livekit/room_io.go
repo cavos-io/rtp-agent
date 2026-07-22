@@ -9,6 +9,7 @@ import (
 	"maps"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -441,6 +442,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startUserTranscriptionListener()
 	rio.startAgentTranscriptionListener()
 	rio.startSessionCloseListener()
+	if session != nil && !opts.DisableTranscriptionOutput {
+		session.SetTextOutput(&roomIOAgentTextOutput{rio: rio})
+	}
 
 	if !opts.DisableAudioOutput {
 		rio.audioSubscribed = make(chan struct{})
@@ -456,6 +460,36 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 type roomIOPlaybackController struct {
 	rio *RoomIO
+}
+
+type roomIOAgentTextOutput struct {
+	rio  *RoomIO
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (o *roomIOAgentTextOutput) CaptureText(_ context.Context, chunk agent.TextOutputChunk) error {
+	if o == nil || o.rio == nil || chunk.Text == "" {
+		return nil
+	}
+	o.mu.Lock()
+	o.text.WriteString(chunk.Text)
+	o.mu.Unlock()
+	o.rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: chunk.Text})
+	return nil
+}
+
+func (o *roomIOAgentTextOutput) Flush() {
+	if o == nil || o.rio == nil {
+		return
+	}
+	o.mu.Lock()
+	text := o.text.String()
+	o.text.Reset()
+	o.mu.Unlock()
+	if text != "" {
+		o.rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: text, IsFinal: true})
+	}
 }
 
 func (c roomIOPlaybackController) ClearBuffer() {
