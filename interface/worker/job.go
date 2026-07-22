@@ -424,13 +424,6 @@ type StartSessionOptions struct {
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
 	SessionContext context.Context
-
-	// BeforeSessionStart runs after the room is connected and RoomIO is ready,
-	// but BEFORE session.Start. It is the injection point for app logic that
-	// needs a live room while the session has not started processing yet
-	// (e.g. transfer runtime + flow-init that must set the flow agent before
-	// the first turn). Returning an error aborts StartSession.
-	BeforeSessionStart func(ctx context.Context) error
 }
 
 type jobSessionRoomIO interface {
@@ -526,11 +519,11 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	if c.Room == nil {
 		roomIO = livekitNewRoomIO(nil, session, roomOptions)
 		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
-		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
 			_ = roomIO.Close()
 			return err
 		}
+		roomIO.AttachRoom(room)
 	}
 
 	if c.Room != nil {
@@ -557,12 +550,6 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 
 	c.primaryRoomIO = roomIO
-
-	if opts.BeforeSessionStart != nil {
-		if err := opts.BeforeSessionStart(ctx); err != nil {
-			return err
-		}
-	}
 
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
