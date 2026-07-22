@@ -122,7 +122,7 @@ func AWSRealtimeSonic2Voices() []string {
 	return append([]string(nil), awsRealtimeSonic2Voices...)
 }
 
-type AWSRealtimeModel struct {
+type RealtimeModel struct {
 	model                string
 	region               string
 	voice                string
@@ -144,10 +144,10 @@ type AWSRealtimeModel struct {
 	client               awsRealtimeClient
 }
 
-type AWSRealtimeOption func(*AWSRealtimeModel)
+type RealtimeOption func(*RealtimeModel)
 
-func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeModel {
-	provider := &AWSRealtimeModel{
+func NewRealtimeModel(model string, opts ...RealtimeOption) *RealtimeModel {
+	provider := &RealtimeModel{
 		model:                awsRealtimeModelOrDefault(model),
 		region:               awsRegionOrDefault(""),
 		voice:                defaultAWSRealtimeVoice,
@@ -168,8 +168,8 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 	return provider
 }
 
-func NewAWSRealtimeModelWithNovaSonic1(opts ...AWSRealtimeOption) *AWSRealtimeModel {
-	provider := NewAWSRealtimeModel(defaultAWSRealtimeNovaSonic1, opts...)
+func NewAWSRealtimeModelWithNovaSonic1(opts ...RealtimeOption) *RealtimeModel {
+	provider := NewRealtimeModel(defaultAWSRealtimeNovaSonic1, opts...)
 	if provider.model == "" {
 		provider.model = defaultAWSRealtimeNovaSonic1
 	}
@@ -177,8 +177,8 @@ func NewAWSRealtimeModelWithNovaSonic1(opts ...AWSRealtimeOption) *AWSRealtimeMo
 	return provider
 }
 
-func NewAWSRealtimeModelWithNovaSonic2(opts ...AWSRealtimeOption) *AWSRealtimeModel {
-	provider := NewAWSRealtimeModel(defaultAWSRealtimeNovaSonic2, opts...)
+func NewAWSRealtimeModelWithNovaSonic2(opts ...RealtimeOption) *RealtimeModel {
+	provider := NewRealtimeModel(defaultAWSRealtimeNovaSonic2, opts...)
 	if provider.model == "" {
 		provider.model = defaultAWSRealtimeNovaSonic2
 	}
@@ -186,82 +186,82 @@ func NewAWSRealtimeModelWithNovaSonic2(opts ...AWSRealtimeOption) *AWSRealtimeMo
 	return provider
 }
 
-func WithAWSRealtimeModel(model string) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeModel(model string) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.model = model
 	}
 }
 
-func WithAWSRealtimeRegion(region string) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeRegion(region string) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.region = region
 	}
 }
 
-func WithAWSRealtimeVoice(voice string) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeVoice(voice string) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.voice = voice
 	}
 }
 
-func WithAWSRealtimeTurnDetection(turnDetection string) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeTurnDetection(turnDetection string) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.turnDetection = turnDetection
 	}
 }
 
-func WithAWSRealtimeMaxTokens(maxTokens int) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeMaxTokens(maxTokens int) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.maxTokens = maxTokens
 		provider.maxTokensSet = true
 	}
 }
 
-func WithAWSRealtimeTopP(topP float64) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeTopP(topP float64) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.topP = topP
 		provider.topPSet = true
 	}
 }
 
-func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeTemperature(temperature float64) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.temperature = temperature
 		provider.temperatureSet = true
 	}
 }
 
-func WithAWSRealtimeToolChoice(toolChoice llm.ToolChoice) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeToolChoice(toolChoice llm.ToolChoice) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.toolChoice = toolChoice
 	}
 }
 
-func WithAWSRealtimeGenerateReplyTimeout(timeout time.Duration) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeGenerateReplyTimeout(timeout time.Duration) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.generateReplyTimeout = timeout
 	}
 }
 
-func WithAWSRealtimeClient(client awsRealtimeClient) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeClient(client awsRealtimeClient) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.client = client
 	}
 }
 
-func WithAWSRealtimeMaxSessionDuration(duration time.Duration) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeMaxSessionDuration(duration time.Duration) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.maxSession = duration
 	}
 }
 
-func WithAWSRealtimeCredentialExpiry(expiry func() (time.Time, bool)) AWSRealtimeOption {
-	return func(provider *AWSRealtimeModel) {
+func WithAWSRealtimeCredentialExpiry(expiry func() (time.Time, bool)) RealtimeOption {
+	return func(provider *RealtimeModel) {
 		provider.credentialExpiry = expiry
 	}
 }
 
-func (m *AWSRealtimeModel) sessionRecycleDuration(now time.Time) time.Duration {
+func (m *RealtimeModel) sessionRecycleDuration(now time.Time) time.Duration {
 	if m == nil {
 		return 0
 	}
@@ -299,45 +299,45 @@ func awsRealtimeMaxSessionFromEnv() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func (m *AWSRealtimeModel) Label() string         { return "aws.RealtimeModel" }
-func (m *AWSRealtimeModel) Model() string         { return m.model }
-func (m *AWSRealtimeModel) Provider() string      { return awsRealtimeProvider }
-func (m *AWSRealtimeModel) Region() string        { return m.region }
-func (m *AWSRealtimeModel) Voice() string         { return m.voice }
-func (m *AWSRealtimeModel) Modalities() string    { return m.modalities }
-func (m *AWSRealtimeModel) TurnDetection() string { return m.turnDetection }
-func (m *AWSRealtimeModel) MaxTokens() (int, bool) {
+func (m *RealtimeModel) Label() string         { return "aws.RealtimeModel" }
+func (m *RealtimeModel) Model() string         { return m.model }
+func (m *RealtimeModel) Provider() string      { return awsRealtimeProvider }
+func (m *RealtimeModel) Region() string        { return m.region }
+func (m *RealtimeModel) Voice() string         { return m.voice }
+func (m *RealtimeModel) Modalities() string    { return m.modalities }
+func (m *RealtimeModel) TurnDetection() string { return m.turnDetection }
+func (m *RealtimeModel) MaxTokens() (int, bool) {
 	if m == nil {
 		return 0, false
 	}
 	return m.maxTokens, m.maxTokensSet
 }
-func (m *AWSRealtimeModel) TopP() (float64, bool) {
+func (m *RealtimeModel) TopP() (float64, bool) {
 	if m == nil {
 		return 0, false
 	}
 	return m.topP, m.topPSet
 }
-func (m *AWSRealtimeModel) Temperature() (float64, bool) {
+func (m *RealtimeModel) Temperature() (float64, bool) {
 	if m == nil {
 		return 0, false
 	}
 	return m.temperature, m.temperatureSet
 }
-func (m *AWSRealtimeModel) ToolChoice() llm.ToolChoice {
+func (m *RealtimeModel) ToolChoice() llm.ToolChoice {
 	if m == nil {
 		return nil
 	}
 	return m.toolChoice
 }
-func (m *AWSRealtimeModel) GenerateReplyTimeout() time.Duration {
+func (m *RealtimeModel) GenerateReplyTimeout() time.Duration {
 	if m == nil {
 		return 0
 	}
 	return m.generateReplyTimeout
 }
 
-func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       false,
 		TurnDetection:           true,
@@ -352,7 +352,7 @@ func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	}
 }
 
-func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
+func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	client := m.client
 	if client == nil {
 		resolved, err := newAWSRealtimeSDKClient(context.Background(), m.region)
@@ -372,7 +372,7 @@ func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
 	return session, nil
 }
 
-func (m *AWSRealtimeModel) Close() error {
+func (m *RealtimeModel) Close() error {
 	return nil
 }
 
@@ -425,7 +425,7 @@ func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Co
 }
 
 type awsRealtimeSession struct {
-	model                    *AWSRealtimeModel
+	model                    *RealtimeModel
 	client                   awsRealtimeClient
 	builder                  *awsRealtimeEventBuilder
 	stream                   awsRealtimeStream
@@ -640,7 +640,7 @@ type awsRealtimeStartOptions struct {
 	restart bool
 }
 
-func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
+func newAWSRealtimeSession(model *RealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
 	audioCtx, audioCancel := context.WithCancel(context.Background())
 	session := &awsRealtimeSession{
 		model:                    model,
@@ -2410,4 +2410,15 @@ func (s *awsRealtimeSession) CommitAudio() error {
 }
 func (s *awsRealtimeSession) ClearAudio() error {
 	return nil
+}
+
+// Deprecated: use RealtimeModel.
+type AWSRealtimeModel = RealtimeModel
+
+// Deprecated: use RealtimeOption.
+type AWSRealtimeOption = RealtimeOption
+
+// Deprecated: use NewRealtimeModel.
+func NewAWSRealtimeModel(model string, opts ...RealtimeOption) *RealtimeModel {
+	return NewRealtimeModel(model, opts...)
 }

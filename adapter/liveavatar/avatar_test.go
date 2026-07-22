@@ -27,7 +27,7 @@ func TestNewLiveAvatarUsesReferenceDefaultsAndEnv(t *testing.T) {
 	t.Setenv(liveAvatarAPIKeyEnv, "env-key")
 	t.Setenv(liveAvatarAvatarIDEnv, "avatar-123")
 
-	avatar := NewLiveAvatar("")
+	avatar := NewAvatar("")
 
 	if avatar.apiKey != "env-key" {
 		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
@@ -52,7 +52,7 @@ func TestNewLiveAvatarUsesReferenceDefaultsAndEnv(t *testing.T) {
 func TestNewLiveAvatarPrefersExplicitAPIKey(t *testing.T) {
 	t.Setenv(liveAvatarAPIKeyEnv, "env-key")
 
-	avatar := NewLiveAvatar("explicit-key")
+	avatar := NewAvatar("explicit-key")
 
 	if avatar.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", avatar.apiKey)
@@ -62,7 +62,7 @@ func TestNewLiveAvatarPrefersExplicitAPIKey(t *testing.T) {
 func TestLiveAvatarStartRequiresAPIKey(t *testing.T) {
 	t.Setenv(liveAvatarAPIKeyEnv, "")
 	t.Setenv(liveAvatarAvatarIDEnv, "avatar-123")
-	avatar := NewLiveAvatar("")
+	avatar := NewAvatar("")
 
 	err := avatar.Start(context.Background())
 
@@ -74,7 +74,7 @@ func TestLiveAvatarStartRequiresAPIKey(t *testing.T) {
 func TestLiveAvatarStartRequiresAvatarID(t *testing.T) {
 	t.Setenv(liveAvatarAPIKeyEnv, "env-key")
 	t.Setenv(liveAvatarAvatarIDEnv, "")
-	avatar := NewLiveAvatar("")
+	avatar := NewAvatar("")
 
 	err := avatar.Start(context.Background())
 
@@ -86,7 +86,7 @@ func TestLiveAvatarStartRequiresAvatarID(t *testing.T) {
 func TestLiveAvatarStartAndUpdateState(t *testing.T) {
 	t.Setenv(liveAvatarAPIKeyEnv, "env-key")
 	t.Setenv(liveAvatarAvatarIDEnv, "avatar-123")
-	avatar := NewLiveAvatar("")
+	avatar := NewAvatar("")
 
 	if err := avatar.Start(context.Background()); err != nil {
 		t.Fatalf("Start error = %v", err)

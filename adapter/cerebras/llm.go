@@ -14,18 +14,18 @@ const (
 	defaultCerebrasBaseURL = "https://api.cerebras.ai/v1"
 )
 
-type CerebrasLLM struct {
-	inner   *openai.OpenAILLM
+type LLM struct {
+	inner   *openai.LLM
 	apiKey  string
 	baseURL string
 }
 
-func NewCerebrasLLM(apiKey string, model string) *CerebrasLLM {
+func NewLLM(apiKey string, model string) *LLM {
 	if model == "" {
 		model = defaultCerebrasModel
 	}
 	resolvedAPIKey := resolveCerebrasAPIKey(apiKey)
-	return &CerebrasLLM{
+	return &LLM{
 		inner:   openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, defaultCerebrasBaseURL),
 		apiKey:  resolvedAPIKey,
 		baseURL: defaultCerebrasBaseURL,
@@ -39,21 +39,29 @@ func resolveCerebrasAPIKey(apiKey string) string {
 	return os.Getenv("CEREBRAS_API_KEY")
 }
 
-func (l *CerebrasLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.inner.Model()
 }
 
-func (l *CerebrasLLM) Provider() string {
+func (l *LLM) Provider() string {
 	return "cerebras"
 }
 
-func (l *CerebrasLLM) BaseURL() string {
+func (l *LLM) BaseURL() string {
 	return l.baseURL
 }
 
-func (l *CerebrasLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("cerebras API key is required, either as argument or set CEREBRAS_API_KEY environmental variable")
 	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
+}
+
+// Deprecated: use LLM.
+type CerebrasLLM = LLM
+
+// Deprecated: use NewLLM.
+func NewCerebrasLLM(apiKey string, model string) *LLM {
+	return NewLLM(apiKey, model)
 }

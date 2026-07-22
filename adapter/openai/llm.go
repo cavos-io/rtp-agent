@@ -73,7 +73,7 @@ const defaultSambaNovaOpenAIBaseURL = "https://api.sambanova.ai/v1"
 const defaultCerebrasOpenAIBaseURL = "https://api.cerebras.ai/v1"
 const defaultXAIOpenAIBaseURL = "https://api.x.ai/v1"
 
-type OpenAILLM struct {
+type LLM struct {
 	client               *openai.Client
 	clientConfig         openai.ClientConfig
 	model                string
@@ -99,7 +99,7 @@ type OpenAILLM struct {
 	requestCancels       map[uint64]context.CancelFunc
 }
 
-type OpenAILLMOption func(*OpenAILLM)
+type LLMOption func(*LLM)
 
 type openRouterLLMOptions struct {
 	siteURL        string
@@ -107,7 +107,7 @@ type openRouterLLMOptions struct {
 	fallbackModels []string
 	provider       map[string]any
 	plugins        []map[string]any
-	llmOptions     []OpenAILLMOption
+	llmOptions     []LLMOption
 }
 
 type OpenRouterLLMOption func(*openRouterLLMOptions)
@@ -142,14 +142,14 @@ func WithOpenRouterPlugins(plugins []map[string]any) OpenRouterLLMOption {
 	}
 }
 
-func WithOpenRouterLLMOptions(opts ...OpenAILLMOption) OpenRouterLLMOption {
+func WithOpenRouterLLMOptions(opts ...LLMOption) OpenRouterLLMOption {
 	return func(o *openRouterLLMOptions) {
 		o.llmOptions = append(o.llmOptions, opts...)
 	}
 }
 
-func WithOpenAILLMTemperature(temperature float64) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMTemperature(temperature float64) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -157,8 +157,8 @@ func WithOpenAILLMTemperature(temperature float64) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMTopP(topP float64) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -166,8 +166,8 @@ func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -175,8 +175,8 @@ func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMStore(store bool) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMStore(store bool) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -184,8 +184,8 @@ func WithOpenAILLMStore(store bool) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMServiceTier(serviceTier string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMServiceTier(serviceTier string) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -193,8 +193,8 @@ func WithOpenAILLMServiceTier(serviceTier string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -202,8 +202,8 @@ func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMPromptCacheKey(promptCacheKey string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMPromptCacheKey(promptCacheKey string) LLMOption {
+	return func(l *LLM) {
 		if l.extraBody == nil {
 			l.extraBody = map[string]any{}
 		}
@@ -211,8 +211,8 @@ func WithOpenAILLMPromptCacheKey(promptCacheKey string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMPromptCacheRetention(promptCacheRetention string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMPromptCacheRetention(promptCacheRetention string) LLMOption {
+	return func(l *LLM) {
 		if l.extraBody == nil {
 			l.extraBody = map[string]any{}
 		}
@@ -220,8 +220,8 @@ func WithOpenAILLMPromptCacheRetention(promptCacheRetention string) OpenAILLMOpt
 	}
 }
 
-func WithOpenAILLMUser(user string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMUser(user string) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -229,32 +229,32 @@ func WithOpenAILLMUser(user string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMOrganization(organization string) OpenAILLMOption {
+func WithOpenAILLMOrganization(organization string) LLMOption {
 	return withOpenAILLMExtraHeader("OpenAI-Organization", organization)
 }
 
-func WithOpenAILLMProject(project string) OpenAILLMOption {
+func WithOpenAILLMProject(project string) LLMOption {
 	return withOpenAILLMExtraHeader("OpenAI-Project", project)
 }
 
-func WithOpenAILLMAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMAzureADTokenProvider(provider func(context.Context) (string, error)) LLMOption {
+	return func(l *LLM) {
 		l.azureADTokenProvider = provider
 	}
 }
 
-func WithOpenAILLMAzureBaseURL(baseURL string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMAzureBaseURL(baseURL string) LLMOption {
+	return func(l *LLM) {
 		l.baseURL = baseURL
 	}
 }
 
-func WithOpenAILLMAzureTimeout(timeout time.Duration) OpenAILLMOption {
+func WithOpenAILLMAzureTimeout(timeout time.Duration) LLMOption {
 	return WithOpenAILLMTimeout(timeout)
 }
 
-func WithOpenAILLMTimeout(timeout time.Duration) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMTimeout(timeout time.Duration) LLMOption {
+	return func(l *LLM) {
 		connectOptions := llm.DefaultAPIConnectOptions()
 		if l.defaultConnect != nil {
 			connectOptions = *l.defaultConnect
@@ -264,8 +264,8 @@ func WithOpenAILLMTimeout(timeout time.Duration) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMMaxRetries(maxRetries int) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMMaxRetries(maxRetries int) LLMOption {
+	return func(l *LLM) {
 		if maxRetries < 0 {
 			return
 		}
@@ -278,8 +278,8 @@ func WithOpenAILLMMaxRetries(maxRetries int) OpenAILLMOption {
 	}
 }
 
-func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func withOpenAILLMExtraHeader(key string, value string) LLMOption {
+	return func(l *LLM) {
 		if l.extraHeaders == nil {
 			l.extraHeaders = map[string]string{}
 		}
@@ -287,8 +287,8 @@ func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMMetadata(metadata map[string]string) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -296,8 +296,8 @@ func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMVerbosity(verbosity string) LLMOption {
+	return func(l *LLM) {
 		if l.extraBody == nil {
 			l.extraBody = map[string]any{}
 		}
@@ -310,8 +310,8 @@ func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMReasoning(reasoning map[string]any) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMReasoning(reasoning map[string]any) LLMOption {
+	return func(l *LLM) {
 		if l.extraBody == nil {
 			l.extraBody = map[string]any{}
 		}
@@ -320,8 +320,8 @@ func WithOpenAILLMReasoning(reasoning map[string]any) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMReasoningEffort(reasoningEffort string) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -329,8 +329,8 @@ func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMExtraParams(params map[string]any) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMExtraParams(params map[string]any) LLMOption {
+	return func(l *LLM) {
 		if l.extraParams == nil {
 			l.extraParams = map[string]any{}
 		}
@@ -342,56 +342,56 @@ func WithOpenAILLMExtraParams(params map[string]any) OpenAILLMOption {
 	}
 }
 
-func WithOpenAILLMDefaultReasoning(defaultReasoning bool) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMDefaultReasoning(defaultReasoning bool) LLMOption {
+	return func(l *LLM) {
 		l.defaultReasoning = defaultReasoning
 	}
 }
 
-func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) LLMOption {
+	return func(l *LLM) {
 		l.parallelToolCalls = parallelToolCalls
 		l.parallelToolCallsSet = true
 	}
 }
 
-func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) LLMOption {
+	return func(l *LLM) {
 		l.toolChoice = toolChoice
 	}
 }
 
-func WithOpenAILLMStrictToolSchema(strict bool) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMStrictToolSchema(strict bool) LLMOption {
+	return func(l *LLM) {
 		l.strictToolSchema = strict
 	}
 }
 
-func WithOpenAILLMExtraHeaders(headers map[string]string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMExtraHeaders(headers map[string]string) LLMOption {
+	return func(l *LLM) {
 		l.extraHeaders = cloneOpenAIStringMap(headers)
 	}
 }
 
-func WithOpenAILLMExtraQuery(query map[string]string) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMExtraQuery(query map[string]string) LLMOption {
+	return func(l *LLM) {
 		l.extraQuery = cloneOpenAIStringMap(query)
 	}
 }
 
-func WithOpenAILLMExtraBody(body map[string]any) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func WithOpenAILLMExtraBody(body map[string]any) LLMOption {
+	return func(l *LLM) {
 		l.extraBody = mergeOpenAIAnyMap(cloneOpenAIAnyMapDeep(body), l.extraBody)
 	}
 }
 
-func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
-	return func(l *OpenAILLM) {
+func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) LLMOption {
+	return func(l *LLM) {
 		l.httpClient = httpClient
 	}
 }
 
-func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewLLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
@@ -403,11 +403,11 @@ func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAI
 	return newOpenAILLMWithConfigAndModel(config, model, opts...)
 }
 
-func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultOpenAILLMModel
 	}
-	provider := &OpenAILLM{
+	provider := &LLM{
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
@@ -426,13 +426,13 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 	return provider, nil
 }
 
-func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultAzureOpenAILLMModel
 	}
 	defaultConnect := llm.DefaultAPIConnectOptions()
 	defaultConnect.MaxRetry = 0
-	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
+	provider := &LLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -503,7 +503,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	return provider, nil
 }
 
-func NewOVHCloudOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewOVHCloudOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultOVHCloudOpenAILLMModel
 	}
@@ -516,7 +516,7 @@ func NewOVHCloudOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOVHCloudOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewDeepSeekOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultDeepSeekOpenAILLMModel
 	}
@@ -529,7 +529,7 @@ func NewDeepSeekOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultDeepSeekOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewFireworksOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultFireworksOpenAILLMModel
 	}
@@ -542,7 +542,7 @@ func NewFireworksOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultFireworksOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewPerplexityOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewPerplexityOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultPerplexityOpenAILLMModel
 	}
@@ -555,7 +555,7 @@ func NewPerplexityOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Ope
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultPerplexityOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewTogetherOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultTogetherOpenAILLMModel
 	}
@@ -568,7 +568,7 @@ func NewTogetherOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTogetherOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewTelnyxOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultTelnyxOpenAILLMModel
 	}
@@ -581,7 +581,7 @@ func NewTelnyxOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultTelnyxOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewNebiusOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultNebiusOpenAILLMModel
 	}
@@ -594,7 +594,7 @@ func NewNebiusOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultNebiusOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if baseURL == "" {
 		baseURL = defaultLettaOpenAIBaseURL
 	}
@@ -618,14 +618,14 @@ func NewLettaOpenAILLM(agentID, baseURL, apiKey string, opts ...OpenAILLMOption)
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, agentID, sdkBaseURL, nil, opts...), nil
 }
 
-func NewOllamaOpenAILLM(model string, opts ...OpenAILLMOption) *OpenAILLM {
+func NewOllamaOpenAILLM(model string, opts ...LLMOption) *LLM {
 	if model == "" {
 		model = defaultOllamaOpenAILLMModel
 	}
 	return NewOpenAILLMWithBaseURLAndHTTPClient("ollama", model, defaultOllamaOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...)
 }
 
-func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewCometAPIOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultCometAPIOpenAILLMModel
 	}
@@ -638,7 +638,7 @@ func NewCometAPIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCometAPIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewOctoAIOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultOctoAIOpenAILLMModel
 	}
@@ -651,7 +651,7 @@ func NewOctoAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAIL
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultOctoAIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewSambaNovaOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultSambaNovaOpenAILLMModel
 	}
@@ -661,7 +661,7 @@ func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	if apiKey == "" {
 		return nil, fmt.Errorf("SambaNova API key is required, either as argument or set SAMBANOVA_API_KEY environment variable")
 	}
-	options := []OpenAILLMOption{
+	options := []LLMOption{
 		WithOpenAILLMToolChoice("auto"),
 		WithOpenAILLMStrictToolSchema(false),
 	}
@@ -669,7 +669,7 @@ func NewSambaNovaOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*Open
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultSambaNovaOpenAIBaseURL, nil, options...), nil
 }
 
-func NewCerebrasOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewCerebrasOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultCerebrasOpenAILLMModel
 	}
@@ -679,12 +679,12 @@ func NewCerebrasOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenA
 	if apiKey == "" {
 		return nil, fmt.Errorf("cerebras API key is required, either as argument or set CEREBRAS_API_KEY environment variable")
 	}
-	options := []OpenAILLMOption{WithOpenAILLMStrictToolSchema(false)}
+	options := []LLMOption{WithOpenAILLMStrictToolSchema(false)}
 	options = append(options, opts...)
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultCerebrasOpenAIBaseURL, nil, options...), nil
 }
 
-func NewXAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+func NewXAIOpenAILLM(model, apiKey string, opts ...LLMOption) (*LLM, error) {
 	if model == "" {
 		model = defaultXAIOpenAILLMModel
 	}
@@ -697,20 +697,20 @@ func NewXAIOpenAILLM(model, apiKey string, opts ...OpenAILLMOption) (*OpenAILLM,
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, defaultXAIOpenAIBaseURL, nil, openAILLMOptionsWithDefaultToolChoiceAuto(opts...)...), nil
 }
 
-func openAILLMOptionsWithDefaultToolChoiceAuto(opts ...OpenAILLMOption) []OpenAILLMOption {
-	options := []OpenAILLMOption{WithOpenAILLMToolChoice("auto")}
+func openAILLMOptionsWithDefaultToolChoiceAuto(opts ...LLMOption) []LLMOption {
+	options := []LLMOption{WithOpenAILLMToolChoice("auto")}
 	return append(options, opts...)
 }
 
-func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+func NewOpenRouterLLM(apiKey, model string, opts ...OpenRouterLLMOption) (*LLM, error) {
 	return newOpenRouterLLM(apiKey, model, defaultOpenRouterLLMURL, nil, opts...)
 }
 
-func NewOpenRouterLLMWithHTTPClient(apiKey, model string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+func NewOpenRouterLLMWithHTTPClient(apiKey, model string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*LLM, error) {
 	return newOpenRouterLLM(apiKey, model, defaultOpenRouterLLMURL, httpClient, opts...)
 }
 
-func newOpenRouterLLM(apiKey, model, baseURL string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*OpenAILLM, error) {
+func newOpenRouterLLM(apiKey, model, baseURL string, httpClient openai.HTTPDoer, opts ...OpenRouterLLMOption) (*LLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openRouterAPIKeyEnv)
 	}
@@ -748,7 +748,7 @@ func newOpenRouterLLM(apiKey, model, baseURL string, httpClient openai.HTTPDoer,
 		body["plugins"] = cloneOpenAIAnyMapSlice(options.plugins)
 	}
 
-	llmOptions := []OpenAILLMOption{
+	llmOptions := []LLMOption{
 		WithOpenAILLMToolChoice("auto"),
 		WithOpenAILLMExtraHeaders(headers),
 		WithOpenAILLMExtraBody(body),
@@ -793,11 +793,11 @@ func (c *azureADTokenProviderHTTPClient) Do(req *http.Request) (*http.Response, 
 	return base.Do(cloned)
 }
 
-func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string, opts ...OpenAILLMOption) *OpenAILLM {
+func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string, opts ...LLMOption) *LLM {
 	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil, opts...)
 }
 
-func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openai.HTTPDoer, opts ...OpenAILLMOption) *OpenAILLM {
+func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openai.HTTPDoer, opts ...LLMOption) *LLM {
 	config := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		config.BaseURL = baseURL
@@ -805,7 +805,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	if httpClient != nil {
 		config.HTTPClient = httpClient
 	}
-	provider := &OpenAILLM{
+	provider := &LLM{
 		model:            model,
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
@@ -823,13 +823,13 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	return provider
 }
 
-func applyOpenAIHTTPClient(provider *OpenAILLM, config *openai.ClientConfig) {
+func applyOpenAIHTTPClient(provider *LLM, config *openai.ClientConfig) {
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
 }
 
-func wrapOpenAIExtraHeaders(provider *OpenAILLM, config *openai.ClientConfig) {
+func wrapOpenAIExtraHeaders(provider *LLM, config *openai.ClientConfig) {
 	if len(provider.extraHeaders) > 0 {
 		config.HTTPClient = &extraHeadersHTTPClient{
 			base:    config.HTTPClient,
@@ -838,7 +838,7 @@ func wrapOpenAIExtraHeaders(provider *OpenAILLM, config *openai.ClientConfig) {
 	}
 }
 
-func wrapOpenAIExtraQuery(provider *OpenAILLM, config *openai.ClientConfig) {
+func wrapOpenAIExtraQuery(provider *LLM, config *openai.ClientConfig) {
 	if len(provider.extraQuery) > 0 {
 		config.HTTPClient = &extraQueryHTTPClient{
 			base:  config.HTTPClient,
@@ -847,7 +847,7 @@ func wrapOpenAIExtraQuery(provider *OpenAILLM, config *openai.ClientConfig) {
 	}
 }
 
-func wrapOpenAIExtraBody(provider *OpenAILLM, config *openai.ClientConfig) {
+func wrapOpenAIExtraBody(provider *LLM, config *openai.ClientConfig) {
 	if len(provider.extraBody) > 0 {
 		config.HTTPClient = &extraBodyHTTPClient{
 			base: config.HTTPClient,
@@ -1000,11 +1000,11 @@ func (c *extraContentHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return base.Do(cloned)
 }
 
-func (l *OpenAILLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
-func (l *OpenAILLM) Provider() string {
+func (l *LLM) Provider() string {
 	u, err := url.Parse(l.baseURL)
 	if err != nil || u.Host == "" {
 		return "openai"
@@ -1012,7 +1012,7 @@ func (l *OpenAILLM) Provider() string {
 	return u.Host
 }
 
-func (l *OpenAILLM) Close() error {
+func (l *LLM) Close() error {
 	if l == nil {
 		return nil
 	}
@@ -1050,7 +1050,7 @@ func (l *OpenAILLM) Close() error {
 	return closeErr
 }
 
-func (l *OpenAILLM) registerStream(stream *openaiStream) bool {
+func (l *LLM) registerStream(stream *openaiStream) bool {
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
@@ -1065,7 +1065,7 @@ func (l *OpenAILLM) registerStream(stream *openaiStream) bool {
 	return true
 }
 
-func (l *OpenAILLM) registerLazyStream(stream *openaiLazyStream) bool {
+func (l *LLM) registerLazyStream(stream *openaiLazyStream) bool {
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
@@ -1080,7 +1080,7 @@ func (l *OpenAILLM) registerLazyStream(stream *openaiLazyStream) bool {
 	return true
 }
 
-func (l *OpenAILLM) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+func (l *LLM) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
@@ -1095,25 +1095,25 @@ func (l *OpenAILLM) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	return id, true
 }
 
-func (l *OpenAILLM) unregisterRequest(id uint64) {
+func (l *LLM) unregisterRequest(id uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.requestCancels, id)
 }
 
-func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
+func (l *LLM) unregisterStream(stream *openaiStream) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.streams, stream)
 }
 
-func (l *OpenAILLM) unregisterLazyStream(stream *openaiLazyStream) {
+func (l *LLM) unregisterLazyStream(stream *openaiLazyStream) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.lazyStreams, stream)
 }
 
-func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.isClosed() {
 		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 	}
@@ -1132,7 +1132,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	return stream, nil
 }
 
-func (l *OpenAILLM) chatEager(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) chatEager(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.isClosed() {
 		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 	}
@@ -1248,7 +1248,7 @@ func (openAIEOFStream) Close() error {
 type openaiLazyStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
-	provider *OpenAILLM
+	provider *LLM
 	chatCtx  *llm.ChatContext
 	opts     []llm.ChatOption
 
@@ -1347,7 +1347,7 @@ func (s *openaiLazyStream) unregister() {
 	}
 }
 
-func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {
+func (l *LLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {
 	if options != nil && options.ConnectOptions != nil {
 		return options.EffectiveConnectOptions()
 	}
@@ -1360,7 +1360,7 @@ func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APICo
 	return options.EffectiveConnectOptions()
 }
 
-func (l *OpenAILLM) isClosed() bool {
+func (l *LLM) isClosed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.closed
@@ -1415,7 +1415,7 @@ func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error 
 	}
 }
 
-func (l *OpenAILLM) openAIClientWithCallExtras(params map[string]any, patches []openAIExtraContentPatch) *openai.Client {
+func (l *LLM) openAIClientWithCallExtras(params map[string]any, patches []openAIExtraContentPatch) *openai.Client {
 	headers := openAIExtraHeaderParams(params)
 	query := openAIExtraQueryParams(params)
 	body := openAIExtraBodyParams(params)
@@ -2607,7 +2607,7 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 type openaiStream struct {
 	stream        *openai.ChatCompletionStream
 	cancel        context.CancelFunc
-	provider      *OpenAILLM
+	provider      *LLM
 	mu            sync.Mutex
 	closed        bool
 	pending       []*llm.ChatChunk
@@ -2961,4 +2961,15 @@ func (s *openaiStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+// Deprecated: use LLM.
+type OpenAILLM = LLM
+
+// Deprecated: use LLMOption.
+type OpenAILLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewOpenAILLM(apiKey string, model string, opts ...LLMOption) (*LLM, error) {
+	return NewLLM(apiKey, model, opts...)
 }

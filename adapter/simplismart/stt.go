@@ -33,7 +33,7 @@ const (
 	simplismartAPIKeyEnv            = "SIMPLISMART_API_KEY"
 )
 
-type SimplismartSTT struct {
+type STT struct {
 	apiKey                       string
 	baseURL                      string
 	model                        string
@@ -64,10 +64,10 @@ type SimplismartSTT struct {
 	sampleRate                   int
 }
 
-type SimplismartSTTOption func(*SimplismartSTT)
+type STTOption func(*STT)
 
-func WithSimplismartSTTBaseURL(baseURL string) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 			if s.streaming {
@@ -77,8 +77,8 @@ func WithSimplismartSTTBaseURL(baseURL string) SimplismartSTTOption {
 	}
 }
 
-func WithSimplismartSTTStreaming(streaming bool) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTStreaming(streaming bool) STTOption {
+	return func(s *STT) {
 		s.streaming = streaming
 		if streaming {
 			s.baseURL = simplismartSTTWebsocketURL(s.baseURL)
@@ -88,51 +88,51 @@ func WithSimplismartSTTStreaming(streaming bool) SimplismartSTTOption {
 	}
 }
 
-func WithSimplismartSTTModel(model string) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithSimplismartSTTLanguage(language string) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithSimplismartSTTTask(task string) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTTask(task string) STTOption {
+	return func(s *STT) {
 		if task != "" {
 			s.task = task
 		}
 	}
 }
 
-func WithSimplismartSTTWithoutTimestamps(withoutTimestamps bool) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTWithoutTimestamps(withoutTimestamps bool) STTOption {
+	return func(s *STT) {
 		s.withoutTimestamps = withoutTimestamps
 	}
 }
 
-func WithSimplismartSTTHotwords(hotwords string) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTHotwords(hotwords string) STTOption {
+	return func(s *STT) {
 		s.hotwords = hotwords
 	}
 }
 
-func WithSimplismartSTTNumSpeakers(numSpeakers int) SimplismartSTTOption {
-	return func(s *SimplismartSTT) {
+func WithSimplismartSTTNumSpeakers(numSpeakers int) STTOption {
+	return func(s *STT) {
 		if numSpeakers >= 0 {
 			s.numSpeakers = numSpeakers
 		}
 	}
 }
 
-func NewSimplismartSTT(apiKey string, opts ...SimplismartSTTOption) *SimplismartSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(simplismartAPIKeyEnv)
 	}
@@ -140,7 +140,7 @@ func NewSimplismartSTT(apiKey string, opts ...SimplismartSTTOption) *Simplismart
 	compressionRatioThreshold := 2.4
 	maxTokens := 400.0
 	logProbThreshold := -1.0
-	provider := &SimplismartSTT{
+	provider := &STT{
 		apiKey:                       apiKey,
 		baseURL:                      defaultSimplismartSTTBaseURL,
 		model:                        defaultSimplismartSTTModel,
@@ -171,19 +171,19 @@ func NewSimplismartSTT(apiKey string, opts ...SimplismartSTTOption) *Simplismart
 	return provider
 }
 
-func (s *SimplismartSTT) Label() string { return "simplismart.STT" }
-func (s *SimplismartSTT) Model() string { return s.model }
-func (s *SimplismartSTT) Provider() string {
+func (s *STT) Label() string { return "simplismart.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Simplismart"
 }
-func (s *SimplismartSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultSimplismartSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *SimplismartSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         s.streaming,
 		InterimResults:    false,
@@ -193,7 +193,7 @@ func (s *SimplismartSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if !s.streaming {
 		return nil, fmt.Errorf("simplismart streaming stt requires streaming mode enabled")
 	}
@@ -232,7 +232,7 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 	return stream, nil
 }
 
-func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if err := validateSimplismartSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func validateSimplismartSTTAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildSimplismartSTTRecognizeRequest(ctx context.Context, s *SimplismartSTT, audio []byte, language string) (*http.Request, error) {
+func buildSimplismartSTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	body, err := json.Marshal(simplismartSTTRequestPayload(s, audio, language))
 	if err != nil {
 		return nil, err
@@ -330,7 +330,7 @@ func buildSimplismartSTTRecognizeRequest(ctx context.Context, s *SimplismartSTT,
 	return req, nil
 }
 
-func simplismartSTTRequestPayload(s *SimplismartSTT, audio []byte, language string) map[string]interface{} {
+func simplismartSTTRequestPayload(s *STT, audio []byte, language string) map[string]interface{} {
 	payload := map[string]interface{}{
 		"audio_data":                     base64.StdEncoding.EncodeToString(audio),
 		"language":                       resolveSimplismartSTTLanguage(s, language),
@@ -371,14 +371,14 @@ func setOptionalFloat(payload map[string]interface{}, key string, value *float64
 	}
 }
 
-func simplismartSTTHTTPURL(s *SimplismartSTT) string {
+func simplismartSTTHTTPURL(s *STT) string {
 	if strings.HasPrefix(s.baseURL, "ws://") || strings.HasPrefix(s.baseURL, "wss://") {
 		return defaultSimplismartSTTBaseURL
 	}
 	return s.baseURL
 }
 
-func buildSimplismartSTTStreamURL(s *SimplismartSTT) string {
+func buildSimplismartSTTStreamURL(s *STT) string {
 	return simplismartSTTWebsocketURL(s.baseURL)
 }
 
@@ -398,7 +398,7 @@ func simplismartSTTWebsocketURL(baseURL string) string {
 	return parsed.String()
 }
 
-func buildSimplismartSTTHeaders(s *SimplismartSTT) http.Header {
+func buildSimplismartSTTHeaders(s *STT) http.Header {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+s.apiKey)
 	return headers
@@ -408,7 +408,7 @@ func buildSimplismartSTTInitialConfig(language string) ([]byte, error) {
 	return json.Marshal(map[string]interface{}{"language": language})
 }
 
-func resolveSimplismartSTTLanguage(s *SimplismartSTT, language string) string {
+func resolveSimplismartSTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -612,4 +612,15 @@ func simplismartSTTStreamEvents(requestID string, language string, payload []byt
 			},
 		},
 	}
+}
+
+// Deprecated: use STT.
+type SimplismartSTT = STT
+
+// Deprecated: use STTOption.
+type SimplismartSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewSimplismartSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

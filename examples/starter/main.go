@@ -70,9 +70,9 @@ func main() {
 
 	baseAgent := agent.NewAgent(instructions)
 
-	baseAgent.VAD = silero.NewSileroVAD()
+	baseAgent.VAD = silero.NewVAD()
 
-	provider, err := livekitAdapter.NewLiveKitInferenceLLM(config.LLMModel, config.LiveKitInferenceAPIKey, config.LiveKitInferenceAPISecret)
+	provider, err := livekitAdapter.NewLLM(config.LLMModel, config.LiveKitInferenceAPIKey, config.LiveKitInferenceAPISecret)
 	if err != nil {
 		os.Exit(1)
 	}

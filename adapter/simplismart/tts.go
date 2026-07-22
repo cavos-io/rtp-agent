@@ -31,7 +31,7 @@ const (
 	defaultSimplismartTTSQwenLanguage      = "English"
 )
 
-type SimplismartTTS struct {
+type TTS struct {
 	apiKey            string
 	baseURL           string
 	model             string
@@ -46,10 +46,10 @@ type SimplismartTTS struct {
 	baseURLExplicit   bool
 }
 
-type SimplismartTTSOption func(*SimplismartTTS)
+type TTSOption func(*TTS)
 
-func WithSimplismartTTSBaseURL(baseURL string) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = baseURL
 			t.baseURLExplicit = true
@@ -57,67 +57,67 @@ func WithSimplismartTTSBaseURL(baseURL string) SimplismartTTSOption {
 	}
 }
 
-func WithSimplismartTTSModel(model string) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithSimplismartTTSSampleRate(sampleRate int) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithSimplismartTTSTemperature(temperature float64) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSTemperature(temperature float64) TTSOption {
+	return func(t *TTS) {
 		t.temperature = temperature
 	}
 }
 
-func WithSimplismartTTSTopP(topP float64) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSTopP(topP float64) TTSOption {
+	return func(t *TTS) {
 		t.topP = topP
 	}
 }
 
-func WithSimplismartTTSRepetitionPenalty(repetitionPenalty float64) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSRepetitionPenalty(repetitionPenalty float64) TTSOption {
+	return func(t *TTS) {
 		t.repetitionPenalty = repetitionPenalty
 	}
 }
 
-func WithSimplismartTTSMaxTokens(maxTokens int) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSMaxTokens(maxTokens int) TTSOption {
+	return func(t *TTS) {
 		if maxTokens > 0 {
 			t.maxTokens = maxTokens
 		}
 	}
 }
 
-func WithSimplismartTTSLanguage(language string) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithSimplismartTTSLeadingSilence(leadingSilence bool) SimplismartTTSOption {
-	return func(t *SimplismartTTS) {
+func WithSimplismartTTSLeadingSilence(leadingSilence bool) TTSOption {
+	return func(t *TTS) {
 		t.leadingSilence = &leadingSilence
 	}
 }
 
-func NewSimplismartTTS(apiKey string, voice string, opts ...SimplismartTTSOption) *SimplismartTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(simplismartAPIKeyEnv)
 	}
-	provider := &SimplismartTTS{
+	provider := &TTS{
 		apiKey:            apiKey,
 		baseURL:           defaultSimplismartTTSBaseURL,
 		model:             defaultSimplismartTTSModel,
@@ -151,16 +151,16 @@ func NewSimplismartTTS(apiKey string, voice string, opts ...SimplismartTTSOption
 	return provider
 }
 
-func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
-func (t *SimplismartTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "simplismart.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SimplismartTTS) SampleRate() int  { return t.sampleRate }
-func (t *SimplismartTTS) NumChannels() int { return 1 }
-func (t *SimplismartTTS) Model() string    { return t.model }
-func (t *SimplismartTTS) Provider() string { return "SimpliSmart" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "SimpliSmart" }
 
-func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("%s is not set", simplismartAPIKeyEnv)
 	}
@@ -173,11 +173,11 @@ func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.Chunk
 	}, nil
 }
 
-func (t *SimplismartTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("simplismart streaming tts not natively supported by basic rest api")
 }
 
-func buildSimplismartTTSRequest(ctx context.Context, t *SimplismartTTS, text string) (*http.Request, error) {
+func buildSimplismartTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	if isSimplismartQwenModel(t.model) {
 		return buildSimplismartTTSQwenRequest(ctx, t, text)
 	}
@@ -204,7 +204,7 @@ func buildSimplismartTTSRequest(ctx context.Context, t *SimplismartTTS, text str
 	return req, nil
 }
 
-func buildSimplismartTTSQwenRequest(ctx context.Context, t *SimplismartTTS, text string) (*http.Request, error) {
+func buildSimplismartTTSQwenRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"model":           t.model,
 		"text":            text,
@@ -236,7 +236,7 @@ func isSimplismartQwenModel(model string) bool {
 
 type simplismartTTSChunkedStream struct {
 	ctx          context.Context
-	provider     *SimplismartTTS
+	provider     *TTS
 	text         string
 	resp         *http.Response
 	sampleRate   int
@@ -332,4 +332,15 @@ func (s *simplismartTTSChunkedStream) Close() error {
 		return nil
 	}
 	return s.resp.Body.Close()
+}
+
+// Deprecated: use TTS.
+type SimplismartTTS = TTS
+
+// Deprecated: use TTSOption.
+type SimplismartTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSimplismartTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

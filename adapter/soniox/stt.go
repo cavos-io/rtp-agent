@@ -33,7 +33,7 @@ const (
 	sonioxFinalizedToken   = "<fin>"
 )
 
-type SonioxSTT struct {
+type STT struct {
 	apiKey                       string
 	baseURL                      string
 	model                        string
@@ -66,113 +66,113 @@ type SonioxContextObject struct {
 	TranslationTerms []SonioxContextTranslationTerm `json:"translation_terms,omitempty"`
 }
 
-type SonioxSTTOption func(*SonioxSTT)
+type STTOption func(*STT)
 
-func WithSonioxBaseURL(baseURL string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSonioxModel(model string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithSonioxLanguageHints(languageHints []string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxLanguageHints(languageHints []string) STTOption {
+	return func(s *STT) {
 		s.languageHints = languageHints
 	}
 }
 
-func WithSonioxLanguageHintsStrict(strict bool) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxLanguageHintsStrict(strict bool) STTOption {
+	return func(s *STT) {
 		s.languageHintsStrict = strict
 	}
 }
 
-func WithSonioxContextText(context string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxContextText(context string) STTOption {
+	return func(s *STT) {
 		if context != "" {
 			s.context = context
 		}
 	}
 }
 
-func WithSonioxContextObject(context SonioxContextObject) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxContextObject(context SonioxContextObject) STTOption {
+	return func(s *STT) {
 		s.context = context
 	}
 }
 
-func WithSonioxNumChannels(numChannels int) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxNumChannels(numChannels int) STTOption {
+	return func(s *STT) {
 		if numChannels > 0 {
 			s.numChannels = numChannels
 		}
 	}
 }
 
-func WithSonioxSampleRate(sampleRate int) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithSonioxSpeakerDiarization(enabled bool) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxSpeakerDiarization(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableSpeakerDiarization = enabled
 	}
 }
 
-func WithSonioxLanguageIdentification(enabled bool) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxLanguageIdentification(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableLanguageIdentification = enabled
 	}
 }
 
-func WithSonioxMaxEndpointDelayMS(ms int) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxMaxEndpointDelayMS(ms int) STTOption {
+	return func(s *STT) {
 		if ms > 0 {
 			s.maxEndpointDelayMS = ms
 		}
 	}
 }
 
-func WithSonioxClientReferenceID(clientReferenceID string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxClientReferenceID(clientReferenceID string) STTOption {
+	return func(s *STT) {
 		s.clientReferenceID = clientReferenceID
 	}
 }
 
-func WithSonioxOneWayTranslation(targetLanguage string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxOneWayTranslation(targetLanguage string) STTOption {
+	return func(s *STT) {
 		if targetLanguage != "" {
 			s.translation = map[string]string{"type": "one_way", "target_language": targetLanguage}
 		}
 	}
 }
 
-func WithSonioxTwoWayTranslation(languageA string, languageB string) SonioxSTTOption {
-	return func(s *SonioxSTT) {
+func WithSonioxTwoWayTranslation(languageA string, languageB string) STTOption {
+	return func(s *STT) {
 		if languageA != "" && languageB != "" {
 			s.translation = map[string]string{"type": "two_way", "language_a": languageA, "language_b": languageB}
 		}
 	}
 }
 
-func NewSonioxSTT(apiKey string, opts ...SonioxSTTOption) *SonioxSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(sonioxAPIKeyEnv)
 	}
-	provider := &SonioxSTT{
+	provider := &STT{
 		apiKey:                       apiKey,
 		baseURL:                      defaultBaseURL,
 		model:                        defaultModel,
@@ -187,18 +187,18 @@ func NewSonioxSTT(apiKey string, opts ...SonioxSTTOption) *SonioxSTT {
 	return provider
 }
 
-func (s *SonioxSTT) Label() string { return "soniox.STT" }
-func (s *SonioxSTT) Model() string { return s.model }
-func (s *SonioxSTT) Provider() string {
+func (s *STT) Label() string { return "soniox.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Soniox"
 }
-func (s *SonioxSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultSampleRate
 	}
 	return uint32(s.sampleRate)
 }
-func (s *SonioxSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
@@ -208,7 +208,7 @@ func (s *SonioxSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := validateSonioxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -246,7 +246,7 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	return stream, nil
 }
 
-func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("soniox speech-to-text api does not support single frame recognition")
 }
 
@@ -257,14 +257,14 @@ func validateSonioxAPIKey(apiKey string) error {
 	return nil
 }
 
-func validateSonioxSTTOptions(s *SonioxSTT) error {
+func validateSonioxSTTOptions(s *STT) error {
 	if s.maxEndpointDelayMS < 500 || s.maxEndpointDelayMS > 3000 {
 		return fmt.Errorf("max_endpoint_delay_ms must be between 500 and 3000")
 	}
 	return nil
 }
 
-func buildSonioxConfig(s *SonioxSTT) map[string]any {
+func buildSonioxConfig(s *STT) map[string]any {
 	config := map[string]any{
 		"api_key":                        s.apiKey,
 		"model":                          s.model,
@@ -286,7 +286,7 @@ func buildSonioxConfig(s *SonioxSTT) map[string]any {
 	return config
 }
 
-func buildSonioxConfigJSON(s *SonioxSTT) ([]byte, error) {
+func buildSonioxConfigJSON(s *STT) ([]byte, error) {
 	config := buildSonioxConfig(s)
 	if s.languageHints == nil {
 		delete(config, "language_hints")
@@ -869,4 +869,15 @@ func (a *sonioxTokenAccumulator) mergedSpeechData(other *sonioxTokenAccumulator,
 		TargetLanguages: targetLanguages,
 		TargetTexts:     targetTexts,
 	}
+}
+
+// Deprecated: use STT.
+type SonioxSTT = STT
+
+// Deprecated: use STTOption.
+type SonioxSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewSonioxSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

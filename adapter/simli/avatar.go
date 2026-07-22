@@ -13,15 +13,15 @@ const (
 	defaultInitialAvatarState  = agent.AvatarStateIdle
 )
 
-type SimliAvatar struct {
+type Avatar struct {
 	apiKey         string
 	apiURL         string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewSimliAvatar(apiKey string) *SimliAvatar {
-	return &SimliAvatar{
+func NewAvatar(apiKey string) *Avatar {
+	return &Avatar{
 		apiKey:         apiKey,
 		apiURL:         defaultAPIURL,
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -29,19 +29,27 @@ func NewSimliAvatar(apiKey string) *SimliAvatar {
 	}
 }
 
-func (a *SimliAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *SimliAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *SimliAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *SimliAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type SimliAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewSimliAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

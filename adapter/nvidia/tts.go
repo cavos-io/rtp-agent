@@ -26,7 +26,7 @@ const (
 
 var nvidiaTTSNewlineWhitespace = regexp.MustCompile(`\s*\n+\s*`)
 
-type NvidiaTTS struct {
+type TTS struct {
 	apiKey       string
 	voice        string
 	functionID   string
@@ -36,47 +36,47 @@ type NvidiaTTS struct {
 	languageCode string
 }
 
-type NvidiaTTSOption func(*NvidiaTTS)
+type TTSOption func(*TTS)
 
-func WithNvidiaTTSAPIKey(apiKey string) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSAPIKey(apiKey string) TTSOption {
+	return func(t *TTS) {
 		if apiKey != "" {
 			t.apiKey = apiKey
 		}
 	}
 }
 
-func WithNvidiaTTSServer(server string) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSServer(server string) TTSOption {
+	return func(t *TTS) {
 		t.server = server
 	}
 }
 
-func WithNvidiaTTSFunctionID(functionID string) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSFunctionID(functionID string) TTSOption {
+	return func(t *TTS) {
 		t.functionID = functionID
 	}
 }
 
-func WithNvidiaTTSVoice(voice string) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		t.voice = voice
 	}
 }
 
-func WithNvidiaTTSLanguageCode(languageCode string) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSLanguageCode(languageCode string) TTSOption {
+	return func(t *TTS) {
 		t.languageCode = languageCode
 	}
 }
 
-func WithNvidiaTTSUseSSL(useSSL bool) NvidiaTTSOption {
-	return func(t *NvidiaTTS) {
+func WithNvidiaTTSUseSSL(useSSL bool) TTSOption {
+	return func(t *TTS) {
 		t.useSSL = useSSL
 	}
 }
 
-func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*NvidiaTTS, error) {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(nvidiaAPIKeyEnv)
 	}
@@ -84,7 +84,7 @@ func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*Nvidia
 		voice = defaultNvidiaTTSVoice
 	}
 
-	provider := &NvidiaTTS{
+	provider := &TTS{
 		apiKey:       apiKey,
 		voice:        voice,
 		functionID:   defaultNvidiaTTSFunctionID,
@@ -102,23 +102,23 @@ func NewNvidiaTTS(apiKey string, voice string, opts ...NvidiaTTSOption) (*Nvidia
 	return provider, nil
 }
 
-func (t *NvidiaTTS) Label() string    { return "nvidia.TTS" }
-func (t *NvidiaTTS) Model() string    { return t.voice }
-func (t *NvidiaTTS) Provider() string { return "nvidia" }
-func (t *NvidiaTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string    { return "nvidia.TTS" }
+func (t *TTS) Model() string    { return t.voice }
+func (t *TTS) Provider() string { return "nvidia" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *NvidiaTTS) SampleRate() int  { return t.sampleRate }
-func (t *NvidiaTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *NvidiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return &nvidiaTTSChunkedStream{ctx: ctx, text: text}, nil
 }
 
-func (t *NvidiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -714,4 +714,15 @@ func nvidiaTTSTailStartsSentence(tail string) bool {
 		}
 	}
 	return false
+}
+
+// Deprecated: use TTS.
+type NvidiaTTS = TTS
+
+// Deprecated: use TTSOption.
+type NvidiaTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewNvidiaTTS(apiKey string, voice string, opts ...TTSOption) (*TTS, error) {
+	return NewTTS(apiKey, voice, opts...)
 }

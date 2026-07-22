@@ -47,7 +47,7 @@ func DefaultVADOptions() VADOptions {
 	}
 }
 
-type SileroVAD struct {
+type VAD struct {
 	options        VADOptions
 	inner          *vad.SimpleVAD
 	scaleThreshold bool
@@ -137,7 +137,7 @@ func WithONNXRuntimeLibraryPath(path string) VADOption {
 	}
 }
 
-func NewSileroVAD(opts ...VADOption) *SileroVAD {
+func NewVAD(opts ...VADOption) *VAD {
 	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
 		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
@@ -149,7 +149,7 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	return detector
 }
 
-func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
+func NewVADWithOptions(opts ...VADOption) (*VAD, error) {
 	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
 		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
@@ -158,6 +158,19 @@ func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
 		return nil, err
 	}
 	return newSileroVADWithResolvedOptions(options, options.UseONNXRuntime)
+}
+
+// Deprecated: use VAD.
+type SileroVAD = VAD
+
+// Deprecated: use NewVAD.
+func NewSileroVAD(opts ...VADOption) *VAD {
+	return NewVAD(opts...)
+}
+
+// Deprecated: use NewVADWithOptions.
+func NewSileroVADWithOptions(opts ...VADOption) (*VAD, error) {
+	return NewVADWithOptions(opts...)
 }
 
 func buildVADOptions(opts ...VADOption) VADOptions {
@@ -174,7 +187,7 @@ type sileroProbabilityEstimatorFactory func(VADOptions) (vad.ProbabilityEstimato
 
 var newSileroProbabilityEstimatorFactory sileroProbabilityEstimatorFactory = newSileroONNXProbabilityEstimatorFactory
 
-func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*SileroVAD, error) {
+func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*VAD, error) {
 	if options.UseONNXRuntime {
 		factory, err := newSileroProbabilityEstimatorFactory(options)
 		if err != nil {
@@ -190,11 +203,11 @@ func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*Sil
 	return newSileroVADFallback(options), nil
 }
 
-func newSileroVADFallback(options VADOptions) *SileroVAD {
+func newSileroVADFallback(options VADOptions) *VAD {
 	return newSileroVADFromSimpleOptions(simpleOptionsFromSilero(options), options, true)
 }
 
-func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options VADOptions, scaleThreshold bool) *SileroVAD {
+func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options VADOptions, scaleThreshold bool) *VAD {
 	inner := vad.NewSimpleVADWithOptions(simpleOptions)
 	if options.activationThresholdSet {
 		threshold := options.ActivationThreshold
@@ -207,7 +220,7 @@ func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options V
 		inner.UpdateOptionsWith(vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech))
 	}
 
-	detector := &SileroVAD{
+	detector := &VAD{
 		options:        options,
 		inner:          inner,
 		scaleThreshold: scaleThreshold,
@@ -223,25 +236,25 @@ func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options V
 	return detector
 }
 
-func (v *SileroVAD) Label() string {
+func (v *VAD) Label() string {
 	return "silero.VAD"
 }
 
-func (v *SileroVAD) Model() string {
+func (v *VAD) Model() string {
 	return "silero"
 }
 
-func (v *SileroVAD) Provider() string {
+func (v *VAD) Provider() string {
 	return "ONNX"
 }
 
-func (v *SileroVAD) Capabilities() vad.VADCapabilities {
+func (v *VAD) Capabilities() vad.VADCapabilities {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return vad.VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
-func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
+func (v *VAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
@@ -257,7 +270,7 @@ func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
 	}
 }
 
-func (v *SileroVAD) removeMetricsHandler(handler vad.VADMetricsHandler) {
+func (v *VAD) removeMetricsHandler(handler vad.VADMetricsHandler) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for i, registered := range v.handlers {
@@ -268,7 +281,7 @@ func (v *SileroVAD) removeMetricsHandler(handler vad.VADMetricsHandler) {
 	}
 }
 
-func (v *SileroVAD) UpdateOptions(options VADOptions) {
+func (v *VAD) UpdateOptions(options VADOptions) {
 	v.mu.Lock()
 	options.SampleRate = 0
 	options.UpdateInterval = 0
@@ -282,7 +295,7 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged, v.scaleThreshold)...)
 }
 
-func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
+func (v *VAD) UpdateOptionsWith(opts ...VADOption) {
 	v.mu.Lock()
 	merged := v.options
 	sampleRate := merged.SampleRate
@@ -303,7 +316,7 @@ func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
 	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged, v.scaleThreshold)...)
 }
 
-func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
+func (v *VAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	v.mu.RLock()
 	options := v.options
 	v.mu.RUnlock()
@@ -425,7 +438,7 @@ func validateVADOptions(options VADOptions) error {
 	return nil
 }
 
-func (v *SileroVAD) emitMetrics(metrics *telemetry.VADMetrics) {
+func (v *VAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	v.mu.RLock()
 	handlers := append([]vad.VADMetricsHandler(nil), v.handlers...)
 	v.mu.RUnlock()

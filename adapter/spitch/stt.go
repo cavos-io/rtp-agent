@@ -15,32 +15,32 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
-type SpitchSTT struct {
+type STT struct {
 	apiKey   string
 	language string
 }
 
-func NewSpitchSTT(apiKey string) *SpitchSTT {
-	return &SpitchSTT{
+func NewSTT(apiKey string) *STT {
+	return &STT{
 		apiKey:   resolveSpitchAPIKey(apiKey),
 		language: "en",
 	}
 }
 
-func (s *SpitchSTT) Label() string { return "spitch.STT" }
-func (s *SpitchSTT) Model() string { return "unknown" }
-func (s *SpitchSTT) Provider() string {
+func (s *STT) Label() string { return "spitch.STT" }
+func (s *STT) Model() string { return "unknown" }
+func (s *STT) Provider() string {
 	return "Spitch"
 }
-func (s *SpitchSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, OfflineRecognize: true}
 }
 
-func (s *SpitchSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	return nil, fmt.Errorf("spitch streaming stt not natively supported by basic rest api")
 }
 
-func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	language = s.resolveLanguage(language)
 	req, err := buildSpitchSTTRecognizeRequest(ctx, s, frames, language)
 	if err != nil {
@@ -73,7 +73,7 @@ func spitchSTTTransportError(err error) error {
 	return llm.NewAPIConnectionError(msg)
 }
 
-func (s *SpitchSTT) resolveLanguage(language string) string {
+func (s *STT) resolveLanguage(language string) string {
 	if language != "" {
 		return language
 	}
@@ -125,7 +125,7 @@ func spitchSTTResponseToEvent(result spitchSTTResponse, language string) *stt.Sp
 	}
 }
 
-func buildSpitchSTTRecognizeRequest(ctx context.Context, s *SpitchSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {
+func buildSpitchSTTRecognizeRequest(ctx context.Context, s *STT, frames []*model.AudioFrame, language string) (*http.Request, error) {
 	language = s.resolveLanguage(language)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -187,4 +187,12 @@ func spitchSTTWAVBytes(frames []*model.AudioFrame) []byte {
 	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
 	wav.Write(data)
 	return wav.Bytes()
+}
+
+// Deprecated: use STT.
+type SpitchSTT = STT
+
+// Deprecated: use NewSTT.
+func NewSpitchSTT(apiKey string) *STT {
+	return NewSTT(apiKey)
 }

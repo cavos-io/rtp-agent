@@ -32,7 +32,7 @@ const (
 	xaiTTSNumChannels         = 1
 )
 
-type XaiTTS struct {
+type TTS struct {
 	mu           sync.Mutex
 	apiKey       string
 	websocketURL string
@@ -42,37 +42,37 @@ type XaiTTS struct {
 	closed       bool
 }
 
-type XaiTTSOption func(*XaiTTS)
+type TTSOption func(*TTS)
 
-func WithXaiTTSWebsocketURL(websocketURL string) XaiTTSOption {
-	return func(t *XaiTTS) {
+func WithXaiTTSWebsocketURL(websocketURL string) TTSOption {
+	return func(t *TTS) {
 		if websocketURL != "" {
 			t.websocketURL = websocketURL
 		}
 	}
 }
 
-func WithXaiTTSVoice(voice string) XaiTTSOption {
-	return func(t *XaiTTS) {
+func WithXaiTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithXaiTTSLanguage(language string) XaiTTSOption {
-	return func(t *XaiTTS) {
+func WithXaiTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func NewXaiTTS(apiKey string, voice string, opts ...XaiTTSOption) *XaiTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(xaiAPIKeyEnv)
 	}
-	provider := &XaiTTS{
+	provider := &TTS{
 		apiKey:       apiKey,
 		websocketURL: defaultXaiTTSWebsocketURL,
 		voice:        voice,
@@ -87,19 +87,19 @@ func NewXaiTTS(apiKey string, voice string, opts ...XaiTTSOption) *XaiTTS {
 	return provider
 }
 
-func (t *XaiTTS) Label() string { return "xai.TTS" }
-func (t *XaiTTS) Model() string { return "unknown" }
-func (t *XaiTTS) Provider() string {
+func (t *TTS) Label() string { return "xai.TTS" }
+func (t *TTS) Model() string { return "unknown" }
+func (t *TTS) Provider() string {
 	return "xAI"
 }
 
-func (t *XaiTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *XaiTTS) SampleRate() int  { return xaiTTSSampleRate }
-func (t *XaiTTS) NumChannels() int { return xaiTTSNumChannels }
+func (t *TTS) SampleRate() int  { return xaiTTSSampleRate }
+func (t *TTS) NumChannels() int { return xaiTTSNumChannels }
 
-func (t *XaiTTS) UpdateOptions(opts ...XaiTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, opt := range opts {
@@ -107,7 +107,7 @@ func (t *XaiTTS) UpdateOptions(opts ...XaiTTSOption) {
 	}
 }
 
-func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -124,7 +124,7 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	}, nil
 }
 
-func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -151,7 +151,7 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *XaiTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -177,7 +177,7 @@ func (t *XaiTTS) Close() error {
 	return closeErr
 }
 
-func (t *XaiTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -186,7 +186,7 @@ func (t *XaiTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *XaiTTS) registerStream(stream *xaiTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *xaiTTSSynthesizeStream) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -199,7 +199,7 @@ func (t *XaiTTS) registerStream(stream *xaiTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *XaiTTS) unregisterStream(stream *xaiTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *xaiTTSSynthesizeStream) {
 	if t == nil {
 		return
 	}
@@ -215,7 +215,7 @@ func validateXaiAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildXaiTTSStreamURL(t *XaiTTS) string {
+func buildXaiTTSStreamURL(t *TTS) string {
 	u, _ := url.Parse(t.websocketURL)
 	q := u.Query()
 	q.Set("voice", t.voice)
@@ -226,7 +226,7 @@ func buildXaiTTSStreamURL(t *XaiTTS) string {
 	return u.String()
 }
 
-func buildXaiTTSHeaders(t *XaiTTS) http.Header {
+func buildXaiTTSHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	return headers
@@ -335,7 +335,7 @@ func (s *xaiTTSWebsocketChunkedStream) Close() error {
 }
 
 type xaiTTSSynthesizeStream struct {
-	owner         *XaiTTS
+	owner         *TTS
 	conn          *websocket.Conn
 	streamURL     string
 	headers       http.Header
@@ -669,4 +669,15 @@ func xaiTTSTokenizeWords(text string, language string) []string {
 		}
 	}
 	return tokens
+}
+
+// Deprecated: use TTS.
+type XaiTTS = TTS
+
+// Deprecated: use TTSOption.
+type XaiTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewXaiTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

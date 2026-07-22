@@ -32,7 +32,7 @@ const (
 	asyncAITTSNumChannels       = 1
 )
 
-type AsyncAITTS struct {
+type TTS struct {
 	apiKey     string
 	baseURL    string
 	model      string
@@ -45,61 +45,61 @@ type AsyncAITTS struct {
 	streams    map[*asyncAITTSStream]struct{}
 }
 
-type AsyncAITTSOption func(*AsyncAITTS)
+type TTSOption func(*TTS)
 
-func WithAsyncAITTSBaseURL(baseURL string) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithAsyncAITTSModel(model string) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithAsyncAITTSVoice(voice string) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithAsyncAITTSLanguage(language string) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithAsyncAITTSEncoding(encoding string) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 		}
 	}
 }
 
-func WithAsyncAITTSSampleRate(sampleRate int) AsyncAITTSOption {
-	return func(t *AsyncAITTS) {
+func WithAsyncAITTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func NewAsyncAITTS(apiKey string, voice string, opts ...AsyncAITTSOption) *AsyncAITTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(asyncAIAPIKeyEnv)
 	}
-	provider := &AsyncAITTS{
+	provider := &TTS{
 		apiKey:     apiKey,
 		baseURL:    defaultAsyncAITTSBaseURL,
 		model:      defaultAsyncAITTSModel,
@@ -117,22 +117,22 @@ func NewAsyncAITTS(apiKey string, voice string, opts ...AsyncAITTSOption) *Async
 	return provider
 }
 
-func (t *AsyncAITTS) Label() string { return "asyncai.TTS" }
-func (t *AsyncAITTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "asyncai.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *AsyncAITTS) SampleRate() int  { return t.sampleRate }
-func (t *AsyncAITTS) NumChannels() int { return asyncAITTSNumChannels }
-func (t *AsyncAITTS) Model() string    { return t.model }
-func (t *AsyncAITTS) Provider() string { return "AsyncAI" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return asyncAITTSNumChannels }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "AsyncAI" }
 
-func (t *AsyncAITTS) UpdateOptions(opts ...AsyncAITTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	if t == nil {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	candidate := &AsyncAITTS{
+	candidate := &TTS{
 		apiKey:     t.apiKey,
 		baseURL:    t.baseURL,
 		model:      t.model,
@@ -149,11 +149,11 @@ func (t *AsyncAITTS) UpdateOptions(opts ...AsyncAITTSOption) {
 	t.voice = candidate.voice
 }
 
-func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	return nil, fmt.Errorf("asyncai tts supports streaming only; use tts.stream()")
 }
 
-func (t *AsyncAITTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -179,7 +179,7 @@ func (t *AsyncAITTS) Close() error {
 	return closeErr
 }
 
-func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -227,7 +227,7 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *AsyncAITTS) registerStream(stream *asyncAITTSStream) bool {
+func (t *TTS) registerStream(stream *asyncAITTSStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -244,7 +244,7 @@ func (t *AsyncAITTS) registerStream(stream *asyncAITTSStream) bool {
 	return true
 }
 
-func (t *AsyncAITTS) unregisterStream(stream *asyncAITTSStream) {
+func (t *TTS) unregisterStream(stream *asyncAITTSStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -256,7 +256,7 @@ func (t *AsyncAITTS) unregisterStream(stream *asyncAITTSStream) {
 	}
 }
 
-func (t *AsyncAITTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -265,14 +265,14 @@ func (t *AsyncAITTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *AsyncAITTS) validateStreamConfig() error {
+func (t *TTS) validateStreamConfig() error {
 	if t.apiKey == "" {
 		return fmt.Errorf("AsyncAI API key is required, either as argument or set ASYNCAI_API_KEY environment variable")
 	}
 	return nil
 }
 
-func buildAsyncAITTSWebsocketURL(t *AsyncAITTS) string {
+func buildAsyncAITTSWebsocketURL(t *TTS) string {
 	u, _ := url.Parse(t.baseURL)
 	switch u.Scheme {
 	case "https":
@@ -288,7 +288,7 @@ func buildAsyncAITTSWebsocketURL(t *AsyncAITTS) string {
 	return u.String()
 }
 
-func buildAsyncAITTSInitMessage(t *AsyncAITTS) ([]byte, error) {
+func buildAsyncAITTSInitMessage(t *TTS) ([]byte, error) {
 	message := map[string]any{
 		"model_id": t.model,
 		"voice": map[string]any{
@@ -377,7 +377,7 @@ func asyncAITTSReadError(err error) error {
 }
 
 type asyncAITTSStream struct {
-	owner       *AsyncAITTS
+	owner       *TTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -650,4 +650,15 @@ func asyncAITTSDecodeBase64Audio(data string) ([]byte, error) {
 		}
 	}
 	return base64.StdEncoding.DecodeString(string(clean))
+}
+
+// Deprecated: use TTS.
+type AsyncAITTS = TTS
+
+// Deprecated: use TTSOption.
+type AsyncAITTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewAsyncAITTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

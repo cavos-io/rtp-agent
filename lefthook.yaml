@@ -1,0 +1,27 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: test integrity
+      run: scripts/check-test-integrity.sh
+
+    - name: targeted tests
+      run: scripts/go-test-targeted.sh
+
+    - name: architecture
+      glob: "**/*.go"
+      run: go tool go-file-arch -config .architecture.yaml ./...
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: full build
+      run: scripts/go-build-all.sh
+
+    - name: full tests
+      run: scripts/go-test-all.sh
+
+    - name: ffmpeg tests
+      run: scripts/go-test-ffmpeg.sh
+
+    - name: staticcheck and deadcode
+      run: scripts/check-deadcode.sh

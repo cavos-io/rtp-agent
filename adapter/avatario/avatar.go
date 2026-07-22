@@ -17,7 +17,7 @@ const (
 	avatarioAvatarIDEnv         = "AVATARIO_AVATAR_ID"
 )
 
-type AvatarioAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatarID       string
 	avatarIdentity string
@@ -26,11 +26,11 @@ type AvatarioAvatar struct {
 	started        bool
 }
 
-func NewAvatarioAvatar(apiKey string) *AvatarioAvatar {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(avatarioAPIKeyEnv)
 	}
-	return &AvatarioAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		avatarID:       os.Getenv(avatarioAvatarIDEnv),
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -39,11 +39,11 @@ func NewAvatarioAvatar(apiKey string) *AvatarioAvatar {
 	}
 }
 
-func (a *AvatarioAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *AvatarioAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.avatarID == "" {
 		return errors.New("AVATARIO_AVATAR_ID must be set")
 	}
@@ -54,7 +54,15 @@ func (a *AvatarioAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AvatarioAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
+}
+
+// Deprecated: use Avatar.
+type AvatarioAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewAvatarioAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

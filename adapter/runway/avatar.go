@@ -27,9 +27,9 @@ const (
 	runwayBaseURLEnv                = "RUNWAYML_BASE_URL"
 )
 
-type RunwayAvatarOption func(*RunwayAvatar)
+type AvatarOption func(*Avatar)
 
-type RunwayAvatar struct {
+type Avatar struct {
 	apiKey            string
 	apiURL            string
 	avatar            map[string]string
@@ -42,7 +42,7 @@ type RunwayAvatar struct {
 	started           bool
 }
 
-func NewRunwayAvatar(apiKey string, opts ...RunwayAvatarOption) (*RunwayAvatar, error) {
+func NewAvatar(apiKey string, opts ...AvatarOption) (*Avatar, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(runwayAPISecretEnv)
 	}
@@ -50,7 +50,7 @@ func NewRunwayAvatar(apiKey string, opts ...RunwayAvatarOption) (*RunwayAvatar, 
 	if apiURL == "" {
 		apiURL = defaultRunwayAPIURL
 	}
-	avatar := &RunwayAvatar{
+	avatar := &Avatar{
 		apiKey:         apiKey,
 		apiURL:         apiURL,
 		avatarIdentity: defaultAvatarAgentIdentity,
@@ -73,8 +73,8 @@ func NewRunwayAvatar(apiKey string, opts ...RunwayAvatarOption) (*RunwayAvatar, 
 	return avatar, nil
 }
 
-func WithRunwayAvatarID(avatarID string) RunwayAvatarOption {
-	return func(avatar *RunwayAvatar) {
+func WithRunwayAvatarID(avatarID string) AvatarOption {
+	return func(avatar *Avatar) {
 		if avatarID == "" {
 			return
 		}
@@ -86,8 +86,8 @@ func WithRunwayAvatarID(avatarID string) RunwayAvatarOption {
 	}
 }
 
-func WithRunwayPresetID(presetID string) RunwayAvatarOption {
-	return func(avatar *RunwayAvatar) {
+func WithRunwayPresetID(presetID string) AvatarOption {
+	return func(avatar *Avatar) {
 		if presetID == "" {
 			return
 		}
@@ -99,21 +99,21 @@ func WithRunwayPresetID(presetID string) RunwayAvatarOption {
 	}
 }
 
-func WithRunwayMaxDuration(maxDuration int) RunwayAvatarOption {
-	return func(avatar *RunwayAvatar) {
+func WithRunwayMaxDuration(maxDuration int) AvatarOption {
+	return func(avatar *Avatar) {
 		avatar.maxDuration = &maxDuration
 	}
 }
 
-func WithRunwayAPIURL(apiURL string) RunwayAvatarOption {
-	return func(avatar *RunwayAvatar) {
+func WithRunwayAPIURL(apiURL string) AvatarOption {
+	return func(avatar *Avatar) {
 		if apiURL != "" {
 			avatar.apiURL = apiURL
 		}
 	}
 }
 
-func (a *RunwayAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("RUNWAYML_API_SECRET must be set by arguments or environment variables")
 	}
@@ -126,20 +126,20 @@ func (a *RunwayAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *RunwayAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *RunwayAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *RunwayAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
 }
 
-func (a *RunwayAvatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
+func (a *Avatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
 	endpoint, headers, body, err := buildRunwayCreateSessionRequest(a, info)
 	if err != nil {
 		return err
@@ -173,7 +173,7 @@ func (a *RunwayAvatar) createSession(ctx context.Context, info agent.AvatarStart
 	return nil
 }
 
-func buildRunwayCreateSessionRequest(avatar *RunwayAvatar, info agent.AvatarStartInfo) (string, map[string]string, []byte, error) {
+func buildRunwayCreateSessionRequest(avatar *Avatar, info agent.AvatarStartInfo) (string, map[string]string, []byte, error) {
 	payload := map[string]any{
 		"model":  runwayModel,
 		"avatar": avatar.avatar,
@@ -197,4 +197,15 @@ func buildRunwayCreateSessionRequest(avatar *RunwayAvatar, info agent.AvatarStar
 		"Content-Type":     "application/json",
 	}
 	return "/v1/realtime_sessions", headers, body, nil
+}
+
+// Deprecated: use Avatar.
+type RunwayAvatar = Avatar
+
+// Deprecated: use AvatarOption.
+type RunwayAvatarOption = AvatarOption
+
+// Deprecated: use NewAvatar.
+func NewRunwayAvatar(apiKey string, opts ...AvatarOption) (*Avatar, error) {
+	return NewAvatar(apiKey, opts...)
 }

@@ -39,9 +39,12 @@ type realtimeOptions struct {
 	noInputEndConversationSeconds *float64
 }
 
-type RealtimeModelOption func(*realtimeOptions)
+type RealtimeOption func(*realtimeOptions)
 
-func NewRealtimeModel(apiKey string, opts ...RealtimeModelOption) (*RealtimeModel, error) {
+// Deprecated: use RealtimeOption.
+type RealtimeModelOption = RealtimeOption
+
+func NewRealtimeModel(apiKey string, opts ...RealtimeOption) (*RealtimeModel, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(phonicAPIKeyEnv)
 	}
@@ -55,35 +58,35 @@ func NewRealtimeModel(apiKey string, opts ...RealtimeModelOption) (*RealtimeMode
 	return &RealtimeModel{apiKey: apiKey, opts: options}, nil
 }
 
-func WithPhonicAgent(agent string) RealtimeModelOption {
+func WithPhonicAgent(agent string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.phonicAgent = agent }
 }
 
-func WithPhonicVoice(voice string) RealtimeModelOption {
+func WithPhonicVoice(voice string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.voice = voice }
 }
 
-func WithPhonicWelcomeMessage(message string) RealtimeModelOption {
+func WithPhonicWelcomeMessage(message string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.welcomeMessage = &message }
 }
 
-func WithPhonicGenerateWelcomeMessage(generate bool) RealtimeModelOption {
+func WithPhonicGenerateWelcomeMessage(generate bool) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.generateWelcomeMessage = &generate }
 }
 
-func WithPhonicProject(project string) RealtimeModelOption {
+func WithPhonicProject(project string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.project = &project }
 }
 
-func WithPhonicDefaultLanguage(language string) RealtimeModelOption {
+func WithPhonicDefaultLanguage(language string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.defaultLanguage = language }
 }
 
-func WithPhonicAdditionalLanguages(languages []string) RealtimeModelOption {
+func WithPhonicAdditionalLanguages(languages []string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.additionalLanguages = append([]string(nil), languages...) }
 }
 
-func WithPhonicLanguages(languages []string) RealtimeModelOption {
+func WithPhonicLanguages(languages []string) RealtimeOption {
 	return func(opts *realtimeOptions) {
 		if len(languages) == 0 || opts.defaultLanguage != "" || len(opts.additionalLanguages) > 0 {
 			return
@@ -93,39 +96,39 @@ func WithPhonicLanguages(languages []string) RealtimeModelOption {
 	}
 }
 
-func WithPhonicMultilingualMode(mode string) RealtimeModelOption {
+func WithPhonicMultilingualMode(mode string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.multilingualMode = mode }
 }
 
-func WithPhonicAudioSpeed(speed float64) RealtimeModelOption {
+func WithPhonicAudioSpeed(speed float64) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.audioSpeed = &speed }
 }
 
-func WithPhonicTools(tools []string) RealtimeModelOption {
+func WithPhonicTools(tools []string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.phonicTools = append([]string(nil), tools...) }
 }
 
-func WithPhonicBoostedKeywords(keywords []string) RealtimeModelOption {
+func WithPhonicBoostedKeywords(keywords []string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.boostedKeywords = append([]string(nil), keywords...) }
 }
 
-func WithPhonicMinWordsToInterrupt(minWords int) RealtimeModelOption {
+func WithPhonicMinWordsToInterrupt(minWords int) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.minWordsToInterrupt = &minWords }
 }
 
-func WithPhonicGenerateNoInputPokeText(generate bool) RealtimeModelOption {
+func WithPhonicGenerateNoInputPokeText(generate bool) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.generateNoInputPokeText = &generate }
 }
 
-func WithPhonicNoInputPokeSeconds(seconds float64) RealtimeModelOption {
+func WithPhonicNoInputPokeSeconds(seconds float64) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.noInputPokeSeconds = &seconds }
 }
 
-func WithPhonicNoInputPokeText(text string) RealtimeModelOption {
+func WithPhonicNoInputPokeText(text string) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.noInputPokeText = text }
 }
 
-func WithPhonicNoInputEndConversationSeconds(seconds float64) RealtimeModelOption {
+func WithPhonicNoInputEndConversationSeconds(seconds float64) RealtimeOption {
 	return func(opts *realtimeOptions) { opts.noInputEndConversationSeconds = &seconds }
 }
 

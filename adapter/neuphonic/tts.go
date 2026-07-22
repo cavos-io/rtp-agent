@@ -32,7 +32,7 @@ const (
 	defaultNeuphonicSampleRate = 22050
 )
 
-type NeuphonicTTS struct {
+type TTS struct {
 	mu         sync.Mutex
 	streams    map[*neuphonicTTSSynthesizeStream]struct{}
 	apiKey     string
@@ -45,50 +45,50 @@ type NeuphonicTTS struct {
 	closed     bool
 }
 
-type NeuphonicTTSOption func(*NeuphonicTTS)
+type TTSOption func(*TTS)
 
-func WithNeuphonicTTSBaseURL(baseURL string) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithNeuphonicTTSVoice(voice string) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithNeuphonicTTSLangCode(langCode string) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSLangCode(langCode string) TTSOption {
+	return func(t *TTS) {
 		if langCode != "" {
 			t.langCode = langCode
 		}
 	}
 }
 
-func WithNeuphonicTTSEncoding(encoding string) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 		}
 	}
 }
 
-func WithNeuphonicTTSSampleRate(sampleRate int) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithNeuphonicTTSSpeed(speed float64) NeuphonicTTSOption {
-	return func(t *NeuphonicTTS) {
+func WithNeuphonicTTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
 		t.speed = &speed
 	}
 }
@@ -101,12 +101,12 @@ func cloneFloatPtr(value *float64) *float64 {
 	return &clone
 }
 
-func NewNeuphonicTTS(apiKey string, voice string, opts ...NeuphonicTTSOption) *NeuphonicTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("NEUPHONIC_API_KEY")
 	}
 	defaultSpeed := 1.0
-	provider := &NeuphonicTTS{
+	provider := &TTS{
 		streams:    make(map[*neuphonicTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultNeuphonicBaseURL,
@@ -125,19 +125,19 @@ func NewNeuphonicTTS(apiKey string, voice string, opts ...NeuphonicTTSOption) *N
 	return provider
 }
 
-func (t *NeuphonicTTS) Label() string { return "neuphonic.TTS" }
-func (t *NeuphonicTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "neuphonic.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *NeuphonicTTS) SampleRate() int  { return t.sampleRate }
-func (t *NeuphonicTTS) NumChannels() int { return 1 }
-func (t *NeuphonicTTS) Model() string    { return "Octave" }
-func (t *NeuphonicTTS) Provider() string { return "Neuphonic" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return "Octave" }
+func (t *TTS) Provider() string { return "Neuphonic" }
 
-func (t *NeuphonicTTS) UpdateOptions(opts ...NeuphonicTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	candidate := &NeuphonicTTS{
+	candidate := &TTS{
 		apiKey:     t.apiKey,
 		baseURL:    t.baseURL,
 		voice:      t.voice,
@@ -154,7 +154,7 @@ func (t *NeuphonicTTS) UpdateOptions(opts ...NeuphonicTTSOption) {
 	t.speed = cloneFloatPtr(candidate.speed)
 }
 
-func (t *NeuphonicTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*neuphonicTTSSynthesizeStream, 0, len(t.streams))
@@ -173,7 +173,7 @@ func (t *NeuphonicTTS) Close() error {
 	return closeErr
 }
 
-func (t *NeuphonicTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -182,7 +182,7 @@ func (t *NeuphonicTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *NeuphonicTTS) registerStream(stream *neuphonicTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *neuphonicTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -199,7 +199,7 @@ func (t *NeuphonicTTS) registerStream(stream *neuphonicTTSSynthesizeStream) bool
 	return true
 }
 
-func (t *NeuphonicTTS) unregisterStream(stream *neuphonicTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *neuphonicTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -208,7 +208,7 @@ func (t *NeuphonicTTS) unregisterStream(stream *neuphonicTTSSynthesizeStream) {
 	t.mu.Unlock()
 }
 
-func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -228,7 +228,7 @@ func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}, nil
 }
 
-func buildNeuphonicTTSRequest(ctx context.Context, t *NeuphonicTTS, text string) (*http.Request, error) {
+func buildNeuphonicTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	return buildNeuphonicTTSRequestFromOptions(ctx, neuphonicTTSRequestOptions{
 		text:       text,
 		apiKey:     t.apiKey,
@@ -275,7 +275,7 @@ func buildNeuphonicTTSRequestFromOptions(ctx context.Context, opts neuphonicTTSR
 	return req, nil
 }
 
-func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -321,7 +321,7 @@ func validateNeuphonicAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildNeuphonicTTSWebsocketURL(t *NeuphonicTTS) *url.URL {
+func buildNeuphonicTTSWebsocketURL(t *TTS) *url.URL {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -341,7 +341,7 @@ func buildNeuphonicTTSWebsocketURL(t *NeuphonicTTS) *url.URL {
 	return wsURL
 }
 
-func buildNeuphonicTTSWebsocketHeaders(t *NeuphonicTTS) http.Header {
+func buildNeuphonicTTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("x-api-key", t.apiKey)
 	return headers
@@ -518,7 +518,7 @@ func cloneFloat64Ptr(value *float64) *float64 {
 }
 
 type neuphonicTTSSynthesizeStream struct {
-	owner       *NeuphonicTTS
+	owner       *TTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -810,4 +810,15 @@ func neuphonicTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio 
 
 func neuphonicTTSSegmentID() string {
 	return "segment-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// Deprecated: use TTS.
+type NeuphonicTTS = TTS
+
+// Deprecated: use TTSOption.
+type NeuphonicTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewNeuphonicTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

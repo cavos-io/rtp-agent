@@ -14,36 +14,44 @@ const (
 	bithumanAPISecretEnv       = "BITHUMAN_API_SECRET"
 )
 
-type BithumanAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewBithumanAvatar(apiKey string) *BithumanAvatar {
+func NewAvatar(apiKey string) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(bithumanAPISecretEnv)
 	}
-	return &BithumanAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		avatarIdentity: defaultAvatarAgentIdentity,
 		state:          defaultInitialAvatarState,
 	}
 }
 
-func (a *BithumanAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *BithumanAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *BithumanAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *BithumanAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type BithumanAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewBithumanAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

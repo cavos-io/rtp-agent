@@ -30,7 +30,7 @@ const (
 	cartesiaSTTAPIVersion                  = "2025-04-16"
 )
 
-type CartesiaSTT struct {
+type STT struct {
 	apiKey               string
 	wsBaseURL            string
 	model                string
@@ -44,18 +44,18 @@ type CartesiaSTT struct {
 	closed               bool
 }
 
-type CartesiaSTTOption func(*CartesiaSTT)
+type STTOption func(*STT)
 
-func WithCartesiaSTTBaseURL(baseURL string) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.wsBaseURL = cartesiaSTTBaseURLToWSBaseURL(baseURL)
 		}
 	}
 }
 
-func WithCartesiaSTTModel(model string) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 			s.finalTranscriptMode = cartesiaSTTFinalTranscriptMode(model)
@@ -63,41 +63,41 @@ func WithCartesiaSTTModel(model string) CartesiaSTTOption {
 	}
 }
 
-func WithCartesiaSTTLanguage(language string) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.language = language
 	}
 }
 
-func WithCartesiaSTTSampleRate(sampleRate int) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithCartesiaSTTEncoding(encoding string) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTEncoding(encoding string) STTOption {
+	return func(s *STT) {
 		if encoding != "" {
 			s.encoding = encoding
 		}
 	}
 }
 
-func WithCartesiaSTTAudioChunkDurationMS(durationMS int) CartesiaSTTOption {
-	return func(s *CartesiaSTT) {
+func WithCartesiaSTTAudioChunkDurationMS(durationMS int) STTOption {
+	return func(s *STT) {
 		if durationMS > 0 {
 			s.audioChunkDurationMS = durationMS
 		}
 	}
 }
 
-func NewCartesiaSTT(apiKey string, opts ...CartesiaSTTOption) *CartesiaSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("CARTESIA_API_KEY")
 	}
-	provider := &CartesiaSTT{
+	provider := &STT{
 		apiKey:               apiKey,
 		wsBaseURL:            cartesiaSTTBaseURLToWSBaseURL(defaultCartesiaSTTBaseURL),
 		model:                defaultCartesiaSTTModel,
@@ -117,18 +117,18 @@ func NewCartesiaSTT(apiKey string, opts ...CartesiaSTTOption) *CartesiaSTT {
 	return provider
 }
 
-func (s *CartesiaSTT) Label() string { return "cartesia.STT" }
-func (s *CartesiaSTT) Model() string { return s.model }
-func (s *CartesiaSTT) Provider() string {
+func (s *STT) Label() string { return "cartesia.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Cartesia"
 }
-func (s *CartesiaSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultCartesiaSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
-func (s *CartesiaSTT) UpdateOptions(language string) {
+func (s *STT) UpdateOptions(language string) {
 	if s == nil || language == "" {
 		return
 	}
@@ -144,7 +144,7 @@ func (s *CartesiaSTT) UpdateOptions(language string) {
 	}
 }
 
-func (s *CartesiaSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (s *CartesiaSTT) Close() error {
 	return closeErr
 }
 
-func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	legacy := s.finalTranscriptMode == "legacy"
 	aligned := ""
 	if legacy {
@@ -185,7 +185,7 @@ func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -239,7 +239,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	return stream, nil
 }
 
-func (s *CartesiaSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -248,7 +248,7 @@ func (s *CartesiaSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *CartesiaSTT) registerStream(stream *cartesiaSTTStream) bool {
+func (s *STT) registerStream(stream *cartesiaSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -264,7 +264,7 @@ func (s *CartesiaSTT) registerStream(stream *cartesiaSTTStream) bool {
 	return true
 }
 
-func (s *CartesiaSTT) unregisterStream(stream *cartesiaSTTStream) {
+func (s *STT) unregisterStream(stream *cartesiaSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -273,7 +273,7 @@ func (s *CartesiaSTT) unregisterStream(stream *cartesiaSTTStream) {
 	delete(s.streams, stream)
 }
 
-func (s *CartesiaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("cartesia stt does not support batch recognition")
 }
 
@@ -285,7 +285,7 @@ func validateCartesiaSTTAPIKey(apiKey string) error {
 }
 
 type cartesiaSTTStream struct {
-	provider      *CartesiaSTT
+	provider      *STT
 	conn          *websocket.Conn
 	events        chan *stt.SpeechEvent
 	errCh         chan error
@@ -625,11 +625,11 @@ type cartesiaSTTStreamState struct {
 	startTime         float64
 }
 
-func buildCartesiaSTTStreamURL(s *CartesiaSTT) string {
+func buildCartesiaSTTStreamURL(s *STT) string {
 	return buildCartesiaSTTStreamURLForLanguage(s, s.language)
 }
 
-func buildCartesiaSTTStreamURLForLanguage(s *CartesiaSTT, language string) string {
+func buildCartesiaSTTStreamURLForLanguage(s *STT, language string) string {
 	path := "/stt/turns/websocket"
 	if s.finalTranscriptMode == "legacy" {
 		path = "/stt/websocket"
@@ -646,7 +646,7 @@ func buildCartesiaSTTStreamURLForLanguage(s *CartesiaSTT, language string) strin
 	return u.String()
 }
 
-func buildCartesiaSTTHeaders(s *CartesiaSTT) http.Header {
+func buildCartesiaSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Cartesia-Version", cartesiaSTTAPIVersion)
 	headers.Set("X-API-Key", s.apiKey)
@@ -914,7 +914,7 @@ func cartesiaLanguageBase(language string) string {
 	return language
 }
 
-func (s *CartesiaSTT) languageOrDefault() string {
+func (s *STT) languageOrDefault() string {
 	return cartesiaLanguageOrDefault(s.language)
 }
 
@@ -957,4 +957,15 @@ func cartesiaAnyFloat(value any) float64 {
 	default:
 		return 0
 	}
+}
+
+// Deprecated: use STT.
+type CartesiaSTT = STT
+
+// Deprecated: use STTOption.
+type CartesiaSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewCartesiaSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

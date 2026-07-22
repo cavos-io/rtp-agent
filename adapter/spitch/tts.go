@@ -25,7 +25,7 @@ const (
 	defaultSpitchSampleRate   = 24000
 )
 
-type SpitchTTS struct {
+type TTS struct {
 	apiKey       string
 	baseURL      string
 	voice        string
@@ -34,50 +34,50 @@ type SpitchTTS struct {
 	sampleRate   int
 }
 
-type SpitchTTSOption func(*SpitchTTS)
+type TTSOption func(*TTS)
 
-func WithSpitchTTSBaseURL(baseURL string) SpitchTTSOption {
-	return func(t *SpitchTTS) {
+func WithSpitchTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithSpitchTTSVoice(voice string) SpitchTTSOption {
-	return func(t *SpitchTTS) {
+func WithSpitchTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithSpitchTTSLanguage(language string) SpitchTTSOption {
-	return func(t *SpitchTTS) {
+func WithSpitchTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithSpitchTTSOutputFormat(outputFormat string) SpitchTTSOption {
-	return func(t *SpitchTTS) {
+func WithSpitchTTSOutputFormat(outputFormat string) TTSOption {
+	return func(t *TTS) {
 		if outputFormat != "" {
 			t.outputFormat = outputFormat
 		}
 	}
 }
 
-func WithSpitchTTSSampleRate(sampleRate int) SpitchTTSOption {
-	return func(t *SpitchTTS) {
+func WithSpitchTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func NewSpitchTTS(apiKey string, voice string, opts ...SpitchTTSOption) *SpitchTTS {
-	provider := &SpitchTTS{
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	provider := &TTS{
 		apiKey:       resolveSpitchAPIKey(apiKey),
 		baseURL:      defaultSpitchBaseURL,
 		voice:        voice,
@@ -94,16 +94,16 @@ func NewSpitchTTS(apiKey string, voice string, opts ...SpitchTTSOption) *SpitchT
 	return provider
 }
 
-func (t *SpitchTTS) Label() string { return "spitch.TTS" }
-func (t *SpitchTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "spitch.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpitchTTS) SampleRate() int  { return t.sampleRate }
-func (t *SpitchTTS) NumChannels() int { return 1 }
-func (t *SpitchTTS) Model() string    { return "unknown" }
-func (t *SpitchTTS) Provider() string { return "Spitch" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return "unknown" }
+func (t *TTS) Provider() string { return "Spitch" }
 
-func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	return &spitchTTSChunkedStream{
 		ctx:          ctx,
 		text:         text,
@@ -116,7 +116,7 @@ func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}, nil
 }
 
-func buildSpitchTTSRequest(ctx context.Context, t *SpitchTTS, text string) (*http.Request, error) {
+func buildSpitchTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	return buildSpitchTTSRequestFromOptions(ctx, spitchTTSRequestOptions{
 		text:         text,
 		apiKey:       t.apiKey,
@@ -157,7 +157,7 @@ func buildSpitchTTSRequestFromOptions(ctx context.Context, opts spitchTTSRequest
 	return req, nil
 }
 
-func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("spitch streaming tts not natively supported by basic rest api")
 }
 
@@ -373,4 +373,15 @@ func decodeSpitchWAVPCM16(data []byte) (*model.AudioFrame, error) {
 		NumChannels:       uint32(numChannels),
 		SamplesPerChannel: uint32(len(pcmData) / (int(numChannels) * 2)),
 	}, nil
+}
+
+// Deprecated: use TTS.
+type SpitchTTS = TTS
+
+// Deprecated: use TTSOption.
+type SpitchTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSpitchTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

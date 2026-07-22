@@ -41,7 +41,7 @@ const (
 	inworldTTSMaxResponseLineBytes           = 16 * 1024 * 1024
 )
 
-type InworldTTS struct {
+type TTS struct {
 	mu                         sync.Mutex
 	apiKey                     string
 	baseURL                    string
@@ -64,94 +64,94 @@ type InworldTTS struct {
 	streams                    map[*inworldTTSSynthesizeStream]struct{}
 }
 
-type InworldTTSOption func(*InworldTTS)
+type TTSOption func(*TTS)
 
-func WithInworldTTSBaseURL(baseURL string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = ensureTrailingSlash(baseURL)
 		}
 	}
 }
 
-func WithInworldTTSWebsocketURL(wsURL string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSWebsocketURL(wsURL string) TTSOption {
+	return func(t *TTS) {
 		if wsURL != "" {
 			t.wsURL = ensureTrailingSlash(wsURL)
 		}
 	}
 }
 
-func WithInworldTTSVoice(voice string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithInworldTTSModel(model string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithInworldTTSEncoding(encoding string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 		}
 	}
 }
 
-func WithInworldTTSBitRate(bitRate int) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSBitRate(bitRate int) TTSOption {
+	return func(t *TTS) {
 		if bitRate > 0 {
 			t.bitRate = bitRate
 		}
 	}
 }
 
-func WithInworldTTSSampleRate(sampleRate int) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithInworldTTSSpeakingRate(speakingRate float64) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSSpeakingRate(speakingRate float64) TTSOption {
+	return func(t *TTS) {
 		if speakingRate > 0 {
 			t.speakingRate = speakingRate
 		}
 	}
 }
 
-func WithInworldTTSTemperature(temperature float64) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSTemperature(temperature float64) TTSOption {
+	return func(t *TTS) {
 		if temperature > 0 {
 			t.temperature = temperature
 		}
 	}
 }
 
-func WithInworldTTSLanguage(language string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
-func WithInworldTTSTimestampType(timestampType string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSTimestampType(timestampType string) TTSOption {
+	return func(t *TTS) {
 		t.timestampType = timestampType
 	}
 }
 
-func WithInworldTTSTextNormalization(enabled bool) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSTextNormalization(enabled bool) TTSOption {
+	return func(t *TTS) {
 		if enabled {
 			t.textNormalization = "ON"
 		} else {
@@ -160,38 +160,38 @@ func WithInworldTTSTextNormalization(enabled bool) InworldTTSOption {
 	}
 }
 
-func WithInworldTTSDeliveryMode(deliveryMode string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSDeliveryMode(deliveryMode string) TTSOption {
+	return func(t *TTS) {
 		t.deliveryMode = deliveryMode
 	}
 }
 
-func WithInworldTTSTimestampTransportStrategy(strategy string) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSTimestampTransportStrategy(strategy string) TTSOption {
+	return func(t *TTS) {
 		if strategy != "" {
 			t.timestampTransportStrategy = strategy
 		}
 	}
 }
 
-func WithInworldTTSBufferCharThreshold(threshold int) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSBufferCharThreshold(threshold int) TTSOption {
+	return func(t *TTS) {
 		if threshold > 0 {
 			t.bufferCharThreshold = threshold
 		}
 	}
 }
 
-func WithInworldTTSMaxBufferDelayMS(delayMS int) InworldTTSOption {
-	return func(t *InworldTTS) {
+func WithInworldTTSMaxBufferDelayMS(delayMS int) TTSOption {
+	return func(t *TTS) {
 		if delayMS > 0 {
 			t.maxBufferDelayMS = delayMS
 		}
 	}
 }
 
-func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *InworldTTS {
-	provider := &InworldTTS{
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	provider := &TTS{
 		apiKey:                     resolveInworldAPIKey(apiKey),
 		baseURL:                    defaultInworldBaseURL,
 		wsURL:                      defaultInworldWebsocketURL,
@@ -218,23 +218,23 @@ func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *Inwor
 	return provider
 }
 
-func (t *InworldTTS) Label() string { return "inworld.TTS" }
-func (t *InworldTTS) Model() string { return t.model }
-func (t *InworldTTS) Provider() string {
+func (t *TTS) Label() string { return "inworld.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "Inworld"
 }
 
-func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{
 		Streaming:         true,
 		AlignedTranscript: t.timestampType != "" && t.timestampType != "TIMESTAMP_TYPE_UNSPECIFIED",
 	}
 }
 
-func (t *InworldTTS) SampleRate() int  { return t.sampleRate }
-func (t *InworldTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *InworldTTS) UpdateOptions(opts ...InworldTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	if t == nil {
 		return
 	}
@@ -245,7 +245,7 @@ func (t *InworldTTS) UpdateOptions(opts ...InworldTTSOption) {
 	}
 }
 
-func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -260,7 +260,7 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	}, nil
 }
 
-func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*http.Request, error) {
+func buildInworldTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	payload := inworldTTSRequestPayload(t, text)
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -279,13 +279,13 @@ func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*h
 	return req, nil
 }
 
-func inworldTTSRequestPayload(t *InworldTTS, text string) map[string]interface{} {
+func inworldTTSRequestPayload(t *TTS, text string) map[string]interface{} {
 	payload := inworldTTSBasePayload(t)
 	payload["text"] = text
 	return payload
 }
 
-func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -329,7 +329,7 @@ func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *InworldTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -352,7 +352,7 @@ func (t *InworldTTS) Close() error {
 	return firstErr
 }
 
-func (t *InworldTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -361,7 +361,7 @@ func (t *InworldTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *InworldTTS) registerStream(stream *inworldTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *inworldTTSSynthesizeStream) bool {
 	if stream == nil {
 		return false
 	}
@@ -378,7 +378,7 @@ func (t *InworldTTS) registerStream(stream *inworldTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *InworldTTS) unregisterStream(stream *inworldTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *inworldTTSSynthesizeStream) {
 	if stream == nil {
 		return
 	}
@@ -387,11 +387,11 @@ func (t *InworldTTS) unregisterStream(stream *inworldTTSSynthesizeStream) {
 	delete(t.streams, stream)
 }
 
-func buildInworldTTSWebsocketURL(t *InworldTTS) string {
+func buildInworldTTSWebsocketURL(t *TTS) string {
 	return strings.TrimRight(t.wsURL, "/") + "/tts/v1/voice:streamBidirectional"
 }
 
-func buildInworldTTSHeaders(t *InworldTTS) http.Header {
+func buildInworldTTSHeaders(t *TTS) http.Header {
 	headers := http.Header{}
 	headers.Set("Authorization", "Basic "+t.apiKey)
 	headers.Set("X-User-Agent", inworldUserAgent)
@@ -399,11 +399,11 @@ func buildInworldTTSHeaders(t *InworldTTS) http.Header {
 	return headers
 }
 
-func buildInworldTTSWebsocketHeaders(t *InworldTTS) http.Header {
+func buildInworldTTSWebsocketHeaders(t *TTS) http.Header {
 	return buildInworldTTSHeaders(t)
 }
 
-func buildInworldTTSCreateMessage(t *InworldTTS, contextID string) ([]byte, error) {
+func buildInworldTTSCreateMessage(t *TTS, contextID string) ([]byte, error) {
 	create := inworldTTSBasePayload(t)
 	delete(create, "text")
 	if audioConfig, ok := create["audioConfig"].(map[string]interface{}); ok {
@@ -440,7 +440,7 @@ func buildInworldTTSCloseMessage(contextID string) ([]byte, error) {
 	})
 }
 
-func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
+func inworldTTSBasePayload(t *TTS) map[string]interface{} {
 	payload := map[string]interface{}{
 		"voiceId": t.voice,
 		"modelId": t.model,
@@ -552,7 +552,7 @@ type inworldTTSSynthesizeStream struct {
 	conn              *websocket.Conn
 	ctx               context.Context
 	cancel            context.CancelFunc
-	provider          *InworldTTS
+	provider          *TTS
 	contextID         string
 	events            chan *tts.SynthesizedAudio
 	errCh             chan error
@@ -1004,4 +1004,15 @@ func inworldTTSGenerationEndTime(timed []tts.TimedString) float64 {
 
 func ensureTrailingSlash(value string) string {
 	return strings.TrimRight(value, "/") + "/"
+}
+
+// Deprecated: use TTS.
+type InworldTTS = TTS
+
+// Deprecated: use TTSOption.
+type InworldTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewInworldTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

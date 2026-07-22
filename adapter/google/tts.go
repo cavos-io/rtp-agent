@@ -31,7 +31,7 @@ var newGoogleTTSClient = func(ctx context.Context, opts ...option.ClientOption) 
 	return texttospeech.NewClient(ctx, opts...)
 }
 
-type GoogleTTS struct {
+type TTS struct {
 	mu      sync.Mutex
 	streams map[*googleTTSSynthesizeStream]struct{}
 	client  googleTTSClient
@@ -51,7 +51,7 @@ type googleTTSClient interface {
 	StreamingSynthesize(ctx context.Context, opts ...gax.CallOption) (texttospeechpb.TextToSpeech_StreamingSynthesizeClient, error)
 }
 
-type GoogleTTSOption func(*googleTTSConfig)
+type TTSOption func(*googleTTSConfig)
 
 type googleTTSConfig struct {
 	language     string
@@ -87,70 +87,70 @@ type googleTTSConfig struct {
 	useMarkup    bool
 }
 
-func WithGoogleTTSLanguage(language string) GoogleTTSOption {
+func WithGoogleTTSLanguage(language string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.language = language
 		cfg.languageSet = true
 	}
 }
 
-func WithGoogleTTSLocation(location string) GoogleTTSOption {
+func WithGoogleTTSLocation(location string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.location = location
 		cfg.locationSet = true
 	}
 }
 
-func WithGoogleTTSGender(gender string) GoogleTTSOption {
+func WithGoogleTTSGender(gender string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.gender = googleTTSSSMLGender(gender)
 		cfg.genderSet = true
 	}
 }
 
-func WithGoogleTTSVoice(voice string) GoogleTTSOption {
+func WithGoogleTTSVoice(voice string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.voice = voice
 		cfg.voiceSet = true
 	}
 }
 
-func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
+func WithGoogleTTSVoiceCloneKey(key string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.cloneKey = key
 		cfg.cloneKeySet = true
 	}
 }
 
-func WithGoogleTTSModel(model string) GoogleTTSOption {
+func WithGoogleTTSModel(model string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.model = model
 		cfg.modelSet = true
 	}
 }
 
-func WithGoogleTTSPrompt(prompt string) GoogleTTSOption {
+func WithGoogleTTSPrompt(prompt string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.prompt = &prompt
 		cfg.promptSet = true
 	}
 }
 
-func WithGoogleTTSSpeakingRate(rate float64) GoogleTTSOption {
+func WithGoogleTTSSpeakingRate(rate float64) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.speakingRate = rate
 		cfg.rateSet = true
 	}
 }
 
-func WithGoogleTTSPitch(pitch float64) GoogleTTSOption {
+func WithGoogleTTSPitch(pitch float64) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.pitch = pitch
 		cfg.pitchSet = true
 	}
 }
 
-func WithGoogleTTSEffectsProfileID(profileID string) GoogleTTSOption {
+func WithGoogleTTSEffectsProfileID(profileID string) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		if profileID != "" {
 			cfg.effects = []string{profileID}
@@ -159,47 +159,47 @@ func WithGoogleTTSEffectsProfileID(profileID string) GoogleTTSOption {
 	}
 }
 
-func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
+func WithGoogleTTSVolumeGainDB(volumeGainDB float64) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.volumeGainDB = volumeGainDB
 		cfg.volumeSet = true
 	}
 }
 
-func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
+func WithGoogleTTSSampleRate(sampleRate int32) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.sampleRate = sampleRate
 		cfg.sampleSet = true
 	}
 }
 
-func WithGoogleTTSAudioEncoding(encoding texttospeechpb.AudioEncoding) GoogleTTSOption {
+func WithGoogleTTSAudioEncoding(encoding texttospeechpb.AudioEncoding) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.encoding = encoding
 		cfg.encodingSet = true
 	}
 }
 
-func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciations) GoogleTTSOption {
+func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciations) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.custom = custom
 		cfg.customSet = true
 	}
 }
 
-func WithGoogleTTSStreaming(enabled bool) GoogleTTSOption {
+func WithGoogleTTSStreaming(enabled bool) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.streaming = enabled
 	}
 }
 
-func WithGoogleTTSSSML(enabled bool) GoogleTTSOption {
+func WithGoogleTTSSSML(enabled bool) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.enableSSML = enabled
 	}
 }
 
-func WithGoogleTTSMarkup(enabled bool) GoogleTTSOption {
+func WithGoogleTTSMarkup(enabled bool) TTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.useMarkup = enabled
 	}
@@ -207,7 +207,7 @@ func WithGoogleTTSMarkup(enabled bool) GoogleTTSOption {
 
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
+func NewTTS(credentialsFile string, ttsOpts ...TTSOption) (*TTS, error) {
 	cfg := googleTTSConfigFromOptions(ttsOpts...)
 	if err := validateGoogleTTSConfig(cfg); err != nil {
 		return nil, err
@@ -231,11 +231,11 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 	return newGoogleTTSWithConfig(client, cfg), nil
 }
 
-func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
+func newGoogleTTSWithClient(client googleTTSClient, opts ...TTSOption) *TTS {
 	return newGoogleTTSWithConfig(client, googleTTSConfigFromOptions(opts...))
 }
 
-func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
+func googleTTSConfigFromOptions(opts ...TTSOption) googleTTSConfig {
 	cfg := googleTTSConfig{
 		language:     "en-US",
 		location:     "global",
@@ -278,8 +278,8 @@ func googleTTSEndpoint(cfg googleTTSConfig) string {
 	return cfg.location + "-texttospeech.googleapis.com"
 }
 
-func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *GoogleTTS {
-	return &GoogleTTS{
+func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *TTS {
+	return &TTS{
 		streams: make(map[*googleTTSSynthesizeStream]struct{}),
 		client:  client,
 		voice:   googleTTSVoiceParams(cfg),
@@ -300,24 +300,24 @@ func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *Google
 	}
 }
 
-func (t *GoogleTTS) Label() string { return "google.TTS" }
-func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "google.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	if t != nil && (t.ssml || !t.stream) {
 		return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 	}
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *GoogleTTS) SampleRate() int  { return int(t.audio.GetSampleRateHertz()) }
-func (t *GoogleTTS) NumChannels() int { return 1 }
-func (t *GoogleTTS) Model() string {
+func (t *TTS) SampleRate() int  { return int(t.audio.GetSampleRateHertz()) }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string {
 	if t.model != "" {
 		return t.model
 	}
 	return "Chirp3"
 }
-func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
+func (t *TTS) Provider() string { return "Google Cloud Platform" }
 
-func (t *GoogleTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*googleTTSSynthesizeStream, 0, len(t.streams))
@@ -336,7 +336,7 @@ func (t *GoogleTTS) Close() error {
 	return closeErr
 }
 
-func (t *GoogleTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -345,7 +345,7 @@ func (t *GoogleTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *googleTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -363,13 +363,13 @@ func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *GoogleTTS) unregisterStream(stream *googleTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *googleTTSSynthesizeStream) {
 	t.mu.Lock()
 	delete(t.streams, stream)
 	t.mu.Unlock()
 }
 
-func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	cfg := googleTTSConfig{
 		language:     t.voice.GetLanguageCode(),
 		voice:        t.voice.GetName(),
@@ -406,7 +406,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	}
 }
 
-func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -479,7 +479,7 @@ func googleTTSStatusRetryable(code codes.Code) bool {
 	}
 }
 
-func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -713,7 +713,7 @@ type googleTTSSynthesizeStream struct {
 	cond        *sync.Cond
 	closeOnce   sync.Once
 	cancel      context.CancelFunc
-	owner       *GoogleTTS
+	owner       *TTS
 	ctx         context.Context
 	client      googleTTSClient
 	streams     []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
@@ -1308,4 +1308,15 @@ func googleTTSSSMLGender(gender string) texttospeechpb.SsmlVoiceGender {
 	default:
 		return texttospeechpb.SsmlVoiceGender_NEUTRAL
 	}
+}
+
+// Deprecated: use TTS.
+type GoogleTTS = TTS
+
+// Deprecated: use TTSOption.
+type GoogleTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewGoogleTTS(credentialsFile string, ttsOpts ...TTSOption) (*TTS, error) {
+	return NewTTS(credentialsFile, ttsOpts...)
 }

@@ -30,7 +30,7 @@ type AudioConfig struct {
 	SampleRate int
 }
 
-type DIDAvatar struct {
+type Avatar struct {
 	agentID        string
 	apiKey         string
 	apiURL         string
@@ -42,7 +42,7 @@ type DIDAvatar struct {
 	started        bool
 }
 
-func NewDIDAvatar(agentID, apiKey string) *DIDAvatar {
+func NewAvatar(agentID, apiKey string) *Avatar {
 	if agentID == "" {
 		agentID = os.Getenv(didAgentIDEnv)
 	}
@@ -53,7 +53,7 @@ func NewDIDAvatar(agentID, apiKey string) *DIDAvatar {
 	if apiURL == "" {
 		apiURL = defaultDIDAPIURL
 	}
-	return &DIDAvatar{
+	return &Avatar{
 		agentID:        agentID,
 		apiKey:         apiKey,
 		apiURL:         apiURL,
@@ -64,7 +64,7 @@ func NewDIDAvatar(agentID, apiKey string) *DIDAvatar {
 	}
 }
 
-func (a *DIDAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("DID_API_KEY must be set by arguments or environment variables")
 	}
@@ -80,20 +80,20 @@ func (a *DIDAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *DIDAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *DIDAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *DIDAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
 }
 
-func (a *DIDAvatar) joinSession(ctx context.Context, info agent.AvatarStartInfo) error {
+func (a *Avatar) joinSession(ctx context.Context, info agent.AvatarStartInfo) error {
 	endpoint, headers, body, err := buildDIDJoinSessionRequest(a, info)
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (a *DIDAvatar) joinSession(ctx context.Context, info agent.AvatarStartInfo)
 	return nil
 }
 
-func buildDIDJoinSessionRequest(avatar *DIDAvatar, info agent.AvatarStartInfo) (string, map[string]string, []byte, error) {
+func buildDIDJoinSessionRequest(avatar *Avatar, info agent.AvatarStartInfo) (string, map[string]string, []byte, error) {
 	payload := map[string]any{
 		"transport": map[string]any{
 			"provider":   "livekit",
@@ -148,4 +148,12 @@ func buildDIDJoinSessionRequest(avatar *DIDAvatar, info agent.AvatarStartInfo) (
 		"Authorization": "Basic " + avatar.apiKey,
 	}
 	return "/v2/agents/" + avatar.agentID + "/sessions/join", headers, body, nil
+}
+
+// Deprecated: use Avatar.
+type DIDAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewDIDAvatar(agentID, apiKey string) *Avatar {
+	return NewAvatar(agentID, apiKey)
 }

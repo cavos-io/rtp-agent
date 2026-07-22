@@ -1,0 +1,415 @@
+version: 1
+
+workdir: .
+
+# ============================================
+# Components.
+# ============================================
+components:
+  cmd:
+    in:
+      - cmd
+
+  app:
+    in:
+      - app/**
+
+  interface_cli:
+    in:
+      - interface/cli/**
+
+  interface_worker:
+    in:
+      - interface/worker/**
+
+  adapter:
+    in:
+      - adapter/*
+
+  core_model:
+    in:
+      - core/**/model
+
+  core:
+    in:
+      - core/*
+      - core/**
+
+  library:
+    in:
+      - library/**
+
+commonComponents:
+  - library
+
+# ============================================
+# Dependency Rules (hexagonal boundaries)
+# ============================================
+# Core may not depend on adapters or interfaces.
+# Adapters and interfaces depend inward on core.
+# App wires concrete dependencies; cmd invokes app and CLI.
+dependencyRules:
+  cmd:
+    mayDependOn:
+      - app
+      - interface_cli
+
+  app:
+    mayDependOn:
+      - adapter
+      - core
+      - core_model
+      - interface_cli
+      - interface_worker
+
+  interface_cli:
+    mayDependOn:
+      - interface_cli
+      - interface_worker
+      - core
+      - core_model
+
+  interface_worker:
+    mayDependOn:
+      - interface_worker
+      - core
+      - core_model
+
+  adapter:
+    mayDependOn:
+      - adapter
+      - core
+      - core_model
+
+  core:
+    mayDependOn:
+      - core
+      - core_model
+
+  core_model:
+    mayDependOn:
+      - core_model
+
+  library:
+    mayDependOn:
+      - library
+
+# ============================================
+# Adapter directory contracts.
+# ============================================
+directoryRules:
+  - id: adapter-plugin-file
+    directories:
+      include:
+        - adapter/*
+    require:
+      files:
+        - plugin.go
+    message: "Every adapter package must define plugin metadata in plugin.go."
+
+  - id: adapter-capability-file
+    directories:
+      include:
+        - adapter/*
+      exclude:
+        - adapter/blingfire
+        - adapter/browser
+        - adapter/hamming
+        - adapter/krisp
+        - adapter/nltk
+        - adapter/pipecat
+    require:
+      anyFiles:
+        - vad.go
+        - stt.go
+        - llm.go
+        - tts.go
+        - avatar.go
+        - computer_tool.go
+        - realtime.go
+    message: "Provider adapters must expose at least one standard capability file."
+
+# ============================================
+# Adapter file contracts.
+# ============================================
+fileContractRules:
+  - id: adapter-plugin-metadata
+    files:
+      include:
+        - adapter/*/plugin.go
+    require:
+      declarations:
+        - kind: const
+          name: PluginTitle
+          value:
+            matches:
+              - "^rtp-agent\\.plugins\\.[a-z0-9_]+$"
+        - kind: const
+          name: PluginVersion
+          value:
+            matches:
+              - "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        - kind: const
+          name: PluginPackage
+          value:
+            matches:
+              - "^rtp-agent\\.plugins\\.[a-z0-9_]+$"
+    message: "plugin.go must define the standard plugin title, semantic version, and package constants."
+
+  - id: adapter-vad-contract
+    files:
+      include:
+        - adapter/*/vad.go
+    require:
+      siblingFiles:
+        - vad_test.go
+      declarations:
+        - kind: struct
+          name: VAD
+        - kind: func
+          name: NewVAD
+          returns:
+            contains:
+              - "*VAD"
+        - kind: type
+          name: VADOption
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+VAD$"
+          nameNotMatches:
+            - "^VAD$"
+    message: "vad.go must expose the standard VAD implementation contract; exported interfaces belong in core/vad."
+
+  - id: adapter-stt-contract
+    files:
+      include:
+        - adapter/*/stt.go
+    require:
+      siblingFiles:
+        - stt_test.go
+      declarations:
+        - kind: struct
+          name: STT
+        - kind: func
+          name: NewSTT
+          returns:
+            matches:
+              - "^\\(?\\*STT"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+STT$"
+          nameNotMatches:
+            - "^STT$"
+    message: "stt.go must expose the standard STT implementation contract; exported interfaces belong in core/stt."
+
+  - id: adapter-stt-option-contract
+    files:
+      include:
+        - adapter/*/stt.go
+      exclude:
+        - adapter/spitch/stt.go
+    require:
+      declarations:
+        - kind: type
+          name: STTOption
+    message: "STT adapters with constructor options must name the option type STTOption."
+
+  - id: adapter-llm-contract
+    files:
+      include:
+        - adapter/*/llm.go
+      exclude:
+        - adapter/azure/llm.go
+    require:
+      siblingFiles:
+        - llm_test.go
+      declarations:
+        - kind: struct
+          name: LLM
+        - kind: func
+          name: NewLLM
+          returns:
+            matches:
+              - "^\\(?\\*LLM"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+LLM$"
+          nameNotMatches:
+            - "^LLM$"
+    message: "llm.go must expose the standard LLM implementation contract; exported interfaces belong in core/llm."
+
+  - id: adapter-azure-llm-contract
+    files:
+      include:
+        - adapter/azure/llm.go
+    require:
+      siblingFiles:
+        - llm_test.go
+      declarations:
+        - kind: type
+          name: LLM
+        - kind: type
+          name: LLMOption
+        - kind: func
+          name: NewLLM
+          returns:
+            matches:
+              - "^\\(?\\*LLM"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+    message: "Azure LLM must expose canonical aliases for its OpenAI-compatible implementation."
+
+  - id: adapter-llm-option-contract
+    files:
+      include:
+        - adapter/anthropic/llm.go
+        - adapter/aws/llm.go
+        - adapter/google/llm.go
+        - adapter/groq/llm.go
+        - adapter/livekit/llm.go
+        - adapter/mistralai/llm.go
+        - adapter/openai/llm.go
+        - adapter/sarvam/llm.go
+        - adapter/telnyx/llm.go
+    require:
+      declarations:
+        - kind: type
+          name: LLMOption
+    message: "LLM adapters with constructor options must name the option type LLMOption."
+
+  - id: adapter-tts-contract
+    files:
+      include:
+        - adapter/*/tts.go
+    require:
+      siblingFiles:
+        - tts_test.go
+      declarations:
+        - kind: struct
+          name: TTS
+        - kind: func
+          name: NewTTS
+          returns:
+            matches:
+              - "^\\(?\\*TTS"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+TTS$"
+          nameNotMatches:
+            - "^TTS$"
+    message: "tts.go must expose the standard TTS implementation contract; exported interfaces belong in core/tts."
+
+  - id: adapter-tts-option-contract
+    files:
+      include:
+        - adapter/*/tts.go
+      exclude:
+        - adapter/clova/tts.go
+    require:
+      declarations:
+        - kind: type
+          name: TTSOption
+    message: "TTS adapters with options must name the option type TTSOption."
+
+  - id: adapter-avatar-contract
+    files:
+      include:
+        - adapter/*/avatar.go
+    require:
+      siblingFiles:
+        - avatar_test.go
+      declarations:
+        - kind: struct
+          name: Avatar
+        - kind: func
+          name: NewAvatar
+          returns:
+            matches:
+              - "^\\(?\\*Avatar"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+Avatar$"
+          nameNotMatches:
+            - "^Avatar$"
+    message: "avatar.go must expose the standard Avatar implementation contract; exported interfaces belong in core/agent."
+
+  - id: adapter-avatar-option-contract
+    files:
+      include:
+        - adapter/runway/avatar.go
+    require:
+      declarations:
+        - kind: type
+          name: AvatarOption
+    message: "Avatar adapters with constructor options must name the option type AvatarOption."
+
+  - id: adapter-computer-tool-contract
+    files:
+      include:
+        - adapter/*/computer_tool.go
+    require:
+      siblingFiles:
+        - computer_tool_test.go
+      declarations:
+        - kind: struct
+          name: ComputerTool
+        - kind: func
+          name: NewComputerTool
+          returns:
+            contains:
+              - "*ComputerTool"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+    message: "computer_tool.go must expose the standard ComputerTool implementation contract; exported interfaces belong in core."
+
+  - id: adapter-realtime-contract
+    files:
+      include:
+        - adapter/*/realtime.go
+    require:
+      siblingFiles:
+        - realtime_test.go
+      declarations:
+        - kind: struct
+          name: RealtimeModel
+        - kind: type
+          name: RealtimeOption
+        - kind: func
+          name: NewRealtimeModel
+          returns:
+            matches:
+              - "^\\(?\\*RealtimeModel"
+    deny:
+      declarations:
+        - kind: interface
+          exported: true
+        - kind: struct
+          nameMatches:
+            - ".+RealtimeModel$"
+          nameNotMatches:
+            - "^RealtimeModel$"
+    message: "realtime.go must expose the standard realtime model contract; exported interfaces belong in core/llm."

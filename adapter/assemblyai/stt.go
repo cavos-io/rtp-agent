@@ -31,7 +31,7 @@ const (
 	defaultAssemblyAIMinTurnSilence = 100
 )
 
-type AssemblyAISTT struct {
+type STT struct {
 	mu                 sync.Mutex
 	apiKey             string
 	baseURL            string
@@ -55,26 +55,26 @@ type AssemblyAISTT struct {
 	closed             bool
 }
 
-type AssemblyAISTTOption func(*AssemblyAISTT)
+type STTOption func(*STT)
 
-func WithAssemblyAISTTBaseURL(baseURL string) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithAssemblyAISTTSampleRate(sampleRate int) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithAssemblyAISTTModel(model string) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model == "u3-pro" {
 			model = "u3-rt-pro"
 		}
@@ -84,97 +84,97 @@ func WithAssemblyAISTTModel(model string) AssemblyAISTTOption {
 	}
 }
 
-func WithAssemblyAISTTMinTurnSilence(ms int) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTMinTurnSilence(ms int) STTOption {
+	return func(s *STT) {
 		if ms > 0 {
 			s.minTurnSilence = intPtr(ms)
 		}
 	}
 }
 
-func WithAssemblyAISTTMaxTurnSilence(ms int) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTMaxTurnSilence(ms int) STTOption {
+	return func(s *STT) {
 		if ms > 0 {
 			s.maxTurnSilence = intPtr(ms)
 		}
 	}
 }
 
-func WithAssemblyAISTTEndOfTurnConfidenceThreshold(threshold float64) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTEndOfTurnConfidenceThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.endTurnConfidence = &threshold
 	}
 }
 
-func WithAssemblyAISTTFormatTurns(enabled bool) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTFormatTurns(enabled bool) STTOption {
+	return func(s *STT) {
 		s.formatTurns = boolPtr(enabled)
 	}
 }
 
-func WithAssemblyAISTTLanguageDetection(enabled bool) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTLanguageDetection(enabled bool) STTOption {
+	return func(s *STT) {
 		s.languageDetection = boolPtr(enabled)
 	}
 }
 
-func WithAssemblyAISTTContinuousPartials(enabled bool) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTContinuousPartials(enabled bool) STTOption {
+	return func(s *STT) {
 		s.continuousPartials = boolPtr(enabled)
 	}
 }
 
-func WithAssemblyAISTTInterruptionDelay(ms int) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTInterruptionDelay(ms int) STTOption {
+	return func(s *STT) {
 		if ms >= 0 {
 			s.interruptionDelay = intPtr(ms)
 		}
 	}
 }
 
-func WithAssemblyAISTTKeytermsPrompt(keyterms []string) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTKeytermsPrompt(keyterms []string) STTOption {
+	return func(s *STT) {
 		s.keytermsPrompt = append([]string(nil), keyterms...)
 	}
 }
 
-func WithAssemblyAISTTPrompt(prompt string) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTPrompt(prompt string) STTOption {
+	return func(s *STT) {
 		s.prompt = prompt
 	}
 }
 
-func WithAssemblyAISTTVADThreshold(threshold float64) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTVADThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.vadThreshold = &threshold
 	}
 }
 
-func WithAssemblyAISTTSpeakerLabels(enabled bool) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTSpeakerLabels(enabled bool) STTOption {
+	return func(s *STT) {
 		s.speakerLabels = boolPtr(enabled)
 	}
 }
 
-func WithAssemblyAISTTMaxSpeakers(maxSpeakers int) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTMaxSpeakers(maxSpeakers int) STTOption {
+	return func(s *STT) {
 		if maxSpeakers > 0 {
 			s.maxSpeakers = intPtr(maxSpeakers)
 		}
 	}
 }
 
-func WithAssemblyAISTTDomain(domain string) AssemblyAISTTOption {
-	return func(s *AssemblyAISTT) {
+func WithAssemblyAISTTDomain(domain string) STTOption {
+	return func(s *STT) {
 		s.domain = domain
 	}
 }
 
-func NewAssemblyAISTT(apiKey string, opts ...AssemblyAISTTOption) *AssemblyAISTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv("ASSEMBLYAI_API_KEY")
 	}
-	provider := &AssemblyAISTT{
+	provider := &STT{
 		apiKey:         apiKey,
 		baseURL:        defaultAssemblyAIBaseURL,
 		sampleRate:     defaultAssemblyAISampleRate,
@@ -191,24 +191,24 @@ func NewAssemblyAISTT(apiKey string, opts ...AssemblyAISTTOption) *AssemblyAISTT
 	return provider
 }
 
-func (s *AssemblyAISTT) Label() string { return "assemblyai.STT" }
-func (s *AssemblyAISTT) Model() string { return s.speechModel }
-func (s *AssemblyAISTT) Provider() string {
+func (s *STT) Label() string { return "assemblyai.STT" }
+func (s *STT) Model() string { return s.speechModel }
+func (s *STT) Provider() string {
 	return "AssemblyAI"
 }
 
-func (s *AssemblyAISTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultAssemblyAISampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: s.speakerLabels != nil && *s.speakerLabels, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
-func (s *AssemblyAISTT) UpdateOptions(opts ...AssemblyAISTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -232,7 +232,7 @@ func (s *AssemblyAISTT) UpdateOptions(opts ...AssemblyAISTTOption) {
 	}
 }
 
-func (s *AssemblyAISTT) registerStream(stream *assemblyAISTTStream) bool {
+func (s *STT) registerStream(stream *assemblyAISTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -249,7 +249,7 @@ func (s *AssemblyAISTT) registerStream(stream *assemblyAISTTStream) bool {
 	return true
 }
 
-func (s *AssemblyAISTT) unregisterStream(stream *assemblyAISTTStream) {
+func (s *STT) unregisterStream(stream *assemblyAISTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -261,7 +261,7 @@ func (s *AssemblyAISTT) unregisterStream(stream *assemblyAISTTStream) {
 	}
 }
 
-func (s *AssemblyAISTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -287,7 +287,7 @@ func (s *AssemblyAISTT) Close() error {
 	return closeErr
 }
 
-func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -334,7 +334,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	return stream, nil
 }
 
-func (s *AssemblyAISTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -343,11 +343,11 @@ func (s *AssemblyAISTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("assemblyai offline recognize is not implemented")
 }
 
-func (s *AssemblyAISTT) validateStreamConfig() error {
+func (s *STT) validateStreamConfig() error {
 	if s.apiKey == "" {
 		return fmt.Errorf("AssemblyAI API key is required. Pass one in via the apiKey parameter, or set it as the ASSEMBLYAI_API_KEY environment variable")
 	}
@@ -365,7 +365,7 @@ func (s *AssemblyAISTT) validateStreamConfig() error {
 	return nil
 }
 
-func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {
+func buildAssemblyAIStreamURL(s *STT) string {
 	u, err := url.Parse(strings.TrimRight(s.baseURL, "/") + "/v3/ws")
 	if err != nil {
 		return ""
@@ -434,7 +434,7 @@ type assemblyAIConfigSnapshot struct {
 	vadThreshold       *float64
 }
 
-func assemblyAIConfigSnapshotFromSTT(s *AssemblyAISTT) assemblyAIConfigSnapshot {
+func assemblyAIConfigSnapshotFromSTT(s *STT) assemblyAIConfigSnapshot {
 	return assemblyAIConfigSnapshot{
 		endTurnConfidence:  cloneFloat64Ptr(s.endTurnConfidence),
 		minTurnSilence:     cloneIntPtr(s.minTurnSilence),
@@ -506,7 +506,7 @@ type assemblyAISTTStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
-	owner  *AssemblyAISTT
+	owner  *STT
 
 	writeBinary func([]byte) error
 	writeJSON   func(any) error
@@ -1117,4 +1117,15 @@ func (s *assemblyAISTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return nil, err
 	}
+}
+
+// Deprecated: use STT.
+type AssemblyAISTT = STT
+
+// Deprecated: use STTOption.
+type AssemblyAISTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewAssemblyAISTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

@@ -15,8 +15,8 @@ import (
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
-type MistralLLM struct {
-	inner       *openai.OpenAILLM
+type LLM struct {
+	inner       *openai.LLM
 	apiKey      string
 	model       string
 	baseURL     string
@@ -25,70 +25,70 @@ type MistralLLM struct {
 	toolChoice  llm.ToolChoice
 }
 
-type MistralLLMOption func(*MistralLLM)
+type LLMOption func(*LLM)
 
-func WithMistralLLMModel(model string) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMModel(model string) LLMOption {
+	return func(l *LLM) {
 		if model != "" {
 			l.model = model
 		}
 	}
 }
 
-func WithMistralLLMTemperature(temperature float64) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMTemperature(temperature float64) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("temperature", temperature)
 	}
 }
 
-func WithMistralLLMTopP(topP float64) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMTopP(topP float64) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("top_p", topP)
 	}
 }
 
-func WithMistralLLMMaxCompletionTokens(maxCompletionTokens int) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMMaxCompletionTokens(maxCompletionTokens int) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("max_tokens", maxCompletionTokens)
 	}
 }
 
-func WithMistralLLMPresencePenalty(presencePenalty float64) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMPresencePenalty(presencePenalty float64) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("presence_penalty", presencePenalty)
 	}
 }
 
-func WithMistralLLMFrequencyPenalty(frequencyPenalty float64) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMFrequencyPenalty(frequencyPenalty float64) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("frequency_penalty", frequencyPenalty)
 	}
 }
 
-func WithMistralLLMRandomSeed(randomSeed int) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMRandomSeed(randomSeed int) LLMOption {
+	return func(l *LLM) {
 		l.setExtraParam("seed", randomSeed)
 	}
 }
 
-func WithMistralLLMToolChoice(toolChoice llm.ToolChoice) MistralLLMOption {
-	return func(l *MistralLLM) {
+func WithMistralLLMToolChoice(toolChoice llm.ToolChoice) LLMOption {
+	return func(l *LLM) {
 		l.toolChoice = toolChoice
 	}
 }
 
-func withMistralLLMHTTPClient(httpClient goopenai.HTTPDoer) MistralLLMOption {
-	return func(l *MistralLLM) {
+func withMistralLLMHTTPClient(httpClient goopenai.HTTPDoer) LLMOption {
+	return func(l *LLM) {
 		l.httpClient = httpClient
 	}
 }
 
-func NewMistralLLM(apiKey string, model string, opts ...MistralLLMOption) *MistralLLM {
+func NewLLM(apiKey string, model string, opts ...LLMOption) *LLM {
 	if model == "" {
 		model = "ministral-8b-latest"
 	}
 	resolvedAPIKey := resolveMistralLLMAPIKey(apiKey)
-	provider := &MistralLLM{
+	provider := &LLM{
 		apiKey:  resolvedAPIKey,
 		model:   model,
 		baseURL: "https://api.mistral.ai/v1",
@@ -107,28 +107,28 @@ func resolveMistralLLMAPIKey(apiKey string) string {
 	return os.Getenv("MISTRAL_API_KEY")
 }
 
-func (l *MistralLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
-func (l *MistralLLM) Provider() string { return "MistralAI" }
+func (l *LLM) Provider() string { return "MistralAI" }
 
-func (l *MistralLLM) UpdateOptions(opts ...MistralLLMOption) {
+func (l *LLM) UpdateOptions(opts ...LLMOption) {
 	for _, opt := range opts {
 		opt(l)
 	}
 	l.rebuildInner()
 }
 
-func (l *MistralLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("mistral AI API key is required; set MISTRAL_API_KEY or pass api_key")
 	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
 
-func (l *MistralLLM) rebuildInner() {
-	opts := []openai.OpenAILLMOption{}
+func (l *LLM) rebuildInner() {
+	opts := []openai.LLMOption{}
 	if len(l.extraParams) > 0 {
 		opts = append(opts, openai.WithOpenAILLMExtraParams(cloneMistralLLMAnyMap(l.extraParams)))
 	}
@@ -148,7 +148,7 @@ func (l *MistralLLM) rebuildInner() {
 	)
 }
 
-func (l *MistralLLM) setExtraParam(key string, value any) {
+func (l *LLM) setExtraParam(key string, value any) {
 	if l.extraParams == nil {
 		l.extraParams = map[string]any{}
 	}
@@ -299,4 +299,15 @@ func remapMistralLLMToolChoiceForProviderTools(payload map[string]any) bool {
 	}
 	payload["tool_choice"] = "auto"
 	return true
+}
+
+// Deprecated: use LLM.
+type MistralLLM = LLM
+
+// Deprecated: use LLMOption.
+type MistralLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewMistralLLM(apiKey string, model string, opts ...LLMOption) *LLM {
+	return NewLLM(apiKey, model, opts...)
 }

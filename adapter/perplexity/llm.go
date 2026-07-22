@@ -14,18 +14,18 @@ const (
 	defaultPerplexityBaseURL = "https://api.perplexity.ai"
 )
 
-type PerplexityLLM struct {
-	inner   *openai.OpenAILLM
+type LLM struct {
+	inner   *openai.LLM
 	apiKey  string
 	baseURL string
 }
 
-func NewPerplexityLLM(apiKey string, model string) *PerplexityLLM {
+func NewLLM(apiKey string, model string) *LLM {
 	if model == "" {
 		model = defaultPerplexityModel
 	}
 	resolvedAPIKey := resolvePerplexityAPIKey(apiKey)
-	return &PerplexityLLM{
+	return &LLM{
 		inner:   openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, defaultPerplexityBaseURL),
 		apiKey:  resolvedAPIKey,
 		baseURL: defaultPerplexityBaseURL,
@@ -39,17 +39,25 @@ func resolvePerplexityAPIKey(apiKey string) string {
 	return os.Getenv("PERPLEXITY_API_KEY")
 }
 
-func (l *PerplexityLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.inner.Model()
 }
 
-func (l *PerplexityLLM) BaseURL() string {
+func (l *LLM) BaseURL() string {
 	return l.baseURL
 }
 
-func (l *PerplexityLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("perplexity API key is required, either as argument or set PERPLEXITY_API_KEY environmental variable")
 	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
+}
+
+// Deprecated: use LLM.
+type PerplexityLLM = LLM
+
+// Deprecated: use NewLLM.
+func NewPerplexityLLM(apiKey string, model string) *LLM {
+	return NewLLM(apiKey, model)
 }

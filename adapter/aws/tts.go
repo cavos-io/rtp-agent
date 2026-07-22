@@ -21,7 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
-type AWSTTS struct {
+type TTS struct {
 	client         *polly.Client
 	credentials    AWSCredentials
 	credentialsSet bool
@@ -36,16 +36,16 @@ type AWSTTS struct {
 	closed         bool
 }
 
-type AWSTTSOption func(*AWSTTS)
+type TTSOption func(*TTS)
 
-func WithAWSTTSVoice(voice types.VoiceId) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSVoice(voice types.VoiceId) TTSOption {
+	return func(t *TTS) {
 		t.voice = voice
 	}
 }
 
-func WithAWSTTSCredentials(creds AWSCredentials) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSCredentials(creds AWSCredentials) TTSOption {
+	return func(t *TTS) {
 		if creds.valid() {
 			t.credentials = creds
 			t.credentialsSet = true
@@ -53,31 +53,31 @@ func WithAWSTTSCredentials(creds AWSCredentials) AWSTTSOption {
 	}
 }
 
-func WithAWSTTSEngine(engine types.Engine) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSEngine(engine types.Engine) TTSOption {
+	return func(t *TTS) {
 		t.engine = engine
 	}
 }
 
-func WithAWSTTSTextType(textType types.TextType) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSTextType(textType types.TextType) TTSOption {
+	return func(t *TTS) {
 		t.textType = textType
 	}
 }
 
-func WithAWSTTSLanguage(language types.LanguageCode) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSLanguage(language types.LanguageCode) TTSOption {
+	return func(t *TTS) {
 		t.language = language
 	}
 }
 
-func WithAWSTTSSampleRate(sampleRate int) AWSTTSOption {
-	return func(t *AWSTTS) {
+func WithAWSTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		t.sampleRate = sampleRate
 	}
 }
 
-func NewAWSTTS(ctx context.Context, region string, voice string, providerOpts ...AWSTTSOption) (*AWSTTS, error) {
+func NewTTS(ctx context.Context, region string, voice string, providerOpts ...TTSOption) (*TTS, error) {
 	if voice == "" {
 		voice = string(types.VoiceIdRuth)
 	}
@@ -101,11 +101,11 @@ func NewAWSTTS(ctx context.Context, region string, voice string, providerOpts ..
 	return provider, nil
 }
 
-func newAWSTTSWithClient(client *polly.Client, voice string, opts ...AWSTTSOption) *AWSTTS {
+func newAWSTTSWithClient(client *polly.Client, voice string, opts ...TTSOption) *TTS {
 	if voice == "" {
 		voice = string(types.VoiceIdRuth)
 	}
-	provider := &AWSTTS{
+	provider := &TTS{
 		client:       client,
 		voice:        types.VoiceId(voice),
 		engine:       types.EngineGenerative,
@@ -120,18 +120,18 @@ func newAWSTTSWithClient(client *polly.Client, voice string, opts ...AWSTTSOptio
 	return provider
 }
 
-func (t *AWSTTS) Label() string { return "aws.TTS" }
-func (t *AWSTTS) Model() string { return string(t.engine) }
-func (t *AWSTTS) Provider() string {
+func (t *TTS) Label() string { return "aws.TTS" }
+func (t *TTS) Model() string { return string(t.engine) }
+func (t *TTS) Provider() string {
 	return "Amazon Polly"
 }
-func (t *AWSTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AWSTTS) SampleRate() int  { return t.sampleRate }
-func (t *AWSTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -163,7 +163,7 @@ type awsTTSRequestOptions struct {
 	sampleRate   int
 }
 
-func (t *AWSTTS) snapshotOptions() awsTTSRequestOptions {
+func (t *TTS) snapshotOptions() awsTTSRequestOptions {
 	if t == nil {
 		return awsTTSRequestOptions{}
 	}
@@ -179,7 +179,7 @@ func (t *AWSTTS) snapshotOptions() awsTTSRequestOptions {
 	}
 }
 
-func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
+func buildAWSSynthesizeSpeechInput(t *TTS, text string) *polly.SynthesizeSpeechInput {
 	return buildAWSSynthesizeSpeechInputFromOptions(t.snapshotOptions(), text)
 }
 
@@ -198,7 +198,7 @@ func buildAWSSynthesizeSpeechInputFromOptions(opts awsTTSRequestOptions, text st
 	return input
 }
 
-func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	sampleRate := t.sampleRate
@@ -208,7 +208,7 @@ func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
 	t.sampleRate = sampleRate
 }
 
-func (t *AWSTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -234,7 +234,7 @@ func (t *AWSTTS) Close() error {
 	return closeErr
 }
 
-func (t *AWSTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -243,7 +243,7 @@ func (t *AWSTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *AWSTTS) registerStream(stream *awsTTSChunkedStream) bool {
+func (t *TTS) registerStream(stream *awsTTSChunkedStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -256,13 +256,13 @@ func (t *AWSTTS) registerStream(stream *awsTTSChunkedStream) bool {
 	return true
 }
 
-func (t *AWSTTS) unregisterStream(stream *awsTTSChunkedStream) {
+func (t *TTS) unregisterStream(stream *awsTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("streaming input for polly tts is not supported natively via rest")
 }
 
@@ -282,7 +282,7 @@ type awsTTSChunkedStream struct {
 	hasAudio     bool
 	emittedAudio bool
 	finalSent    bool
-	provider     *AWSTTS
+	provider     *TTS
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -607,4 +607,15 @@ func (s *awsTTSChunkedStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+// Deprecated: use TTS.
+type AWSTTS = TTS
+
+// Deprecated: use TTSOption.
+type AWSTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewAWSTTS(ctx context.Context, region string, voice string, providerOpts ...TTSOption) (*TTS, error) {
+	return NewTTS(ctx, region, voice, providerOpts...)
 }

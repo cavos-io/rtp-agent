@@ -12,33 +12,41 @@ const (
 	defaultInitialAvatarState  = agent.AvatarStateIdle
 )
 
-type TavusAvatar struct {
+type Avatar struct {
 	apiKey         string
 	avatarIdentity string
 	state          agent.AvatarState
 }
 
-func NewTavusAvatar(apiKey string) *TavusAvatar {
-	return &TavusAvatar{
+func NewAvatar(apiKey string) *Avatar {
+	return &Avatar{
 		apiKey:         resolveTavusAPIKey(apiKey),
 		avatarIdentity: defaultAvatarAgentIdentity,
 		state:          defaultInitialAvatarState,
 	}
 }
 
-func (a *TavusAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *TavusAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *TavusAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *TavusAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+// Deprecated: use Avatar.
+type TavusAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewTavusAvatar(apiKey string) *Avatar {
+	return NewAvatar(apiKey)
 }

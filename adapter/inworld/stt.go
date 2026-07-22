@@ -28,7 +28,7 @@ const (
 	inworldSTTEndpoint                                = "stt/v1/transcribe:streamBidirectional"
 )
 
-type InworldSTT struct {
+type STT struct {
 	mu                               sync.Mutex
 	apiKey                           string
 	authorization                    string
@@ -46,85 +46,85 @@ type InworldSTT struct {
 	closed                           bool
 }
 
-type InworldSTTOption func(*InworldSTT)
+type STTOption func(*STT)
 
-func WithInworldSTTBaseURL(baseURL string) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = baseURL
 		}
 	}
 }
 
-func WithInworldSTTModel(model string) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithInworldSTTLanguage(language string) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithInworldSTTSampleRate(sampleRate int) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithInworldSTTNumChannels(numChannels int) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTNumChannels(numChannels int) STTOption {
+	return func(s *STT) {
 		if numChannels > 0 {
 			s.numChannels = numChannels
 		}
 	}
 }
 
-func WithInworldSTTVoiceProfile(enabled bool) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTVoiceProfile(enabled bool) STTOption {
+	return func(s *STT) {
 		s.enableVoiceProfile = enabled
 	}
 }
 
-func WithInworldSTTVoiceProfileTopN(topN int) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTVoiceProfileTopN(topN int) STTOption {
+	return func(s *STT) {
 		if topN > 0 {
 			s.voiceProfileTopN = topN
 		}
 	}
 }
 
-func WithInworldSTTVADThreshold(threshold float64) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTVADThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.vadThreshold = &threshold
 	}
 }
 
-func WithInworldSTTMinEndOfTurnSilenceWhenConfident(ms int) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTMinEndOfTurnSilenceWhenConfident(ms int) STTOption {
+	return func(s *STT) {
 		if ms >= 0 {
 			s.minEndOfTurnSilenceWhenConfident = ms
 		}
 	}
 }
 
-func WithInworldSTTEndOfTurnConfidenceThreshold(threshold float64) InworldSTTOption {
-	return func(s *InworldSTT) {
+func WithInworldSTTEndOfTurnConfidenceThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.endOfTurnConfidenceThreshold = threshold
 	}
 }
 
-func NewInworldSTT(apiKey string, opts ...InworldSTTOption) *InworldSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	resolvedAPIKey := resolveInworldAPIKey(apiKey)
-	provider := &InworldSTT{
+	provider := &STT{
 		apiKey:                           resolvedAPIKey,
 		authorization:                    "Basic " + resolvedAPIKey,
 		baseURL:                          defaultInworldSTTBaseURL,
@@ -144,24 +144,24 @@ func NewInworldSTT(apiKey string, opts ...InworldSTTOption) *InworldSTT {
 	return provider
 }
 
-func (s *InworldSTT) Label() string { return "inworld.STT" }
-func (s *InworldSTT) Model() string { return s.model }
-func (s *InworldSTT) Provider() string {
+func (s *STT) Label() string { return "inworld.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "Inworld"
 }
 
-func (s *InworldSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, OfflineRecognize: false}
 }
 
-func (s *InworldSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultInworldSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *InworldSTT) UpdateOptions(opts ...InworldSTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	if s == nil {
 		return
 	}
@@ -172,7 +172,7 @@ func (s *InworldSTT) UpdateOptions(opts ...InworldSTTOption) {
 	}
 }
 
-func (s *InworldSTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -198,7 +198,7 @@ func (s *InworldSTT) Close() error {
 	return closeErr
 }
 
-func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -241,7 +241,7 @@ func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	return stream, nil
 }
 
-func (s *InworldSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("inworld stt does not support batch recognition")
 }
 
@@ -258,10 +258,10 @@ type inworldSTTStream struct {
 	cancel context.CancelFunc
 	state  *inworldSTTStreamState
 
-	provider *InworldSTT
+	provider *STT
 }
 
-func (s *InworldSTT) registerStream(stream *inworldSTTStream) bool {
+func (s *STT) registerStream(stream *inworldSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -277,7 +277,7 @@ func (s *InworldSTT) registerStream(stream *inworldSTTStream) bool {
 	return true
 }
 
-func (s *InworldSTT) unregisterStream(stream *inworldSTTStream) {
+func (s *STT) unregisterStream(stream *inworldSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -286,7 +286,7 @@ func (s *InworldSTT) unregisterStream(stream *inworldSTTStream) {
 	delete(s.streams, stream)
 }
 
-func (s *InworldSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -456,7 +456,7 @@ type inworldSTTStreamState struct {
 	speaking  bool
 }
 
-func buildInworldSTTTranscribeConfig(s *InworldSTT, language string) map[string]any {
+func buildInworldSTTTranscribeConfig(s *STT, language string) map[string]any {
 	if language == "" {
 		language = s.language
 	}
@@ -483,7 +483,7 @@ func buildInworldSTTTranscribeConfig(s *InworldSTT, language string) map[string]
 	return config
 }
 
-func buildInworldSTTConfigMessage(s *InworldSTT, language string) map[string]any {
+func buildInworldSTTConfigMessage(s *STT, language string) map[string]any {
 	return map[string]any{"transcribeConfig": buildInworldSTTTranscribeConfig(s, language)}
 }
 
@@ -499,14 +499,14 @@ func buildInworldSTTCloseStreamMessage() map[string]any {
 	return map[string]any{"closeStream": map[string]any{}}
 }
 
-func buildInworldSTTStreamURL(s *InworldSTT) string {
+func buildInworldSTTStreamURL(s *STT) string {
 	base := strings.TrimRight(s.baseURL, "/")
 	base = strings.Replace(base, "https://", "wss://", 1)
 	base = strings.Replace(base, "http://", "ws://", 1)
 	return base + "/" + inworldSTTEndpoint
 }
 
-func buildInworldSTTHeaders(s *InworldSTT) http.Header {
+func buildInworldSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", s.authorization)
 	return headers
@@ -568,4 +568,15 @@ func processInworldSTTStreamEvent(state *inworldSTTStreamState, data map[string]
 
 func shortInworldSTTRequestID() string {
 	return fmt.Sprintf("req-%d", time.Now().UnixNano())
+}
+
+// Deprecated: use STT.
+type InworldSTT = STT
+
+// Deprecated: use STTOption.
+type InworldSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewInworldSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

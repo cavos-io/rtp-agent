@@ -16,16 +16,16 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
-type XaiLLM struct {
+type LLM struct {
 	apiKey string
 	model  string
 }
 
-func NewXaiLLM(apiKey string, model string) *XaiLLM {
+func NewLLM(apiKey string, model string) *LLM {
 	if model == "" {
 		model = "grok-4-1-fast-non-reasoning"
 	}
-	return &XaiLLM{
+	return &LLM{
 		apiKey: resolveXaiLLMAPIKey(apiKey),
 		model:  model,
 	}
@@ -38,7 +38,7 @@ func resolveXaiLLMAPIKey(apiKey string) string {
 	return os.Getenv("XAI_API_KEY")
 }
 
-func (l *XaiLLM) Model() string {
+func (l *LLM) Model() string {
 	return l.model
 }
 
@@ -58,7 +58,7 @@ type xaiToolCall struct {
 	} `json:"function"`
 }
 
-func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("xAI API key is required, either as argument or set XAI_API_KEY environmental variable")
 	}
@@ -515,4 +515,12 @@ func (t *FileSearchTool) Description() string {
 func (t *FileSearchTool) Parameters() map[string]any { return nil }
 func (t *FileSearchTool) Execute(ctx context.Context, args string) (string, error) {
 	return "dispatched", nil
+}
+
+// Deprecated: use LLM.
+type XaiLLM = LLM
+
+// Deprecated: use NewLLM.
+func NewXaiLLM(apiKey string, model string) *LLM {
+	return NewLLM(apiKey, model)
 }

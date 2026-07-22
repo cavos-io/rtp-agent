@@ -31,7 +31,7 @@ type PersonaConfig struct {
 	AvatarModel string
 }
 
-type AnamAvatar struct {
+type Avatar struct {
 	apiKey         string
 	apiURL         string
 	personaConfig  PersonaConfig
@@ -41,7 +41,7 @@ type AnamAvatar struct {
 	started        bool
 }
 
-func NewAnamAvatar(apiKey string, personaConfig ...PersonaConfig) *AnamAvatar {
+func NewAvatar(apiKey string, personaConfig ...PersonaConfig) *Avatar {
 	if apiKey == "" {
 		apiKey = os.Getenv(anamAPIKeyEnv)
 	}
@@ -53,7 +53,7 @@ func NewAnamAvatar(apiKey string, personaConfig ...PersonaConfig) *AnamAvatar {
 	if len(personaConfig) > 0 {
 		persona = personaConfig[0]
 	}
-	return &AnamAvatar{
+	return &Avatar{
 		apiKey:         apiKey,
 		apiURL:         apiURL,
 		personaConfig:  persona,
@@ -63,7 +63,7 @@ func NewAnamAvatar(apiKey string, personaConfig ...PersonaConfig) *AnamAvatar {
 	}
 }
 
-func (a *AnamAvatar) Start(ctx context.Context) error {
+func (a *Avatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("ANAM_API_KEY must be set by arguments or environment variables")
 	}
@@ -76,20 +76,20 @@ func (a *AnamAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AnamAvatar) UpdateState(state agent.AvatarState) error {
+func (a *Avatar) UpdateState(state agent.AvatarState) error {
 	a.state = state
 	return nil
 }
 
-func (a *AnamAvatar) Provider() string {
+func (a *Avatar) Provider() string {
 	return providerName
 }
 
-func (a *AnamAvatar) AvatarIdentity() string {
+func (a *Avatar) AvatarIdentity() string {
 	return a.avatarIdentity
 }
 
-func (a *AnamAvatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
+func (a *Avatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
 	endpoint, headers, body, err := buildAnamSessionTokenRequest(a.apiKey, a.personaConfig, info.LiveKitURL, info.LiveKitToken)
 	if err != nil {
 		return err
@@ -140,4 +140,12 @@ func buildAnamSessionTokenRequest(apiKey string, personaConfig PersonaConfig, li
 		"Content-Type":  "application/json",
 	}
 	return "/v1/auth/session-token", headers, body, nil
+}
+
+// Deprecated: use Avatar.
+type AnamAvatar = Avatar
+
+// Deprecated: use NewAvatar.
+func NewAnamAvatar(apiKey string, personaConfig ...PersonaConfig) *Avatar {
+	return NewAvatar(apiKey, personaConfig...)
 }

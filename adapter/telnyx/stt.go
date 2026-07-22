@@ -30,7 +30,7 @@ const (
 	telnyxAPIKeyEnv                     = "TELNYX_API_KEY"
 )
 
-type TelnyxSTT struct {
+type STT struct {
 	mu                  sync.Mutex
 	apiKey              string
 	baseURL             string
@@ -42,51 +42,51 @@ type TelnyxSTT struct {
 	closed              bool
 }
 
-type TelnyxSTTOption func(*TelnyxSTT)
+type STTOption func(*STT)
 
-func WithTelnyxSTTBaseURL(baseURL string) TelnyxSTTOption {
-	return func(s *TelnyxSTT) {
+func WithTelnyxSTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = baseURL
 		}
 	}
 }
 
-func WithTelnyxSTTLanguage(language string) TelnyxSTTOption {
-	return func(s *TelnyxSTT) {
+func WithTelnyxSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = language
 		}
 	}
 }
 
-func WithTelnyxSTTTranscriptionEngine(engine string) TelnyxSTTOption {
-	return func(s *TelnyxSTT) {
+func WithTelnyxSTTTranscriptionEngine(engine string) STTOption {
+	return func(s *STT) {
 		if engine != "" {
 			s.transcriptionEngine = engine
 		}
 	}
 }
 
-func WithTelnyxSTTInterimResults(interimResults bool) TelnyxSTTOption {
-	return func(s *TelnyxSTT) {
+func WithTelnyxSTTInterimResults(interimResults bool) STTOption {
+	return func(s *STT) {
 		s.interimResults = interimResults
 	}
 }
 
-func WithTelnyxSTTSampleRate(sampleRate int) TelnyxSTTOption {
-	return func(s *TelnyxSTT) {
+func WithTelnyxSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
 		}
 	}
 }
 
-func NewTelnyxSTT(apiKey string, opts ...TelnyxSTTOption) *TelnyxSTT {
+func NewSTT(apiKey string, opts ...STTOption) *STT {
 	if apiKey == "" {
 		apiKey = os.Getenv(telnyxAPIKeyEnv)
 	}
-	provider := &TelnyxSTT{
+	provider := &STT{
 		apiKey:              apiKey,
 		baseURL:             defaultTelnyxSTTBaseURL,
 		language:            defaultTelnyxSTTLanguage,
@@ -100,20 +100,20 @@ func NewTelnyxSTT(apiKey string, opts ...TelnyxSTTOption) *TelnyxSTT {
 	return provider
 }
 
-func (s *TelnyxSTT) Label() string { return "telnyx.STT" }
-func (s *TelnyxSTT) Model() string { return s.transcriptionEngine }
-func (s *TelnyxSTT) Provider() string {
+func (s *STT) Label() string { return "telnyx.STT" }
+func (s *STT) Model() string { return s.transcriptionEngine }
+func (s *STT) Provider() string {
 	return "telnyx"
 }
 
-func (s *TelnyxSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return defaultTelnyxSTTSampleRate
 	}
 	return uint32(s.sampleRate)
 }
 
-func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:        true,
 		InterimResults:   s.interimResults,
@@ -122,7 +122,7 @@ func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -167,7 +167,7 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	return stream, nil
 }
 
-func (s *TelnyxSTT) Close() error {
+func (s *STT) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	streams := make([]*telnyxSTTStream, 0, len(s.streams))
@@ -185,7 +185,7 @@ func (s *TelnyxSTT) Close() error {
 	return firstErr
 }
 
-func (s *TelnyxSTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -194,7 +194,7 @@ func (s *TelnyxSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) bool {
+func (s *STT) registerStream(stream *telnyxSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
 	}
@@ -213,7 +213,7 @@ func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) bool {
 	return true
 }
 
-func (s *TelnyxSTT) unregisterStream(stream *telnyxSTTStream) {
+func (s *STT) unregisterStream(stream *telnyxSTTStream) {
 	if stream == nil {
 		return
 	}
@@ -222,7 +222,7 @@ func (s *TelnyxSTT) unregisterStream(stream *telnyxSTTStream) {
 	delete(s.streams, stream)
 }
 
-func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	stream, err := s.Stream(ctx, language)
 	if err != nil {
 		return nil, err
@@ -274,7 +274,7 @@ func validateTelnyxAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildTelnyxSTTStreamURL(s *TelnyxSTT, language string) string {
+func buildTelnyxSTTStreamURL(s *STT, language string) string {
 	u, err := url.Parse(s.baseURL)
 	if err != nil {
 		return s.baseURL
@@ -287,7 +287,7 @@ func buildTelnyxSTTStreamURL(s *TelnyxSTT, language string) string {
 	return u.String()
 }
 
-func buildTelnyxSTTHeaders(s *TelnyxSTT) http.Header {
+func buildTelnyxSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+s.apiKey)
 	return headers
@@ -306,7 +306,7 @@ func telnyxSTTDialError(err error, resp *http.Response) error {
 	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
 }
 
-func resolveTelnyxSTTLanguage(s *TelnyxSTT, language string) string {
+func resolveTelnyxSTTLanguage(s *STT, language string) string {
 	if language != "" {
 		return language
 	}
@@ -348,7 +348,7 @@ func writeTelnyxSTTHeader(write func([]byte) error, sampleRate int) error {
 }
 
 type telnyxSTTStream struct {
-	provider   *TelnyxSTT
+	provider   *STT
 	conn       *websocket.Conn
 	events     chan *stt.SpeechEvent
 	errCh      chan error
@@ -672,4 +672,15 @@ func telnyxTruthy(value any) bool {
 	default:
 		return true
 	}
+}
+
+// Deprecated: use STT.
+type TelnyxSTT = STT
+
+// Deprecated: use STTOption.
+type TelnyxSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewTelnyxSTT(apiKey string, opts ...STTOption) *STT {
+	return NewSTT(apiKey, opts...)
 }

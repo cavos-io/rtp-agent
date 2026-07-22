@@ -43,7 +43,7 @@ const (
 	defaultOVHCloudOpenAISTTModel      = "whisper-large-v3-turbo"
 )
 
-type OpenAISTT struct {
+type STT struct {
 	client               *openai.Client
 	httpClient           openai.HTTPDoer
 	apiKey               string
@@ -76,28 +76,28 @@ type OpenAISTT struct {
 	closed               bool
 }
 
-type OpenAISTTOption func(*OpenAISTT)
+type STTOption func(*STT)
 
 type openAIRealtimeSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func WithOpenAISTTModel(model string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTModel(model string) STTOption {
+	return func(s *STT) {
 		if model != "" {
 			s.model = model
 		}
 	}
 }
 
-func WithOpenAISTTLanguage(language string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.languageSet = true
 		s.languageValue = language
 		s.language = language
 	}
 }
 
-func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTDetectLanguage(detect bool) STTOption {
+	return func(s *STT) {
 		s.detectOptionSet = true
 		s.detectLanguage = detect
 		if detect {
@@ -106,28 +106,28 @@ func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 	}
 }
 
-func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTPrompt(prompt string) STTOption {
+	return func(s *STT) {
 		s.prompt = prompt
 	}
 }
 
-func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTNoiseReductionType(noiseReductionType string) STTOption {
+	return func(s *STT) {
 		s.noiseReduction = noiseReductionType
 	}
 }
 
-func WithOpenAISTTOrganization(organization string) OpenAISTTOption {
+func WithOpenAISTTOrganization(organization string) STTOption {
 	return withOpenAISTTExtraHeader("OpenAI-Organization", organization)
 }
 
-func WithOpenAISTTProject(project string) OpenAISTTOption {
+func WithOpenAISTTProject(project string) STTOption {
 	return withOpenAISTTExtraHeader("OpenAI-Project", project)
 }
 
-func withOpenAISTTExtraHeader(key string, value string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func withOpenAISTTExtraHeader(key string, value string) STTOption {
+	return func(s *STT) {
 		if s.extraHeaders == nil {
 			s.extraHeaders = map[string]string{}
 		}
@@ -135,8 +135,8 @@ func withOpenAISTTExtraHeader(key string, value string) OpenAISTTOption {
 	}
 }
 
-func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) STTOption {
+	return func(s *STT) {
 		s.turnDetectionSet = true
 		if turnDetection == nil {
 			s.turnDetection = nil
@@ -149,27 +149,27 @@ func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTO
 	}
 }
 
-func WithOpenAISTTRealtime(useRealtime bool) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTRealtime(useRealtime bool) STTOption {
+	return func(s *STT) {
 		s.useRealtime = useRealtime
 	}
 }
 
-func WithOpenAISTTVAD(v vad.VAD) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTVAD(v vad.VAD) STTOption {
+	return func(s *STT) {
 		s.vadSet = true
 		s.vad = v
 	}
 }
 
-func WithOpenAISTTConnectOptions(connectOptions llm.APIConnectOptions) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTConnectOptions(connectOptions llm.APIConnectOptions) STTOption {
+	return func(s *STT) {
 		s.connect = connectOptions
 	}
 }
 
-func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTBaseURL(baseURL string) STTOption {
+	return func(s *STT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 			s.baseURLSet = true
@@ -177,25 +177,25 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	}
 }
 
-func WithOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
+func WithOpenAISTTHTTPClient(client openai.HTTPDoer) STTOption {
 	return withOpenAISTTHTTPClient(client)
 }
 
-func withOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func withOpenAISTTHTTPClient(client openai.HTTPDoer) STTOption {
+	return func(s *STT) {
 		if client != nil {
 			s.httpClient = client
 		}
 	}
 }
 
-func WithOpenAISTTAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAISTTOption {
-	return func(s *OpenAISTT) {
+func WithOpenAISTTAzureADTokenProvider(provider func(context.Context) (string, error)) STTOption {
+	return func(s *STT) {
 		s.azureADTokenProvider = provider
 	}
 }
 
-func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+func NewSTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
@@ -205,7 +205,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
 	}
-	provider := &OpenAISTT{
+	provider := &STT{
 		apiKey:        apiKey,
 		baseURL:       openAIBaseURLFromEnv(),
 		model:         model,
@@ -219,7 +219,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	}
 	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
-		provider.vad = silero.NewSileroVAD()
+		provider.vad = silero.NewVAD()
 	}
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = provider.baseURL
@@ -237,11 +237,11 @@ func openAIBaseURLFromEnv() string {
 	return defaultOpenAIBaseURL
 }
 
-func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...STTOption) (*STT, error) {
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
 	}
-	preflight := &OpenAISTT{}
+	preflight := &STT{}
 	for _, opt := range opts {
 		opt(preflight)
 	}
@@ -268,7 +268,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	realtimeBaseURL := openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment)
 
-	provider := &OpenAISTT{
+	provider := &STT{
 		apiKey:               apiKey,
 		azureADToken:         azureADToken,
 		azureADTokenProvider: preflight.azureADTokenProvider,
@@ -288,7 +288,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
-		provider.vad = silero.NewSileroVAD()
+		provider.vad = silero.NewVAD()
 	}
 
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
@@ -341,7 +341,7 @@ func openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment string) string
 	return strings.TrimRight(azureEndpoint, "/") + "/openai/deployments/" + url.PathEscape(azureDeployment)
 }
 
-func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+func NewOVHCloudOpenAISTT(model, apiKey string, opts ...STTOption) (*STT, error) {
 	if model == "" {
 		model = defaultOVHCloudOpenAISTTModel
 	}
@@ -352,30 +352,30 @@ func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenA
 		return nil, fmt.Errorf("OVHcloud AI Endpoints API key is required")
 	}
 
-	options := append([]OpenAISTTOption{WithOpenAISTTBaseURL(defaultOVHCloudOpenAIBaseURL)}, opts...)
-	return NewOpenAISTT(apiKey, model, options...)
+	options := append([]STTOption{WithOpenAISTTBaseURL(defaultOVHCloudOpenAIBaseURL)}, opts...)
+	return NewSTT(apiKey, model, options...)
 }
 
-func (s *OpenAISTT) Label() string { return "openai.STT" }
-func (s *OpenAISTT) applyDetectLanguage() {
+func (s *STT) Label() string { return "openai.STT" }
+func (s *STT) applyDetectLanguage() {
 	if s != nil && s.detectLanguage {
 		s.language = ""
 	}
 }
 
-func (s *OpenAISTT) Provider() string {
+func (s *STT) Provider() string {
 	u, err := url.Parse(s.baseURL)
 	if err != nil || u.Host == "" {
 		return "openai"
 	}
 	return u.Host
 }
-func (s *OpenAISTT) Model() string { return s.model }
-func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Model() string { return s.model }
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
 
-func (s *OpenAISTT) Close() error {
+func (s *STT) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -405,7 +405,7 @@ func (s *OpenAISTT) Close() error {
 	return closeErr
 }
 
-func (s *OpenAISTT) isClosed() bool {
+func (s *STT) isClosed() bool {
 	if s == nil {
 		return true
 	}
@@ -414,7 +414,7 @@ func (s *OpenAISTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
+func (s *STT) UpdateOptions(opts ...STTOption) {
 	previousDetectOptionSet := s.detectOptionSet
 	s.languageSet = false
 	s.languageValue = ""
@@ -436,7 +436,7 @@ func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
 	}
 }
 
-func (s *OpenAISTT) registerRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
+func (s *STT) registerRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -448,7 +448,7 @@ func (s *OpenAISTT) registerRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
 	s.streams[stream] = struct{}{}
 }
 
-func (s *OpenAISTT) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+func (s *STT) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 	if s.closed {
@@ -463,13 +463,13 @@ func (s *OpenAISTT) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	return id, true
 }
 
-func (s *OpenAISTT) unregisterRequest(id uint64) {
+func (s *STT) unregisterRequest(id uint64) {
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 	delete(s.requestCancels, id)
 }
 
-func (s *OpenAISTT) unregisterRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
+func (s *STT) unregisterRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
 	if s == nil || stream == nil {
 		return
 	}
@@ -478,7 +478,7 @@ func (s *OpenAISTT) unregisterRealtimeSTTStream(stream *openAIRealtimeSTTStream)
 	delete(s.streams, stream)
 }
 
-func (s *OpenAISTT) updateRealtimeSTTStreamLanguage(language string) {
+func (s *STT) updateRealtimeSTTStreamLanguage(language string) {
 	s.streamsMu.Lock()
 	streams := make([]*openAIRealtimeSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
@@ -490,7 +490,7 @@ func (s *OpenAISTT) updateRealtimeSTTStreamLanguage(language string) {
 	}
 }
 
-func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if !s.useRealtime {
 		return nil, fmt.Errorf("openai realtime stt is not enabled")
 	}
@@ -558,7 +558,7 @@ func defaultOpenAIRealtimeSTTWebsocketDialer(ctx context.Context, endpoint strin
 	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
-func (s *OpenAISTT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+func (s *STT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Conn, *http.Response, error) {
 	var (
 		conn *websocket.Conn
 		resp *http.Response
@@ -587,7 +587,7 @@ func (s *OpenAISTT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Co
 	return nil, nil, err
 }
 
-func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*websocket.Conn, *http.Response, error) {
+func (s *STT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*websocket.Conn, *http.Response, error) {
 	if s.connect.Timeout <= 0 {
 		return s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 	}
@@ -596,7 +596,7 @@ func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*webso
 	return s.dialWebsocket(dialCtx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 }
 
-func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
+func buildOpenAIRealtimeSTTWebsocketURL(s *STT) *url.URL {
 	baseURL := strings.TrimRight(s.baseURL, "/")
 	if s.realtimeBaseURL != "" {
 		baseURL = strings.TrimRight(s.realtimeBaseURL, "/")
@@ -614,7 +614,7 @@ func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
 	return wsURL
 }
 
-func buildOpenAIRealtimeSTTHeaders(s *OpenAISTT) http.Header {
+func buildOpenAIRealtimeSTTHeaders(s *STT) http.Header {
 	headers := make(http.Header)
 	headers.Set("User-Agent", "LiveKit Agents")
 	authToken := s.apiKey
@@ -625,7 +625,7 @@ func buildOpenAIRealtimeSTTHeaders(s *OpenAISTT) http.Header {
 	return headers
 }
 
-func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
+func buildOpenAIRealtimeSTTSessionUpdate(s *STT) ([]byte, error) {
 	transcription := map[string]interface{}{"model": s.model}
 	if s.prompt != "" {
 		transcription["prompt"] = s.prompt
@@ -689,7 +689,7 @@ func buildOpenAIRealtimeSTTCommitMessage() ([]byte, error) {
 	return json.Marshal(map[string]interface{}{"type": "input_audio_buffer.commit"})
 }
 
-func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
@@ -773,7 +773,7 @@ func openAISTTWAVBytes(frames []*model.AudioFrame) []byte {
 	return wav.Bytes()
 }
 
-func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.AudioRequest {
+func openAIAudioRequest(s *STT, reader io.Reader, language string) openai.AudioRequest {
 	requestLanguage := openAIAudioRequestLanguage(s, language)
 	req := openai.AudioRequest{
 		Model:    s.model,
@@ -789,7 +789,7 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	return req
 }
 
-func openAIAudioRequestLanguage(s *OpenAISTT, language string) string {
+func openAIAudioRequestLanguage(s *STT, language string) string {
 	requestLanguage := s.language
 	if language != "" {
 		requestLanguage = language
@@ -860,7 +860,7 @@ type openAIRealtimeSTTStream struct {
 	audio           *audio.AudioByteStream
 	normalizer      openAIRealtimeInputAudioNormalizer
 	state           *openAIRealtimeSTTMessageState
-	owner           *OpenAISTT
+	owner           *STT
 	vadStream       vad.VADStream
 	startTimeOffset float64
 	startTime       float64
@@ -1017,7 +1017,7 @@ func (s *openAIRealtimeSTTStream) shouldCommitOnEndInputLocked() bool {
 	return !s.owner.usesRealtimeSTTServerTurnDetection()
 }
 
-func (s *OpenAISTT) usesRealtimeSTTServerTurnDetection() bool {
+func (s *STT) usesRealtimeSTTServerTurnDetection() bool {
 	if s == nil || openAIRealtimeIsWhisperModel(s.model) {
 		return false
 	}
@@ -1623,4 +1623,15 @@ func openAIInt(value interface{}) int {
 	default:
 		return 0
 	}
+}
+
+// Deprecated: use STT.
+type OpenAISTT = STT
+
+// Deprecated: use STTOption.
+type OpenAISTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewOpenAISTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
+	return NewSTT(apiKey, model, opts...)
 }

@@ -35,7 +35,7 @@ const deepgramTTSCloseMessage = `{"type": "Close"}`
 
 var errDeepgramTTSReleasedToPool = errors.New("deepgram tts stream released to pool")
 
-type DeepgramTTS struct {
+type TTS struct {
 	apiKey                string
 	baseURL               string
 	model                 string
@@ -52,29 +52,29 @@ type DeepgramTTS struct {
 	prewarmCancel         context.CancelFunc
 }
 
-type DeepgramTTSOption func(*DeepgramTTS)
+type TTSOption func(*TTS)
 
-func WithDeepgramTTSBaseURL(baseURL string) DeepgramTTSOption {
-	return func(t *DeepgramTTS) {
+func WithDeepgramTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		t.baseURL = strings.TrimRight(baseURL, "/")
 	}
 }
 
-func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
-	return func(t *DeepgramTTS) {
+func WithDeepgramTTSMipOptOut(mipOptOut bool) TTSOption {
+	return func(t *TTS) {
 		t.mipOptOut = mipOptOut
 	}
 }
 
-func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
-	return func(t *DeepgramTTS) {
+func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) TTSOption {
+	return func(t *TTS) {
 		t.encoding = deepgramTTSNormalizeEncoding(encoding)
 		t.sampleRate = sampleRate
 	}
 }
 
-func WithDeepgramTTSStreamResponseTimeout(timeout time.Duration) DeepgramTTSOption {
-	return func(t *DeepgramTTS) {
+func WithDeepgramTTSStreamResponseTimeout(timeout time.Duration) TTSOption {
+	return func(t *TTS) {
 		if timeout > 0 {
 			t.streamResponseTimeout = timeout
 		}
@@ -94,14 +94,14 @@ func deepgramTTSNormalizeEncoding(encoding string) string {
 	}
 }
 
-func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *DeepgramTTS {
+func NewTTS(apiKey string, model string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("DEEPGRAM_API_KEY")
 	}
 	if model == "" {
 		model = "aura-2-andromeda-en"
 	}
-	provider := &DeepgramTTS{
+	provider := &TTS{
 		apiKey:                apiKey,
 		baseURL:               defaultDeepgramTTSBaseURL,
 		model:                 model,
@@ -116,20 +116,20 @@ func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *Dee
 	return provider
 }
 
-func (t *DeepgramTTS) Label() string { return "deepgram.TTS" }
-func (t *DeepgramTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "deepgram.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *DeepgramTTS) SampleRate() int  { return t.sampleRate }
-func (t *DeepgramTTS) NumChannels() int { return 1 }
-func (t *DeepgramTTS) Model() string    { return t.model }
-func (t *DeepgramTTS) Provider() string { return "Deepgram" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "Deepgram" }
 
-func (t *DeepgramTTS) UpdateOptions(model string) {
+func (t *TTS) UpdateOptions(model string) {
 	t.model = model
 }
 
-func (t *DeepgramTTS) Prewarm() {
+func (t *TTS) Prewarm() {
 	if t == nil || validateDeepgramTTSAPIKey(t.apiKey) != nil {
 		return
 	}
@@ -167,7 +167,7 @@ func (t *DeepgramTTS) Prewarm() {
 	}()
 }
 
-func (t *DeepgramTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*deepgramTTSStream, 0, len(t.streams))
@@ -197,7 +197,7 @@ func (t *DeepgramTTS) Close() error {
 	return closeErr
 }
 
-func (t *DeepgramTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -206,7 +206,7 @@ func (t *DeepgramTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -226,7 +226,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}, nil
 }
 
-func buildDeepgramTTSSynthesizeRequest(t *DeepgramTTS, text string) (string, []byte) {
+func buildDeepgramTTSSynthesizeRequest(t *TTS, text string) (string, []byte) {
 	u := deepgramTTSBaseURL(t, false)
 	q := u.Query()
 	q.Set("model", t.model)
@@ -240,7 +240,7 @@ func buildDeepgramTTSSynthesizeRequest(t *DeepgramTTS, text string) (string, []b
 	return u.String(), jsonBody
 }
 
-func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -274,7 +274,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	return stream, nil
 }
 
-func (t *DeepgramTTS) registerStream(stream *deepgramTTSStream) bool {
+func (t *TTS) registerStream(stream *deepgramTTSStream) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -287,13 +287,13 @@ func (t *DeepgramTTS) registerStream(stream *deepgramTTSStream) bool {
 	return true
 }
 
-func (t *DeepgramTTS) unregisterStream(stream *deepgramTTSStream) {
+func (t *TTS) unregisterStream(stream *deepgramTTSStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func (t *DeepgramTTS) takePrewarmedConn() *websocket.Conn {
+func (t *TTS) takePrewarmedConn() *websocket.Conn {
 	if t == nil {
 		return nil
 	}
@@ -313,7 +313,7 @@ func (t *DeepgramTTS) takePrewarmedConn() *websocket.Conn {
 	return conn
 }
 
-func (t *DeepgramTTS) storePrewarmedConn(conn *websocket.Conn) bool {
+func (t *TTS) storePrewarmedConn(conn *websocket.Conn) bool {
 	if t == nil || conn == nil {
 		return false
 	}
@@ -343,7 +343,7 @@ func validateDeepgramTTSAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildDeepgramTTSStreamURL(t *DeepgramTTS) string {
+func buildDeepgramTTSStreamURL(t *TTS) string {
 	u := deepgramTTSBaseURL(t, true)
 	q := u.Query()
 	q.Set("model", t.model)
@@ -354,7 +354,7 @@ func buildDeepgramTTSStreamURL(t *DeepgramTTS) string {
 	return u.String()
 }
 
-func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
+func deepgramTTSBaseURL(t *TTS, websocketURL bool) url.URL {
 	baseURL := t.baseURL
 	if websocketURL && strings.HasPrefix(baseURL, "http") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -687,7 +687,7 @@ func (s *deepgramTTSChunkedStream) cancelRequestLocked() {
 }
 
 type deepgramTTSStream struct {
-	provider    *DeepgramTTS
+	provider    *TTS
 	ctx         context.Context
 	cancel      context.CancelFunc
 	apiKey      string
@@ -1553,4 +1553,15 @@ func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	}
+}
+
+// Deprecated: use TTS.
+type DeepgramTTS = TTS
+
+// Deprecated: use TTSOption.
+type DeepgramTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewDeepgramTTS(apiKey string, model string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, model, opts...)
 }

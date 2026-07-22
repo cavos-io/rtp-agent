@@ -29,7 +29,7 @@ const (
 	telnyxTTSNumChannels       = 1
 )
 
-type TelnyxTTS struct {
+type TTS struct {
 	mu          sync.Mutex
 	streams     map[tts.SynthesizeStream]struct{}
 	apiKey      string
@@ -40,24 +40,24 @@ type TelnyxTTS struct {
 	openSegment func(context.Context) (tts.SynthesizeStream, error)
 }
 
-type TelnyxTTSOption func(*TelnyxTTS)
+type TTSOption func(*TTS)
 
-func WithTelnyxTTSBaseURL(baseURL string) TelnyxTTSOption {
-	return func(t *TelnyxTTS) {
+func WithTelnyxTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = baseURL
 		}
 	}
 }
 
-func NewTelnyxTTS(apiKey string, voice string, opts ...TelnyxTTSOption) *TelnyxTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(telnyxAPIKeyEnv)
 	}
 	if voice == "" {
 		voice = defaultTelnyxTTSVoice
 	}
-	provider := &TelnyxTTS{
+	provider := &TTS{
 		streams:    make(map[tts.SynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultTelnyxTTSBaseURL,
@@ -70,16 +70,16 @@ func NewTelnyxTTS(apiKey string, voice string, opts ...TelnyxTTSOption) *TelnyxT
 	return provider
 }
 
-func (t *TelnyxTTS) Label() string { return "telnyx.TTS" }
-func (t *TelnyxTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "telnyx.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *TelnyxTTS) SampleRate() int  { return t.sampleRate }
-func (t *TelnyxTTS) NumChannels() int { return telnyxTTSNumChannels }
-func (t *TelnyxTTS) Model() string    { return t.voice }
-func (t *TelnyxTTS) Provider() string { return "telnyx" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return telnyxTTSNumChannels }
+func (t *TTS) Model() string    { return t.voice }
+func (t *TTS) Provider() string { return "telnyx" }
 
-func (t *TelnyxTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]tts.SynthesizeStream, 0, len(t.streams))
@@ -98,7 +98,7 @@ func (t *TelnyxTTS) Close() error {
 	return closeErr
 }
 
-func (t *TelnyxTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -107,7 +107,7 @@ func (t *TelnyxTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *TelnyxTTS) registerStream(stream tts.SynthesizeStream) bool {
+func (t *TTS) registerStream(stream tts.SynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -128,7 +128,7 @@ func (t *TelnyxTTS) registerStream(stream tts.SynthesizeStream) bool {
 	return true
 }
 
-func (t *TelnyxTTS) unregisterStream(stream tts.SynthesizeStream) {
+func (t *TTS) unregisterStream(stream tts.SynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func (t *TelnyxTTS) unregisterStream(stream tts.SynthesizeStream) {
 	t.mu.Unlock()
 }
 
-func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -147,7 +147,7 @@ func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	return &telnyxTTSChunkedStream{provider: t, ctx: ctx, text: text}, nil
 }
 
-func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -165,7 +165,7 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *TelnyxTTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.openSegment != nil {
 		return t.openSegment(ctx)
 	}
@@ -202,7 +202,7 @@ func (t *TelnyxTTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream
 	return stream, nil
 }
 
-func buildTelnyxTTSStreamURL(t *TelnyxTTS) string {
+func buildTelnyxTTSStreamURL(t *TTS) string {
 	u, err := url.Parse(t.baseURL)
 	if err != nil {
 		return t.baseURL
@@ -213,7 +213,7 @@ func buildTelnyxTTSStreamURL(t *TelnyxTTS) string {
 	return u.String()
 }
 
-func buildTelnyxTTSHeaders(t *TelnyxTTS) http.Header {
+func buildTelnyxTTSHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	return headers
@@ -315,7 +315,7 @@ func (s *telnyxTTSChunkedStream) Close() error {
 }
 
 type telnyxTTSSegmentedStream struct {
-	provider    *TelnyxTTS
+	provider    *TTS
 	ctx         context.Context
 	segments    chan telnyxTTSSegment
 	current     *telnyxTTSSegment
@@ -502,7 +502,7 @@ func (s *telnyxTTSSegmentedStream) closeSegments() {
 }
 
 type telnyxTTSStream struct {
-	owner       *TelnyxTTS
+	owner       *TTS
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -850,4 +850,15 @@ func telnyxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+// Deprecated: use TTS.
+type TelnyxTTS = TTS
+
+// Deprecated: use TTSOption.
+type TelnyxTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewTelnyxTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

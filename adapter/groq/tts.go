@@ -30,7 +30,7 @@ const (
 	defaultGroqTTSTotalTimeout   = 30 * time.Second
 )
 
-type GroqTTS struct {
+type TTS struct {
 	apiKey         string
 	baseURL        string
 	model          string
@@ -44,37 +44,37 @@ type GroqTTS struct {
 	requestCancels map[uint64]context.CancelFunc
 }
 
-type GroqTTSOption func(*GroqTTS)
+type TTSOption func(*TTS)
 
-func WithGroqTTSBaseURL(baseURL string) GroqTTSOption {
-	return func(t *GroqTTS) {
+func WithGroqTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithGroqTTSModel(model string) GroqTTSOption {
-	return func(t *GroqTTS) {
+func WithGroqTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithGroqTTSVoice(voice string) GroqTTSOption {
-	return func(t *GroqTTS) {
+func WithGroqTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func NewGroqTTS(apiKey string, voice string, opts ...GroqTTSOption) *GroqTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("GROQ_API_KEY")
 	}
-	provider := &GroqTTS{
+	provider := &TTS{
 		apiKey:         apiKey,
 		baseURL:        defaultGroqTTSBaseURL,
 		model:          defaultGroqTTSModel,
@@ -92,16 +92,16 @@ func NewGroqTTS(apiKey string, voice string, opts ...GroqTTSOption) *GroqTTS {
 	return provider
 }
 
-func (t *GroqTTS) Label() string { return "groq.TTS" }
-func (t *GroqTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "groq.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *GroqTTS) SampleRate() int  { return t.sampleRate }
-func (t *GroqTTS) NumChannels() int { return 1 }
-func (t *GroqTTS) Model() string    { return t.model }
-func (t *GroqTTS) Provider() string { return "Groq" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "Groq" }
 
-func (t *GroqTTS) UpdateOptions(model string, voice string) {
+func (t *TTS) UpdateOptions(model string, voice string) {
 	if model != "" {
 		t.model = model
 	}
@@ -110,7 +110,7 @@ func (t *GroqTTS) UpdateOptions(model string, voice string) {
 	}
 }
 
-func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateGroqTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	return stream, nil
 }
 
-func (t *GroqTTS) Close() error {
+func (t *TTS) Close() error {
 	if t == nil {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (t *GroqTTS) Close() error {
 	return closeErr
 }
 
-func (t *GroqTTS) registerStream(stream *groqTTSChunkedStream) bool {
+func (t *TTS) registerStream(stream *groqTTSChunkedStream) bool {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -182,7 +182,7 @@ func (t *GroqTTS) registerStream(stream *groqTTSChunkedStream) bool {
 	return true
 }
 
-func (t *GroqTTS) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+func (t *TTS) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -197,19 +197,19 @@ func (t *GroqTTS) registerRequest(cancel context.CancelFunc) (uint64, bool) {
 	return id, true
 }
 
-func (t *GroqTTS) unregisterRequest(id uint64) {
+func (t *TTS) unregisterRequest(id uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.requestCancels, id)
 }
 
-func (t *GroqTTS) unregisterStream(stream *groqTTSChunkedStream) {
+func (t *TTS) unregisterStream(stream *groqTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func (t *GroqTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closed
@@ -233,7 +233,7 @@ func validateGroqTTSAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildGroqTTSRequest(ctx context.Context, t *GroqTTS, text string) (*http.Request, error) {
+func buildGroqTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	return buildGroqTTSRequestWithOptions(ctx, t.baseURL, t.apiKey, t.model, t.voice, t.responseFormat, text)
 }
 
@@ -257,7 +257,7 @@ func buildGroqTTSRequestWithOptions(ctx context.Context, baseURL, apiKey, modelN
 	return req, nil
 }
 
-func (t *GroqTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("groq streaming tts not natively supported")
 }
 
@@ -275,7 +275,7 @@ type groqTTSChunkedStream struct {
 	voice            string
 	responseFormat   string
 	sampleRate       int
-	provider         *GroqTTS
+	provider         *TTS
 	requestID        string
 	started          bool
 	finalSent        bool
@@ -647,4 +647,15 @@ func (s *groqTTSChunkedStream) Close() error {
 	err := body.Close()
 	s.unregister()
 	return err
+}
+
+// Deprecated: use TTS.
+type GroqTTS = TTS
+
+// Deprecated: use TTSOption.
+type GroqTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewGroqTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

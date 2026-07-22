@@ -43,7 +43,7 @@ var (
 	upliftAISocketIOReconnectDelay = time.Second
 )
 
-type UpliftAITTS struct {
+type TTS struct {
 	apiKey                    string
 	voice                     string
 	outputFormat              string
@@ -59,7 +59,7 @@ type UpliftAITTS struct {
 	socketClient              *upliftAISocketIOClient
 }
 
-type UpliftAITTSOption func(*UpliftAITTS)
+type TTSOption func(*TTS)
 type UpliftAITTSUpdateOption func(*upliftAITTSUpdateOptions)
 
 type upliftAISocketIOConn interface {
@@ -85,26 +85,26 @@ type upliftAITTSUpdateOptions struct {
 	outputFormat *string
 }
 
-func WithUpliftAIBaseURL(baseURL string) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAIBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		t.baseURL = baseURL
 	}
 }
 
-func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAIOutputFormat(outputFormat string) TTSOption {
+	return func(t *TTS) {
 		t.outputFormat = outputFormat
 	}
 }
 
-func WithUpliftAINumChannels(numChannels int) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAINumChannels(numChannels int) TTSOption {
+	return func(t *TTS) {
 		t.numChannels = numChannels
 	}
 }
 
-func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
+	return func(t *TTS) {
 		if tokenizer == nil {
 			return
 		}
@@ -114,8 +114,8 @@ func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) UpliftA
 	}
 }
 
-func WithUpliftAIWordTokenizer(tokenizer tokenize.WordTokenizer) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAIWordTokenizer(tokenizer tokenize.WordTokenizer) TTSOption {
+	return func(t *TTS) {
 		if tokenizer == nil {
 			return
 		}
@@ -125,8 +125,8 @@ func WithUpliftAIWordTokenizer(tokenizer tokenize.WordTokenizer) UpliftAITTSOpti
 	}
 }
 
-func WithUpliftAIPhraseReplacementConfigID(configID string) UpliftAITTSOption {
-	return func(t *UpliftAITTS) {
+func WithUpliftAIPhraseReplacementConfigID(configID string) TTSOption {
+	return func(t *TTS) {
 		t.phraseReplacementConfigID = configID
 	}
 }
@@ -143,7 +143,7 @@ func WithUpliftAIUpdateOutputFormat(outputFormat string) UpliftAITTSUpdateOption
 	}
 }
 
-func NewUpliftAITTS(apiKey string, voice string, opts ...UpliftAITTSOption) *UpliftAITTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("UPLIFTAI_API_KEY")
 	}
@@ -154,7 +154,7 @@ func NewUpliftAITTS(apiKey string, voice string, opts ...UpliftAITTSOption) *Upl
 	if baseURL == "" {
 		baseURL = defaultUpliftAIBaseURL
 	}
-	tts := &UpliftAITTS{
+	tts := &TTS{
 		apiKey:       apiKey,
 		voice:        voice,
 		outputFormat: defaultUpliftAIFormat,
@@ -170,18 +170,18 @@ func NewUpliftAITTS(apiKey string, voice string, opts ...UpliftAITTSOption) *Upl
 	return tts
 }
 
-func (t *UpliftAITTS) Label() string { return "upliftai.TTS" }
-func (t *UpliftAITTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "upliftai.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *UpliftAITTS) SampleRate() int { return defaultUpliftAISampleRate }
-func (t *UpliftAITTS) NumChannels() int {
+func (t *TTS) SampleRate() int { return defaultUpliftAISampleRate }
+func (t *TTS) NumChannels() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.numChannels
 }
 
-func (t *UpliftAITTS) UpdateOptions(opts ...UpliftAITTSUpdateOption) {
+func (t *TTS) UpdateOptions(opts ...UpliftAITTSUpdateOption) {
 	var update upliftAITTSUpdateOptions
 	for _, opt := range opts {
 		if opt != nil {
@@ -198,7 +198,7 @@ func (t *UpliftAITTS) UpdateOptions(opts ...UpliftAITTSUpdateOption) {
 	}
 }
 
-func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -223,7 +223,7 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	return stream, nil
 }
 
-func (t *UpliftAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -238,7 +238,7 @@ func (t *UpliftAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	return stream, nil
 }
 
-func (t *UpliftAITTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -268,13 +268,13 @@ func (t *UpliftAITTS) Close() error {
 	return closeErr
 }
 
-func (t *UpliftAITTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closed
 }
 
-func (t *UpliftAITTS) registerStream(stream io.Closer) bool {
+func (t *TTS) registerStream(stream io.Closer) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -284,25 +284,25 @@ func (t *UpliftAITTS) registerStream(stream io.Closer) bool {
 	return true
 }
 
-func (t *UpliftAITTS) unregisterStream(stream io.Closer) {
+func (t *TTS) unregisterStream(stream io.Closer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
 }
 
-func (t *UpliftAITTS) requestOptions() (baseURL string, voiceID string, outputFormat string, phraseReplacementConfigID string) {
+func (t *TTS) requestOptions() (baseURL string, voiceID string, outputFormat string, phraseReplacementConfigID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.baseURL, t.voice, t.outputFormat, t.phraseReplacementConfigID
 }
 
-func (t *UpliftAITTS) outputNumChannels() int {
+func (t *TTS) outputNumChannels() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.numChannels
 }
 
-func (t *UpliftAITTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
+func (t *TTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.tokenizerKind != "sentence" {
@@ -311,7 +311,7 @@ func (t *UpliftAITTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
 	return t.sentenceTokenizer
 }
 
-func (t *UpliftAITTS) streamWordTokenizer() tokenize.WordTokenizer {
+func (t *TTS) streamWordTokenizer() tokenize.WordTokenizer {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.tokenizerKind != "word" {
@@ -320,7 +320,7 @@ func (t *UpliftAITTS) streamWordTokenizer() tokenize.WordTokenizer {
 	return t.wordTokenizer
 }
 
-func (t *UpliftAITTS) socketIOSynthesis(ctx context.Context, baseURL string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
+func (t *TTS) socketIOSynthesis(ctx context.Context, baseURL string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -339,7 +339,7 @@ func (t *UpliftAITTS) socketIOSynthesis(ctx context.Context, baseURL string, tex
 }
 
 type upliftAITTSSynthesizeStream struct {
-	owner  *UpliftAITTS
+	owner  *TTS
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -360,7 +360,7 @@ type upliftAITTSStreamResult struct {
 	err   error
 }
 
-func newUpliftAITTSSynthesizeStream(owner *UpliftAITTS, ctx context.Context) *upliftAITTSSynthesizeStream {
+func newUpliftAITTSSynthesizeStream(owner *TTS, ctx context.Context) *upliftAITTSSynthesizeStream {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -615,7 +615,7 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 }
 
 type upliftAITTSChunkedStream struct {
-	owner          *UpliftAITTS
+	owner          *TTS
 	ctx            context.Context
 	cancel         context.CancelFunc
 	text           string
@@ -1921,4 +1921,15 @@ func (s *upliftAITTSChunkedStream) Close() error {
 		}
 	})
 	return s.err
+}
+
+// Deprecated: use TTS.
+type UpliftAITTS = TTS
+
+// Deprecated: use TTSOption.
+type UpliftAITTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewUpliftAITTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

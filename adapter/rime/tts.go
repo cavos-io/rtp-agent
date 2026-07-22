@@ -44,7 +44,7 @@ const (
 
 var errRimeTTSClientClosed = errors.New("rime tts client closed")
 
-type RimeTTS struct {
+type TTS struct {
 	mu                       sync.Mutex
 	streams                  map[*rimeTTSSynthesizeStream]struct{}
 	prewarmConn              *websocket.Conn
@@ -110,10 +110,10 @@ type rimeStringOption struct {
 	set   bool
 }
 
-type RimeTTSOption func(*RimeTTS)
+type TTSOption func(*TTS)
 
-func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		t.baseURL = baseURL
 		if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
 			t.useWebsocket = true
@@ -121,8 +121,8 @@ func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 	}
 }
 
-func WithRimeTTSModel(model string) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		t.model = model
 		t.modelTouched = true
 		t.restoreCommonParamsForModel()
@@ -136,126 +136,126 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 	}
 }
 
-func WithRimeTTSVoice(voice string) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		t.voice = voice
 		t.voiceSet = true
 	}
 }
 
-func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		t.requestSampleRate = sampleRate
 		t.requestSampleRateSet = true
 		t.requestSampleRateTouched = true
 	}
 }
 
-func WithRimeTTSLang(lang string) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSLang(lang string) TTSOption {
+	return func(t *TTS) {
 		t.lang = lang
 		t.langSet = true
 		t.langTouched = true
 	}
 }
 
-func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) TTSOption {
+	return func(t *TTS) {
 		t.timeScaleFactor = &timeScaleFactor
 		t.timeScaleFactorTouched = true
 		t.storeTimeScaleFactorForModel()
 	}
 }
 
-func WithRimeTTSRepetitionPenalty(repetitionPenalty float64) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSRepetitionPenalty(repetitionPenalty float64) TTSOption {
+	return func(t *TTS) {
 		t.repetitionPenalty = &repetitionPenalty
 		t.repetitionPenaltyTouched = true
 	}
 }
 
-func WithRimeTTSTemperature(temperature float64) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSTemperature(temperature float64) TTSOption {
+	return func(t *TTS) {
 		t.temperature = &temperature
 		t.temperatureTouched = true
 	}
 }
 
-func WithRimeTTSTopP(topP float64) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSTopP(topP float64) TTSOption {
+	return func(t *TTS) {
 		t.topP = &topP
 		t.topPTouched = true
 	}
 }
 
-func WithRimeTTSMaxTokens(maxTokens int) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSMaxTokens(maxTokens int) TTSOption {
+	return func(t *TTS) {
 		t.maxTokens = &maxTokens
 		t.maxTokensTouched = true
 	}
 }
 
-func WithRimeTTSSpeedAlpha(speedAlpha float64) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSSpeedAlpha(speedAlpha float64) TTSOption {
+	return func(t *TTS) {
 		t.speedAlpha = &speedAlpha
 		t.speedAlphaTouched = true
 	}
 }
 
-func WithRimeTTSReduceLatency(reduceLatency bool) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSReduceLatency(reduceLatency bool) TTSOption {
+	return func(t *TTS) {
 		t.reduceLatency = &reduceLatency
 		t.reduceLatencyTouched = true
 	}
 }
 
-func WithRimeTTSPauseBetweenBrackets(pauseBetweenBrackets bool) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSPauseBetweenBrackets(pauseBetweenBrackets bool) TTSOption {
+	return func(t *TTS) {
 		t.pauseBetweenBrackets = &pauseBetweenBrackets
 		t.pauseBracketsTouched = true
 	}
 }
 
-func WithRimeTTSPhonemizeBetweenBrackets(phonemizeBetweenBrackets bool) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSPhonemizeBetweenBrackets(phonemizeBetweenBrackets bool) TTSOption {
+	return func(t *TTS) {
 		t.phonemizeBetweenBrackets = &phonemizeBetweenBrackets
 		t.phonemizeBracketsTouched = true
 	}
 }
 
-func WithRimeTTSWebsocket(useWebsocket bool) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSWebsocket(useWebsocket bool) TTSOption {
+	return func(t *TTS) {
 		t.useWebsocket = useWebsocket
 	}
 }
 
-func WithRimeTTSSegment(segment string) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSSegment(segment string) TTSOption {
+	return func(t *TTS) {
 		t.segment = segment
 	}
 }
 
-func WithRimeTTSSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
+	return func(t *TTS) {
 		if tokenizer != nil {
 			t.sentenceTokenizer = tokenizer
 		}
 	}
 }
 
-func WithRimeTTSStreamResponseTimeout(timeout time.Duration) RimeTTSOption {
-	return func(t *RimeTTS) {
+func WithRimeTTSStreamResponseTimeout(timeout time.Duration) TTSOption {
+	return func(t *TTS) {
 		if timeout >= 0 {
 			t.streamResponseTimeout = timeout
 		}
 	}
 }
 
-func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("RIME_API_KEY")
 	}
-	provider := &RimeTTS{
+	provider := &TTS{
 		apiKey:                apiKey,
 		baseURL:               defaultRimeHTTPBaseURL,
 		model:                 defaultRimeModel,
@@ -305,7 +305,7 @@ func defaultRimeVoice(model string) string {
 	}
 }
 
-func (t *RimeTTS) storeTimeScaleFactorForModel() {
+func (t *TTS) storeTimeScaleFactorForModel() {
 	bucket := rimeTimeScaleFactorBucket(t.model)
 	if bucket == "" {
 		return
@@ -316,7 +316,7 @@ func (t *RimeTTS) storeTimeScaleFactorForModel() {
 	t.timeScaleFactors[bucket] = cloneFloat64Ptr(t.timeScaleFactor)
 }
 
-func (t *RimeTTS) restoreTimeScaleFactorForModel() {
+func (t *TTS) restoreTimeScaleFactorForModel() {
 	if t.timeScaleFactorTouched {
 		t.storeTimeScaleFactorForModel()
 		return
@@ -346,7 +346,7 @@ func rimeTimeScaleFactorBucket(model string) string {
 	}
 }
 
-func (t *RimeTTS) storeCommonParamsForModel() {
+func (t *TTS) storeCommonParamsForModel() {
 	bucket := rimeCommonParamsBucket(t.model)
 	if bucket == "" {
 		return
@@ -365,7 +365,7 @@ func (t *RimeTTS) storeCommonParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) storeTouchedCommonParamsForModel() {
+func (t *TTS) storeTouchedCommonParamsForModel() {
 	if !t.langTouched && !t.requestSampleRateTouched {
 		return
 	}
@@ -387,7 +387,7 @@ func (t *RimeTTS) storeTouchedCommonParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) restoreCommonParamsForModel() {
+func (t *TTS) restoreCommonParamsForModel() {
 	if !t.langTouched {
 		bucket := rimeCommonParamsBucket(t.model)
 		if bucket == "" {
@@ -429,7 +429,7 @@ func rimeCommonParamsBucket(model string) string {
 	}
 }
 
-func (t *RimeTTS) storeArcanaParamsForModel() {
+func (t *TTS) storeArcanaParamsForModel() {
 	if t.model != "arcana" {
 		return
 	}
@@ -438,7 +438,7 @@ func (t *RimeTTS) storeArcanaParamsForModel() {
 	t.arcanaTopP = cloneFloat64Ptr(t.topP)
 }
 
-func (t *RimeTTS) storeTouchedArcanaParamsForModel() {
+func (t *TTS) storeTouchedArcanaParamsForModel() {
 	if t.model != "arcana" {
 		return
 	}
@@ -453,7 +453,7 @@ func (t *RimeTTS) storeTouchedArcanaParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) restoreArcanaParamsForModel() {
+func (t *TTS) restoreArcanaParamsForModel() {
 	if t.model != "arcana" {
 		return
 	}
@@ -468,7 +468,7 @@ func (t *RimeTTS) restoreArcanaParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) storeMistParamsForModel() {
+func (t *TTS) storeMistParamsForModel() {
 	if !strings.Contains(t.model, "mist") {
 		return
 	}
@@ -478,7 +478,7 @@ func (t *RimeTTS) storeMistParamsForModel() {
 	t.mistPhonemizeBrackets = cloneBoolPtr(t.phonemizeBetweenBrackets)
 }
 
-func (t *RimeTTS) storeTouchedMistParamsForModel() {
+func (t *TTS) storeTouchedMistParamsForModel() {
 	if !strings.Contains(t.model, "mist") {
 		return
 	}
@@ -496,7 +496,7 @@ func (t *RimeTTS) storeTouchedMistParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) restoreMistParamsForModel() {
+func (t *TTS) restoreMistParamsForModel() {
 	if !strings.Contains(t.model, "mist") {
 		return
 	}
@@ -514,14 +514,14 @@ func (t *RimeTTS) restoreMistParamsForModel() {
 	}
 }
 
-func (t *RimeTTS) storeTouchedMaxTokensForModel() {
+func (t *TTS) storeTouchedMaxTokensForModel() {
 	if !t.maxTokensTouched {
 		return
 	}
 	t.storeMaxTokensForModel()
 }
 
-func (t *RimeTTS) storeMaxTokensForModel() {
+func (t *TTS) storeMaxTokensForModel() {
 	bucket := rimeMaxTokensBucket(t.model)
 	if bucket == "" {
 		return
@@ -532,7 +532,7 @@ func (t *RimeTTS) storeMaxTokensForModel() {
 	t.maxTokensByModel[bucket] = cloneIntPtr(t.maxTokens)
 }
 
-func (t *RimeTTS) restoreMaxTokensForModel() {
+func (t *TTS) restoreMaxTokensForModel() {
 	if t.maxTokensTouched {
 		return
 	}
@@ -621,25 +621,25 @@ func cloneBoolPtr(value *bool) *bool {
 	return &cloned
 }
 
-func (t *RimeTTS) Label() string { return "rime.TTS" }
-func (t *RimeTTS) Model() string { return t.model }
-func (t *RimeTTS) Provider() string {
+func (t *TTS) Label() string { return "rime.TTS" }
+func (t *TTS) Model() string { return t.model }
+func (t *TTS) Provider() string {
 	return "Rime"
 }
 
-func (t *RimeTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: t.useWebsocket, AlignedTranscript: t.useWebsocket}
 }
-func (t *RimeTTS) SampleRate() int  { return t.sampleRate }
-func (t *RimeTTS) NumChannels() int { return 1 }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
 
-func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
+func (t *TTS) UpdateOptions(opts ...TTSOption) error {
 	if t == nil {
 		return io.ErrClosedPipe
 	}
 	t.mu.Lock()
 	currentUseWebsocket := t.useWebsocket
-	candidate := &RimeTTS{
+	candidate := &TTS{
 		apiKey:                   t.apiKey,
 		baseURL:                  t.baseURL,
 		model:                    t.model,
@@ -736,7 +736,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	return nil
 }
 
-func normalizeRimeTransportBaseURL(t *RimeTTS) {
+func normalizeRimeTransportBaseURL(t *TTS) {
 	if t.useWebsocket && t.baseURL == defaultRimeHTTPBaseURL {
 		t.baseURL = defaultRimeWSBaseURL
 		return
@@ -746,7 +746,7 @@ func normalizeRimeTransportBaseURL(t *RimeTTS) {
 	}
 }
 
-func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -771,7 +771,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}, nil
 }
 
-func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Request, error) {
+func buildRimeTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	if err := validateRimeTimeScaleFactor(t); err != nil {
 		return nil, err
 	}
@@ -797,7 +797,7 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 	return req, nil
 }
 
-func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -862,7 +862,7 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *RimeTTS) Prewarm() {
+func (t *TTS) Prewarm() {
 	if t == nil || !t.useWebsocket || validateRimeAPIKey(t.apiKey) != nil || validateRimeTimeScaleFactor(t) != nil {
 		return
 	}
@@ -910,7 +910,7 @@ func (t *RimeTTS) Prewarm() {
 	}()
 }
 
-func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
+func (t *TTS) takePrewarmedConn() *websocket.Conn {
 	if t == nil {
 		return nil
 	}
@@ -936,7 +936,7 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 	return conn
 }
 
-func (t *RimeTTS) currentPoolGeneration() uint64 {
+func (t *TTS) currentPoolGeneration() uint64 {
 	if t == nil {
 		return 0
 	}
@@ -945,7 +945,7 @@ func (t *RimeTTS) currentPoolGeneration() uint64 {
 	return t.poolGeneration
 }
 
-func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, poolGeneration uint64) {
+func (t *TTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, poolGeneration uint64) {
 	if t == nil || conn == nil {
 		return
 	}
@@ -967,7 +967,7 @@ func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, 
 	t.mu.Unlock()
 }
 
-func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
+func (t *TTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 	dialCtx := ctx
 	var cancelDial context.CancelFunc
 	if t.streamResponseTimeout > 0 {
@@ -1007,7 +1007,7 @@ func rimeHTTPStatusReason(statusCode int, status string) string {
 	return message
 }
 
-func (t *RimeTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	prewarmConn := t.prewarmConn
@@ -1085,7 +1085,7 @@ func closeRimePrewarmedConn(conn *websocket.Conn) error {
 	return stream.closeFromProvider()
 }
 
-func (t *RimeTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -1094,7 +1094,7 @@ func (t *RimeTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *RimeTTS) registerStream(stream *rimeTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *rimeTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -1111,7 +1111,7 @@ func (t *RimeTTS) registerStream(stream *rimeTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *RimeTTS) unregisterStream(stream *rimeTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *rimeTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -1127,14 +1127,14 @@ func validateRimeAPIKey(apiKey string) error {
 	return nil
 }
 
-func validateRimeTimeScaleFactor(t *RimeTTS) error {
+func validateRimeTimeScaleFactor(t *TTS) error {
 	if t.model == "mistv2" && t.timeScaleFactor != nil {
 		return fmt.Errorf("time_scale_factor is not supported by the mistv2 model; use arcana, mistv3, or coda")
 	}
 	return nil
 }
 
-func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
+func buildRimeTTSWebsocketURL(t *TTS) *url.URL {
 	wsURL, err := url.Parse(t.baseURL + "/ws3")
 	if err != nil {
 		wsURL = &url.URL{Scheme: "wss", Host: strings.TrimPrefix(t.baseURL, "wss://"), Path: "/ws3"}
@@ -1150,7 +1150,7 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	return wsURL
 }
 
-func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
+func addRimeModelParams(params map[string]interface{}, t *TTS, includeHTTPOnly bool) {
 	switch {
 	case t.model == "arcana":
 		addRimeCommonModelParams(params, t, includeHTTPOnly)
@@ -1188,7 +1188,7 @@ func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOn
 	}
 }
 
-func addRimeCommonModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
+func addRimeCommonModelParams(params map[string]interface{}, t *TTS, includeHTTPOnly bool) {
 	if t.lang != "" || t.langSet {
 		params["lang"] = t.lang
 	}
@@ -1200,7 +1200,7 @@ func addRimeCommonModelParams(params map[string]interface{}, t *RimeTTS, include
 	}
 }
 
-func addRimeModelQueryParams(query url.Values, t *RimeTTS) {
+func addRimeModelQueryParams(query url.Values, t *TTS) {
 	params := map[string]interface{}{}
 	addRimeModelParams(params, t, false)
 	for key, value := range params {
@@ -1208,7 +1208,7 @@ func addRimeModelQueryParams(query url.Values, t *RimeTTS) {
 	}
 }
 
-func buildRimeTTSWebsocketHeaders(t *RimeTTS) http.Header {
+func buildRimeTTSWebsocketHeaders(t *TTS) http.Header {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+t.apiKey)
 	return header
@@ -1244,8 +1244,8 @@ type rimeTTSChunkedStream struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	text         string
-	provider     *RimeTTS
-	opts         RimeTTS
+	provider     *TTS
+	opts         TTS
 	sampleRate   int
 	requestID    string
 	requested    bool
@@ -1426,7 +1426,7 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	return s.openResponse(requestCtx, cancel)
 }
 
-func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
+func rimeTTSApplyLazyHTTPOptionUpdates(opts *TTS, provider *TTS) {
 	if opts == nil || provider == nil || opts.model != provider.model {
 		return
 	}
@@ -1530,7 +1530,7 @@ type rimeTTSSynthesizeStream struct {
 	conn                  *websocket.Conn
 	ctx                   context.Context
 	cancel                context.CancelFunc
-	provider              *RimeTTS
+	provider              *TTS
 	requestID             string
 	contextID             string
 	websocketURL          string
@@ -2630,4 +2630,15 @@ func rimeTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
+}
+
+// Deprecated: use TTS.
+type RimeTTS = TTS
+
+// Deprecated: use TTSOption.
+type RimeTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewRimeTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

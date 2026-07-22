@@ -31,7 +31,7 @@ const (
 	sonioxTTSKeepaliveInterval   = 10 * time.Second
 )
 
-type SonioxTTS struct {
+type TTS struct {
 	mu           sync.Mutex
 	streams      map[*sonioxTTSSynthesizeStream]struct{}
 	apiKey       string
@@ -45,69 +45,69 @@ type SonioxTTS struct {
 	closed       bool
 }
 
-type SonioxTTSOption func(*SonioxTTS)
+type TTSOption func(*TTS)
 
-func WithSonioxTTSWebsocketURL(websocketURL string) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSWebsocketURL(websocketURL string) TTSOption {
+	return func(t *TTS) {
 		if websocketURL != "" {
 			t.websocketURL = websocketURL
 		}
 	}
 }
 
-func WithSonioxTTSModel(model string) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithSonioxTTSLanguage(language string) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSLanguage(language string) TTSOption {
+	return func(t *TTS) {
 		if language != "" {
 			t.language = language
 		}
 	}
 }
 
-func WithSonioxTTSVoice(voice string) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithSonioxTTSAudioFormat(audioFormat string) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSAudioFormat(audioFormat string) TTSOption {
+	return func(t *TTS) {
 		if audioFormat != "" {
 			t.audioFormat = audioFormat
 		}
 	}
 }
 
-func WithSonioxTTSSampleRate(sampleRate int) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithSonioxTTSBitrate(bitrate int) SonioxTTSOption {
-	return func(t *SonioxTTS) {
+func WithSonioxTTSBitrate(bitrate int) TTSOption {
+	return func(t *TTS) {
 		if bitrate > 0 {
 			t.bitrate = &bitrate
 		}
 	}
 }
 
-func NewSonioxTTS(apiKey string, opts ...SonioxTTSOption) *SonioxTTS {
+func NewTTS(apiKey string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(sonioxAPIKeyEnv)
 	}
-	provider := &SonioxTTS{
+	provider := &TTS{
 		streams:      make(map[*sonioxTTSSynthesizeStream]struct{}),
 		apiKey:       apiKey,
 		websocketURL: defaultSonioxTTSWebsocketURL,
@@ -123,16 +123,16 @@ func NewSonioxTTS(apiKey string, opts ...SonioxTTSOption) *SonioxTTS {
 	return provider
 }
 
-func (t *SonioxTTS) Label() string { return "soniox.TTS" }
-func (t *SonioxTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "soniox.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *SonioxTTS) SampleRate() int  { return t.sampleRate }
-func (t *SonioxTTS) NumChannels() int { return sonioxTTSNumChannels }
-func (t *SonioxTTS) Model() string    { return t.model }
-func (t *SonioxTTS) Provider() string { return "Soniox" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return sonioxTTSNumChannels }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "Soniox" }
 
-func (t *SonioxTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	streams := make([]*sonioxTTSSynthesizeStream, 0, len(t.streams))
@@ -151,7 +151,7 @@ func (t *SonioxTTS) Close() error {
 	return closeErr
 }
 
-func (t *SonioxTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -160,7 +160,7 @@ func (t *SonioxTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *SonioxTTS) registerStream(stream *sonioxTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *sonioxTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -177,7 +177,7 @@ func (t *SonioxTTS) registerStream(stream *sonioxTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *SonioxTTS) unregisterStream(stream *sonioxTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *sonioxTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -186,7 +186,7 @@ func (t *SonioxTTS) unregisterStream(stream *sonioxTTSSynthesizeStream) {
 	t.mu.Unlock()
 }
 
-func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -196,7 +196,7 @@ func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	return &sonioxTTSChunkedStream{provider: t, ctx: ctx, text: text}, nil
 }
 
-func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -240,7 +240,7 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type sonioxTTSChunkedStream struct {
-	provider *SonioxTTS
+	provider *TTS
 	ctx      context.Context
 	text     string
 	stream   tts.SynthesizeStream
@@ -314,7 +314,7 @@ type sonioxTTSSynthesizeStream struct {
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
-	provider   *SonioxTTS
+	provider   *TTS
 	streamID   string
 	sampleRate int
 	events     chan *tts.SynthesizedAudio
@@ -563,7 +563,7 @@ func (s *sonioxTTSSynthesizeStream) keepAliveLoop() {
 	}
 }
 
-func buildSonioxTTSStartConfig(t *SonioxTTS, streamID string) map[string]any {
+func buildSonioxTTSStartConfig(t *TTS, streamID string) map[string]any {
 	config := map[string]any{
 		"api_key":      t.apiKey,
 		"model":        t.model,
@@ -698,4 +698,15 @@ func sonioxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 
 func shortSonioxTTSStreamID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// Deprecated: use TTS.
+type SonioxTTS = TTS
+
+// Deprecated: use TTSOption.
+type SonioxTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewSonioxTTS(apiKey string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, opts...)
 }

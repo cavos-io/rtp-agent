@@ -13,7 +13,7 @@ func TestNewAvatartalkAvatarUsesReferenceDefaults(t *testing.T) {
 	t.Setenv(avatarTalkAvatarEnv, "")
 	t.Setenv(avatarTalkEmotionEnv, "")
 
-	avatar := NewAvatartalkAvatar("explicit-key")
+	avatar := NewAvatar("explicit-key")
 
 	if avatar.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", avatar.apiKey)
@@ -46,7 +46,7 @@ func TestNewAvatartalkAvatarUsesEnvironmentConfig(t *testing.T) {
 	t.Setenv(avatarTalkAvatarEnv, "custom-avatar")
 	t.Setenv(avatarTalkEmotionEnv, "calm")
 
-	avatar := NewAvatartalkAvatar("")
+	avatar := NewAvatar("")
 
 	if avatar.apiKey != "env-key" {
 		t.Fatalf("apiKey = %q, want env key", avatar.apiKey)
@@ -61,7 +61,7 @@ func TestNewAvatartalkAvatarUsesEnvironmentConfig(t *testing.T) {
 
 func TestAvatartalkAvatarStartRequiresAPIKey(t *testing.T) {
 	t.Setenv(avatarTalkAPIKeyEnv, "")
-	avatar := NewAvatartalkAvatar("")
+	avatar := NewAvatar("")
 
 	err := avatar.Start(context.Background())
 
@@ -74,7 +74,7 @@ func TestAvatartalkAvatarStartRequiresAPIKey(t *testing.T) {
 }
 
 func TestAvatartalkAvatarStartAndUpdateState(t *testing.T) {
-	avatar := NewAvatartalkAvatar("explicit-key")
+	avatar := NewAvatar("explicit-key")
 
 	if err := avatar.Start(context.Background()); err != nil {
 		t.Fatalf("Start returned error: %v", err)

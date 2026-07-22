@@ -46,9 +46,12 @@ type TTS struct {
 	language    string
 }
 
-type Option func(*TTS)
+type TTSOption func(*TTS)
 
-func WithBaseURL(baseURL string) Option {
+// Deprecated: use TTSOption.
+type Option = TTSOption
+
+func WithBaseURL(baseURL string) TTSOption {
 	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
@@ -56,7 +59,7 @@ func WithBaseURL(baseURL string) Option {
 	}
 }
 
-func WithVoice(voice string) Option {
+func WithVoice(voice string) TTSOption {
 	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
@@ -64,7 +67,7 @@ func WithVoice(voice string) Option {
 	}
 }
 
-func WithModel(model string) Option {
+func WithModel(model string) TTSOption {
 	return func(t *TTS) {
 		if model != "" {
 			t.model = model
@@ -72,7 +75,7 @@ func WithModel(model string) Option {
 	}
 }
 
-func WithSampleRate(sampleRate int) Option {
+func WithSampleRate(sampleRate int) TTSOption {
 	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
@@ -80,7 +83,7 @@ func WithSampleRate(sampleRate int) Option {
 	}
 }
 
-func WithEncoding(encoding string) Option {
+func WithEncoding(encoding string) TTSOption {
 	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
@@ -88,7 +91,7 @@ func WithEncoding(encoding string) Option {
 	}
 }
 
-func WithContainer(container string) Option {
+func WithContainer(container string) TTSOption {
 	return func(t *TTS) {
 		if container != "" {
 			t.container = container
@@ -96,7 +99,7 @@ func WithContainer(container string) Option {
 	}
 }
 
-func WithNumChannels(numChannels int) Option {
+func WithNumChannels(numChannels int) TTSOption {
 	return func(t *TTS) {
 		if numChannels > 0 {
 			t.numChannels = numChannels
@@ -104,7 +107,7 @@ func WithNumChannels(numChannels int) Option {
 	}
 }
 
-func WithSampleWidth(sampleWidth int) Option {
+func WithSampleWidth(sampleWidth int) TTSOption {
 	return func(t *TTS) {
 		if sampleWidth > 0 {
 			t.sampleWidth = sampleWidth
@@ -112,7 +115,7 @@ func WithSampleWidth(sampleWidth int) Option {
 	}
 }
 
-func WithLanguage(language string) Option {
+func WithLanguage(language string) TTSOption {
 	return func(t *TTS) {
 		if language != "" {
 			t.language = language
@@ -120,7 +123,7 @@ func WithLanguage(language string) Option {
 	}
 }
 
-func NewTTS(apiKey string, opts ...Option) *TTS {
+func NewTTS(apiKey string, opts ...TTSOption) *TTS {
 	provider := &TTS{
 		apiKey:      resolveGnaniAPIKey(apiKey),
 		baseURL:     defaultBaseURL,

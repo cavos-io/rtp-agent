@@ -26,37 +26,37 @@ const (
 	clovaSTTNumChannels            = 1
 )
 
-type ClovaSTT struct {
+type STT struct {
 	secret    string
 	invokeURL string
 	language  string
 	threshold float64
 }
 
-type ClovaSTTOption func(*ClovaSTT)
+type STTOption func(*STT)
 
-func WithClovaSTTLanguage(language string) ClovaSTTOption {
-	return func(s *ClovaSTT) {
+func WithClovaSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		if language != "" {
 			s.language = normalizeClovaSTTLanguage(language)
 		}
 	}
 }
 
-func WithClovaSTTThreshold(threshold float64) ClovaSTTOption {
-	return func(s *ClovaSTT) {
+func WithClovaSTTThreshold(threshold float64) STTOption {
+	return func(s *STT) {
 		s.threshold = threshold
 	}
 }
 
-func NewClovaSTT(secret, invokeURL string, opts ...ClovaSTTOption) *ClovaSTT {
+func NewSTT(secret, invokeURL string, opts ...STTOption) *STT {
 	if secret == "" {
 		secret = os.Getenv("CLOVA_STT_SECRET_KEY")
 	}
 	if invokeURL == "" {
 		invokeURL = os.Getenv("CLOVA_STT_INVOKE_URL")
 	}
-	provider := &ClovaSTT{
+	provider := &STT{
 		secret:    secret,
 		invokeURL: strings.TrimRight(invokeURL, "/"),
 		language:  defaultClovaSTTLanguage,
@@ -68,20 +68,20 @@ func NewClovaSTT(secret, invokeURL string, opts ...ClovaSTTOption) *ClovaSTT {
 	return provider
 }
 
-func (s *ClovaSTT) Label() string { return "clova.STT" }
-func (s *ClovaSTT) Model() string { return "unknown" }
-func (s *ClovaSTT) Provider() string {
+func (s *STT) Label() string { return "clova.STT" }
+func (s *STT) Model() string { return "unknown" }
+func (s *STT) Provider() string {
 	return "Clova"
 }
-func (s *ClovaSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: false, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
 
-func (s *ClovaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	return nil, fmt.Errorf("clova stt streaming is not supported")
 }
 
-func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	wav, err := clovaSTTWAVBytesFromFrames(frames)
 	if err != nil {
 		return nil, err
@@ -106,12 +106,12 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	return clovaSTTResponseToEvent(s.withLanguage(language), result)
 }
 
-func buildClovaSTTRecognizeRequest(ctx context.Context, s *ClovaSTT, audio []byte, language string) (*http.Request, error) {
+func buildClovaSTTRecognizeRequest(ctx context.Context, s *STT, audio []byte, language string) (*http.Request, error) {
 	wav := clovaSTTWAVBytes(audio, defaultClovaSTTInputSampleRate, clovaSTTNumChannels)
 	return buildClovaSTTRecognizeRequestWithWAV(ctx, s, wav, language)
 }
 
-func buildClovaSTTRecognizeRequestWithWAV(ctx context.Context, s *ClovaSTT, wav []byte, language string) (*http.Request, error) {
+func buildClovaSTTRecognizeRequestWithWAV(ctx context.Context, s *STT, wav []byte, language string) (*http.Request, error) {
 	provider := s.withLanguage(language)
 	params, err := json.Marshal(map[string]string{
 		"language":   provider.language,
@@ -212,7 +212,7 @@ type clovaSTTResponse struct {
 	Error      any     `json:"error"`
 }
 
-func clovaSTTResponseToEvent(s *ClovaSTT, resp clovaSTTResponse) (*stt.SpeechEvent, error) {
+func clovaSTTResponseToEvent(s *STT, resp clovaSTTResponse) (*stt.SpeechEvent, error) {
 	if resp.Error != nil || resp.Text == "" {
 		return nil, fmt.Errorf("unexpected clova stt response: %+v", resp)
 	}
@@ -228,11 +228,11 @@ func clovaSTTResponseToEvent(s *ClovaSTT, resp clovaSTTResponse) (*stt.SpeechEve
 	}, nil
 }
 
-func (s *ClovaSTT) urlBuilder(processMethod string) string {
+func (s *STT) urlBuilder(processMethod string) string {
 	return strings.TrimRight(s.invokeURL, "/") + "/" + processMethod
 }
 
-func (s *ClovaSTT) withLanguage(language string) *ClovaSTT {
+func (s *STT) withLanguage(language string) *STT {
 	if language == "" {
 		return s
 	}
@@ -275,4 +275,15 @@ func clovaSTTWAVBytes(audio []byte, sampleRate int, numChannels int) []byte {
 	_ = binary.Write(&buf, binary.LittleEndian, dataSize)
 	buf.Write(audio)
 	return buf.Bytes()
+}
+
+// Deprecated: use STT.
+type ClovaSTT = STT
+
+// Deprecated: use STTOption.
+type ClovaSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewClovaSTT(secret, invokeURL string, opts ...STTOption) *STT {
+	return NewSTT(secret, invokeURL, opts...)
 }

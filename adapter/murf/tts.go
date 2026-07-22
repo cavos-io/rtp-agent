@@ -34,7 +34,7 @@ const (
 	defaultMurfMaxDelayMS = 0
 )
 
-type MurfTTS struct {
+type TTS struct {
 	mu         sync.Mutex
 	closed     bool
 	streams    map[*murfTTSSynthesizeStream]struct{}
@@ -50,77 +50,77 @@ type MurfTTS struct {
 	encoding   string
 }
 
-type MurfTTSOption func(*MurfTTS)
+type TTSOption func(*TTS)
 
-func WithMurfTTSBaseURL(baseURL string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSBaseURL(baseURL string) TTSOption {
+	return func(t *TTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
 
-func WithMurfTTSModel(model string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSModel(model string) TTSOption {
+	return func(t *TTS) {
 		if model != "" {
 			t.model = model
 		}
 	}
 }
 
-func WithMurfTTSLocale(locale string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSLocale(locale string) TTSOption {
+	return func(t *TTS) {
 		t.locale = locale
 	}
 }
 
-func WithMurfTTSVoice(voice string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSVoice(voice string) TTSOption {
+	return func(t *TTS) {
 		if voice != "" {
 			t.voice = voice
 		}
 	}
 }
 
-func WithMurfTTSStyle(style string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSStyle(style string) TTSOption {
+	return func(t *TTS) {
 		t.style = style
 	}
 }
 
-func WithMurfTTSSpeed(speed int) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSSpeed(speed int) TTSOption {
+	return func(t *TTS) {
 		t.speed = &speed
 	}
 }
 
-func WithMurfTTSPitch(pitch int) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSPitch(pitch int) TTSOption {
+	return func(t *TTS) {
 		t.pitch = &pitch
 	}
 }
 
-func WithMurfTTSSampleRate(sampleRate int) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSSampleRate(sampleRate int) TTSOption {
+	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
 	}
 }
 
-func WithMurfTTSEncoding(encoding string) MurfTTSOption {
-	return func(t *MurfTTS) {
+func WithMurfTTSEncoding(encoding string) TTSOption {
+	return func(t *TTS) {
 		if encoding != "" {
 			t.encoding = encoding
 		}
 	}
 }
 
-func NewMurfTTS(apiKey string, voice string, opts ...MurfTTSOption) *MurfTTS {
+func NewTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("MURF_API_KEY")
 	}
-	provider := &MurfTTS{
+	provider := &TTS{
 		streams:    make(map[*murfTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultMurfBaseURL,
@@ -139,16 +139,16 @@ func NewMurfTTS(apiKey string, voice string, opts ...MurfTTSOption) *MurfTTS {
 	return provider
 }
 
-func (t *MurfTTS) Label() string { return "murf.TTS" }
-func (t *MurfTTS) Capabilities() tts.TTSCapabilities {
+func (t *TTS) Label() string { return "murf.TTS" }
+func (t *TTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *MurfTTS) SampleRate() int  { return t.sampleRate }
-func (t *MurfTTS) NumChannels() int { return 1 }
-func (t *MurfTTS) Model() string    { return t.model }
-func (t *MurfTTS) Provider() string { return "Murf" }
+func (t *TTS) SampleRate() int  { return t.sampleRate }
+func (t *TTS) NumChannels() int { return 1 }
+func (t *TTS) Model() string    { return t.model }
+func (t *TTS) Provider() string { return "Murf" }
 
-func (t *MurfTTS) Close() error {
+func (t *TTS) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -171,7 +171,7 @@ func (t *MurfTTS) Close() error {
 	return closeErr
 }
 
-func (t *MurfTTS) registerStream(stream *murfTTSSynthesizeStream) bool {
+func (t *TTS) registerStream(stream *murfTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -189,7 +189,7 @@ func (t *MurfTTS) registerStream(stream *murfTTSSynthesizeStream) bool {
 	return true
 }
 
-func (t *MurfTTS) unregisterStream(stream *murfTTSSynthesizeStream) {
+func (t *TTS) unregisterStream(stream *murfTTSSynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -198,13 +198,13 @@ func (t *MurfTTS) unregisterStream(stream *murfTTSSynthesizeStream) {
 	t.mu.Unlock()
 }
 
-func (t *MurfTTS) UpdateOptions(opts ...MurfTTSOption) {
+func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	for _, opt := range opts {
 		opt(t)
 	}
 }
 
-func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -220,7 +220,7 @@ func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}, nil
 }
 
-func buildMurfTTSRequest(ctx context.Context, t *MurfTTS, text string) (*http.Request, error) {
+func buildMurfTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
 		"text":              text,
 		"model":             t.model,
@@ -255,7 +255,7 @@ func buildMurfTTSRequest(ctx context.Context, t *MurfTTS, text string) (*http.Re
 	return req, nil
 }
 
-func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -288,7 +288,7 @@ func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *MurfTTS) isClosed() bool {
+func (t *TTS) isClosed() bool {
 	if t == nil {
 		return true
 	}
@@ -304,7 +304,7 @@ func validateMurfAPIKey(apiKey string) error {
 	return nil
 }
 
-func buildMurfTTSWebsocketURL(t *MurfTTS) *url.URL {
+func buildMurfTTSWebsocketURL(t *TTS) *url.URL {
 	baseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
@@ -321,27 +321,27 @@ func buildMurfTTSWebsocketURL(t *MurfTTS) *url.URL {
 	return wsURL
 }
 
-func buildMurfTTSWebsocketHeaders(t *MurfTTS) http.Header {
+func buildMurfTTSWebsocketHeaders(t *TTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("api-key", t.apiKey)
 	return headers
 }
 
-func buildMurfTTSTextMessage(t *MurfTTS, text string, contextID string) ([]byte, error) {
+func buildMurfTTSTextMessage(t *TTS, text string, contextID string) ([]byte, error) {
 	packet := murfTTSWebsocketPacket(t)
 	packet["context_id"] = contextID
 	packet["text"] = text + " "
 	return json.Marshal(packet)
 }
 
-func buildMurfTTSEndMessage(t *MurfTTS, contextID string) ([]byte, error) {
+func buildMurfTTSEndMessage(t *TTS, contextID string) ([]byte, error) {
 	packet := murfTTSWebsocketPacket(t)
 	packet["context_id"] = contextID
 	packet["end"] = true
 	return json.Marshal(packet)
 }
 
-func murfTTSWebsocketPacket(t *MurfTTS) map[string]interface{} {
+func murfTTSWebsocketPacket(t *TTS) map[string]interface{} {
 	voiceConfig := map[string]interface{}{}
 	if t.voice != "" {
 		voiceConfig["voice_id"] = t.voice
@@ -369,7 +369,7 @@ type murfTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
 	text         string
-	opts         MurfTTS
+	opts         TTS
 	sampleRate   int
 	requested    bool
 	pendingFinal bool
@@ -452,7 +452,7 @@ type murfTTSSynthesizeStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
-	provider    *MurfTTS
+	provider    *TTS
 	contextID   string
 	sampleRate  int
 	events      chan *tts.SynthesizedAudio
@@ -719,4 +719,15 @@ func murfTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 
 func murfTTSContextID() string {
 	return "context-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// Deprecated: use TTS.
+type MurfTTS = TTS
+
+// Deprecated: use TTSOption.
+type MurfTTSOption = TTSOption
+
+// Deprecated: use NewTTS.
+func NewMurfTTS(apiKey string, voice string, opts ...TTSOption) *TTS {
+	return NewTTS(apiKey, voice, opts...)
 }

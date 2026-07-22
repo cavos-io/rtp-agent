@@ -23,7 +23,7 @@ const (
 	defaultAWSLLMModel = "amazon.nova-2-lite-v1:0"
 )
 
-type AWSLLM struct {
+type LLM struct {
 	client             awsLLMClient
 	model              string
 	credentials        AWSCredentials
@@ -40,20 +40,20 @@ type AWSLLM struct {
 	cacheTools         bool
 }
 
-type AWSLLMOption func(*AWSLLM)
+type LLMOption func(*LLM)
 
 type awsLLMClient interface {
 	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
-func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) LLMOption {
+	return func(l *LLM) {
 		l.toolChoice = toolChoice
 	}
 }
 
-func WithAWSLLMCredentials(creds AWSCredentials) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMCredentials(creds AWSCredentials) LLMOption {
+	return func(l *LLM) {
 		if creds.valid() {
 			l.credentials = creds
 			l.credentialsSet = true
@@ -61,50 +61,50 @@ func WithAWSLLMCredentials(creds AWSCredentials) AWSLLMOption {
 	}
 }
 
-func WithAWSLLMMaxOutputTokens(maxOutputTokens int32) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMMaxOutputTokens(maxOutputTokens int32) LLMOption {
+	return func(l *LLM) {
 		l.maxOutputTokens = maxOutputTokens
 		l.maxOutputTokensSet = true
 	}
 }
 
-func WithAWSLLMTemperature(temperature float32) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMTemperature(temperature float32) LLMOption {
+	return func(l *LLM) {
 		l.temperature = temperature
 		l.temperatureSet = true
 	}
 }
 
-func WithAWSLLMTopP(topP float32) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMTopP(topP float32) LLMOption {
+	return func(l *LLM) {
 		l.topP = topP
 		l.topPSet = true
 	}
 }
 
-func WithAWSLLMAdditionalRequestFields(fields any) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMAdditionalRequestFields(fields any) LLMOption {
+	return func(l *LLM) {
 		l.additionalFields = fields
 	}
 }
 
-func WithAWSLLMCacheSystem(cache bool) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMCacheSystem(cache bool) LLMOption {
+	return func(l *LLM) {
 		l.cacheSystem = cache
 	}
 }
 
-func WithAWSLLMCacheTools(cache bool) AWSLLMOption {
-	return func(l *AWSLLM) {
+func WithAWSLLMCacheTools(cache bool) LLMOption {
+	return func(l *LLM) {
 		l.cacheTools = cache
 	}
 }
 
-func NewAWSLLM(ctx context.Context, region string, model string, providerOpts ...AWSLLMOption) (*AWSLLM, error) {
+func NewLLM(ctx context.Context, region string, model string, providerOpts ...LLMOption) (*LLM, error) {
 	model = awsLLMModelOrDefault(model)
 	region = awsRegionOrDefault(region)
 
-	provider := &AWSLLM{
+	provider := &LLM{
 		model: model,
 	}
 	for _, opt := range providerOpts {
@@ -137,49 +137,49 @@ func awsRegionOrDefault(region string) string {
 	return region
 }
 
-func (l *AWSLLM) Label() string { return "aws.LLM" }
-func (l *AWSLLM) Model() string { return l.model }
-func (l *AWSLLM) Provider() string {
+func (l *LLM) Label() string { return "aws.LLM" }
+func (l *LLM) Model() string { return l.model }
+func (l *LLM) Provider() string {
 	return "AWS Bedrock"
 }
-func (l *AWSLLM) ToolChoice() llm.ToolChoice {
+func (l *LLM) ToolChoice() llm.ToolChoice {
 	if l == nil {
 		return nil
 	}
 	return l.toolChoice
 }
-func (l *AWSLLM) MaxOutputTokens() (int32, bool) {
+func (l *LLM) MaxOutputTokens() (int32, bool) {
 	if l == nil {
 		return 0, false
 	}
 	return l.maxOutputTokens, l.maxOutputTokensSet
 }
-func (l *AWSLLM) Temperature() (float32, bool) {
+func (l *LLM) Temperature() (float32, bool) {
 	if l == nil {
 		return 0, false
 	}
 	return l.temperature, l.temperatureSet
 }
-func (l *AWSLLM) TopP() (float32, bool) {
+func (l *LLM) TopP() (float32, bool) {
 	if l == nil {
 		return 0, false
 	}
 	return l.topP, l.topPSet
 }
-func (l *AWSLLM) AdditionalRequestFields() any {
+func (l *LLM) AdditionalRequestFields() any {
 	if l == nil {
 		return nil
 	}
 	return l.additionalFields
 }
-func (l *AWSLLM) CacheSystem() bool {
+func (l *LLM) CacheSystem() bool {
 	return l != nil && l.cacheSystem
 }
-func (l *AWSLLM) CacheTools() bool {
+func (l *LLM) CacheTools() bool {
 	return l != nil && l.cacheTools
 }
 
-func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.client == nil {
 		return nil, llm.NewAPIConnectionError("aws bedrock client is not configured")
 	}
@@ -310,7 +310,7 @@ func validateAWSFunctionCallArguments(chatCtx *llm.ChatContext) error {
 	return nil
 }
 
-func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
+func (l *LLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
 	config := buildAWSInferenceConfig(params)
 	if config.MaxTokens == nil && l.maxOutputTokensSet {
 		config.MaxTokens = aws.Int32(l.maxOutputTokens)
@@ -957,4 +957,15 @@ func (s *awsLLMStream) currentProviderStream() *bedrockruntime.ConverseStreamEve
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stream
+}
+
+// Deprecated: use LLM.
+type AWSLLM = LLM
+
+// Deprecated: use LLMOption.
+type AWSLLMOption = LLMOption
+
+// Deprecated: use NewLLM.
+func NewAWSLLM(ctx context.Context, region string, model string, providerOpts ...LLMOption) (*LLM, error) {
+	return NewLLM(ctx, region, model, providerOpts...)
 }

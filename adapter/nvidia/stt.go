@@ -26,7 +26,7 @@ const (
 
 var errNvidiaSTTStreamInputEnded = errors.New("stream input ended")
 
-type NvidiaSTT struct {
+type STT struct {
 	apiKey          string
 	apiKeyExplicit  bool
 	model           string
@@ -41,70 +41,70 @@ type NvidiaSTT struct {
 	clientFactory   nvidiaSTTClientFactory
 }
 
-type NvidiaSTTOption func(*NvidiaSTT)
+type STTOption func(*STT)
 
-func WithNvidiaSTTAPIKey(apiKey string) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTAPIKey(apiKey string) STTOption {
+	return func(s *STT) {
 		s.apiKey = apiKey
 		s.apiKeyExplicit = true
 	}
 }
 
-func WithNvidiaSTTServer(server string) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTServer(server string) STTOption {
+	return func(s *STT) {
 		s.server = server
 	}
 }
 
-func WithNvidiaSTTFunctionID(functionID string) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTFunctionID(functionID string) STTOption {
+	return func(s *STT) {
 		s.functionID = functionID
 	}
 }
 
-func WithNvidiaSTTModel(model string) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTModel(model string) STTOption {
+	return func(s *STT) {
 		s.model = model
 	}
 }
 
-func WithNvidiaSTTLanguage(language string) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTLanguage(language string) STTOption {
+	return func(s *STT) {
 		s.language = language
 	}
 }
 
-func WithNvidiaSTTSampleRate(sampleRate int) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTSampleRate(sampleRate int) STTOption {
+	return func(s *STT) {
 		s.sampleRate = sampleRate
 	}
 }
 
-func WithNvidiaSTTPunctuate(enabled bool) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTPunctuate(enabled bool) STTOption {
+	return func(s *STT) {
 		s.punctuate = enabled
 	}
 }
 
-func WithNvidiaSTTUseSSL(useSSL bool) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTUseSSL(useSSL bool) STTOption {
+	return func(s *STT) {
 		s.useSSL = useSSL
 	}
 }
 
-func WithNvidiaSTTDiarization(enabled bool) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTDiarization(enabled bool) STTOption {
+	return func(s *STT) {
 		s.diarization = enabled
 	}
 }
 
-func WithNvidiaSTTMaxSpeakerCount(count int) NvidiaSTTOption {
-	return func(s *NvidiaSTT) {
+func WithNvidiaSTTMaxSpeakerCount(count int) STTOption {
+	return func(s *STT) {
 		s.maxSpeakerCount = count
 	}
 }
 
-func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*NvidiaSTT, error) {
+func NewSTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(nvidiaAPIKeyEnv)
 	}
@@ -112,7 +112,7 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 		model = defaultNvidiaSTTModel
 	}
 
-	provider := &NvidiaSTT{
+	provider := &STT{
 		apiKey:          apiKey,
 		model:           model,
 		functionID:      defaultNvidiaSTTFunctionID,
@@ -134,12 +134,12 @@ func NewNvidiaSTT(apiKey string, model string, opts ...NvidiaSTTOption) (*Nvidia
 	return provider, nil
 }
 
-func (s *NvidiaSTT) Label() string { return "nvidia.STT" }
-func (s *NvidiaSTT) Model() string { return s.model }
-func (s *NvidiaSTT) Provider() string {
+func (s *STT) Label() string { return "nvidia.STT" }
+func (s *STT) Model() string { return s.model }
+func (s *STT) Provider() string {
 	return "nvidia"
 }
-func (s *NvidiaSTT) InputSampleRate() uint32 {
+func (s *STT) InputSampleRate() uint32 {
 	if s == nil {
 		return defaultNvidiaSTTSampleRate
 	}
@@ -148,7 +148,7 @@ func (s *NvidiaSTT) InputSampleRate() uint32 {
 	}
 	return uint32(s.sampleRate)
 }
-func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
+func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
@@ -158,14 +158,14 @@ func (s *NvidiaSTT) Capabilities() stt.STTCapabilities {
 	}
 }
 
-func (s *NvidiaSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*stt.SpeechEvent, error) {
+func (s *STT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*stt.SpeechEvent, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return nil, fmt.Errorf("%s", nvidiaSTTRecognizeUnsupported)
 }
 
-func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (s *NvidiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 type nvidiaSTTStream struct {
 	mu                 sync.Mutex
 	stateChanged       chan struct{}
-	stt                *NvidiaSTT
+	stt                *STT
 	ctx                context.Context
 	transportCtx       context.Context
 	language           string
@@ -600,4 +600,15 @@ func (s *nvidiaSTTStream) SetStartTime(startTime float64) {
 		panic("start_time must be non-negative")
 	}
 	s.startTime = startTime
+}
+
+// Deprecated: use STT.
+type NvidiaSTT = STT
+
+// Deprecated: use STTOption.
+type NvidiaSTTOption = STTOption
+
+// Deprecated: use NewSTT.
+func NewNvidiaSTT(apiKey string, model string, opts ...STTOption) (*STT, error) {
+	return NewSTT(apiKey, model, opts...)
 }
