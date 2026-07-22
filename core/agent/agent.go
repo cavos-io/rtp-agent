@@ -60,6 +60,7 @@ type Agent struct {
 	LLM               llm.LLM
 	RealtimeModel     llm.RealtimeModel
 	TTS               tts.TTS
+	TranscriptionNode TranscriptionNode
 
 	AllowInterruptions         bool
 	AllowInterruptionsSet      bool
@@ -87,6 +88,13 @@ func (a *Agent) GetAgent() *Agent {
 
 func (a *Agent) GetActivity() *AgentActivity {
 	return a.activity
+}
+
+func (a *Agent) ResolveTranscriptionNode() TranscriptionNode {
+	if a != nil && a.TranscriptionNode != nil {
+		return a.TranscriptionNode
+	}
+	return passthroughTranscriptionNode
 }
 
 func (a *Agent) Label() string {

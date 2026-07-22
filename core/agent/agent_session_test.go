@@ -893,6 +893,31 @@ func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T
 	assertConversationItemAddedEvent(t, second, msg, "second")
 }
 
+type recordingTextOutput struct {
+	chunks  []TextOutputChunk
+	flushes int
+}
+
+func (r *recordingTextOutput) CaptureText(_ context.Context, chunk TextOutputChunk) error {
+	r.chunks = append(r.chunks, chunk)
+	return nil
+}
+
+func (r *recordingTextOutput) Flush() {
+	r.flushes++
+}
+
+func TestAgentSessionStoresTextOutput(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	output := &recordingTextOutput{}
+
+	session.SetTextOutput(output)
+
+	if got := session.TextOutput(); got != output {
+		t.Fatalf("TextOutput() = %T, want configured recorder", got)
+	}
+}
+
 func TestAgentSessionConversationItemAddedDeliveredWhenChannelFull(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	conversationEvents := session.conversationItemAddedEvents()

@@ -313,6 +313,7 @@ type AgentSession struct {
 	videoSampler            *VoiceActivityVideoSampler
 	audioOutputController   AudioOutputController
 	audioPlaybackController AudioPlaybackController
+	textOutput              TextOutput
 	toolExecutionRegistry   activeToolRegistry
 
 	// Event channels
@@ -566,6 +567,18 @@ func (s *AgentSession) AudioOutputController() AudioOutputController {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.audioOutputController
+}
+
+func (s *AgentSession) SetTextOutput(output TextOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.textOutput = output
+}
+
+func (s *AgentSession) TextOutput() TextOutput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.textOutput
 }
 
 func (s *AgentSession) SetAudioPlaybackController(controller AudioPlaybackController) {
