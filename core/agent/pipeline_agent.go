@@ -2228,10 +2228,24 @@ func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSe
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		var output TextOutput
+		if session != nil {
+			output = session.TextOutput()
+		}
+		if output != nil {
+			defer output.Flush()
+		}
 		var transcript strings.Builder
 		for timedText := range timedTextCh {
 			if timedText.Text == "" {
 				continue
+			}
+			if output != nil {
+				value := timedText
+				if err := output.CaptureText(context.Background(), TextOutputChunk{Text: timedText.Text, Timed: &value}); err != nil {
+					va.emitError(err, output)
+					return
+				}
 			}
 			transcript.WriteString(timedText.Text)
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{

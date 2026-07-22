@@ -1396,6 +1396,72 @@ func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentUsesAlignedTextOutput(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{
+		{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+	}}}
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 1),
+		flushed:  make(chan struct{}),
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
+	session.SetTextOutput(output)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{Data: make([]byte, 4000), SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 2000}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case chunk := <-output.captured:
+		if chunk.Text != "aligned transcript" || chunk.Timed == nil {
+			t.Fatalf("aligned chunk = %#v, want timed aligned transcript", chunk)
+		}
+		if chunk.Timed.StartTime != 0.1 || chunk.Timed.EndTime != 0.5 {
+			t.Fatalf("aligned timing = %#v, want 0.1..0.5", chunk.Timed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("aligned text output was not captured")
+	}
+}
+
+func TestPipelineAgentTextOutputIgnoresTTSReplacements(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{
+		{Delta: &llm.ChoiceDelta{Content: "LiveKit"}},
+	}}}
+	output := &channelTextOutput{captured: make(chan TextOutputChunk, 1), flushed: make(chan struct{})}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		TTSTextReplacements: map[string]string{"LiveKit": "live kit"},
+	})
+	session.SetTextOutput(output)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{1}, SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case chunk := <-output.captured:
+		if chunk.Text != "LiveKit" {
+			t.Fatalf("text output = %q, want pre-TTS replacement text LiveKit", chunk.Text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("text output was not captured")
+	}
+}
+
 func TestPipelineAgentEmitsFinalAlignedAgentOutputTranscription(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
