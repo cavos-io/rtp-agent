@@ -1317,6 +1317,32 @@ func TestAgentActivityHoldsPreflightTranscriptWhileAgentSpeaking(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartOfSpeechPreservesHeldSTTWhileAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeVAD,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type: stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "speech before the next VAD segment",
+		}},
+	}}
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	if !activity.holdSTTWhileAgentSpeaking {
+		t.Fatal("holdSTTWhileAgentSpeaking = false, want preserved while agent is speaking")
+	}
+	if got := len(activity.heldSTTEvents); got != 1 {
+		t.Fatalf("held STT events = %d, want previous transcript preserved", got)
+	}
+}
+
 func TestAgentActivityHoldsSTTStartOfSpeechWhileAgentSpeaking(t *testing.T) {
 	endpointing := &recordingActivityEndpointing{}
 	agent := NewAgent("test")

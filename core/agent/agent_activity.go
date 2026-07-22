@@ -1690,7 +1690,9 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		a.clearUserAudioFrames()
 	}
 	a.userSpeechStoppedAt = time.Time{}
-	a.clearHeldUserTranscriptWindow()
+	if a.Session == nil || a.Session.AgentStateValue() != AgentStateSpeaking {
+		a.clearHeldUserTranscriptWindow()
+	}
 	if a.Session != nil {
 		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
 	}
