@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	consoleui "github.com/cavos-io/rtp-agent/interface/cli/console"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
@@ -798,7 +799,7 @@ func startConsoleAudioUI(ctx context.Context, args ConsoleArgs) (func(), error) 
 }
 
 type consoleTranscriptSession interface {
-	AgentOutputTranscribedEvents() <-chan agent.AgentOutputTranscribedEvent
+	ConversationItemAddedEvents() <-chan agent.ConversationItemAddedEvent
 }
 
 func startConsoleTranscriptPrinter(ctx context.Context, session any, out io.Writer) bool {
@@ -807,17 +808,18 @@ func startConsoleTranscriptPrinter(ctx context.Context, session any, out io.Writ
 		return false
 	}
 
-	events := transcripts.AgentOutputTranscribedEvents()
+	events := transcripts.ConversationItemAddedEvents()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case ev := <-events:
-				if strings.TrimSpace(ev.Transcript) == "" {
+				message, ok := ev.Item.(*llm.ChatMessage)
+				if !ok || message.Role != llm.ChatRoleAssistant || strings.TrimSpace(message.TextContent()) == "" {
 					continue
 				}
-				fmt.Fprintf(out, "\nAgent: %s\n❯ ", ev.Transcript)
+				fmt.Fprintf(out, "\nAgent: %s\n❯ ", message.TextContent())
 			}
 		}
 	}()

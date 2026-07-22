@@ -322,7 +322,6 @@ type AgentSession struct {
 	agentStateSubs       []chan AgentStateChangedEvent
 	userStateSubs        []chan UserStateChangedEvent
 	userInputSubs        []chan UserInputTranscribedEvent
-	agentOutputSubs      []chan AgentOutputTranscribedEvent
 	agentReasoningSubs   []chan AgentReasoningTranscribedEvent
 	speechCreatedCh      chan SpeechCreatedEvent
 	speechCreatedSubd    bool
@@ -851,8 +850,6 @@ func (s *AgentSession) EmitEvent(ev Event) {
 		s.emitUserStateChangedEvent(event)
 	case *UserInputTranscribedEvent:
 		s.EmitUserInputTranscribed(*event)
-	case *AgentOutputTranscribedEvent:
-		s.EmitAgentOutputTranscribed(*event)
 	case *AgentReasoningTranscribedEvent:
 		s.EmitAgentReasoningTranscribed(*event)
 	case *SpeechCreatedEvent:
@@ -1397,46 +1394,6 @@ func (s *AgentSession) userInputTranscribedSubscribers() ([]chan UserInputTransc
 	defer s.mu.Unlock()
 
 	return append([]chan UserInputTranscribedEvent(nil), s.userInputSubs...), s.teardownCh
-}
-
-func (s *AgentSession) AgentOutputTranscribedEvents() <-chan AgentOutputTranscribedEvent {
-	return s.agentOutputTranscribedEvents()
-}
-
-func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent) {
-	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
-	}
-	s.recordEvent(&ev)
-	subscribers, done := s.agentOutputTranscribedSubscribers()
-	for _, ch := range subscribers {
-		if ev.IsFinal {
-			if !sendUntil(ch, ev, done) {
-				return
-			}
-		} else {
-			select {
-			case ch <- ev:
-			default:
-			}
-		}
-	}
-}
-
-func (s *AgentSession) agentOutputTranscribedEvents() chan AgentOutputTranscribedEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	ch := make(chan AgentOutputTranscribedEvent, 10)
-	s.agentOutputSubs = append(s.agentOutputSubs, ch)
-	return ch
-}
-
-func (s *AgentSession) agentOutputTranscribedSubscribers() ([]chan AgentOutputTranscribedEvent, <-chan struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return append([]chan AgentOutputTranscribedEvent(nil), s.agentOutputSubs...), s.teardownCh
 }
 
 func (s *AgentSession) AgentReasoningTranscribedEvents() <-chan AgentReasoningTranscribedEvent {
