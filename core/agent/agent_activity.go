@@ -4488,7 +4488,7 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		started := timeToUnixSeconds(startedAt)
 		info.StartedSpeakingAt = &started
 	}
-	if info.StoppedSpeakingAt == nil && !a.userSpeechStoppedAt.IsZero() {
+	if !a.userSpeechStoppedAt.IsZero() && (!a.sttEOSReceived || info.StoppedSpeakingAt == nil || *info.StoppedSpeakingAt > timeToUnixSeconds(time.Now())) {
 		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
 		info.StoppedSpeakingAt = &stopped
 	}
@@ -4743,7 +4743,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 		}
 
 		if info.StoppedSpeakingAt != nil {
-			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+			elapsedAdjustment := *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+			if elapsedAdjustment < 0 {
+				endpointingDelay += elapsedAdjustment
+			}
 		}
 		if !info.endpointingNotBefore.IsZero() {
 			endpointingDelay = max(endpointingDelay, time.Until(info.endpointingNotBefore).Seconds())
