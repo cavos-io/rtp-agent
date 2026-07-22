@@ -972,40 +972,6 @@ func TestUserInputTranscribedEventMarshalJSONMatchesReferenceOptionalFields(t *t
 	}
 }
 
-func TestAgentOutputTranscribedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
-	ev := &AgentOutputTranscribedEvent{
-		Language:   "en-US",
-		Transcript: "assistant reply",
-		IsFinal:    false,
-		CreatedAt:  time.Unix(21, 750_000_000),
-	}
-
-	data, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatalf("Marshal AgentOutputTranscribedEvent returned error: %v", err)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("Unmarshal marshaled AgentOutputTranscribedEvent returned error: %v", err)
-	}
-	if payload["type"] != "agent_output_transcribed" {
-		t.Fatalf("type = %#v, want agent_output_transcribed", payload["type"])
-	}
-	if payload["transcript"] != "assistant reply" || payload["is_final"] != false {
-		t.Fatalf("payload transcript/finality = %#v, want reference transcript fields", payload)
-	}
-	if payload["language"] != "en-US" {
-		t.Fatalf("language = %#v, want en-US", payload["language"])
-	}
-	if payload["created_at"] != 21.75 {
-		t.Fatalf("created_at = %#v, want 21.75", payload["created_at"])
-	}
-	if _, ok := payload["IsFinal"]; ok {
-		t.Fatalf("payload used Go field names: %#v", payload)
-	}
-}
-
 func TestAgentFalseInterruptionEventIsTypedAndTimestamped(t *testing.T) {
 	before := time.Now()
 	ev := NewAgentFalseInterruptionEvent(true)

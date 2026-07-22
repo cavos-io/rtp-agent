@@ -1780,11 +1780,11 @@ func TestRoomIOPlaybackFinishedIncludesSynchronizedTranscript(t *testing.T) {
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "hello",
 		IsFinal:    false,
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: " there",
 		IsFinal:    false,
 	})
@@ -1817,7 +1817,7 @@ func TestRoomIOInterruptedPlaybackDoesNotReportFullTranscriptWhenPartial(t *test
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "heard words unheard words",
 		IsFinal:    false,
 	})
@@ -1853,7 +1853,7 @@ func TestRoomIOInterruptedPlaybackCarriesEmptySynchronizedTranscriptWhenKnown(t 
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "",
 		IsFinal:    false,
 	})
@@ -1874,7 +1874,7 @@ func TestRoomIOInterruptedPlaybackCarriesEmptySynchronizedTranscriptWhenKnown(t 
 
 func TestRoomIOPlaybackStartedKeepsEarlySynchronizedTranscript(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "early transcript",
 		IsFinal:    false,
 	})
@@ -1914,7 +1914,7 @@ func TestRoomIOPlaybackFinishedDoesNotCarryLateTranscriptToNextSegment(t *testin
 	if _, err := rio.WaitForPlayout(context.Background()); err != nil {
 		t.Fatalf("WaitForPlayout(first) error = %v", err)
 	}
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "late transcript",
 		IsFinal:    true,
 	})
@@ -2301,14 +2301,12 @@ func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	agentStateCancelled := make(chan struct{})
 	userStateCancelled := make(chan struct{})
 	userTranscriptionCancelled := make(chan struct{})
-	agentTranscriptionCancelled := make(chan struct{})
 	sessionCloseCancelled := make(chan struct{})
 	rio := &RoomIO{
-		agentStateCancel:         closeOnce(agentStateCancelled),
-		userStateCancel:          closeOnce(userStateCancelled),
-		userTranscriptionCancel:  closeOnce(userTranscriptionCancelled),
-		agentTranscriptionCancel: closeOnce(agentTranscriptionCancelled),
-		sessionCloseCancel:       closeOnce(sessionCloseCancelled),
+		agentStateCancel:        closeOnce(agentStateCancelled),
+		userStateCancel:         closeOnce(userStateCancelled),
+		userTranscriptionCancel: closeOnce(userTranscriptionCancelled),
+		sessionCloseCancel:      closeOnce(sessionCloseCancelled),
 	}
 
 	if err := rio.Close(); err != nil {
@@ -2318,7 +2316,6 @@ func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	assertClosed(t, agentStateCancelled, "agent state listener")
 	assertClosed(t, userStateCancelled, "user state listener")
 	assertClosed(t, userTranscriptionCancelled, "user transcription listener")
-	assertClosed(t, agentTranscriptionCancelled, "agent transcription listener")
 	assertClosed(t, sessionCloseCancelled, "session close listener")
 	if rio.agentStateCancel != nil {
 		t.Fatal("agentStateCancel still set after Close")
@@ -2328,9 +2325,6 @@ func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	}
 	if rio.userTranscriptionCancel != nil {
 		t.Fatal("userTranscriptionCancel still set after Close")
-	}
-	if rio.agentTranscriptionCancel != nil {
-		t.Fatal("agentTranscriptionCancel still set after Close")
 	}
 	if rio.sessionCloseCancel != nil {
 		t.Fatal("sessionCloseCancel still set after Close")
@@ -2657,10 +2651,7 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 			published <- roomIOPublishedText{text: text, opts: opts}
 		},
 	}
-	rio.startAgentTranscriptionListener()
-	defer rio.agentTranscriptionCancel()
-
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "assistant transcript",
 		IsFinal:    false,
 		Language:   "en",
@@ -2730,11 +2721,11 @@ func TestRoomIOForwardsAgentTranscriptionToNextOutput(t *testing.T) {
 		agentTextStreamOpener: factory.open,
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "assistant delta",
 		IsFinal:    false,
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "assistant final",
 		IsFinal:    true,
 	})
@@ -2770,17 +2761,17 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 		},
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "Halo,",
 		IsFinal:    false,
 		Language:   "id",
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: " ada yang bisa saya bantu?",
 		IsFinal:    false,
 		Language:   "id",
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "Halo, ada yang bisa saya bantu?",
 		IsFinal:    true,
 		Language:   "id",
@@ -2821,7 +2812,7 @@ func TestRoomIOReusesAgentTranscriptionSegmentUntilFinal(t *testing.T) {
 	}
 }
 
-func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
+func TestRoomIOFlushResetsAgentTranscriptionSegment(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 4)
 	rio := &RoomIO{
@@ -2830,11 +2821,8 @@ func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
 			published <- roomIOPublishedText{text: text, opts: opts}
 		},
 	}
-	rio.startAgentTranscriptionListener()
-	defer rio.agentTranscriptionCancel()
-
-	// First speech: emit a delta (not final) to establish a segment ID.
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	// First text segment: emit a delta to establish a segment ID.
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "hello",
 		IsFinal:    false,
 	})
@@ -2844,17 +2832,14 @@ func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
 		t.Fatal("first segment id must not be empty")
 	}
 
-	// New speech created before the first segment ends.
-	session.EmitSpeechCreated(agent.SpeechCreatedEvent{
-		SpeechHandle: agent.NewSpeechHandle(false, agent.DefaultInputDetails()),
-		Source:       "say",
+	rio.handleAgentText(roomIOAgentTextChunk{
+		Transcript: "hello",
+		IsFinal:    true,
 	})
+	_ = receivePublishedText(t, published, "first final")
 
-	// Give the goroutine time to process SpeechCreated and reset state.
-	time.Sleep(20 * time.Millisecond)
-
-	// Second speech delta must use a new segment ID.
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	// Second text segment must use a new segment ID.
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "world",
 		IsFinal:    false,
 	})
@@ -2864,7 +2849,7 @@ func TestRoomIOSpeechCreatedResetsAgentTranscriptionSegment(t *testing.T) {
 		t.Fatal("second segment id must not be empty")
 	}
 	if firstSegmentID == secondSegmentID {
-		t.Fatalf("segment id must reset on SpeechCreated: both = %q", firstSegmentID)
+		t.Fatalf("segment id must reset on flush: both = %q", firstSegmentID)
 	}
 }
 
@@ -2876,15 +2861,15 @@ func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T)
 		},
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "partial",
 		IsFinal:    false,
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "",
 		IsFinal:    true,
 	})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "next",
 		IsFinal:    false,
 	})
@@ -2920,7 +2905,7 @@ func TestRoomIOEmptyFinalAgentTranscriptionDoesNotPublishWhenNoSegmentActive(t *
 		},
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "",
 		IsFinal:    true,
 	})
@@ -2941,7 +2926,7 @@ func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
 		},
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "assistant transcript",
 		IsFinal:    true,
 	})
@@ -2969,7 +2954,7 @@ func TestRoomIOPublishesAgentOutputLegacyTranscriptionPacket(t *testing.T) {
 		},
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+	rio.handleAgentText(roomIOAgentTextChunk{
 		Transcript: "assistant transcript",
 		IsFinal:    true,
 		Language:   "en",
@@ -3761,16 +3746,7 @@ func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
 			published <- roomIOPublishedText{text: text, opts: opts}
 		},
 	}
-	rio.startAgentTranscriptionListener()
-	if rio.agentTranscriptionCancel != nil {
-		defer rio.agentTranscriptionCancel()
-	}
-
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "assistant transcript",
-		IsFinal:    true,
-	})
-
+	_ = rio
 	select {
 	case got := <-published:
 		t.Fatalf("published agent transcription despite disabled output: %#v", got)
@@ -3860,10 +3836,10 @@ func TestRoomIOAgentTranscriptionDeltaStreamAppendsToSingleStream(t *testing.T) 
 		agentTextStreamOpener:            factory.open,
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "selamat ", IsFinal: false})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "pagi ", IsFinal: false})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo selamat pagi ", IsFinal: true})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "halo ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "selamat ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "pagi ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "halo selamat pagi ", IsFinal: true})
 
 	if len(factory.streams) != 1 {
 		t.Fatalf("opened %d streams, want 1 persistent stream for the segment", len(factory.streams))
@@ -3925,7 +3901,7 @@ func TestRoomIOAgentTranscriptionDeltaStreamLoneFinalWritesFullText(t *testing.T
 		agentTextStreamOpener:            factory.open,
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "assistant transcript", IsFinal: true})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "assistant transcript", IsFinal: true})
 
 	if len(factory.streams) != 1 {
 		t.Fatalf("opened %d streams, want 1", len(factory.streams))
@@ -3948,10 +3924,10 @@ func TestRoomIOAgentTranscriptionDeltaStreamNewSegmentOpensNewStream(t *testing.
 		agentTextStreamOpener:            factory.open,
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: true})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "dunia ", IsFinal: false})
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "dunia ", IsFinal: true})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "halo ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "halo ", IsFinal: true})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "dunia ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "dunia ", IsFinal: true})
 
 	if len(factory.streams) != 2 {
 		t.Fatalf("opened %d streams, want 2 (one per segment)", len(factory.streams))
@@ -4028,7 +4004,7 @@ func TestRoomIOCloseAgentTextStreamClosesOpenWriter(t *testing.T) {
 		agentTextStreamOpener:            factory.open,
 	}
 
-	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
+	rio.handleAgentText(roomIOAgentTextChunk{Transcript: "halo ", IsFinal: false})
 	if len(factory.streams) != 1 || factory.streams[0].closed {
 		t.Fatalf("expected one open (not closed) stream, got %#v", factory.streams)
 	}

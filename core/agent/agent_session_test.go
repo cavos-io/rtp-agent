@@ -335,82 +335,6 @@ func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testin
 	}
 }
 
-func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	first := session.AgentOutputTranscribedEvents()
-	second := session.AgentOutputTranscribedEvents()
-
-	session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-		Transcript: "hi",
-	})
-
-	assertAgentTranscriptEvent(t, first, "first")
-	assertAgentTranscriptEvent(t, second, "second")
-}
-
-func TestAgentSessionFinalAgentOutputTranscribedDeliveredWhenChannelFull(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	ch := session.AgentOutputTranscribedEvents()
-
-	// Fill the channel buffer with delta events so it's full.
-	for range cap(ch) {
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
-	}
-
-	// Final event must block and be delivered even though channel was full.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "final", IsFinal: true})
-	}()
-
-	// Drain one slot then verify final event arrives.
-	<-ch
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("final AgentOutputTranscribed event was not delivered when channel became available")
-	}
-
-	var finalReceived bool
-	for {
-		select {
-		case ev := <-ch:
-			if ev.IsFinal {
-				finalReceived = true
-			}
-		default:
-			if !finalReceived {
-				t.Fatal("final AgentOutputTranscribed event not found in channel after delivery")
-			}
-			return
-		}
-	}
-}
-
-func TestAgentSessionDeltaAgentOutputTranscribedDroppedWhenChannelFull(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	ch := session.AgentOutputTranscribedEvents()
-
-	// Fill the channel buffer.
-	for range cap(ch) {
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
-	}
-
-	// Emitting another delta must not block (dropped silently).
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "overflow delta", IsFinal: false})
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("delta AgentOutputTranscribed emit blocked when channel was full, want non-blocking drop")
-	}
-}
-
 func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserStateChangedEvents()
@@ -1349,19 +1273,6 @@ func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedE
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive user transcript event", name)
-	}
-}
-
-func assertAgentTranscriptEvent(t *testing.T, events <-chan AgentOutputTranscribedEvent, name string) {
-	t.Helper()
-
-	select {
-	case ev := <-events:
-		if ev.Transcript != "hi" {
-			t.Fatalf("%s subscriber event = %#v, want hi transcript", name, ev)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("%s subscriber did not receive agent transcript event", name)
 	}
 }
 
@@ -7386,40 +7297,6 @@ func (c *closeableSessionTool) Close() error {
 	return c.closeErr
 }
 
-func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
-	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-
-	_ = s.AgentOutputTranscribedEvents()
-
-	emitDone := make(chan struct{})
-	go func() {
-		defer close(emitDone)
-		for i := 0; i < 50; i++ {
-			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: "hello",
-				IsFinal:    true,
-			})
-		}
-	}()
-
-	time.Sleep(150 * time.Millisecond)
-	select {
-	case <-emitDone:
-		t.Fatal("emitter did not block on the full subscriber channel; test cannot prove the fix")
-	default:
-	}
-
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-
-	select {
-	case <-emitDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("EmitAgentOutputTranscribed stayed blocked after Stop() — teardown did not unblock the subscriber send")
-	}
-}
-
 func TestLosslessPrimaryEventEmitUnblocksOnStop(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -7473,61 +7350,6 @@ func fillChannel[T any](ch chan T, value T) {
 	for i := 0; i < cap(ch); i++ {
 		ch <- value
 	}
-}
-
-func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
-	agent := NewAgent("test")
-	agent.TTS = &fakePipelineTTS{}
-	agent.LLM = &fakeGenerationLLM{}
-	agent.STT = &fakePipelineSTT{}
-	agent.VAD = &fakePipelineVAD{}
-	s := NewAgentSession(agent, nil, AgentSessionOptions{})
-	s.Assistant = &fakeSessionAssistant{}
-
-	sub := s.AgentOutputTranscribedEvents()
-
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("first Start: %v", err)
-	}
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatalf("first Stop: %v", err)
-	}
-
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("restart Start: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Stop(context.Background()) })
-
-	emitDone := make(chan struct{})
-	go func() {
-		defer close(emitDone)
-		for i := 0; i < 50; i++ {
-			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: "hello",
-				IsFinal:    true,
-			})
-		}
-	}()
-
-	select {
-	case <-emitDone:
-		t.Fatal("emitter finished without blocking on the full subscriber channel after restart — teardownCh was not reset, so final events are being dropped")
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		for {
-			select {
-			case <-sub:
-			case <-emitDone:
-				return
-			}
-		}
-	}()
-	<-emitDone
-	<-drainDone
 }
 
 type closeTrackingAudioTurnDetector struct {
