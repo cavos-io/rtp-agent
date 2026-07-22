@@ -1453,13 +1453,13 @@ func (s *deepgramStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	flushedFrame := false
+	flushedFrames := 0
 	if tail := s.inputAudio.flush(); tail != nil {
 		if s.audioBStream == nil {
 			s.audioBStream = newDeepgramSTTAudioByteStream(s)
 		}
 		for _, chunk := range s.audioBStream.Push(tail.Data) {
-			flushedFrame = true
+			flushedFrames++
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
 				return err
@@ -1469,7 +1469,7 @@ func (s *deepgramStream) Flush() error {
 	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
-			flushedFrame = true
+			flushedFrames++
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
 				return err
@@ -1477,7 +1477,12 @@ func (s *deepgramStream) Flush() error {
 			s.sendRecognitionUsage(chunk)
 		}
 	}
-	if !flushedFrame {
+	if flushedFrames == 0 {
+		logger.Logger.Debugw("deepgram stt flush completed",
+			"request_id", s.requestID,
+			"flushed_frames", flushedFrames,
+			"finalize_sent", false,
+		)
 		return nil
 	}
 	s.flushRecognitionUsageLocked()
@@ -1485,6 +1490,11 @@ func (s *deepgramStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	logger.Logger.Debugw("deepgram stt flush completed",
+		"request_id", s.requestID,
+		"flushed_frames", flushedFrames,
+		"finalize_sent", true,
+	)
 	return nil
 }
 

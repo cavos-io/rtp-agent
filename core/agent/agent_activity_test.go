@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -16,7 +17,108 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func TestAgentActivityEOURetrySharesUserTurnTrace(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(nil)
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "first", TranscriptConfidence: 0.9})
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "second", TranscriptConfidence: 0.9})
+
+	select {
+	case <-session.MetricsCollectedEvents():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("EOU retry did not complete")
+	}
+
+	spans := recorder.Ended()
+	var userTurn sdktrace.ReadOnlySpan
+	var eouSpans []sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		switch span.Name() {
+		case "user_turn":
+			userTurn = span
+		case "eou_detection":
+			eouSpans = append(eouSpans, span)
+		}
+	}
+	if userTurn == nil {
+		t.Fatal("user_turn span not recorded")
+	}
+	if len(eouSpans) != 2 {
+		t.Fatalf("eou_detection spans = %d, want 2", len(eouSpans))
+	}
+	outcomes := map[string]int{}
+	for _, span := range eouSpans {
+		if span.SpanContext().TraceID() != userTurn.SpanContext().TraceID() {
+			t.Fatalf("EOU trace ID = %s, want user turn trace ID %s", span.SpanContext().TraceID(), userTurn.SpanContext().TraceID())
+		}
+		if span.Parent().SpanID() != userTurn.SpanContext().SpanID() {
+			t.Fatalf("EOU parent = %s, want user turn span %s", span.Parent().SpanID(), userTurn.SpanContext().SpanID())
+		}
+		outcomes[spanAttributes(span.Attributes())[telemetry.AttrEOUOutcome]]++
+	}
+	if outcomes["cancelled"] != 1 || outcomes["completed"] != 1 {
+		t.Fatalf("EOU outcomes = %#v, want one cancelled and one completed", outcomes)
+	}
+}
+
+func TestAgentActivityFinalTranscriptLogsTimingWithoutText(t *testing.T) {
+	recorder := &recordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.userSpeechStartedAt = time.Now().Add(-time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		RequestID: "req-1",
+		Alternatives: []stt.SpeechData{{
+			Text:       "secret phrase",
+			Language:   "en",
+			Confidence: 0.9,
+			EndTime:    0.8,
+		}},
+	})
+
+	fields := recorder.debugFields["received user transcript"]
+	if fields == nil {
+		t.Fatal("received user transcript debug record not found")
+	}
+	if fields["request_id"] != "req-1" || fields["language"] != "en" {
+		t.Fatalf("debug fields = %#v, want request_id=req-1 language=en", fields)
+	}
+	if delay, ok := fields["transcription_delay"].(float64); !ok || delay < 0 {
+		t.Fatalf("transcription_delay = %#v, want non-negative float64", fields["transcription_delay"])
+	}
+	for key, value := range fields {
+		if strings.Contains(key, "secret phrase") || strings.Contains(fmt.Sprint(value), "secret phrase") {
+			t.Fatalf("debug field leaked transcript: %s=%v", key, value)
+		}
+	}
+}
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
 	agent := NewAgent("test")

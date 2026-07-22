@@ -18,6 +18,8 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -157,6 +159,10 @@ type AgentActivity struct {
 	eouMu     sync.Mutex
 	eouCancel context.CancelFunc
 	eouDone   chan struct{}
+
+	userTurnTraceMu  sync.Mutex
+	userTurnTraceCtx context.Context
+	userTurnSpan     trace.Span
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
@@ -371,6 +377,7 @@ func (a *AgentActivity) Stop() {
 	}
 	a.providerUnsubscribes = nil
 	a.cancel()
+	a.endUserTurnSpan(0, 0)
 	a.queueMu.Lock()
 	a.schedulingPaused = true
 	a.schedulingDraining = false
@@ -1661,6 +1668,7 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
+	a.startUserTurnSpan()
 	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
@@ -1898,6 +1906,12 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
+	logger.Logger.Debugw(
+		"received user transcript",
+		"request_id", ev.RequestID,
+		"language", language,
+		"transcription_delay", transcriptionDelay,
+	)
 
 	a.userTurnMu.Lock()
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
@@ -2872,6 +2886,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	hookDelay := time.Since(hookStart).Seconds()
 	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
 	a.commitUserMessage(newMsg)
+	a.endUserTurnSpan(info.TranscriptionDelay, info.EndOfTurnDelay)
 	if info.ReplyAlreadyGenerated {
 		a.cancelPreemptiveGeneration()
 		return nil, nil
@@ -3464,7 +3479,8 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	if a.eouCancel != nil {
 		a.eouCancel()
 	}
-	ctx, cancel := context.WithCancel(a.ctx)
+	ctx, cancel := context.WithCancel(a.userTurnSpanContext())
+	ctx, eouSpan := telemetry.StartSpan(ctx, "eou_detection")
 	done := make(chan struct{})
 	a.eouCancel = cancel
 	a.eouDone = done
@@ -3472,7 +3488,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	a.notifyUserTurnUpdated()
 
 	go func() {
+		outcome := "cancelled"
 		defer func() {
+			eouSpan.SetAttributes(attribute.String(telemetry.AttrEOUOutcome, outcome))
+			eouSpan.End()
 			cancel()
 			a.eouMu.Lock()
 			if a.eouDone == done {
@@ -3519,6 +3538,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		if info.StoppedSpeakingAt != nil {
 			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
 		}
+		eouSpan.SetAttributes(
+			attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay),
+			attribute.String(telemetry.AttrEOULanguage, info.Language),
+			attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay),
+		)
 		timer := time.NewTimer(time.Duration(endpointingDelay * float64(time.Second)))
 		defer timer.Stop()
 
@@ -3527,6 +3551,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			return
 		case <-timer.C:
 			if strings.TrimSpace(info.NewTranscript) == "" {
+				outcome = "empty_transcript"
 				a.clearPendingUserTurn()
 				return
 			}
@@ -3547,8 +3572,49 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				logger.Logger.Errorw("user turn completion failed", err)
 				return
 			}
+			outcome = "completed"
 		}
 	}()
+}
+
+func (a *AgentActivity) startUserTurnSpan() {
+	if a == nil {
+		return
+	}
+	a.userTurnTraceMu.Lock()
+	defer a.userTurnTraceMu.Unlock()
+	if a.userTurnSpan != nil {
+		return
+	}
+	a.userTurnTraceCtx, a.userTurnSpan = telemetry.StartSpan(a.ctx, "user_turn")
+}
+
+func (a *AgentActivity) userTurnSpanContext() context.Context {
+	a.userTurnTraceMu.Lock()
+	defer a.userTurnTraceMu.Unlock()
+	if a.userTurnTraceCtx != nil {
+		return a.userTurnTraceCtx
+	}
+	return a.ctx
+}
+
+func (a *AgentActivity) endUserTurnSpan(transcriptionDelay, endOfTurnDelay float64) {
+	if a == nil {
+		return
+	}
+	a.userTurnTraceMu.Lock()
+	span := a.userTurnSpan
+	a.userTurnSpan = nil
+	a.userTurnTraceCtx = nil
+	a.userTurnTraceMu.Unlock()
+	if span == nil {
+		return
+	}
+	span.SetAttributes(
+		attribute.Float64(telemetry.AttrTranscriptionDelay, transcriptionDelay),
+		attribute.Float64(telemetry.AttrEndOfTurnDelay, endOfTurnDelay),
+	)
+	span.End()
 }
 
 func (a *AgentActivity) turnDetectorThreshold(language string) float64 {

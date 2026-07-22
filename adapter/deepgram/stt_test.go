@@ -24,8 +24,82 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/gorilla/websocket"
+	livekitlogger "github.com/livekit/protocol/logger"
 )
+
+func TestDeepgramSTTFlushLogsFinalizeDecision(t *testing.T) {
+	recorder := &deepgramRecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	stream := &deepgramStream{
+		requestID:   "req-1",
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error { return nil },
+		writeText:   func(string) error { return nil },
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	fields := recorder.debugFields["deepgram stt flush completed"]
+	if fields["request_id"] != "req-1" || fields["flushed_frames"] != 1 || fields["finalize_sent"] != true {
+		t.Fatalf("flush debug fields = %#v, want request ID, one frame, and Finalize sent", fields)
+	}
+
+	recorder.debugFields = nil
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(empty) error = %v", err)
+	}
+	fields = recorder.debugFields["deepgram stt flush completed"]
+	if fields["flushed_frames"] != 0 || fields["finalize_sent"] != false {
+		t.Fatalf("empty flush debug fields = %#v, want zero frames and Finalize deferred", fields)
+	}
+}
+
+type deepgramRecordingLogger struct {
+	debugFields map[string]map[string]any
+}
+
+func (l *deepgramRecordingLogger) Debugw(msg string, keysAndValues ...any) {
+	if l.debugFields == nil {
+		l.debugFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if ok {
+			fields[key] = keysAndValues[i+1]
+		}
+	}
+	l.debugFields[msg] = fields
+}
+func (*deepgramRecordingLogger) Infow(string, ...any)                        {}
+func (*deepgramRecordingLogger) Warnw(string, error, ...any)                 {}
+func (*deepgramRecordingLogger) Errorw(string, error, ...any)                {}
+func (l *deepgramRecordingLogger) WithValues(...any) livekitlogger.Logger    { return l }
+func (l *deepgramRecordingLogger) WithCallDepth(int) livekitlogger.Logger    { return l }
+func (l *deepgramRecordingLogger) WithName(string) livekitlogger.Logger      { return l }
+func (l *deepgramRecordingLogger) WithComponent(string) livekitlogger.Logger { return l }
+func (l *deepgramRecordingLogger) WithItemSampler() livekitlogger.Logger     { return l }
+func (l *deepgramRecordingLogger) WithoutSampler() livekitlogger.Logger      { return l }
+func (*deepgramRecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
+	return livekitlogger.GetDiscardLogger().WithDeferredValues()
+}
+func (*deepgramRecordingLogger) WithUnlikelyValues(...any) livekitlogger.UnlikelyLogger {
+	return livekitlogger.GetDiscardLogger().WithUnlikelyValues()
+}
 
 func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 2

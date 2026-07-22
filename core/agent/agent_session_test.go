@@ -7116,14 +7116,29 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 }
 
 type recordingLogger struct {
+	debugMessages []string
 	infoMessages  []string
 	warnMessages  []string
 	errorMessages []string
 	infoFields    map[string]map[string]any
 	errorFields   map[string]map[string]any
+	debugFields   map[string]map[string]any
 }
 
-func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
+func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {
+	l.debugMessages = append(l.debugMessages, msg)
+	if l.debugFields == nil {
+		l.debugFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if ok {
+			fields[key] = keysAndValues[i+1]
+		}
+	}
+	l.debugFields[msg] = fields
+}
 func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 	l.infoMessages = append(l.infoMessages, msg)
 	if l.infoFields == nil {
