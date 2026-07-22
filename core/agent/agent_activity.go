@@ -2209,19 +2209,28 @@ func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *f
 	if a == nil || ev == nil || a.userSpeechStartedAt.IsZero() || len(ev.Alternatives) == 0 {
 		return nil, nil, 0
 	}
+	now := time.Now()
+	nowSeconds := timeToUnixSeconds(now)
 	startedAt := a.userSpeechStartedAt
 	if !a.userTurnStartedAt.IsZero() {
 		startedAt = a.userTurnStartedAt
 	}
 	started := timeToUnixSeconds(startedAt)
+	if !a.userSpeechStoppedAt.IsZero() && !a.sttEOSReceived {
+		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
+		return &started, &stopped, max(nowSeconds-stopped, 0)
+	}
 	if ev.Alternatives[0].EndTime <= 0 {
 		return &started, nil, 0
 	}
 	stopped := started + ev.Alternatives[0].EndTime
-	transcriptionDelay := timeToUnixSeconds(time.Now()) - stopped
-	if transcriptionDelay < 0 {
-		transcriptionDelay = 0
+	if stopped > nowSeconds {
+		if a.isUserSpeaking() {
+			return &started, nil, 0
+		}
+		stopped = nowSeconds
 	}
+	transcriptionDelay := max(nowSeconds-stopped, 0)
 	return &started, &stopped, transcriptionDelay
 }
 
@@ -3318,7 +3327,7 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		started := timeToUnixSeconds(startedAt)
 		info.StartedSpeakingAt = &started
 	}
-	if info.StoppedSpeakingAt == nil && !a.userSpeechStoppedAt.IsZero() {
+	if !a.userSpeechStoppedAt.IsZero() && (!a.sttEOSReceived || info.StoppedSpeakingAt == nil || *info.StoppedSpeakingAt > timeToUnixSeconds(time.Now())) {
 		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
 		info.StoppedSpeakingAt = &stopped
 	}
@@ -3536,7 +3545,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		}
 
 		if info.StoppedSpeakingAt != nil {
-			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+			elapsedAdjustment := *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+			if elapsedAdjustment < 0 {
+				endpointingDelay += elapsedAdjustment
+			}
 		}
 		eouSpan.SetAttributes(
 			attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay),

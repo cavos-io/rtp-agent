@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,66 @@ func TestAgentActivityFinalTranscriptLogsTimingWithoutText(t *testing.T) {
 		if strings.Contains(key, "secret phrase") || strings.Contains(fmt.Sprint(value), "secret phrase") {
 			t.Fatalf("debug field leaked transcript: %s=%v", key, value)
 		}
+	}
+}
+
+func TestAgentActivityCumulativeSTTOffsetsUseSpeechBoundary(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.userSpeechStartedAt = time.Now().Add(-time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-200 * time.Millisecond)
+
+	for _, streamEndTime := range []float64{24, 48} {
+		_, stopped, delay := activity.finalTranscriptTiming(&stt.SpeechEvent{
+			Alternatives: []stt.SpeechData{{EndTime: streamEndTime}},
+		})
+
+		if stopped == nil || math.Abs(*stopped-timeToUnixSeconds(activity.userSpeechStoppedAt)) > 0.01 {
+			t.Fatalf("stream end %v: stopped = %v, want observed boundary %v", streamEndTime, stopped, activity.userSpeechStoppedAt)
+		}
+		if delay < 0.15 || delay > 0.5 {
+			t.Fatalf("stream end %v: transcription delay = %v, want measured from observed boundary", streamEndTime, delay)
+		}
+	}
+}
+
+func TestAgentActivityPendingFinalPrefersLaterSpeechBoundary(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	future := timeToUnixSeconds(time.Now().Add(12 * time.Second))
+	activity.pendingUserTranscriptPresent = true
+	activity.pendingUserTranscript = "hello"
+	activity.pendingStoppedSpeakingAt = &future
+	activity.userSpeechStoppedAt = time.Now().Add(-100 * time.Millisecond)
+
+	info := activity.pendingFinalEndOfTurnInfo()
+
+	if info.StoppedSpeakingAt == nil || math.Abs(*info.StoppedSpeakingAt-timeToUnixSeconds(activity.userSpeechStoppedAt)) > 0.01 {
+		t.Fatalf("pending EOU stop = %v, want observed boundary %v", info.StoppedSpeakingAt, activity.userSpeechStoppedAt)
+	}
+}
+
+func TestAgentActivityEOUFutureStopDoesNotExtendTimer(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.02})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	future := timeToUnixSeconds(time.Now().Add(10 * time.Second))
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "bounded future stop",
+		TranscriptConfidence: 0.9,
+		StoppedSpeakingAt:    &future,
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("future stop timestamp extended EOU beyond configured endpointing delay")
 	}
 }
 
