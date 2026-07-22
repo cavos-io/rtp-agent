@@ -1500,6 +1500,13 @@ func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
 	return rio.Recorder.Start(outputPath, sampleRate)
 }
 
+func (rio *RoomIO) PopulateSessionReport(report *agent.SessionReport) {
+	if rio == nil || rio.Recorder == nil {
+		return
+	}
+	rio.Recorder.PopulateSessionReport(report)
+}
+
 func (rio *RoomIO) setAudioOutputTrack(track *lksdk.LocalTrack, trackID string, publication *lksdk.LocalTrackPublication) {
 	rio.audioSubOnce = sync.Once{}
 	rio.mu.Lock()

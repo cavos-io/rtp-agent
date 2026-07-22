@@ -214,6 +214,7 @@ type JobContext struct {
 	workerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
+	primaryRoomIO          jobSessionRoomIO
 	tempDirectory          string
 	sessionDirectory       string
 	logContextFields       map[string]any
@@ -380,6 +381,10 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 
 	report := agent.NewSessionReport(session)
 	livekitPopulateJobContextSessionReport(report, c.Job)
+	
+	if c.primaryRoomIO != nil && c.Report != nil {
+		c.primaryRoomIO.PopulateSessionReport(c.Report)
+	}
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
@@ -419,6 +424,13 @@ type StartSessionOptions struct {
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
 	SessionContext context.Context
+
+	// BeforeSessionStart runs after the room is connected and RoomIO is ready,
+	// but BEFORE session.Start. It is the injection point for app logic that
+	// needs a live room while the session has not started processing yet
+	// (e.g. transfer runtime + flow-init that must set the flow agent before
+	// the first turn). Returning an error aborts StartSession.
+	BeforeSessionStart func(ctx context.Context) error
 }
 
 type jobSessionRoomIO interface {
@@ -426,6 +438,7 @@ type jobSessionRoomIO interface {
 	AttachRoom(*SDKRoom)
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
+	PopulateSessionReport(*agent.SessionReport)
 	Close() error
 }
 
@@ -540,6 +553,14 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			if err := roomIO.Start(ctx); err != nil {
 				return err
 			}
+		}
+	}
+
+	c.primaryRoomIO = roomIO
+
+	if opts.BeforeSessionStart != nil {
+		if err := opts.BeforeSessionStart(ctx); err != nil {
+			return err
 		}
 	}
 
