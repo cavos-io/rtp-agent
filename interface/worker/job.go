@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -213,6 +214,7 @@ type JobContext struct {
 	workerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
+	primaryRoomIO          jobSessionRoomIO
 	tempDirectory          string
 	sessionDirectory       string
 	logContextFields       map[string]any
@@ -379,6 +381,10 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 
 	report := agent.NewSessionReport(session)
 	livekitPopulateJobContextSessionReport(report, c.Job)
+	
+	if c.primaryRoomIO != nil && c.Report != nil {
+		c.primaryRoomIO.PopulateSessionReport(c.Report)
+	}
 	if c.Report != nil {
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
@@ -424,6 +430,8 @@ type jobSessionRoomIO interface {
 	WithCallback(*RoomCallback) *RoomCallback
 	AttachRoom(*SDKRoom)
 	Start(context.Context) error
+	StartRecorder(outputPath string, sampleRate int) error
+	PopulateSessionReport(*agent.SessionReport)
 	Close() error
 }
 
@@ -511,11 +519,11 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	if c.Room == nil {
 		roomIO = livekitNewRoomIO(nil, session, roomOptions)
 		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
-		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
 			_ = roomIO.Close()
 			return err
 		}
+		roomIO.AttachRoom(room)
 	}
 
 	if c.Room != nil {
@@ -529,12 +537,19 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}); err != nil {
 			logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
 		}
+		if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+				return err
+			}
+		}
 		if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
 			if err := roomIO.Start(ctx); err != nil {
 				return err
 			}
 		}
 	}
+
+	c.primaryRoomIO = roomIO
 
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
