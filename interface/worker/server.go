@@ -2010,10 +2010,17 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessi
 	if jobCtx == nil {
 		return JobSessionReportUploadPlanResult{}
 	}
+	report := jobCtx.Report
+	generatedReport, err := jobCtx.MakeSessionReport()
+	if err != nil {
+		logger.Logger.Errorw("failed to make session report", err, jobLogValues(jobCtx))
+	} else {
+		report = generatedReport
+	}
 	return livekitServerJobSessionReportUploadPlan(JobSessionReportUploadPlanOptions{
 		Job:       jobCtx.Job,
 		FakeJob:   jobCtx.IsFakeJob(),
-		Report:    jobCtx.Report,
+		Report:    report,
 		URL:       jobCtx.url,
 		APIKey:    opts.APIKey,
 		APISecret: opts.APISecret,

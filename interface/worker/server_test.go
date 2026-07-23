@@ -3625,6 +3625,26 @@ func TestShouldUploadJobSessionReportUsesAnyRecordingOption(t *testing.T) {
 	}
 }
 
+func TestJobSessionReportUploadPlanRefreshesRecordingDuration(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recording_duration"}, "", "", "")
+	ctx.SetPrimarySession(agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}))
+	ctx.Report.RecordingOptions = agent.RecordingOptions{Audio: true}
+	startedAt := float64(time.Now().Add(-time.Minute).UnixNano()) / 1e9
+	ctx.Report.AudioRecordingStartedAt = &startedAt
+
+	plan := jobSessionReportUploadPlan(ctx, WorkerOptions{})
+
+	if !plan.Upload {
+		t.Fatal("jobSessionReportUploadPlan().Upload = false, want true")
+	}
+	if plan.Report.Duration == nil {
+		t.Fatal("jobSessionReportUploadPlan().Report.Duration = nil, want timestamp minus recording start")
+	}
+	if want := plan.Report.Timestamp - startedAt; *plan.Report.Duration != want {
+		t.Fatalf("jobSessionReportUploadPlan().Report.Duration = %v, want %v", *plan.Report.Duration, want)
+	}
+}
+
 func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_eval_only"}, "", "", "")
 	ctx.Report.RecordingOptions = agent.RecordingOptions{}
