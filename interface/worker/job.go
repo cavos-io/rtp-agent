@@ -389,7 +389,10 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 		report.RecordingOptions = c.Report.RecordingOptions
 		report.AudioRecordingPath = c.Report.AudioRecordingPath
 		report.AudioRecordingStartedAt = c.Report.AudioRecordingStartedAt
-		report.Duration = c.Report.Duration
+		if report.AudioRecordingStartedAt != nil {
+			duration := report.Timestamp - *report.AudioRecordingStartedAt
+			report.Duration = &duration
+		}
 	}
 	report.Tagger = c.Tagger()
 	c.Report = report

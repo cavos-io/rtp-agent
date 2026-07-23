@@ -58,7 +58,7 @@ func TestRecorderIORecordingStartedAtHandlesSingleSideAudio(t *testing.T) {
 	}
 }
 
-func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
+func TestRecorderIOPopulateSessionReportSetsRecorderOwnedMetadata(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
 	inputStart := time.Unix(100, 250000000)
 	recorder.InputStartTime = &inputStart
@@ -84,12 +84,8 @@ func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
 	if *report.AudioRecordingStartedAt != wantStartedAt {
 		t.Fatalf("AudioRecordingStartedAt = %v, want %v", *report.AudioRecordingStartedAt, wantStartedAt)
 	}
-	if report.Duration == nil {
-		t.Fatal("Duration = nil, want timestamp minus recording start")
-	}
-	wantDuration := report.Timestamp - wantStartedAt
-	if *report.Duration != wantDuration {
-		t.Fatalf("Duration = %v, want %v", *report.Duration, wantDuration)
+	if report.Duration != nil {
+		t.Fatalf("Duration = %v, want nil until JobContext.MakeSessionReport", *report.Duration)
 	}
 }
 
