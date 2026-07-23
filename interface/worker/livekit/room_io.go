@@ -111,6 +111,7 @@ func (e *opusEncoder) Close() error {
 
 type RoomOptions struct {
 	AudioTrackName             string
+	AudioOutputSampleRate      uint32
 	AudioSubscriptionTimeout   time.Duration
 	PreConnectAudioTimeout     time.Duration
 	DisablePreConnectAudio     bool
@@ -369,10 +370,12 @@ type RoomIO struct {
 	roomEventListeners           map[string]map[uint64]func(RoomEvent)
 	nextRoomEventListenerID      uint64
 
-	audioOutputPaused   bool
-	audioOutputWaiters  []chan audioOutputWaitResult
-	audioOutputCarry    []byte
-	audioOutputDeadline time.Time
+	audioOutputPaused        bool
+	audioOutputWaiters       []chan audioOutputWaitResult
+	audioOutputCarry         []byte
+	audioOutputDeadline      time.Time
+	audioOutputResampler     *audio.StreamingResampler
+	audioOutputOpusResampler *audio.StreamingResampler
 
 	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
 
@@ -418,6 +421,9 @@ type audioOutputWaitResult struct {
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
+	if opts.AudioOutputSampleRate == 0 {
+		opts.AudioOutputSampleRate = roomIOInputSampleRate
+	}
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
 
@@ -2299,6 +2305,8 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	rio.playbackCapturing = false
 	rio.playbackFinishedCount++
 	rio.audioOutputCarry = nil
+	rio.audioOutputResampler = nil
+	rio.audioOutputOpusResampler = nil
 	rio.audioOutputDeadline = time.Time{}
 	playbackPosition := rio.playbackPosition
 	fullPlaybackPosition := playbackPosition
@@ -2596,18 +2604,11 @@ func (rio *RoomIO) releaseAudioSubscriptionFallback(ch chan struct{}) {
 	})
 }
 
-func roomIOResampleMonoForOpus(frame *model.AudioFrame) (*model.AudioFrame, error) {
+func roomIOMonoForOpus(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
 	encodeFrame := frame
-	if frame.SampleRate != 0 && frame.SampleRate != roomIOOpusClockRate {
-		resampled, err := audio.ResampleAudioFrame(frame, roomIOOpusClockRate)
-		if err != nil {
-			return nil, err
-		}
-		encodeFrame = resampled
-	}
 	if encodeFrame.NumChannels > 1 {
 		mono, err := roomIOMonoAudioFrame(encodeFrame)
 		if err != nil {
@@ -2633,10 +2634,46 @@ func roomIOResampleMonoForOpus(frame *model.AudioFrame) (*model.AudioFrame, erro
 	}
 	return &model.AudioFrame{
 		Data:              encodeFrame.Data[:expectedBytes],
-		SampleRate:        roomIOOpusClockRate,
+		SampleRate:        encodeFrame.SampleRate,
 		NumChannels:       1,
 		SamplesPerChannel: samplesPerChannel,
 	}, nil
+}
+
+func (rio *RoomIO) normalizeAudioOutput(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	targetRate := rio.Options.AudioOutputSampleRate
+	if targetRate == 0 {
+		targetRate = roomIOOpusClockRate
+	}
+	if frame == nil || frame.SampleRate == targetRate {
+		return frame, nil
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioOutputResampler == nil {
+		resampler, err := audio.NewStreamingResampler(frame.SampleRate, targetRate, frame.NumChannels)
+		if err != nil {
+			return nil, err
+		}
+		rio.audioOutputResampler = resampler
+	}
+	return rio.audioOutputResampler.Push(frame)
+}
+
+func (rio *RoomIO) resampleAudioOutputForOpus(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.SampleRate == roomIOOpusClockRate {
+		return frame, nil
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioOutputOpusResampler == nil {
+		resampler, err := audio.NewStreamingResampler(frame.SampleRate, roomIOOpusClockRate, frame.NumChannels)
+		if err != nil {
+			return nil, err
+		}
+		rio.audioOutputOpusResampler = resampler
+	}
+	return rio.audioOutputOpusResampler.Push(frame)
 }
 
 func roomIOChunkOpusWithCarry(carry, data []byte, flushTail bool) ([]*model.AudioFrame, []byte) {
@@ -2685,7 +2722,15 @@ func roomIOChunkOpusWithCarry(carry, data []byte, flushTail bool) ([]*model.Audi
 }
 
 func (rio *RoomIO) encodeOpusOutputFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
-	mono, err := roomIOResampleMonoForOpus(frame)
+	normalized, err := rio.normalizeAudioOutput(frame)
+	if err != nil {
+		return nil, err
+	}
+	mono, err := roomIOMonoForOpus(normalized)
+	if err != nil {
+		return nil, err
+	}
+	mono, err = rio.resampleAudioOutputForOpus(mono)
 	if err != nil {
 		return nil, err
 	}
@@ -2707,9 +2752,44 @@ func (rio *RoomIO) flushAudioOutputTail(ctx context.Context) {
 	rio.mu.Lock()
 	carry := rio.audioOutputCarry
 	rio.audioOutputCarry = nil
+	outputResampler := rio.audioOutputResampler
+	rio.audioOutputResampler = nil
+	opusResampler := rio.audioOutputOpusResampler
+	rio.audioOutputOpusResampler = nil
 	encoder := rio.encoder
 	track := rio.audioTrack
 	rio.mu.Unlock()
+	if outputResampler != nil {
+		tail, err := roomIOMonoForOpus(outputResampler.Flush())
+		if err != nil {
+			rio.recordAudioOutputError(err)
+			return
+		}
+		if tail != nil {
+			if opusResampler == nil && tail.SampleRate != roomIOOpusClockRate {
+				opusResampler, err = audio.NewStreamingResampler(tail.SampleRate, roomIOOpusClockRate, tail.NumChannels)
+				if err != nil {
+					rio.recordAudioOutputError(err)
+					return
+				}
+			}
+			if opusResampler != nil {
+				tail, err = opusResampler.Push(tail)
+				if err != nil {
+					rio.recordAudioOutputError(err)
+					return
+				}
+			}
+			if tail != nil {
+				carry = append(carry, tail.Data...)
+			}
+		}
+	}
+	if opusResampler != nil {
+		if tail := opusResampler.Flush(); tail != nil {
+			carry = append(carry, tail.Data...)
+		}
+	}
 	if len(carry) == 0 || encoder == nil || track == nil {
 		return
 	}

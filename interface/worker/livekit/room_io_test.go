@@ -80,6 +80,9 @@ func TestRoomIOAudioOutputEnabledByDefault(t *testing.T) {
 	if rio.Options.DisableAudioOutput {
 		t.Fatal("DisableAudioOutput = true, want audio output enabled by default")
 	}
+	if rio.Options.AudioOutputSampleRate != 24000 {
+		t.Fatalf("AudioOutputSampleRate = %d, want Python reference default 24000", rio.Options.AudioOutputSampleRate)
+	}
 	if assistant.PublishAudio == nil {
 		t.Fatal("PublishAudio = nil, want room audio output wired by default")
 	}
@@ -735,7 +738,7 @@ func TestRoomIOPublishAudioIgnoresStaleGateAfterConfirmedSubscription(t *testing
 
 func TestRoomIOPublishAudioPendingWaiterSurvivesAudioStart(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
-	rio := NewRoomIO(nil, session, RoomOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{AudioOutputSampleRate: 48000})
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio.mu.Lock()
 	pending := rio.audioSubscribed
@@ -781,7 +784,7 @@ func TestRoomIOPublishAudioPendingWaiterSurvivesAudioStart(t *testing.T) {
 
 func TestRoomIOPublishAudioBeforeTrackStartWaitsForSubscription(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
-	rio := NewRoomIO(nil, session, RoomOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{AudioOutputSampleRate: 48000})
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio.mu.Lock()
 	rio.encoder = encoder
@@ -1000,7 +1003,6 @@ func TestRoomIOPublishAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T)
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
-
 	select {
 	case ev := <-session.UserStateChangedCh:
 		if ev.OldState != agent.UserStateListening || ev.NewState != agent.UserStateAway {
@@ -1254,12 +1256,13 @@ func TestRoomIOPublishAudioResamplesPCMToOpusClockRate(t *testing.T) {
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
+	rio.Flush()
 
 	if got, want := len(encoder.pcm), 960*2; got != want {
 		t.Fatalf("encoder PCM length = %d, want %d bytes for 20ms at 48kHz", got, want)
 	}
-	if rio.playbackPosition != 20*time.Millisecond {
-		t.Fatalf("playback position = %v, want original 20ms duration", rio.playbackPosition)
+	if rio.lastPlaybackEvent.PlaybackPosition != 20*time.Millisecond {
+		t.Fatalf("playback position = %v, want original 20ms duration", rio.lastPlaybackEvent.PlaybackPosition)
 	}
 	stats := rio.AudioOutputDiagnostics()
 	if stats.LastInputSampleRate != 8000 {
@@ -1414,16 +1417,16 @@ func TestRoomIOChunkOpusWithCarryNoMidStreamPadding(t *testing.T) {
 	}
 }
 
-func TestRoomIOResampleMonoForOpus(t *testing.T) {
+func TestRoomIOMonoForOpus(t *testing.T) {
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 4*2*2),
 		SampleRate:        48000,
 		NumChannels:       2,
 		SamplesPerChannel: 4,
 	}
-	mono, err := roomIOResampleMonoForOpus(frame)
+	mono, err := roomIOMonoForOpus(frame)
 	if err != nil {
-		t.Fatalf("roomIOResampleMonoForOpus error = %v", err)
+		t.Fatalf("roomIOMonoForOpus error = %v", err)
 	}
 	if mono.NumChannels != 1 {
 		t.Fatalf("NumChannels = %d, want 1", mono.NumChannels)
