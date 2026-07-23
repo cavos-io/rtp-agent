@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -1160,6 +1161,154 @@ func TestPerformTTSInferenceCancelClosesStreamingOutputWhileInputOpen(t *testing
 	}
 	if !providerStream.closed {
 		t.Fatal("provider stream was not closed after context cancellation")
+	}
+}
+
+func TestSpeakingStallProbeStartsIncomplete(t *testing.T) {
+	probe := newSpeakingStallProbe()
+	got := probe.snapshot()
+	if got.textInputClosed || got.synthesisStarted || got.providerNextEntered ||
+		got.providerEOFWaitEntered || got.audioFrameObserved || got.providerEOFReleased ||
+		got.providerStreamClosed || got.audioChannelClosed {
+		t.Fatalf("initial phase snapshot = %s, want all phases incomplete", got)
+	}
+}
+
+func TestPerformTTSInferenceSpeakingStallPhaseBoundaries(t *testing.T) {
+	t.Run("one frame plus EOF closes output", func(t *testing.T) {
+		_, cancel, probe, stream, textCh, data := newSpeakingStallInference(t)
+		defer cancel()
+		observeSpeakingStallOutput(data, probe)
+		textCh <- "One complete diagnostic sentence."
+		probe.markTextInputClosed()
+		close(textCh)
+		waitForSpeakingStallPhase(t, probe, "synthesis start", probe.started)
+		stream.releaseFrame()
+		waitForSpeakingStallPhase(t, probe, "audio frame", probe.audio)
+		stream.releaseEOF()
+		waitForSpeakingStallPhase(t, probe, "provider stream close", probe.closed)
+		waitForSpeakingStallPhase(t, probe, "audio channel close", probe.output)
+
+		got := probe.snapshot()
+		if !got.textInputClosed || !got.providerEOFReleased || !got.audioChannelClosed {
+			t.Fatalf("normal completion phases: %s", got)
+		}
+	})
+
+	t.Run("open text source keeps output open", func(t *testing.T) {
+		_, cancel, probe, stream, textCh, data := newSpeakingStallInference(t)
+		defer cancel()
+		observeSpeakingStallOutput(data, probe)
+		textCh <- "One complete diagnostic sentence. "
+		waitForSpeakingStallPhase(t, probe, "synthesis start", probe.started)
+		stream.releaseFrame()
+		waitForSpeakingStallPhase(t, probe, "audio frame", probe.audio)
+		waitForSpeakingStallPhase(t, probe, "provider EOF wait", probe.eofWait)
+		stream.releaseEOF()
+		waitForSpeakingStallPhase(t, probe, "provider stream close", probe.closed)
+		assertSpeakingStallPhasePending(t, probe, "audio channel", probe.output)
+
+		probe.markTextInputClosed()
+		close(textCh)
+		waitForSpeakingStallPhase(t, probe, "audio channel close", probe.output)
+		got := probe.snapshot()
+		if !got.textInputClosed || !got.providerEOFReleased || !got.audioChannelClosed {
+			t.Fatalf("open-text recovery phases: %s", got)
+		}
+	})
+
+	t.Run("withheld provider EOF keeps output open", func(t *testing.T) {
+		_, cancel, probe, stream, textCh, data := newSpeakingStallInference(t)
+		observeSpeakingStallOutput(data, probe)
+		textCh <- "One complete diagnostic sentence."
+		probe.markTextInputClosed()
+		close(textCh)
+		waitForSpeakingStallPhase(t, probe, "synthesis start", probe.started)
+		stream.releaseFrame()
+		waitForSpeakingStallPhase(t, probe, "audio frame", probe.audio)
+		waitForSpeakingStallPhase(t, probe, "provider EOF wait", probe.eofWait)
+		assertSpeakingStallPhasePending(t, probe, "provider stream close", probe.closed)
+		assertSpeakingStallPhasePending(t, probe, "audio channel", probe.output)
+
+		got := probe.snapshot()
+		if !got.textInputClosed || !got.providerEOFWaitEntered || !got.audioFrameObserved ||
+			got.providerEOFReleased || got.providerStreamClosed || got.audioChannelClosed {
+			t.Fatalf("withheld EOF phases: %s", got)
+		}
+		cancel()
+		waitForSpeakingStallPhase(t, probe, "provider stream close after cancellation", probe.closed)
+		waitForSpeakingStallPhase(t, probe, "audio channel close after cancellation", probe.output)
+	})
+
+	t.Run("cancellation terminates withheld EOF", func(t *testing.T) {
+		_, cancel, probe, stream, textCh, data := newSpeakingStallInference(t)
+		observeSpeakingStallOutput(data, probe)
+		textCh <- "One complete diagnostic sentence."
+		probe.markTextInputClosed()
+		close(textCh)
+		waitForSpeakingStallPhase(t, probe, "synthesis start", probe.started)
+		stream.releaseFrame()
+		waitForSpeakingStallPhase(t, probe, "audio frame", probe.audio)
+		waitForSpeakingStallPhase(t, probe, "provider EOF wait", probe.eofWait)
+
+		cancel()
+		waitForSpeakingStallPhase(t, probe, "provider stream close", probe.closed)
+		waitForSpeakingStallPhase(t, probe, "audio channel close", probe.output)
+		got := probe.snapshot()
+		if got.providerEOFReleased || !got.providerStreamClosed || !got.audioChannelClosed {
+			t.Fatalf("cancellation phases: %s", got)
+		}
+	})
+}
+
+func newSpeakingStallInference(t *testing.T) (
+	context.Context,
+	context.CancelFunc,
+	*speakingStallProbe,
+	*speakingStallProbeChunkedStream,
+	chan string,
+	*TTSGenerationData,
+) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	probe := newSpeakingStallProbe()
+	stream := newSpeakingStallProbeChunkedStream(probe)
+	provider := &speakingStallProbeTTS{probe: probe, stream: stream}
+	textCh := make(chan string, 1)
+	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		cancel()
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	return ctx, cancel, probe, stream, textCh, data
+}
+
+func observeSpeakingStallOutput(data *TTSGenerationData, probe *speakingStallProbe) {
+	go func() {
+		for frame := range data.AudioCh {
+			if frame != nil {
+				probe.markAudioFrameObserved()
+			}
+		}
+		probe.markAudioChannelClosed()
+	}()
+}
+
+func waitForSpeakingStallPhase(t *testing.T, probe *speakingStallProbe, phase string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s; phases: %s", phase, probe.snapshot())
+	}
+}
+
+func assertSpeakingStallPhasePending(t *testing.T, probe *speakingStallProbe, phase string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatalf("%s completed unexpectedly; phases: %s", phase, probe.snapshot())
+	default:
 	}
 }
 
@@ -2578,6 +2727,212 @@ type fakeGenerationChunkedStream struct {
 	index            int
 	closed           bool
 	nextDelay        time.Duration
+}
+
+type speakingStallPhaseSnapshot struct {
+	textInputClosed        bool
+	synthesisStarted       bool
+	providerNextEntered    bool
+	providerEOFWaitEntered bool
+	audioFrameObserved     bool
+	providerEOFReleased    bool
+	providerStreamClosed   bool
+	audioChannelClosed     bool
+}
+
+func (s speakingStallPhaseSnapshot) String() string {
+	return fmt.Sprintf(
+		"text_input_closed=%t synthesis_started=%t provider_next_entered=%t provider_eof_wait_entered=%t audio_frame_observed=%t provider_eof_released=%t provider_stream_closed=%t audio_channel_closed=%t",
+		s.textInputClosed, s.synthesisStarted, s.providerNextEntered,
+		s.providerEOFWaitEntered, s.audioFrameObserved, s.providerEOFReleased,
+		s.providerStreamClosed, s.audioChannelClosed,
+	)
+}
+
+type speakingStallProbe struct {
+	mu      sync.Mutex
+	phases  speakingStallPhaseSnapshot
+	started chan struct{}
+	next    chan struct{}
+	eofWait chan struct{}
+	closed  chan struct{}
+	audio   chan struct{}
+	output  chan struct{}
+
+	startOnce   sync.Once
+	nextOnce    sync.Once
+	eofWaitOnce sync.Once
+	closeOnce   sync.Once
+	audioOnce   sync.Once
+	outputOnce  sync.Once
+}
+
+func newSpeakingStallProbe() *speakingStallProbe {
+	return &speakingStallProbe{
+		started: make(chan struct{}),
+		next:    make(chan struct{}),
+		eofWait: make(chan struct{}),
+		closed:  make(chan struct{}),
+		audio:   make(chan struct{}),
+		output:  make(chan struct{}),
+	}
+}
+
+func (p *speakingStallProbe) set(update func(*speakingStallPhaseSnapshot)) {
+	p.mu.Lock()
+	update(&p.phases)
+	p.mu.Unlock()
+}
+
+func (p *speakingStallProbe) snapshot() speakingStallPhaseSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.phases
+}
+
+func (p *speakingStallProbe) markTextInputClosed() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.textInputClosed = true })
+}
+
+func (p *speakingStallProbe) markSynthesisStarted() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.synthesisStarted = true })
+	p.startOnce.Do(func() { close(p.started) })
+}
+
+func (p *speakingStallProbe) markProviderNextEntered() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.providerNextEntered = true })
+	p.nextOnce.Do(func() { close(p.next) })
+}
+
+func (p *speakingStallProbe) markProviderEOFWaitEntered() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.providerEOFWaitEntered = true })
+	p.eofWaitOnce.Do(func() { close(p.eofWait) })
+}
+
+func (p *speakingStallProbe) markAudioFrameObserved() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.audioFrameObserved = true })
+	p.audioOnce.Do(func() { close(p.audio) })
+}
+
+func (p *speakingStallProbe) markProviderEOFReleased() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.providerEOFReleased = true })
+}
+
+func (p *speakingStallProbe) markProviderStreamClosed() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.providerStreamClosed = true })
+	p.closeOnce.Do(func() { close(p.closed) })
+}
+
+func (p *speakingStallProbe) markAudioChannelClosed() {
+	p.set(func(s *speakingStallPhaseSnapshot) { s.audioChannelClosed = true })
+	p.outputOnce.Do(func() { close(p.output) })
+}
+
+type speakingStallProbeTTS struct {
+	probe  *speakingStallProbe
+	stream *speakingStallProbeChunkedStream
+}
+
+func (t *speakingStallProbeTTS) Label() string { return "speaking-stall-probe" }
+
+func (t *speakingStallProbeTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: false}
+}
+
+func (t *speakingStallProbeTTS) SampleRate() int { return 24000 }
+
+func (t *speakingStallProbeTTS) NumChannels() int { return 1 }
+
+func (t *speakingStallProbeTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return nil, errors.New("stream should be supplied by the core adapter")
+}
+
+func (t *speakingStallProbeTTS) Synthesize(ctx context.Context, _ string) (tts.ChunkedStream, error) {
+	t.probe.markSynthesisStarted()
+	t.stream.bindContext(ctx)
+	return t.stream, nil
+}
+
+type speakingStallProbeChunkedStream struct {
+	probe     *speakingStallProbe
+	frame     *model.AudioFrame
+	frameGate chan struct{}
+	eofGate   chan struct{}
+	closeCh   chan struct{}
+	ctx       context.Context
+	mu        sync.Mutex
+	frameSent bool
+	closeOnce sync.Once
+	frameOnce sync.Once
+	eofOnce   sync.Once
+}
+
+func newSpeakingStallProbeChunkedStream(probe *speakingStallProbe) *speakingStallProbeChunkedStream {
+	return &speakingStallProbeChunkedStream{
+		probe: probe,
+		frame: &model.AudioFrame{
+			Data: make([]byte, 24000*2), SampleRate: 24000,
+			NumChannels: 1, SamplesPerChannel: 24000,
+		},
+		frameGate: make(chan struct{}),
+		eofGate:   make(chan struct{}),
+		closeCh:   make(chan struct{}),
+	}
+}
+
+func (s *speakingStallProbeChunkedStream) bindContext(ctx context.Context) {
+	s.mu.Lock()
+	s.ctx = ctx
+	s.mu.Unlock()
+}
+
+func (s *speakingStallProbeChunkedStream) releaseFrame() {
+	s.frameOnce.Do(func() { close(s.frameGate) })
+}
+
+func (s *speakingStallProbeChunkedStream) releaseEOF() {
+	s.eofOnce.Do(func() {
+		s.probe.markProviderEOFReleased()
+		close(s.eofGate)
+	})
+}
+
+func (s *speakingStallProbeChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.probe.markProviderNextEntered()
+	s.mu.Lock()
+	frameSent := s.frameSent
+	if !frameSent {
+		s.frameSent = true
+	}
+	ctx := s.ctx
+	s.mu.Unlock()
+	if !frameSent {
+		select {
+		case <-s.frameGate:
+			return &tts.SynthesizedAudio{Frame: s.frame}, nil
+		case <-s.closeCh:
+			return nil, context.Canceled
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	s.probe.markProviderEOFWaitEntered()
+	select {
+	case <-s.eofGate:
+		return nil, io.EOF
+	case <-s.closeCh:
+		return nil, context.Canceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *speakingStallProbeChunkedStream) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+		s.probe.markProviderStreamClosed()
+	})
+	return nil
 }
 
 func (s *fakeGenerationChunkedStream) Next() (*tts.SynthesizedAudio, error) {

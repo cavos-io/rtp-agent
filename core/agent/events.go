@@ -48,28 +48,6 @@ func (e *UserInputTranscribedEvent) MarshalJSON() ([]byte, error) {
 	})
 }
 
-type AgentOutputTranscribedEvent struct {
-	Language   string
-	Transcript string
-	IsFinal    bool
-	CreatedAt  time.Time
-}
-
-func (e *AgentOutputTranscribedEvent) GetType() string { return "agent_output_transcribed" }
-
-func (e *AgentOutputTranscribedEvent) MarshalJSON() ([]byte, error) {
-	if e == nil {
-		return json.Marshal(nil)
-	}
-	return json.Marshal(map[string]any{
-		"type":       e.GetType(),
-		"transcript": e.Transcript,
-		"is_final":   e.IsFinal,
-		"language":   e.Language,
-		"created_at": timeToUnixSeconds(e.CreatedAt),
-	})
-}
-
 type AgentReasoningTranscribedEvent struct {
 	Text      string
 	IsFinal   bool

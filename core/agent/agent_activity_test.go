@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,168 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func TestAgentActivityEOURetrySharesUserTurnTrace(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(nil)
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "first", TranscriptConfidence: 0.9})
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "second", TranscriptConfidence: 0.9})
+
+	select {
+	case <-session.MetricsCollectedEvents():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("EOU retry did not complete")
+	}
+
+	spans := recorder.Ended()
+	var userTurn sdktrace.ReadOnlySpan
+	var eouSpans []sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		switch span.Name() {
+		case "user_turn":
+			userTurn = span
+		case "eou_detection":
+			eouSpans = append(eouSpans, span)
+		}
+	}
+	if userTurn == nil {
+		t.Fatal("user_turn span not recorded")
+	}
+	if len(eouSpans) != 2 {
+		t.Fatalf("eou_detection spans = %d, want 2", len(eouSpans))
+	}
+	outcomes := map[string]int{}
+	for _, span := range eouSpans {
+		if span.SpanContext().TraceID() != userTurn.SpanContext().TraceID() {
+			t.Fatalf("EOU trace ID = %s, want user turn trace ID %s", span.SpanContext().TraceID(), userTurn.SpanContext().TraceID())
+		}
+		if span.Parent().SpanID() != userTurn.SpanContext().SpanID() {
+			t.Fatalf("EOU parent = %s, want user turn span %s", span.Parent().SpanID(), userTurn.SpanContext().SpanID())
+		}
+		outcomes[spanAttributes(span.Attributes())[telemetry.AttrEOUOutcome]]++
+	}
+	if outcomes["cancelled"] != 1 || outcomes["completed"] != 1 {
+		t.Fatalf("EOU outcomes = %#v, want one cancelled and one completed", outcomes)
+	}
+}
+
+func TestAgentActivityFinalTranscriptLogsTimingWithoutText(t *testing.T) {
+	recorder := &recordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.userSpeechStartedAt = time.Now().Add(-time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		RequestID: "req-1",
+		Alternatives: []stt.SpeechData{{
+			Text:       "secret phrase",
+			Language:   "en",
+			Confidence: 0.9,
+			EndTime:    0.8,
+		}},
+	})
+
+	fields := recorder.debugFields["received user transcript"]
+	if fields == nil {
+		t.Fatal("received user transcript debug record not found")
+	}
+	if fields["request_id"] != "req-1" || fields["language"] != "en" {
+		t.Fatalf("debug fields = %#v, want request_id=req-1 language=en", fields)
+	}
+	if delay, ok := fields["transcription_delay"].(float64); !ok || delay < 0 {
+		t.Fatalf("transcription_delay = %#v, want non-negative float64", fields["transcription_delay"])
+	}
+	for key, value := range fields {
+		if strings.Contains(key, "secret phrase") || strings.Contains(fmt.Sprint(value), "secret phrase") {
+			t.Fatalf("debug field leaked transcript: %s=%v", key, value)
+		}
+	}
+}
+
+func TestAgentActivityCumulativeSTTOffsetsUseSpeechBoundary(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.userSpeechStartedAt = time.Now().Add(-time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-200 * time.Millisecond)
+
+	for _, streamEndTime := range []float64{24, 48} {
+		_, stopped, delay := activity.finalTranscriptTiming(&stt.SpeechEvent{
+			Alternatives: []stt.SpeechData{{EndTime: streamEndTime}},
+		})
+
+		if stopped == nil || math.Abs(*stopped-timeToUnixSeconds(activity.userSpeechStoppedAt)) > 0.01 {
+			t.Fatalf("stream end %v: stopped = %v, want observed boundary %v", streamEndTime, stopped, activity.userSpeechStoppedAt)
+		}
+		if delay < 0.15 || delay > 0.5 {
+			t.Fatalf("stream end %v: transcription delay = %v, want measured from observed boundary", streamEndTime, delay)
+		}
+	}
+}
+
+func TestAgentActivityPendingFinalPrefersLaterSpeechBoundary(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	future := timeToUnixSeconds(time.Now().Add(12 * time.Second))
+	activity.pendingUserTranscriptPresent = true
+	activity.pendingUserTranscript = "hello"
+	activity.pendingStoppedSpeakingAt = &future
+	activity.userSpeechStoppedAt = time.Now().Add(-100 * time.Millisecond)
+
+	info := activity.pendingFinalEndOfTurnInfo()
+
+	if info.StoppedSpeakingAt == nil || math.Abs(*info.StoppedSpeakingAt-timeToUnixSeconds(activity.userSpeechStoppedAt)) > 0.01 {
+		t.Fatalf("pending EOU stop = %v, want observed boundary %v", info.StoppedSpeakingAt, activity.userSpeechStoppedAt)
+	}
+}
+
+func TestAgentActivityEOUFutureStopDoesNotExtendTimer(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.02})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	future := timeToUnixSeconds(time.Now().Add(10 * time.Second))
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "bounded future stop",
+		TranscriptConfidence: 0.9,
+		StoppedSpeakingAt:    &future,
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("future stop timestamp extended EOU beyond configured endpointing delay")
+	}
+}
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
 	agent := NewAgent("test")
@@ -1151,6 +1314,32 @@ func TestAgentActivityHoldsPreflightTranscriptWhileAgentSpeaking(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("held preflight transcript was not emitted after flush")
+	}
+}
+
+func TestAgentActivityStartOfSpeechPreservesHeldSTTWhileAgentSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeVAD,
+	})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type: stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "speech before the next VAD segment",
+		}},
+	}}
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	if !activity.holdSTTWhileAgentSpeaking {
+		t.Fatal("holdSTTWhileAgentSpeaking = false, want preserved while agent is speaking")
+	}
+	if got := len(activity.heldSTTEvents); got != 1 {
+		t.Fatalf("held STT events = %d, want previous transcript preserved", got)
 	}
 }
 

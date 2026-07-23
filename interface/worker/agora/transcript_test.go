@@ -35,13 +35,16 @@ func TestTranscriptForwarderPublishesTENAssistantTranscript(t *testing.T) {
 	forwarder.Start(ctx)
 	defer forwarder.Stop(context.Background())
 
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "hello there",
-		IsFinal:    true,
-		CreatedAt:  time.UnixMilli(1710000000123),
-	})
+	if err := forwarder.CaptureText(context.Background(), agent.TextOutputChunk{Text: "hello there"}); err != nil {
+		t.Fatalf("CaptureText error = %v", err)
+	}
+	forwarder.Flush()
 
-	got := waitForPublishedTranscript(t, publisher)
+	delta := waitForPublishedTranscript(t, publisher)
+	if delta["is_final"] != false || delta["text"] != "hello there" {
+		t.Fatalf("delta = %#v, want non-final hello there", delta)
+	}
+	got := waitForPublishedTranscriptCount(t, publisher, 2)
 	if got["data_type"] != "transcribe" {
 		t.Fatalf("data_type = %#v, want transcribe", got["data_type"])
 	}
@@ -56,12 +59,6 @@ func TestTranscriptForwarderPublishesTENAssistantTranscript(t *testing.T) {
 	}
 	if got["is_final"] != true {
 		t.Fatalf("is_final = %#v, want true", got["is_final"])
-	}
-	if got["text_ts"] != float64(1710000000123) {
-		t.Fatalf("text_ts = %#v, want event millis", got["text_ts"])
-	}
-	if got["ts"] != float64(1710000000123) {
-		t.Fatalf("ts = %#v, want event millis for TEN playground clients", got["ts"])
 	}
 	if got["stream_id"] != float64(100) {
 		t.Fatalf("stream_id = %#v, want numeric assistant stream", got["stream_id"])
@@ -79,70 +76,6 @@ func TestPublishTranscriptNormalizesStreamID(t *testing.T) {
 	got := publishedJSON(t, publisher, 0)
 	if got["stream_id"] != float64(100) {
 		t.Fatalf("stream_id = %#v, want normalized numeric stream id", got["stream_id"])
-	}
-}
-
-func TestTranscriptForwarderPublishesEmptyFinalAssistantTranscript(t *testing.T) {
-	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
-	publisher := &recordingDataPublisher{}
-	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
-		AssistantStreamID: "100",
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	forwarder.Start(ctx)
-	defer forwarder.Stop(context.Background())
-
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "",
-		IsFinal:    true,
-		CreatedAt:  time.UnixMilli(1710000000133),
-	})
-
-	got := waitForPublishedTranscript(t, publisher)
-	if got["data_type"] != "transcribe" {
-		t.Fatalf("data_type = %#v, want transcribe", got["data_type"])
-	}
-	if got["role"] != "assistant" {
-		t.Fatalf("role = %#v, want assistant", got["role"])
-	}
-	if got["text"] != "" {
-		t.Fatalf("text = %#v, want empty final transcript", got["text"])
-	}
-	if got["is_final"] != true {
-		t.Fatalf("is_final = %#v, want true", got["is_final"])
-	}
-}
-
-func TestTranscriptForwarderPublishesEmptyNonFinalAssistantTranscript(t *testing.T) {
-	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
-	publisher := &recordingDataPublisher{}
-	forwarder := NewTranscriptForwarder(session, publisher, TranscriptForwarderOptions{
-		AssistantStreamID: "100",
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	forwarder.Start(ctx)
-	defer forwarder.Stop(context.Background())
-
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "",
-		IsFinal:    false,
-		CreatedAt:  time.UnixMilli(1710000000144),
-	})
-
-	got := waitForPublishedTranscript(t, publisher)
-	if got["data_type"] != "transcribe" {
-		t.Fatalf("data_type = %#v, want transcribe", got["data_type"])
-	}
-	if got["role"] != "assistant" {
-		t.Fatalf("role = %#v, want assistant", got["role"])
-	}
-	if got["text"] != "" {
-		t.Fatalf("text = %#v, want empty non-final transcript", got["text"])
-	}
-	if got["is_final"] != false {
-		t.Fatalf("is_final = %#v, want false", got["is_final"])
 	}
 }
 
@@ -403,17 +336,16 @@ func TestTranscriptForwarderStartIsIdempotent(t *testing.T) {
 		_ = forwarder.Stop(context.Background())
 	}()
 
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "hello once",
-		IsFinal:    true,
-		CreatedAt:  time.UnixMilli(1710000001111),
-	})
+	if err := forwarder.CaptureText(context.Background(), agent.TextOutputChunk{Text: "hello once"}); err != nil {
+		t.Fatalf("CaptureText error = %v", err)
+	}
+	forwarder.Flush()
 
 	got := waitForPublishedTranscript(t, publisher)
 	if got["text"] != "hello once" {
 		t.Fatalf("text = %#v, want transcript", got["text"])
 	}
-	assertPublishedPayloadCount(t, publisher, 1)
+	assertPublishedPayloadCount(t, publisher, 2)
 }
 
 func TestTranscriptForwarderStopIsIdempotent(t *testing.T) {
@@ -444,12 +376,6 @@ func TestTranscriptForwarderStopBeforeStartPreventsLaterPublish(t *testing.T) {
 		t.Fatalf("Stop() error = %v, want nil", err)
 	}
 	forwarder.Start(context.Background())
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
-		Transcript: "late hello",
-		IsFinal:    true,
-		CreatedAt:  time.UnixMilli(1710000001222),
-	})
-
 	assertPublishedPayloadCount(t, publisher, 0)
 	if publisher.closes != 1 {
 		t.Fatalf("publisher closes = %d, want 1", publisher.closes)
@@ -469,18 +395,6 @@ func TestTranscriptForwarderExitsWhenSubscriptionCloses(t *testing.T) {
 				f.wg.Add(1)
 				go func() {
 					f.forwardUserTranscripts(ctx, events)
-					close(done)
-				}()
-			},
-		},
-		{
-			name: "agent transcript",
-			run: func(ctx context.Context, f *TranscriptForwarder, done chan struct{}) {
-				events := make(chan agent.AgentOutputTranscribedEvent)
-				close(events)
-				f.wg.Add(1)
-				go func() {
-					f.forwardAgentTranscripts(ctx, events)
 					close(done)
 				}()
 			},
@@ -521,13 +435,17 @@ func TestTranscriptForwarderExitsWhenSubscriptionCloses(t *testing.T) {
 }
 
 func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher) map[string]any {
+	return waitForPublishedTranscriptCount(t, publisher, 1)
+}
+
+func waitForPublishedTranscriptCount(t *testing.T, publisher *recordingDataPublisher, count int) map[string]any {
 	t.Helper()
 	deadline := time.After(time.Second)
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	for {
-		if len(publisher.payloads) > 0 {
-			return publishedJSON(t, publisher, 0)
+		if len(publisher.payloads) >= count {
+			return publishedJSON(t, publisher, count-1)
 		}
 		select {
 		case <-tick.C:

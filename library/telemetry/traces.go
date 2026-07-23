@@ -54,6 +54,7 @@ const (
 	AttrEOUUnlikelyThreshold = "lk.eou.unlikely_threshold"
 	AttrEOUDelay             = "lk.eou.endpointing_delay"
 	AttrEOULanguage          = "lk.eou.language"
+	AttrEOUOutcome           = "lk.eou.outcome"
 	AttrUserTranscript       = "lk.user_transcript"
 	AttrTranscriptConfidence = "lk.transcript_confidence"
 	AttrTranscriptionDelay   = "lk.transcription_delay"

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -394,7 +395,6 @@ type RoomIO struct {
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
 
-	agentTranscriptionCancel         context.CancelFunc
 	agentTranscriptionSegmentID      string
 	agentTranscriptionText           string
 	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
@@ -439,8 +439,10 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
 	rio.startUserTranscriptionListener()
-	rio.startAgentTranscriptionListener()
 	rio.startSessionCloseListener()
+	if session != nil && !opts.DisableTranscriptionOutput {
+		session.SetTextOutput(&roomIOAgentTextOutput{rio: rio})
+	}
 
 	if !opts.DisableAudioOutput {
 		rio.audioSubscribed = make(chan struct{})
@@ -456,6 +458,36 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 type roomIOPlaybackController struct {
 	rio *RoomIO
+}
+
+type roomIOAgentTextOutput struct {
+	rio  *RoomIO
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (o *roomIOAgentTextOutput) CaptureText(_ context.Context, chunk agent.TextOutputChunk) error {
+	if o == nil || o.rio == nil || chunk.Text == "" {
+		return nil
+	}
+	o.mu.Lock()
+	o.text.WriteString(chunk.Text)
+	o.mu.Unlock()
+	o.rio.handleAgentText(roomIOAgentTextChunk{Transcript: chunk.Text})
+	return nil
+}
+
+func (o *roomIOAgentTextOutput) Flush() {
+	if o == nil || o.rio == nil {
+		return
+	}
+	o.mu.Lock()
+	text := o.text.String()
+	o.text.Reset()
+	o.mu.Unlock()
+	if text != "" {
+		o.rio.handleAgentText(roomIOAgentTextChunk{Transcript: text, IsFinal: true})
+	}
 }
 
 func (c roomIOPlaybackController) ClearBuffer() {
@@ -567,48 +599,6 @@ func (rio *RoomIO) startSessionCloseListener() {
 	}()
 }
 
-func (rio *RoomIO) startAgentTranscriptionListener() {
-	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rio.agentTranscriptionCancel = cancel
-
-	speechEvents := rio.AgentSession.SpeechCreatedEvents()
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case _, ok := <-speechEvents:
-				if !ok {
-					return
-				}
-				rio.mu.Lock()
-				rio.agentTranscriptionSegmentID = ""
-				rio.agentTranscriptionText = ""
-				rio.mu.Unlock()
-				rio.closeAgentTextStream()
-			}
-		}
-	}()
-
-	events := rio.AgentSession.AgentOutputTranscribedEvents()
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				rio.handleAgentOutputTranscribed(ev)
-			}
-		}
-	}()
-}
-
 func (rio *RoomIO) startUserTranscriptionListener() {
 	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
 		return
@@ -709,7 +699,13 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	rio.clientEvents.DispatchUserState(ev.NewState)
 }
 
-func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
+type roomIOAgentTextChunk struct {
+	Transcript string
+	Language   string
+	IsFinal    bool
+}
+
+func (rio *RoomIO) handleAgentText(ev roomIOAgentTextChunk) {
 	if rio == nil {
 		return
 	}
@@ -733,7 +729,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	}
 	legacyEv := ev
 	legacyEv.Transcript = legacyText
-	rio.publishLegacyAgentTranscription(legacyEv, segmentID)
+	rio.publishAgentTranscriptionPacket(legacyEv, segmentID)
 	rio.publishAgentTranscriptionStream(streamText, lksdk.StreamTextOptions{
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
@@ -818,7 +814,7 @@ func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent
 	rio.publishTranscriptionTextStream(ev.Transcript, trackID, ev.IsFinal, segmentID)
 }
 
-func (rio *RoomIO) publishLegacyAgentTranscription(ev agent.AgentOutputTranscribedEvent, segmentID string) {
+func (rio *RoomIO) publishAgentTranscriptionPacket(ev roomIOAgentTextChunk, segmentID string) {
 	if rio == nil || rio.transcriptionPacketPublisher == nil {
 		return
 	}
@@ -2836,10 +2832,6 @@ func (rio *RoomIO) Close() error {
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
 		rio.sessionCloseCancel = nil
-	}
-	if rio.agentTranscriptionCancel != nil {
-		rio.agentTranscriptionCancel()
-		rio.agentTranscriptionCancel = nil
 	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()

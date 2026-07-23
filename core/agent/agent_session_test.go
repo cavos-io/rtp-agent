@@ -290,6 +290,35 @@ func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T
 	}
 }
 
+func TestAgentSessionEmptyFinalTranscriptDoesNotResetAway(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		filter     func(string) string
+	}{
+		{name: "empty"},
+		{name: "whitespace", transcript: " \t\n "},
+		{name: "filtered empty", transcript: "noise", filter: func(string) string { return "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			session.UserTranscriptFilter = tt.filter
+			session.UpdateUserState(UserStateAway)
+
+			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+				Transcript: tt.transcript,
+				IsFinal:    true,
+			})
+
+			if got := session.UserState(); got != UserStateAway {
+				t.Fatalf("UserState() = %q, want %q", got, UserStateAway)
+			}
+		})
+	}
+}
+
 func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ch := session.UserInputTranscribedEvents()
@@ -332,82 +361,6 @@ func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testin
 			}
 			return
 		}
-	}
-}
-
-func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	first := session.AgentOutputTranscribedEvents()
-	second := session.AgentOutputTranscribedEvents()
-
-	session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-		Transcript: "hi",
-	})
-
-	assertAgentTranscriptEvent(t, first, "first")
-	assertAgentTranscriptEvent(t, second, "second")
-}
-
-func TestAgentSessionFinalAgentOutputTranscribedDeliveredWhenChannelFull(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	ch := session.AgentOutputTranscribedEvents()
-
-	// Fill the channel buffer with delta events so it's full.
-	for range cap(ch) {
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
-	}
-
-	// Final event must block and be delivered even though channel was full.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "final", IsFinal: true})
-	}()
-
-	// Drain one slot then verify final event arrives.
-	<-ch
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("final AgentOutputTranscribed event was not delivered when channel became available")
-	}
-
-	var finalReceived bool
-	for {
-		select {
-		case ev := <-ch:
-			if ev.IsFinal {
-				finalReceived = true
-			}
-		default:
-			if !finalReceived {
-				t.Fatal("final AgentOutputTranscribed event not found in channel after delivery")
-			}
-			return
-		}
-	}
-}
-
-func TestAgentSessionDeltaAgentOutputTranscribedDroppedWhenChannelFull(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	ch := session.AgentOutputTranscribedEvents()
-
-	// Fill the channel buffer.
-	for range cap(ch) {
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "delta", IsFinal: false})
-	}
-
-	// Emitting another delta must not block (dropped silently).
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: "overflow delta", IsFinal: false})
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("delta AgentOutputTranscribed emit blocked when channel was full, want non-blocking drop")
 	}
 }
 
@@ -893,6 +846,31 @@ func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T
 	assertConversationItemAddedEvent(t, second, msg, "second")
 }
 
+type recordingTextOutput struct {
+	chunks  []TextOutputChunk
+	flushes int
+}
+
+func (r *recordingTextOutput) CaptureText(_ context.Context, chunk TextOutputChunk) error {
+	r.chunks = append(r.chunks, chunk)
+	return nil
+}
+
+func (r *recordingTextOutput) Flush() {
+	r.flushes++
+}
+
+func TestAgentSessionStoresTextOutput(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	output := &recordingTextOutput{}
+
+	session.SetTextOutput(output)
+
+	if got := session.TextOutput(); got != output {
+		t.Fatalf("TextOutput() = %T, want configured recorder", got)
+	}
+}
+
 func TestAgentSessionConversationItemAddedDeliveredWhenChannelFull(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	conversationEvents := session.conversationItemAddedEvents()
@@ -1324,19 +1302,6 @@ func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedE
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive user transcript event", name)
-	}
-}
-
-func assertAgentTranscriptEvent(t *testing.T, events <-chan AgentOutputTranscribedEvent, name string) {
-	t.Helper()
-
-	select {
-	case ev := <-events:
-		if ev.Transcript != "hi" {
-			t.Fatalf("%s subscriber event = %#v, want hi transcript", name, ev)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("%s subscriber did not receive agent transcript event", name)
 	}
 }
 
@@ -7180,14 +7145,29 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 }
 
 type recordingLogger struct {
+	debugMessages []string
 	infoMessages  []string
 	warnMessages  []string
 	errorMessages []string
 	infoFields    map[string]map[string]any
 	errorFields   map[string]map[string]any
+	debugFields   map[string]map[string]any
 }
 
-func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
+func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {
+	l.debugMessages = append(l.debugMessages, msg)
+	if l.debugFields == nil {
+		l.debugFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if ok {
+			fields[key] = keysAndValues[i+1]
+		}
+	}
+	l.debugFields[msg] = fields
+}
 func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 	l.infoMessages = append(l.infoMessages, msg)
 	if l.infoFields == nil {
@@ -7361,40 +7341,6 @@ func (c *closeableSessionTool) Close() error {
 	return c.closeErr
 }
 
-func TestEmitAgentOutputTranscribedUnblocksOnStop(t *testing.T) {
-	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-
-	_ = s.AgentOutputTranscribedEvents()
-
-	emitDone := make(chan struct{})
-	go func() {
-		defer close(emitDone)
-		for i := 0; i < 50; i++ {
-			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: "hello",
-				IsFinal:    true,
-			})
-		}
-	}()
-
-	time.Sleep(150 * time.Millisecond)
-	select {
-	case <-emitDone:
-		t.Fatal("emitter did not block on the full subscriber channel; test cannot prove the fix")
-	default:
-	}
-
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-
-	select {
-	case <-emitDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("EmitAgentOutputTranscribed stayed blocked after Stop() — teardown did not unblock the subscriber send")
-	}
-}
-
 func TestLosslessPrimaryEventEmitUnblocksOnStop(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -7448,61 +7394,6 @@ func fillChannel[T any](ch chan T, value T) {
 	for i := 0; i < cap(ch); i++ {
 		ch <- value
 	}
-}
-
-func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
-	agent := NewAgent("test")
-	agent.TTS = &fakePipelineTTS{}
-	agent.LLM = &fakeGenerationLLM{}
-	agent.STT = &fakePipelineSTT{}
-	agent.VAD = &fakePipelineVAD{}
-	s := NewAgentSession(agent, nil, AgentSessionOptions{})
-	s.Assistant = &fakeSessionAssistant{}
-
-	sub := s.AgentOutputTranscribedEvents()
-
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("first Start: %v", err)
-	}
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatalf("first Stop: %v", err)
-	}
-
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("restart Start: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Stop(context.Background()) })
-
-	emitDone := make(chan struct{})
-	go func() {
-		defer close(emitDone)
-		for i := 0; i < 50; i++ {
-			s.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: "hello",
-				IsFinal:    true,
-			})
-		}
-	}()
-
-	select {
-	case <-emitDone:
-		t.Fatal("emitter finished without blocking on the full subscriber channel after restart — teardownCh was not reset, so final events are being dropped")
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		for {
-			select {
-			case <-sub:
-			case <-emitDone:
-				return
-			}
-		}
-	}()
-	<-emitDone
-	<-drainDone
 }
 
 type closeTrackingAudioTurnDetector struct {

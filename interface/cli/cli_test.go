@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/plugin"
@@ -429,7 +430,10 @@ func TestStartConsoleTranscriptPrinterWritesAgentOutput(t *testing.T) {
 	if !startConsoleTranscriptPrinter(ctx, session, &out) {
 		t.Fatal("startConsoleTranscriptPrinter() = false, want true for AgentSession")
 	}
-	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "hello from agent"})
+	session.EmitConversationItemAdded(&llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello from agent"}},
+	})
 
 	deadline := time.After(time.Second)
 	for !strings.Contains(out.String(), "hello from agent") {

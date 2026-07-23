@@ -1171,44 +1171,62 @@ func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T
 	}
 }
 
-func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
-	chatCtx := llm.NewChatContext()
-	l := &fakeGenerationLLM{
-		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{
-				{Delta: &llm.ChoiceDelta{Content: "hello "}},
-				{Delta: &llm.ChoiceDelta{Content: "world"}},
-			},
-		},
-	}
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
-		stream: &fakePipelineTTSStream{
-			frames: []*model.AudioFrame{{
-				Data:              make([]byte, 4000),
-				SampleRate:        1000,
-				NumChannels:       1,
-				SamplesPerChannel: 2000,
-			}},
-		},
-	}, chatCtx)
-	agent.session = session
-	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
+type channelTextOutput struct {
+	captured chan TextOutputChunk
+	flushed  chan struct{}
+}
 
-	agent.generateReply()
+func (o *channelTextOutput) CaptureText(_ context.Context, chunk TextOutputChunk) error {
+	o.captured <- chunk
+	return nil
+}
+
+func (o *channelTextOutput) Flush() {
+	select {
+	case <-o.flushed:
+	default:
+		close(o.flushed)
+	}
+}
+
+func TestPipelineAgentTextOutputDoesNotWaitForTTSAudio(t *testing.T) {
+	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 1),
+		flushed:  make(chan struct{}),
+	}
+	input := make(chan string, 1)
+	input <- "hello"
+	close(input)
+	timing := &TextOutputTiming{}
+
+	ttsInput, done, err := agent.forwardTextOutput(
+		context.Background(),
+		passthroughTranscriptionNode,
+		output,
+		input,
+		timing,
+	)
+	if err != nil {
+		t.Fatalf("forwardTextOutput error = %v", err)
+	}
 
 	select {
-	case ev := <-events:
-		if ev.Transcript == "" || !strings.Contains(ev.Transcript, "hello") {
-			t.Fatalf("agent output transcript = %#v, want generated assistant text", ev)
+	case chunk := <-output.captured:
+		if chunk.Text != "hello" {
+			t.Fatalf("captured text = %q, want hello", chunk.Text)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("AgentOutputTranscribedEvents did not receive assistant transcript")
+		t.Fatal("text output waited for TTS input consumption")
 	}
+
+	if got := <-ttsInput; got != "hello" {
+		t.Fatalf("TTS input = %q, want hello", got)
+	}
+	<-done
 }
 
-func TestPipelineAgentEmitsFinalSynchronizedAgentOutputTranscription(t *testing.T) {
+func TestPipelineAgentStreamsSessionTextOutput(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{
@@ -1218,7 +1236,12 @@ func TestPipelineAgentEmitsFinalSynchronizedAgentOutputTranscription(t *testing.
 			},
 		},
 	}
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 2),
+		flushed:  make(chan struct{}),
+	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetTextOutput(output)
 	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
 		stream: &fakePipelineTTSStream{
 			frames: []*model.AudioFrame{{
@@ -1231,45 +1254,43 @@ func TestPipelineAgentEmitsFinalSynchronizedAgentOutputTranscription(t *testing.
 	}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
 
 	agent.generateReply()
 
-	var final AgentOutputTranscribedEvent
-	for deadline := time.After(time.Second); !final.IsFinal; {
+	var got strings.Builder
+	for range 2 {
 		select {
-		case ev := <-events:
-			final = ev
-		case <-deadline:
-			t.Fatal("AgentOutputTranscribedEvents did not receive final assistant transcript")
+		case chunk := <-output.captured:
+			got.WriteString(chunk.Text)
+		case <-time.After(time.Second):
+			t.Fatal("session text output did not receive generated text")
 		}
 	}
-	if final.Transcript != "hello world" {
-		t.Fatalf("final transcript = %q, want full assistant text", final.Transcript)
+	if got.String() != "hello world" {
+		t.Fatalf("session text output = %q, want hello world", got.String())
+	}
+	select {
+	case <-output.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("session text output was not flushed")
 	}
 }
 
-func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
+func TestPipelineAgentUsesAlignedTextOutput(t *testing.T) {
 	chatCtx := llm.NewChatContext()
-	l := &fakeGenerationLLM{
-		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{
-				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
-			},
-		},
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{
+		{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+	}}}
+	output := &channelTextOutput{
+		captured: make(chan TextOutputChunk, 1),
+		flushed:  make(chan struct{}),
 	}
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
-		UseTTSAlignedTranscript: true,
-	})
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
+	session.SetTextOutput(output)
 	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
 		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
 		stream: &fakePipelineTTSStream{
-			frames: []*model.AudioFrame{{
-				Data:              make([]byte, 4000),
-				SampleRate:        1000,
-				NumChannels:       1,
-				SamplesPerChannel: 2000,
-			}},
+			frames: []*model.AudioFrame{{Data: make([]byte, 4000), SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 2000}},
 			timedTranscripts: [][]tts.TimedString{{
 				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
 			}},
@@ -1277,64 +1298,47 @@ func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 	}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
 
 	agent.generateReply()
 
 	select {
-	case ev := <-events:
-		if ev.Transcript != "aligned transcript" {
-			t.Fatalf("agent output transcript = %q, want TTS aligned transcript", ev.Transcript)
+	case chunk := <-output.captured:
+		if chunk.Text != "aligned transcript" || chunk.Timed == nil {
+			t.Fatalf("aligned chunk = %#v, want timed aligned transcript", chunk)
+		}
+		if chunk.Timed.StartTime != 0.1 || chunk.Timed.EndTime != 0.5 {
+			t.Fatalf("aligned timing = %#v, want 0.1..0.5", chunk.Timed)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("AgentOutputTranscribedEvents did not receive aligned assistant transcript")
+		t.Fatal("aligned text output was not captured")
 	}
 }
 
-func TestPipelineAgentEmitsFinalAlignedAgentOutputTranscription(t *testing.T) {
+func TestPipelineAgentTextOutputIgnoresTTSReplacements(t *testing.T) {
 	chatCtx := llm.NewChatContext()
-	l := &fakeGenerationLLM{
-		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{
-				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
-			},
-		},
-	}
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{
+		{Delta: &llm.ChoiceDelta{Content: "LiveKit"}},
+	}}}
+	output := &channelTextOutput{captured: make(chan TextOutputChunk, 1), flushed: make(chan struct{})}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
-		UseTTSAlignedTranscript: true,
+		TTSTextReplacements: map[string]string{"LiveKit": "live kit"},
 	})
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
-		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
-		stream: &fakePipelineTTSStream{
-			frames: []*model.AudioFrame{{
-				Data:              make([]byte, 4000),
-				SampleRate:        1000,
-				NumChannels:       1,
-				SamplesPerChannel: 2000,
-			}},
-			timedTranscripts: [][]tts.TimedString{{
-				{Text: "Halo, ", StartTime: 0.0, EndTime: 0.2},
-				{Text: "ada yang bisa saya bantu?", StartTime: 0.2, EndTime: 1.0},
-			}},
-		},
-	}, chatCtx)
+	session.SetTextOutput(output)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{1}, SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
 
 	agent.generateReply()
 
-	var final AgentOutputTranscribedEvent
-	for deadline := time.After(time.Second); !final.IsFinal; {
-		select {
-		case ev := <-events:
-			final = ev
-		case <-deadline:
-			t.Fatal("AgentOutputTranscribedEvents did not receive final aligned assistant transcript")
+	select {
+	case chunk := <-output.captured:
+		if chunk.Text != "LiveKit" {
+			t.Fatalf("text output = %q, want pre-TTS replacement text LiveKit", chunk.Text)
 		}
-	}
-	if final.Transcript != "Halo, ada yang bisa saya bantu?" {
-		t.Fatalf("final transcript = %q, want full aligned assistant text", final.Transcript)
+	case <-time.After(time.Second):
+		t.Fatal("text output was not captured")
 	}
 }
 
@@ -1345,13 +1349,9 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 		AudioCh:     make(chan *model.AudioFrame),
 		TimedTextCh: make(chan tts.TimedString),
 	}
-	transcriptSync := NewTranscriptSynchronizer(0)
-	defer transcriptSync.Close()
-	done := closedChannel()
-
 	playDone := make(chan error, 1)
 	go func() {
-		_, err := agent.playTTSGenerationWithTranscript(context.Background(), session, ttsGen, transcriptSync, done, nil)
+		_, err := agent.playTTSGeneration(context.Background(), session, ttsGen, nil)
 		playDone <- err
 	}()
 
@@ -1381,10 +1381,10 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 	select {
 	case err := <-playDone:
 		if err != nil {
-			t.Fatalf("playTTSGenerationWithTranscript error = %v, want nil", err)
+			t.Fatalf("playTTSGeneration error = %v, want nil", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("playTTSGenerationWithTranscript did not finish")
+		t.Fatal("playTTSGeneration did not finish")
 	}
 }
 
@@ -1412,9 +1412,6 @@ func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 	}
 	close(ttsGen.AudioCh)
 	close(ttsGen.TimedTextCh)
-	transcriptSync := NewTranscriptSynchronizer(0)
-	defer transcriptSync.Close()
-	done := closedChannel()
 	var published int
 	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
 		published++
@@ -1422,10 +1419,10 @@ func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 		return nil
 	}
 
-	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+	_, err := agent.playTTSGeneration(ctx, session, ttsGen, nil)
 
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+		t.Fatalf("playTTSGeneration error = %v, want context.Canceled", err)
 	}
 	if published != 1 {
 		t.Fatalf("published frames = %d, want 1 before context cancellation", published)
@@ -1453,18 +1450,15 @@ func TestPipelineAgentCanceledPublishAudioClearsPlayback(t *testing.T) {
 	}
 	close(ttsGen.AudioCh)
 	close(ttsGen.TimedTextCh)
-	transcriptSync := NewTranscriptSynchronizer(0)
-	defer transcriptSync.Close()
-	done := closedChannel()
 	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
 		cancel()
 		return context.Canceled
 	}
 
-	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+	_, err := agent.playTTSGeneration(ctx, session, ttsGen, nil)
 
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+		t.Fatalf("playTTSGeneration error = %v, want context.Canceled", err)
 	}
 	if playback.clearCalls != 1 {
 		t.Fatalf("ClearBuffer calls = %d, want 1 after canceled PublishAudio", playback.clearCalls)
@@ -1486,13 +1480,9 @@ func TestPipelineAgentPlayTTSCancelsWhenNoAudioFrames(t *testing.T) {
 		AudioCh:     make(chan *model.AudioFrame), // never receives a frame, never closed
 		TimedTextCh: make(chan tts.TimedString),
 	}
-	transcriptSync := NewTranscriptSynchronizer(0)
-	defer transcriptSync.Close()
-	done := closedChannel()
-
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+		_, err := agent.playTTSGeneration(ctx, session, ttsGen, nil)
 		resultCh <- err
 	}()
 
@@ -1502,10 +1492,10 @@ func TestPipelineAgentPlayTTSCancelsWhenNoAudioFrames(t *testing.T) {
 	select {
 	case err := <-resultCh:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+			t.Fatalf("playTTSGeneration error = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("playTTSGenerationWithTranscript did not return after context cancellation with no audio frames (stuck ranging over AudioCh)")
+		t.Fatal("playTTSGeneration did not return after context cancellation with no audio frames (stuck ranging over AudioCh)")
 	}
 }
 
@@ -2004,95 +1994,6 @@ func TestPipelineAgentSessionOptionSelectsTTSTextTransforms(t *testing.T) {
 
 	if got, want := providerStream.text.String(), "Say **hi** "; got != want {
 		t.Fatalf("pushed TTS text = %q, want selected transform output %q", got, want)
-	}
-}
-
-func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
-	chatCtx := llm.NewChatContext()
-	l := &fakeGenerationLLM{
-		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{
-				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
-			},
-		},
-	}
-	baseAgent := NewAgent("test")
-	baseAgent.UseTTSAlignedTranscript = true
-	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
-		UseTTSAlignedTranscript: false,
-	})
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
-		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
-		stream: &fakePipelineTTSStream{
-			frames: []*model.AudioFrame{{
-				Data:              make([]byte, 4000),
-				SampleRate:        1000,
-				NumChannels:       1,
-				SamplesPerChannel: 2000,
-			}},
-			timedTranscripts: [][]tts.TimedString{{
-				{Text: "agent aligned transcript", StartTime: 0.1, EndTime: 0.5},
-			}},
-		},
-	}, chatCtx)
-	agent.session = session
-	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
-
-	agent.generateReply()
-
-	select {
-	case ev := <-events:
-		if ev.Transcript != "agent aligned transcript" {
-			t.Fatalf("agent output transcript = %q, want agent override TTS aligned transcript", ev.Transcript)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("AgentOutputTranscribedEvents did not receive agent override aligned assistant transcript")
-	}
-}
-
-func TestPipelineAgentAgentTTSAlignedTranscriptOverrideCanDisableSessionDefault(t *testing.T) {
-	chatCtx := llm.NewChatContext()
-	l := &fakeGenerationLLM{
-		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{
-				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
-			},
-		},
-	}
-	baseAgent := NewAgent("test")
-	baseAgent.UseTTSAlignedTranscript = false
-	baseAgent.UseTTSAlignedTranscriptSet = true
-	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
-		UseTTSAlignedTranscript: true,
-	})
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
-		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
-		stream: &fakePipelineTTSStream{
-			frames: []*model.AudioFrame{{
-				Data:              make([]byte, 4000),
-				SampleRate:        1000,
-				NumChannels:       1,
-				SamplesPerChannel: 2000,
-			}},
-			timedTranscripts: [][]tts.TimedString{{
-				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
-			}},
-		},
-	}, chatCtx)
-	agent.session = session
-	agent.ctx = context.Background()
-	events := session.AgentOutputTranscribedEvents()
-
-	agent.generateReply()
-
-	select {
-	case ev := <-events:
-		if ev.Transcript != "llm transcript" {
-			t.Fatalf("agent output transcript = %q, want agent override to disable TTS aligned transcript", ev.Transcript)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("AgentOutputTranscribedEvents did not receive assistant transcript")
 	}
 }
 
@@ -5769,7 +5670,8 @@ func TestPipelineAgentReplyIgnoresAdjacentLLMFlushSentinelsForTTS(t *testing.T) 
 func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	events := session.AgentOutputTranscribedEvents()
+	output := &channelTextOutput{captured: make(chan TextOutputChunk, 1), flushed: make(chan struct{})}
+	session.SetTextOutput(output)
 	ttsStream := &fakePipelineTTSStream{pushed: make(chan struct{})}
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: ttsStream}, chatCtx)
 	agent.session = session
@@ -5807,57 +5709,28 @@ func TestPipelineAgentSegmentedTTSCancelFinalizesActiveTranscript(t *testing.T) 
 		t.Fatalf("synthesizeSegmentedSpeech error = %v, want context.Canceled", err)
 	}
 
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case ev := <-events:
-			if ev.Transcript == "partial answer" && ev.IsFinal {
-				return
-			}
-		case <-deadline:
-			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript after cancellation")
-		}
-	}
-}
-
-func TestPipelineAgentAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	events := session.AgentOutputTranscribedEvents()
-	syncer := NewTranscriptSynchronizer(0)
-	agent := &PipelineAgent{}
-	done := agent.forwardAgentOutputTranscription(session, syncer)
-
-	syncer.PushText("  padded answer  ")
-	syncer.Close()
-
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("agent output transcription forwarder did not stop")
-	}
-
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case ev := <-events:
-			if ev.IsFinal {
-				if ev.Transcript != "  padded answer  " {
-					t.Fatalf("final transcript = %q, want exact reference text with whitespace", ev.Transcript)
-				}
-				return
-			}
-		case <-deadline:
-			t.Fatal("AgentOutputTranscribedEvents did not receive final transcript")
+	case chunk := <-output.captured:
+		if chunk.Text != "partial answer" {
+			t.Fatalf("captured text = %q, want partial answer", chunk.Text)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("text output did not receive partial text before cancellation")
+	}
+	select {
+	case <-output.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("text output was not flushed after cancellation")
 	}
 }
 
-func TestPipelineAgentAlignedAgentOutputTranscriptionFinalPreservesReferenceWhitespace(t *testing.T) {
+func TestPipelineAgentAlignedTextOutputPreservesReferenceWhitespace(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	events := session.AgentOutputTranscribedEvents()
+	output := &channelTextOutput{captured: make(chan TextOutputChunk, 1), flushed: make(chan struct{})}
+	session.SetTextOutput(output)
 	timedTextCh := make(chan tts.TimedString, 1)
 	agent := &PipelineAgent{}
-	done := agent.forwardAlignedAgentOutputTranscription(session, timedTextCh)
+	done := agent.forwardAlignedTextOutput(session, timedTextCh)
 
 	timedTextCh <- tts.TimedString{Text: "  aligned answer  "}
 	close(timedTextCh)
@@ -5868,19 +5741,13 @@ func TestPipelineAgentAlignedAgentOutputTranscriptionFinalPreservesReferenceWhit
 		t.Fatal("aligned agent output transcription forwarder did not stop")
 	}
 
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case ev := <-events:
-			if ev.IsFinal {
-				if ev.Transcript != "  aligned answer  " {
-					t.Fatalf("final aligned transcript = %q, want exact reference text with whitespace", ev.Transcript)
-				}
-				return
-			}
-		case <-deadline:
-			t.Fatal("AgentOutputTranscribedEvents did not receive final aligned transcript")
+	select {
+	case chunk := <-output.captured:
+		if chunk.Text != "  aligned answer  " {
+			t.Fatalf("aligned text = %q, want exact reference text with whitespace", chunk.Text)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("aligned text output did not receive text")
 	}
 }
 

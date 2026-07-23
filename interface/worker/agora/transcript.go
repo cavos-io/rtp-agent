@@ -26,13 +26,14 @@ type TranscriptForwarder struct {
 	publisher DataPublisher
 	opts      TranscriptForwarderOptions
 
-	cancel  context.CancelFunc
-	stopErr error
-	stopped bool
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	start   sync.Once
-	once    sync.Once
+	cancel        context.CancelFunc
+	stopErr       error
+	stopped       bool
+	mu            sync.Mutex
+	wg            sync.WaitGroup
+	start         sync.Once
+	once          sync.Once
+	assistantText strings.Builder
 }
 
 func NewTranscriptForwarder(session *agent.AgentSession, publisher DataPublisher, opts TranscriptForwarderOptions) *TranscriptForwarder {
@@ -66,11 +67,10 @@ func (f *TranscriptForwarder) Start(ctx context.Context) {
 		ctx, cancel := context.WithCancel(normalizeContext(ctx))
 		f.cancel = cancel
 		userEvents := f.session.UserInputTranscribedEvents()
-		agentEvents := f.session.AgentOutputTranscribedEvents()
 		reasoningEvents := f.session.AgentReasoningTranscribedEvents()
-		f.wg.Add(3)
+		f.session.SetTextOutput(f)
+		f.wg.Add(2)
 		go f.forwardUserTranscripts(ctx, userEvents)
-		go f.forwardAgentTranscripts(ctx, agentEvents)
 		go f.forwardAgentReasoning(ctx, reasoningEvents)
 	})
 }
@@ -109,18 +109,27 @@ func (f *TranscriptForwarder) forwardUserTranscripts(ctx context.Context, events
 	}
 }
 
-func (f *TranscriptForwarder) forwardAgentTranscripts(ctx context.Context, events <-chan agent.AgentOutputTranscribedEvent) {
-	defer f.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-events:
-			if !ok {
-				return
-			}
-			f.publishTranscript(ctx, "assistant", ev.Transcript, ev.IsFinal, f.opts.AssistantStreamID, ev.CreatedAt)
-		}
+func (f *TranscriptForwarder) CaptureText(ctx context.Context, chunk agent.TextOutputChunk) error {
+	if f == nil || chunk.Text == "" {
+		return nil
+	}
+	f.mu.Lock()
+	f.assistantText.WriteString(chunk.Text)
+	f.mu.Unlock()
+	f.publishTranscript(ctx, "assistant", chunk.Text, false, f.opts.AssistantStreamID, time.Now())
+	return nil
+}
+
+func (f *TranscriptForwarder) Flush() {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	text := f.assistantText.String()
+	f.assistantText.Reset()
+	f.mu.Unlock()
+	if text != "" {
+		f.publishTranscript(context.Background(), "assistant", text, true, f.opts.AssistantStreamID, time.Now())
 	}
 }
 

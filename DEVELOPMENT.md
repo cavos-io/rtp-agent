@@ -29,10 +29,10 @@ Do not modify `refs/*` unless the task explicitly updates vendored reference mat
 | `livekit/agents/voice/agent.py` | `core/agent/agent.go` |
 | `livekit/agents/voice/agent_session.py` | `core/agent/agent_session.go` |
 | `livekit/agents/voice/agent_activity.py` | `core/agent/agent_activity.go` |
-| `livekit/agents/voice/generation.py` | `core/agent/generation.go` |
+| `livekit/agents/voice/generation.py` | `core/agent/generation.go`, `core/agent/text_output.go`, and delivered assistant `ConversationItemAddedEvent` commitment |
 | `livekit/agents/voice/room_io/*` | `interface/worker/livekit/room_io.go` |
 | `livekit/agents/voice/recorder_io/*` | `interface/worker/livekit/recorder_io.go` |
-| `livekit/agents/voice/transcription/*` | `core/agent/transcription.go` |
+| `livekit/agents/voice/transcription/*` | `core/agent/text_output.go` and `interface/worker/livekit/room_io.go` |
 | `livekit/agents/voice/avatar/*` | `core/agent/avatar.go` and provider adapters |
 | `livekit/agents/voice/ivr/*` | `core/agent/ivr.go` and `core/beta/tools` |
 | `livekit/agents/llm/*` | `core/llm` |
