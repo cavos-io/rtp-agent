@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/twitchtv/twirp"
 )
@@ -5799,5 +5802,165 @@ func TestRoomIOAgentTranscriptionWriteNeverLandsOnClosedStream(t *testing.T) {
 		t.Fatal("agent transcription delta reached the wire AFTER the stream was closed " +
 			"(publishAgentTranscriptionStream let closeAgentTextStream tear the writer " +
 			"down underneath an in-flight write)")
+	}
+}
+
+func TestEnsureAudioOutputPublishedRepublishesUnboundTrack(t *testing.T) {
+	oldTrack := newRoomIOTestAudioTrack(t)
+	rio := &RoomIO{}
+	rio.setAudioOutputTrack(oldTrack, "TR_old", nil)
+
+	published := make(chan *lksdk.LocalTrack, 1)
+	rio.publishAudioTrackFn = func(track *lksdk.LocalTrack, opts *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error) {
+		published <- track
+		return nil, nil
+	}
+
+	rio.ensureAudioOutputPublished(10 * time.Millisecond)
+
+	select {
+	case track := <-published:
+		if track == oldTrack {
+			t.Fatal("republish must create a fresh track, not reuse the stale one")
+		}
+	default:
+		t.Fatal("unbound track after reconnect must be republished")
+	}
+}
+
+func TestEnsureAudioOutputPublishedSkipsWhenOutputDisabled(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{DisableAudioOutput: true}}
+	called := false
+	rio.publishAudioTrackFn = func(*lksdk.LocalTrack, *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error) {
+		called = true
+		return nil, nil
+	}
+	rio.ensureAudioOutputPublished(time.Millisecond)
+	if called {
+		t.Fatal("must not publish when audio output disabled")
+	}
+}
+
+func TestPublishAudioDropsAndRecordsWhenTrackUnbound(t *testing.T) {
+	track := newRoomIOTestAudioTrack(t)
+	rio := &RoomIO{}
+	rio.setAudioOutputTrack(track, "TR_test", nil)
+	rio.mu.Lock()
+	rio.audioSubscribed = nil
+	rio.audioOutputBoundFn = roomIOTrackIsBound
+	rio.mu.Unlock()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio must not fail hard on unbound track, got %v", err)
+	}
+
+	d := rio.AudioOutputDiagnostics()
+	if d.FramesPublished != 0 {
+		t.Fatalf("FramesPublished = %d, want 0 (nothing reached the wire)", d.FramesPublished)
+	}
+	if d.FramesDroppedUnbound == 0 {
+		t.Fatal("FramesDroppedUnbound must be recorded")
+	}
+	if d.LastError == "" {
+		t.Fatal("LastError must mention the unbound drop")
+	}
+	if d.TrackBound {
+		t.Fatal("TrackBound must be false for a never-bound track")
+	}
+}
+
+type fakeRTPStep struct {
+	pkt *rtp.Packet
+	err error
+}
+
+type fakeRTPTrack struct {
+	steps []fakeRTPStep
+	idx   int
+}
+
+func (f *fakeRTPTrack) ID() string { return "TR_fake" }
+
+func (f *fakeRTPTrack) Codec() webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1,
+	}}
+}
+
+func (f *fakeRTPTrack) ReadRTP() (*rtp.Packet, interceptor.Attributes, error) {
+	if f.idx >= len(f.steps) {
+		return nil, nil, io.EOF
+	}
+	step := f.steps[f.idx]
+	f.idx++
+	return step.pkt, nil, step.err
+}
+
+func opusTestPacket(seq uint16) *rtp.Packet {
+	return &rtp.Packet{
+		Header:  rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: seq, Timestamp: uint32(seq) * 960, SSRC: 42},
+		Payload: []byte{0xf8, 0xff, 0xfe},
+	}
+}
+
+func TestRunAudioInputLoopExitsAfterConsecutiveReadErrors(t *testing.T) {
+	readErr := errors.New("srtp closed")
+	steps := make([]fakeRTPStep, 0, roomIOAudioInputMaxConsecutiveReadErrors)
+	for i := 0; i < roomIOAudioInputMaxConsecutiveReadErrors; i++ {
+		steps = append(steps, fakeRTPStep{err: readErr})
+	}
+	rio := &RoomIO{audioInputGeneration: 1}
+	rio.runAudioInputLoop(&fakeRTPTrack{steps: steps}, 1, newRoomIOInputAudioStream())
+
+	d := rio.AudioInputDiagnostics()
+	if d.ExitReason != "read_error" {
+		t.Fatalf("ExitReason = %q, want read_error", d.ExitReason)
+	}
+	if d.LastError == "" {
+		t.Fatal("LastError must record the read error")
+	}
+}
+
+func TestRunAudioInputLoopSurvivesTransientReadErrors(t *testing.T) {
+	readErr := errors.New("transient")
+	steps := []fakeRTPStep{
+		{pkt: opusTestPacket(1)},
+		{err: readErr},
+		{err: readErr},
+		{pkt: opusTestPacket(2)},
+		{pkt: opusTestPacket(3)},
+	}
+	rio := &RoomIO{audioInputGeneration: 1}
+	rio.runAudioInputLoop(&fakeRTPTrack{steps: steps}, 1, newRoomIOInputAudioStream())
+
+	d := rio.AudioInputDiagnostics()
+	if d.ExitReason != "eof" {
+		t.Fatalf("ExitReason = %q, want eof (transient errors must not kill the loop)", d.ExitReason)
+	}
+	if d.PacketsRead != 3 {
+		t.Fatalf("PacketsRead = %d, want 3", d.PacketsRead)
+	}
+}
+
+func TestRunAudioInputLoopExitsWhenSuperseded(t *testing.T) {
+	rio := &RoomIO{audioInputGeneration: 2}
+	rio.runAudioInputLoop(&fakeRTPTrack{}, 1, newRoomIOInputAudioStream())
+	if got := rio.AudioInputDiagnostics().ExitReason; got != "superseded" {
+		t.Fatalf("ExitReason = %q, want superseded", got)
+	}
+}
+
+func TestRoomIOPlaybackControllerSatisfiesFlusher(t *testing.T) {
+	var controller agent.AudioPlaybackController = roomIOPlaybackController{}
+
+	if _, ok := controller.(interface{ Flush() }); !ok {
+		t.Fatal("roomIOPlaybackController does not satisfy interface{ Flush() }; " +
+			"flushAssistantPlayback would silently skip it and playback would never finish")
 	}
 }

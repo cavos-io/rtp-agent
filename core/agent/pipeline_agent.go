@@ -1903,10 +1903,16 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 
 func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
 	startedSpeaking := false
+	abandonGeneration := func() {
+		if ttsGen != nil && ttsGen.Cancel != nil {
+			ttsGen.Cancel()
+		}
+	}
 	for {
 		var frame *model.AudioFrame
 		select {
 		case <-ctx.Done():
+			abandonGeneration()
 			transcriptSync.Close()
 			<-transcriptionDone
 			va.clearAssistantPlayback(session)
@@ -1926,6 +1932,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 
 		select {
 		case <-ctx.Done():
+			abandonGeneration()
 			transcriptSync.Close()
 			<-transcriptionDone
 			va.clearAssistantPlayback(session)
@@ -1933,6 +1940,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		default:
 		}
 		if speech != nil && speech.IsInterrupted() {
+			abandonGeneration()
 			transcriptSync.Close()
 			<-transcriptionDone
 			return ttsGen, nil
@@ -1940,6 +1948,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		transcriptSync.PushAudio(frame)
 		if va.PublishAudio != nil {
 			if err := va.PublishAudio(ctx, frame); err != nil {
+				abandonGeneration()
 				transcriptSync.Close()
 				<-transcriptionDone
 				if errors.Is(err, context.Canceled) {
@@ -1958,6 +1967,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		session.notifyAgentSpeakingProgress()
 		if speech != nil && speech.IsInterrupted() {
+			abandonGeneration()
 			transcriptSync.Close()
 			<-transcriptionDone
 			return ttsGen, nil

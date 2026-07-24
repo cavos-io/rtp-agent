@@ -6977,6 +6977,256 @@ func TestPipelineAgentEmitsLLMMetricsWhenReplyContextCanceledBeforeTTS(t *testin
 	}
 }
 
+func ttsStreamOpen(s *ttsEndSignalStream) bool {
+	select {
+	case <-s.release:
+		return false
+	default:
+		return true
+	}
+}
+
+func waitStreamClosed(t *testing.T, s *ttsEndSignalStream, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		if !ttsStreamOpen(s) {
+			return true
+		}
+		select {
+		case <-deadline:
+			return false
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func startStalledGeneration(t *testing.T, ctx context.Context) (*TTSGenerationData, *ttsEndSignalStream) {
+	t.Helper()
+	stream := newTTSEndSignalStream(3, false)
+	textCh := make(chan string, 1)
+	textCh <- "halo"
+	close(textCh)
+
+	data, err := PerformTTSInference(ctx, &fakeGenerationTTS{stream: stream}, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !ttsStreamOpen(stream) {
+		t.Fatal("precondition failed: stream closed on its own; this fake no longer models the production stall")
+	}
+	return data, stream
+}
+
+func newTurnLoopSession(t *testing.T) *AgentSession {
+	t.Helper()
+	session := &AgentSession{}
+	session.SetAudioPlaybackController(&flushSpyPlaybackController{})
+	return session
+}
+
+func TestPerformTTSInferenceExposesCancel(t *testing.T) {
+	stream := newTTSEndSignalStream(2, true)
+	textCh := make(chan string, 1)
+	textCh <- "halo"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), &fakeGenerationTTS{stream: stream}, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	if data.Cancel == nil {
+		t.Fatal("Cancel = nil, want a way to stop an abandoned TTS generation")
+	}
+	if !audioChClosed(data.AudioCh, 2*time.Second) {
+		t.Fatal("AudioCh stayed open after the stream reported EOF")
+	}
+	data.Cancel()
+	data.Cancel()
+}
+
+func TestPerformTTSInferenceExposesCancelOnNonStreamingTTS(t *testing.T) {
+	textCh := make(chan string, 1)
+	textCh <- "halo"
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		&fakeGenerationTTS{stream: newTTSEndSignalStream(1, true)},
+		textCh,
+		WithTTSPreserveTimedTranscript(),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	if data.Cancel == nil {
+		t.Fatal("Cancel = nil on the non-streaming path")
+	}
+	data.Cancel()
+}
+
+func TestPlayTTSGenerationCancelsAbandonedGenerationOnInterrupt(t *testing.T) {
+	ttsGen, stream := startStalledGeneration(t, context.Background())
+
+	transcriptionDone := make(chan struct{})
+	close(transcriptionDone)
+
+	speech := NewSpeechHandle(true, InputDetails{Modality: "text"})
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	va := &PipelineAgent{PublishAudio: func(context.Context, *model.AudioFrame) error { return nil }}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = va.playTTSGenerationWithTranscript(
+			context.Background(), newTurnLoopSession(t), ttsGen,
+			NewTranscriptSynchronizer(0), transcriptionDone, speech,
+		)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn loop did not return on an interrupted speech handle")
+	}
+
+	if !waitStreamClosed(t, stream, 2*time.Second) {
+		t.Fatal("the abandoned TTS generation was not cancelled; its reader goroutine stays " +
+			"parked in the backend stream and holds that connection for the rest of the call")
+	}
+}
+
+func TestPlayTTSGenerationCancelsAbandonedGenerationOnContextCancel(t *testing.T) {
+	ttsGen, stream := startStalledGeneration(t, context.Background())
+
+	transcriptionDone := make(chan struct{})
+	close(transcriptionDone)
+
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	cancelTurn()
+
+	va := &PipelineAgent{PublishAudio: func(context.Context, *model.AudioFrame) error { return nil }}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = va.playTTSGenerationWithTranscript(
+			turnCtx, newTurnLoopSession(t), ttsGen,
+			NewTranscriptSynchronizer(0), transcriptionDone, nil,
+		)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn loop did not return on a cancelled context")
+	}
+
+	if !waitStreamClosed(t, stream, 2*time.Second) {
+		t.Fatal("a precomputed generation survived the cancelled turn; the turn ctx does not " +
+			"reach precomputeCtx, so ctx.Done() must cancel the generation explicitly")
+	}
+}
+
+func TestPlayTTSGenerationCancelsAbandonedGenerationOnPublishError(t *testing.T) {
+	ttsGen, stream := startStalledGeneration(t, context.Background())
+
+	transcriptionDone := make(chan struct{})
+	close(transcriptionDone)
+
+	publishErr := errors.New("track write failed")
+	va := &PipelineAgent{PublishAudio: func(context.Context, *model.AudioFrame) error { return publishErr }}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = va.playTTSGenerationWithTranscript(
+			context.Background(), newTurnLoopSession(t), ttsGen,
+			NewTranscriptSynchronizer(0), transcriptionDone, nil,
+		)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn loop did not return after a publish error")
+	}
+
+	if !waitStreamClosed(t, stream, 2*time.Second) {
+		t.Fatal("the generation abandoned after a publish error was not cancelled")
+	}
+}
+
+type flushSpyPlaybackController struct {
+	mu      sync.Mutex
+	flushed int
+	cleared int
+}
+
+func (f *flushSpyPlaybackController) Flush() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.flushed++
+}
+
+func (f *flushSpyPlaybackController) ClearBuffer() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleared++
+}
+
+func (f *flushSpyPlaybackController) WaitForPlayout(context.Context) (AudioPlaybackResult, error) {
+	return AudioPlaybackResult{}, nil
+}
+
+func (f *flushSpyPlaybackController) counts() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.flushed, f.cleared
+}
+
+func TestPlayTTSGenerationFlushesPlaybackWhenAudioChannelCloses(t *testing.T) {
+	controller := &flushSpyPlaybackController{}
+	session := &AgentSession{}
+	session.SetAudioPlaybackController(controller)
+
+	ttsGen := &TTSGenerationData{AudioCh: make(chan *model.AudioFrame)}
+	close(ttsGen.AudioCh)
+
+	transcriptionDone := make(chan struct{})
+	close(transcriptionDone)
+
+	va := &PipelineAgent{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = va.playTTSGenerationWithTranscript(
+			context.Background(),
+			session,
+			ttsGen,
+			NewTranscriptSynchronizer(0),
+			transcriptionDone,
+			nil,
+		)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("playTTSGenerationWithTranscript did not return after AudioCh closed")
+	}
+
+	flushed, cleared := controller.counts()
+	if flushed != 1 {
+		t.Fatalf("Flush() calls = %d, want 1; a closed TTS audio channel must finish playback "+
+			"so the agent leaves the speaking state without waiting for the stall watchdog", flushed)
+	}
+	if cleared != 0 {
+		t.Fatalf("ClearBuffer() calls = %d, want 0; normal completion must not take the interrupt path", cleared)
+	}
+}
+
 func drainForLLMMetrics(ch <-chan MetricsCollectedEvent) bool {
 	for {
 		select {

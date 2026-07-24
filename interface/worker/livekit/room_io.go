@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"reflect"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
+	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -145,6 +148,13 @@ const roomIOInputFrameSizeMS uint32 = 50
 const roomIOAudioSubscriptionTimeout = 10 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 const roomIOOutputMaxLead = 200 * time.Millisecond
+const roomIOAudioInputStatsInterval = 5 * time.Second
+const roomIOAudioInputMaxConsecutiveReadErrors = 5
+const roomIOAudioOutputStatsInterval = 5 * time.Second
+
+func roomIOTrackIsBound(track *lksdk.LocalTrack) bool {
+	return track != nil && track.IsBound()
+}
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
@@ -317,6 +327,26 @@ type RoomIOAudioOutputDiagnostics struct {
 	LastPublishedAt             time.Time
 	LastError                   string
 	LastErrorAt                 time.Time
+	TrackBound                  bool
+	FramesDroppedUnbound        int
+}
+
+type RoomIOAudioInputDiagnostics struct {
+	TrackID         string
+	Generation      uint64
+	PacketsRead     int
+	FramesForwarded int
+	LastPacketAt    time.Time
+	LastError       string
+	LastErrorAt     time.Time
+	ExitReason      string
+	ExitedAt        time.Time
+}
+
+type roomIORTPTrack interface {
+	ID() string
+	Codec() webrtc.RTPCodecParameters
+	ReadRTP() (*rtp.Packet, interceptor.Attributes, error)
 }
 
 type roomIOClientEvents interface {
@@ -377,7 +407,12 @@ type RoomIO struct {
 	audioOutputResampler     *audio.StreamingResampler
 	audioOutputOpusResampler *audio.StreamingResampler
 
-	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
+	audioOutputDiagnostics  RoomIOAudioOutputDiagnostics
+	audioInputDiagnostics   RoomIOAudioInputDiagnostics
+	audioOutputUnboundLogAt time.Time
+	audioOutputStatsLogAt   time.Time
+	audioOutputBoundFn      func(*lksdk.LocalTrack) bool
+	publishAudioTrackFn     func(*lksdk.LocalTrack, *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error)
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
@@ -1319,16 +1354,88 @@ func (rio *RoomIO) onRoomDisconnected() {
 func (rio *RoomIO) onRoomReconnected() {
 	rio.emitRoomEvent(&RoomConnectionStateChangedEvent{State: "connected"})
 	rio.handleExistingParticipantViews(RoomRemoteParticipantViews(rio.Room), rio.localParticipantIdentity())
+	go rio.ensureAudioOutputPublished(5 * time.Second)
+}
+
+func (rio *RoomIO) ensureAudioOutputPublished(waitBound time.Duration) {
+	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
+		return
+	}
+	deadline := time.Now().Add(waitBound)
+	for {
+		rio.mu.Lock()
+		track := rio.audioTrack
+		closed := rio.closed
+		rio.mu.Unlock()
+		if closed {
+			return
+		}
+		if track != nil && track.IsBound() {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	logger.Logger.Warnw("room audio output track not bound after reconnect; republishing", nil)
+	newTrack, err := lksdk.NewLocalSampleTrack(roomIOAudioOutputCodec())
+	if err != nil {
+		logger.Logger.Warnw("room audio output republish: create track failed", err)
+		return
+	}
+	newTrack.OnBind(func() {
+		rio.mu.Lock()
+		rio.audioOutputDiagnostics.TrackBound = true
+		rio.mu.Unlock()
+		logger.Logger.Infow("room audio output track bound")
+	})
+	rio.mu.Lock()
+	rio.audioOutputBoundFn = roomIOTrackIsBound
+	rio.mu.Unlock()
+
+	publish := rio.publishAudioTrackFn
+	if publish == nil {
+		if rio.Room == nil || rio.Room.LocalParticipant == nil {
+			return
+		}
+		publish = func(track *lksdk.LocalTrack, opts *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error) {
+			return rio.Room.LocalParticipant.PublishTrack(track, opts)
+		}
+	}
+	publication, err := publish(newTrack, rio.audioTrackPublicationOptions())
+	if err != nil {
+		logger.Logger.Warnw("room audio output republish failed", err)
+		return
+	}
+	trackID := ""
+	if publication != nil {
+		trackID = publication.SID()
+	}
+	rio.setAudioOutputTrack(newTrack, trackID, publication)
+	logger.Logger.Infow("room audio output track republished", "track_id", trackID)
 }
 
 func (rio *RoomIO) onLocalTrackSubscribed(publication *lksdk.LocalTrackPublication, _ *lksdk.LocalParticipant) {
+	pubSID := ""
+	if publication != nil {
+		pubSID = publication.SID()
+	}
+	log.Printf("[DBG] onLocalTrackSubscribed enter publication_sid=%q", pubSID)
 	if rio == nil || publication == nil {
+		log.Printf("[DBG] onLocalTrackSubscribed abort rio_nil=%v publication_nil=%v", rio == nil, publication == nil)
 		return
 	}
 	rio.mu.Lock()
 	expected := rio.audioPublication
+	expectedSID := ""
+	if expected != nil {
+		expectedSID = expected.SID()
+	}
 	matches := expected == publication || (expected != nil && expected.SID() != "" && expected.SID() == publication.SID())
 	rio.mu.Unlock()
+	log.Printf("[DBG] onLocalTrackSubscribed matches=%v expected_sid=%q got_sid=%q", matches, expectedSID, pubSID)
 	if matches {
 		rio.markAudioSubscribed()
 	}
@@ -1486,8 +1593,20 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
+	track.OnBind(func() {
+		rio.mu.Lock()
+		rio.audioOutputDiagnostics.TrackBound = true
+		rio.mu.Unlock()
+		logger.Logger.Infow("room audio output track bound")
+	})
+	rio.mu.Lock()
+	rio.audioOutputBoundFn = roomIOTrackIsBound
+	rio.mu.Unlock()
+
+	log.Printf("[DBG] RoomIO.Start publishing audio output track")
 	publication, err := rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
 	if err != nil {
+		log.Printf("[DBG] RoomIO.Start PublishTrack error: %v", err)
 		return err
 	}
 
@@ -1496,7 +1615,10 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		trackID = publication.SID()
 	}
 	rio.setAudioOutputTrack(track, trackID, publication)
-	return rio.waitForAudioSubscription(ctx)
+	log.Printf("[DBG] RoomIO.Start track published track_id=%q, waiting for subscription", trackID)
+	err = rio.waitForAudioSubscription(ctx)
+	log.Printf("[DBG] RoomIO.Start waitForAudioSubscription returned err=%v", err)
+	return err
 }
 
 func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
@@ -1570,6 +1692,7 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			rio.setUserTranscriptionTarget(trackID, participantID)
 		}
 		generation, activated := rio.activateAudioInputTrack(trackID, participantID)
+		log.Printf("[DBG] onTrackSubscribed inbound audio track_id=%q participant=%q generation=%d activated=%v", trackID, participantID, generation, activated)
 		if activated {
 			go rio.handleAudioTrack(track, generation)
 		}
@@ -1796,7 +1919,6 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 	if !rio.audioInputTrackActive(generation) {
 		return
 	}
-	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	inputStream := newRoomIOInputAudioStream()
@@ -1815,16 +1937,25 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 		}
 	}
 
+	rio.runAudioInputLoop(track, generation, inputStream)
+}
+
+func (rio *RoomIO) runAudioInputLoop(track roomIORTPTrack, generation uint64, inputStream *audio.AudioByteStream) {
+	rio.beginAudioInputDiagnostics(track.ID(), generation)
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
+	consecutiveReadErrors := 0
+	lastStatsAt := time.Now()
 
 	for {
 		rio.mu.Lock()
 		if rio.closed || rio.audioInputGeneration != generation {
 			rio.mu.Unlock()
+			rio.finishAudioInputLoop(generation, "superseded", nil)
 			return
 		}
 		if rio.audioDisabled {
 			rio.mu.Unlock()
+			rio.finishAudioInputLoop(generation, "audio_disabled", nil)
 			return
 		}
 		rio.mu.Unlock()
@@ -1834,11 +1965,22 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 			if errors.Is(err, io.EOF) {
 				rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
 				rio.forwardRoomInputFrame(context.Background(), roomIOInputSilenceFlushFrame())
-			} else {
-				// log error
+				rio.finishAudioInputLoop(generation, "eof", nil)
+				return
 			}
-			return
+			consecutiveReadErrors++
+			rio.recordAudioInputError(err)
+			logger.Logger.Warnw("room audio input read failed", err,
+				"track", track.ID(), "generation", generation,
+				"consecutive_errors", consecutiveReadErrors)
+			if consecutiveReadErrors >= roomIOAudioInputMaxConsecutiveReadErrors {
+				rio.finishAudioInputLoop(generation, "read_error", err)
+				return
+			}
+			continue
 		}
+		consecutiveReadErrors = 0
+		rio.countAudioInputPacket()
 
 		sb.Push(pkt)
 		for {
@@ -1849,14 +1991,27 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 
 			pcm := sample.Data
 			if rio.decoder != nil {
-				if decoded, err := rio.decoder.Decode(sample.Data); err == nil {
-					pcm = decoded
+				decoded, decodeErr := rio.decoder.Decode(sample.Data)
+				if decodeErr != nil {
+					rio.recordAudioInputError(decodeErr)
+					logger.Logger.Warnw("room audio input opus decode failed", decodeErr, "track", track.ID())
+					continue
 				}
+				pcm = decoded
 			}
 
 			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
+			frames := inputStream.Push(frame.Data)
+			rio.countAudioInputFrames(len(frames))
+			rio.forwardRoomInputFrames(context.Background(), frames)
+		}
 
-			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
+		if time.Since(lastStatsAt) >= roomIOAudioInputStatsInterval {
+			lastStatsAt = time.Now()
+			d := rio.AudioInputDiagnostics()
+			logger.Logger.Infow("room audio input stats",
+				"track", d.TrackID, "generation", d.Generation,
+				"packets_read", d.PacketsRead, "frames_forwarded", d.FramesForwarded)
 		}
 	}
 }
@@ -2156,10 +2311,13 @@ func (rio *RoomIO) waitForAudioOutputResume(ctx context.Context) (bool, error) {
 	waiter := make(chan audioOutputWaitResult, 1)
 	rio.audioOutputWaiters = append(rio.audioOutputWaiters, waiter)
 	rio.mu.Unlock()
+	log.Printf("[DBG] waitForAudioOutputResume BLOCKING: output paused, waiting to resume")
 	select {
 	case result := <-waiter:
+		log.Printf("[DBG] waitForAudioOutputResume resumed drop=%v", result.drop)
 		return result.drop, nil
 	case <-ctx.Done():
+		log.Printf("[DBG] waitForAudioOutputResume ctx done while paused: %v", ctx.Err())
 		rio.removeAudioOutputWaiter(waiter)
 		return false, ctx.Err()
 	}
@@ -2231,6 +2389,60 @@ func (rio *RoomIO) AudioOutputDiagnostics() RoomIOAudioOutputDiagnostics {
 	return rio.audioOutputDiagnostics
 }
 
+func (rio *RoomIO) AudioInputDiagnostics() RoomIOAudioInputDiagnostics {
+	if rio == nil {
+		return RoomIOAudioInputDiagnostics{}
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioInputDiagnostics
+}
+
+func (rio *RoomIO) beginAudioInputDiagnostics(trackID string, generation uint64) {
+	rio.mu.Lock()
+	rio.audioInputDiagnostics = RoomIOAudioInputDiagnostics{TrackID: trackID, Generation: generation}
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) countAudioInputPacket() {
+	rio.mu.Lock()
+	rio.audioInputDiagnostics.PacketsRead++
+	rio.audioInputDiagnostics.LastPacketAt = time.Now()
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) countAudioInputFrames(n int) {
+	if n <= 0 {
+		return
+	}
+	rio.mu.Lock()
+	rio.audioInputDiagnostics.FramesForwarded += n
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) recordAudioInputError(err error) {
+	if err == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.audioInputDiagnostics.LastError = err.Error()
+	rio.audioInputDiagnostics.LastErrorAt = time.Now()
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) finishAudioInputLoop(generation uint64, reason string, err error) {
+	rio.mu.Lock()
+	rio.audioInputDiagnostics.ExitReason = reason
+	rio.audioInputDiagnostics.ExitedAt = time.Now()
+	d := rio.audioInputDiagnostics
+	rio.mu.Unlock()
+	logger.Logger.Infow("room audio input reader exited",
+		"reason", reason, "track", d.TrackID, "generation", generation,
+		"packets_read", d.PacketsRead, "frames_forwarded", d.FramesForwarded,
+		"last_error", d.LastError)
+	_ = err
+}
+
 func (rio *RoomIO) recordAudioOutputFrameReceived(frame *model.AudioFrame) {
 	if rio == nil || frame == nil {
 		return
@@ -2291,6 +2503,40 @@ func (rio *RoomIO) recordAudioOutputError(err error) {
 	rio.playbackAudioLastError = errText
 	rio.mu.Unlock()
 	logger.Logger.Warnw("room audio output publish failed", err)
+}
+
+func (rio *RoomIO) noteAudioOutputUnbound() {
+	now := time.Now()
+	rio.mu.Lock()
+	rio.audioOutputDiagnostics.FramesDroppedUnbound++
+	rio.audioOutputDiagnostics.LastError = "room audio output track not bound; frame dropped"
+	rio.audioOutputDiagnostics.LastErrorAt = now
+	shouldLog := now.Sub(rio.audioOutputUnboundLogAt) >= time.Second
+	if shouldLog {
+		rio.audioOutputUnboundLogAt = now
+	}
+	dropped := rio.audioOutputDiagnostics.FramesDroppedUnbound
+	rio.mu.Unlock()
+	if shouldLog {
+		logger.Logger.Warnw("room audio output track not bound; dropping frame", nil,
+			"frames_dropped_unbound", dropped)
+	}
+}
+
+func (rio *RoomIO) maybeLogAudioOutputStats() {
+	now := time.Now()
+	rio.mu.Lock()
+	if now.Sub(rio.audioOutputStatsLogAt) < roomIOAudioOutputStatsInterval {
+		rio.mu.Unlock()
+		return
+	}
+	rio.audioOutputStatsLogAt = now
+	d := rio.audioOutputDiagnostics
+	rio.mu.Unlock()
+	logger.Logger.Infow("room audio output stats",
+		"track", d.TrackID, "bound", d.TrackBound, "subscribed", d.TrackSubscribed,
+		"frames_received", d.FramesReceived, "frames_published", d.FramesPublished,
+		"frames_dropped_unbound", d.FramesDroppedUnbound, "last_error", d.LastError)
 }
 
 func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript string) {
@@ -2360,13 +2606,20 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 }
 
 func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) error {
+	frameBytes := 0
+	if frame != nil {
+		frameBytes = len(frame.Data)
+	}
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
+		log.Printf("[DBG] PublishAudio skip rio_nil=%v disable_output=%v audio_disabled=%v frame_bytes=%d", rio == nil, rio != nil && rio.Options.DisableAudioOutput, rio != nil && rio.isAudioDisabled(), frameBytes)
 		return nil
 	}
 	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
+		log.Printf("[DBG] PublishAudio waitForAudioSubscriptionReady err=%v", err)
 		return err
 	}
 	if rio.isClosed() {
+		log.Printf("[DBG] PublishAudio skip: rio closed frame_bytes=%d", frameBytes)
 		return nil
 	}
 
@@ -2376,6 +2629,7 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.mu.Unlock()
 
 	if track == nil {
+		log.Printf("[DBG] PublishAudio track==nil (output track not started) frame_bytes=%d", frameBytes)
 		rio.recordAudioOutputFrameReceived(frame)
 		if rio.Recorder != nil {
 			rio.Recorder.RecordOutput(frame)
@@ -2385,21 +2639,34 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	}
 
 	rio.recordAudioOutputFrameReceived(frame)
+	rio.maybeLogAudioOutputStats()
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
 	}
 
 	drop, err := rio.waitForAudioOutputResume(ctx)
 	if err != nil {
+		log.Printf("[DBG] PublishAudio waitForAudioOutputResume err=%v", err)
 		return err
 	}
 	if drop {
+		log.Printf("[DBG] PublishAudio dropped by resume gate frame_bytes=%d", frameBytes)
 		return nil
 	}
 	select {
 	case <-ctx.Done():
+		log.Printf("[DBG] PublishAudio ctx done before write: %v", ctx.Err())
 		return ctx.Err()
 	default:
+	}
+
+	rio.mu.Lock()
+	boundFn := rio.audioOutputBoundFn
+	rio.mu.Unlock()
+	if boundFn != nil && !boundFn(track) {
+		log.Printf("[DBG] PublishAudio track not bound; skipping write frame_bytes=%d", frameBytes)
+		rio.noteAudioOutputUnbound()
+		return nil
 	}
 
 	var encodeFrames []*model.AudioFrame
@@ -2407,6 +2674,7 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 		var err error
 		encodeFrames, err = rio.encodeOpusOutputFrames(frame)
 		if err != nil {
+			log.Printf("[DBG] PublishAudio encodeOpusOutputFrames err=%v", err)
 			rio.recordAudioOutputError(err)
 			return err
 		}
@@ -2421,40 +2689,50 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.recordPlaybackInputFrame(frame)
 
 	if encoder != nil {
+		log.Printf("[DBG] PublishAudio encoder path: %d opus frame(s) to write frame_bytes=%d", len(encodeFrames), frameBytes)
+		written := 0
 		for _, encodeFrame := range encodeFrames {
 			select {
 			case <-ctx.Done():
+				log.Printf("[DBG] PublishAudio ctx done mid-encode after %d writes: %v", written, ctx.Err())
 				return ctx.Err()
 			default:
 			}
 			encoded, err := encoder.Encode(encodeFrame.Data)
 			if err != nil {
+				log.Printf("[DBG] PublishAudio opus Encode err=%v", err)
 				rio.recordAudioOutputError(err)
 				return err
 			}
 			duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
 			if err := rio.pacePlaybackWrite(ctx, duration); err != nil {
+				log.Printf("[DBG] PublishAudio pacePlaybackWrite err=%v", err)
 				return err
 			}
 			if err := track.WriteSample(media.Sample{
 				Data:     encoded,
 				Duration: duration,
 			}, nil); err != nil {
+				log.Printf("[DBG] PublishAudio WriteSample(encoder) err=%v after %d writes", err, written)
 				rio.recordAudioOutputError(err)
 				return err
 			}
+			written++
 			rio.recordAudioOutputFramePublished(frame, encodeFrame, len(encoded), 1)
 			rio.addPlaybackPosition(duration)
 		}
+		log.Printf("[DBG] PublishAudio encoder path done, wrote %d frame(s)", written)
 		return nil
 	}
 
 	duration := time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
 
+	log.Printf("[DBG] PublishAudio raw path (no encoder) writing frame_bytes=%d", frameBytes)
 	if err := track.WriteSample(media.Sample{
 		Data:     frame.Data,
 		Duration: duration,
 	}, nil); err != nil {
+		log.Printf("[DBG] PublishAudio WriteSample(raw) err=%v", err)
 		rio.recordAudioOutputError(err)
 		return err
 	}
@@ -2475,12 +2753,15 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 		return nil
 	}
 	timeout := rio.audioSubscriptionTimeout()
+	log.Printf("[DBG] waitForAudioSubscriptionReady BLOCKING up to %s for local track subscription", timeout)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-ch:
+		log.Printf("[DBG] waitForAudioSubscriptionReady resolved: subscription confirmed")
 		return nil
 	case <-timer.C:
+		log.Printf("[DBG] waitForAudioSubscriptionReady TIMED OUT after %s (agent audio may not reach caller)", timeout)
 		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
 		rio.releaseAudioSubscriptionFallback(ch)
 		if rio.AgentSession != nil {
@@ -2488,6 +2769,7 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
+		log.Printf("[DBG] waitForAudioSubscriptionReady ctx done: %v", ctx.Err())
 		return ctx.Err()
 	}
 }
@@ -2497,6 +2779,7 @@ func (rio *RoomIO) markAudioSubscribed() {
 	ch := rio.audioSubscribed
 	rio.mu.Unlock()
 	if ch == nil {
+		log.Printf("[DBG] markAudioSubscribed: channel already nil (already resolved or no output)")
 		if rio.AgentSession != nil {
 			rio.AgentSession.RefreshUserAwayTimer()
 		}
@@ -2506,6 +2789,7 @@ func (rio *RoomIO) markAudioSubscribed() {
 		rio.mu.Lock()
 		rio.audioOutputDiagnostics.TrackSubscribed = true
 		rio.mu.Unlock()
+		log.Printf("[DBG] markAudioSubscribed: FIRST TIME, marking subscribed and unblocking publish")
 		close(ch)
 	})
 	if rio.AgentSession != nil {
@@ -2826,8 +3110,12 @@ func (rio *RoomIO) pacePlaybackWrite(ctx context.Context, duration time.Duration
 	if wait <= 0 {
 		return nil
 	}
+	if wait > time.Second {
+		log.Printf("[DBG] pacePlaybackWrite long pace wait=%s lead=%s", wait, lead)
+	}
 	select {
 	case <-ctx.Done():
+		log.Printf("[DBG] pacePlaybackWrite ctx done during pace wait: %v", ctx.Err())
 		return ctx.Err()
 	case <-time.After(wait):
 		return nil

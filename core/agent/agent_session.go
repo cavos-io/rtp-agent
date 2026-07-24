@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"sync"
 	"time"
@@ -2929,19 +2930,24 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	closing := s.closing
 	s.mu.Unlock()
 
+	log.Printf("[DBG] SayWithOptions enter text=%q activity_nil=%v assistant_nil=%v closing=%v", opts.Text, activity == nil, assistant == nil, closing)
 	if activity == nil {
 		if closing {
+			log.Printf("[DBG] SayWithOptions abort: session closing")
 			return nil, errAgentSessionClosingSay
 		}
+		log.Printf("[DBG] SayWithOptions abort: session not running")
 		return nil, ErrAgentSessionNotRunning
 	}
 	if s.AudioOutputController() != nil && !s.hasActiveTTS(assistant) {
 		nativeSay, ok := assistant.(nativeSayAssistant)
 		if !ok || !nativeSay.SupportsNativeSay() {
+			log.Printf("[DBG] SayWithOptions abort: audio output configured but no TTS / native say")
 			return nil, errSayMissingTTSWithAudioOutput
 		}
 	}
 
+	log.Printf("[DBG] SayWithOptions dispatching speech handle for text len=%d", len(opts.Text))
 	logger.Logger.Infow("Saying text", "text", opts.Text)
 
 	allowInterruptions := s.defaultAllowInterruptions()

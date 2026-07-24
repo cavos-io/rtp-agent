@@ -2811,3 +2811,106 @@ func TestPerformLLMInferenceStopsStreamingOnCancel(t *testing.T) {
 		t.Fatal("generation stayed blocked after cancel — a streaming send ignored ctx.Done()")
 	}
 }
+
+type ttsEndSignalStream struct {
+	frames    int
+	signalEOF bool
+
+	mu        sync.Mutex
+	emitted   int
+	release   chan struct{}
+	closeOnce sync.Once
+}
+
+func newTTSEndSignalStream(frames int, signalEOF bool) *ttsEndSignalStream {
+	return &ttsEndSignalStream{
+		frames:    frames,
+		signalEOF: signalEOF,
+		release:   make(chan struct{}),
+	}
+}
+
+func (s *ttsEndSignalStream) PushText(string) error { return nil }
+
+func (s *ttsEndSignalStream) Flush() error { return nil }
+
+func (s *ttsEndSignalStream) Close() error {
+	s.closeOnce.Do(func() { close(s.release) })
+	return nil
+}
+
+func (s *ttsEndSignalStream) Next() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	if s.emitted < s.frames {
+		s.emitted++
+		s.mu.Unlock()
+		return &tts.SynthesizedAudio{Frame: &model.AudioFrame{
+			Data:              []byte{1, 2},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}}, nil
+	}
+	s.mu.Unlock()
+
+	if s.signalEOF {
+		return nil, io.EOF
+	}
+	<-s.release
+	return nil, io.EOF
+}
+
+func audioChClosed(ch <-chan *model.AudioFrame, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+func TestPerformTTSInferenceClosesAudioChOnlyWhenStreamSignalsEnd(t *testing.T) {
+	t.Run("stream reports EOF", func(t *testing.T) {
+		stream := newTTSEndSignalStream(3, true)
+		textCh := make(chan string, 1)
+		textCh <- "halo"
+		close(textCh)
+
+		data, err := PerformTTSInference(context.Background(), &fakeGenerationTTS{stream: stream}, textCh)
+		if err != nil {
+			t.Fatalf("PerformTTSInference error = %v", err)
+		}
+
+		if !audioChClosed(data.AudioCh, 2*time.Second) {
+			t.Fatal("AudioCh stayed open after the TTS stream reported EOF; " +
+				"the spoken turn would never finish and the agent would stay in the speaking state")
+		}
+	})
+
+	t.Run("stream never signals end", func(t *testing.T) {
+		stream := newTTSEndSignalStream(3, false)
+		textCh := make(chan string, 1)
+		textCh <- "halo"
+		close(textCh)
+
+		data, err := PerformTTSInference(context.Background(), &fakeGenerationTTS{stream: stream}, textCh)
+		if err != nil {
+			t.Fatalf("PerformTTSInference error = %v", err)
+		}
+
+		if audioChClosed(data.AudioCh, 300*time.Millisecond) {
+			t.Fatal("AudioCh closed even though the TTS stream never signalled end-of-stream; " +
+				"this test no longer reproduces the production stall condition")
+		}
+
+		_ = stream.Close()
+		if !audioChClosed(data.AudioCh, 2*time.Second) {
+			t.Fatal("AudioCh stayed open even after the stream was closed")
+		}
+	})
+}

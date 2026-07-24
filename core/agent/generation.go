@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
 	"sort"
 	"strings"
@@ -316,6 +317,7 @@ type TTSGenerationData struct {
 	ForwardedAudio    bool
 	StartedSpeakingAt float64
 	StoppedSpeakingAt float64
+	Cancel            func()
 }
 
 type TTSInferenceOptions struct {
@@ -378,6 +380,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	data := &TTSGenerationData{
 		AudioCh:     make(chan *model.AudioFrame, 100),
 		TimedTextCh: make(chan tts.TimedString, 100),
+		Cancel:      func() {},
 	}
 
 	var options TTSInferenceOptions
@@ -476,8 +479,33 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		stream = tts.NewSentenceStreamPacerWithOptions(streamCtx, stream, *options.StreamPacer)
 	}
 
+	var cancelOnce sync.Once
+	data.Cancel = func() { cancelOnce.Do(cancelStream) }
+
+	dbgStart := time.Now()
+	var dbgMu sync.Mutex
+	var dbgLastAudioAt time.Time
+	var dbgInputEndedAt time.Time
+	dbgMark := func(target *time.Time) {
+		dbgMu.Lock()
+		*target = time.Now()
+		dbgMu.Unlock()
+	}
+	dbgSince := func(target *time.Time) string {
+		dbgMu.Lock()
+		defer dbgMu.Unlock()
+		if target.IsZero() {
+			return "never"
+		}
+		return time.Since(*target).String()
+	}
+
 	go func() {
-		defer close(data.AudioCh)
+		defer func() {
+			log.Printf("[DBG] TTS AudioCh CLOSING total=%s since_last_audio=%s since_input_ended=%s",
+				time.Since(dbgStart), dbgSince(&dbgLastAudioAt), dbgSince(&dbgInputEndedAt))
+			close(data.AudioCh)
+		}()
 		defer close(data.TimedTextCh)
 		defer cancelStream()
 		defer span.End()
@@ -617,15 +645,22 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				return
 			}
 			if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+				log.Printf("[DBG] TTS EndSynthesizeStreamInput FAILED after %s: %v", time.Since(dbgStart), err)
 				setStreamErr(err)
 				return
 			}
+			dbgMark(&dbgInputEndedAt)
+			log.Printf("[DBG] TTS input ended (no more text) after %s; backend should now finish and signal EOF",
+				time.Since(dbgStart))
 		}()
 		go func() {
 			defer wg.Done()
 			for {
 				audio, err := stream.Next()
 				if err != nil {
+					log.Printf("[DBG] TTS stream.Next() returned err=%v (eof=%v) frames=%d total=%s since_last_audio=%s since_input_ended=%s",
+						err, err == io.EOF, audioFrameCount(), time.Since(dbgStart),
+						dbgSince(&dbgLastAudioAt), dbgSince(&dbgInputEndedAt))
 					if err != io.EOF {
 						setStreamErr(err)
 					}
@@ -650,7 +685,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 				select {
 				case data.AudioCh <- audio.Frame:
+					dbgMark(&dbgLastAudioAt)
 				case <-streamCtx.Done():
+					log.Printf("[DBG] TTS reader aborted by cancellation after %s (frames=%d buffered=%d/%d)",
+						time.Since(dbgStart), audioFrameCount(), len(data.AudioCh), cap(data.AudioCh))
 					return
 				}
 			}
