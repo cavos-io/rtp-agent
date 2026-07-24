@@ -2626,6 +2626,80 @@ func TestAgentActivityCompleteUserTurnFallsBackToTranscriptTimeForEOUDelay(t *te
 	}
 }
 
+func TestAgentActivityCompleteUserTurnRecordsShortInterruption(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:        TurnDetectionModeSTT,
+		AllowInterruptions:   true,
+		MinInterruptionWords: 2,
+	})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+
+	// "hi" is a single word, below MinInterruptionWords, so it is (correctly)
+	// rejected as an interruption. It is still real user speech and must be
+	// recorded in the transcript.
+	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "hi",
+		TranscriptConfidence: 0.9,
+	}); err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("sub-threshold barge-in should not interrupt current speech")
+	default:
+	}
+
+	if !chatCtxHasUserMessage(agent.ChatCtx, "hi") {
+		t.Fatal("short interruption utterance missing from ChatCtx")
+	}
+}
+
+func TestAgentActivityCommitUserMessageIsIdempotent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	msg := &llm.ChatMessage{
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "record me once"}},
+	}
+	activity.commitUserMessage(msg)
+	activity.commitUserMessage(msg)
+
+	count := 0
+	for _, item := range agent.ChatCtx.Items {
+		if m, ok := item.(*llm.ChatMessage); ok && m.TextContent() == "record me once" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("commitUserMessage appended the same turn %d times, want 1", count)
+	}
+}
+
+func chatCtxHasUserMessage(ctx *llm.ChatContext, text string) bool {
+	if ctx == nil {
+		return false
+	}
+	for _, item := range ctx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser && msg.TextContent() == text {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAgentActivityRunEOUDetectionRecordsEndOfUtteranceDelay(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeSTT
