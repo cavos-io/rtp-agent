@@ -2642,9 +2642,6 @@ func TestAgentActivityCompleteUserTurnRecordsShortInterruption(t *testing.T) {
 	activity.currentSpeech = current
 	defer current.MarkDone()
 
-	// "hi" is a single word, below MinInterruptionWords, so it is (correctly)
-	// rejected as an interruption. It is still real user speech and must be
-	// recorded in the transcript.
 	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
 		NewTranscript:        "hi",
 		TranscriptConfidence: 0.9,

@@ -2812,16 +2812,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
-		// Not interrupting the agent does not mean the user did not speak:
-		// still record the utterance in the transcript.
 		newMsg.Metrics = metricsReportFromEndOfTurn(info, 0)
 		a.commitUserMessage(newMsg)
 		return nil, nil
 	}
 	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
 		a.cancelPreemptiveGeneration()
-		// Sub-threshold barge-in: too short to interrupt, but it is still real
-		// user speech and must appear in the transcript.
 		newMsg.Metrics = metricsReportFromEndOfTurn(info, 0)
 		a.commitUserMessage(newMsg)
 		return nil, nil
@@ -3247,11 +3243,6 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
 	}
-	// A single user turn can reach this function from more than one path: it is
-	// now recorded when an utterance is rejected as an interruption (short
-	// barge-in, uninterruptible speech, paused scheduling) and again on the
-	// normal commit path once a reply is scheduled. Guard against appending the
-	// same turn twice, by pointer identity or by message ID.
 	for _, existing := range a.Agent.ChatCtx.Items {
 		if existing == msg {
 			return
