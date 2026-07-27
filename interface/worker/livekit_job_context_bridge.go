@@ -44,6 +44,8 @@ var livekitJobContextApplyAutoSubscribeToRoom = workerlivekit.JobContextApplyAut
 
 var livekitJobContextRoomCallbackWithHandlers = workerlivekit.JobContextRoomCallbackWithHandlers
 
+var livekitNewRoomCallbackRegistry = workerlivekit.NewRoomCallbackRegistry
+
 var livekitNewRoomIO = workerlivekit.NewRoomIO
 
 var livekitJobContextParticipantInfoFromRemoteParticipant = workerlivekit.JobContextParticipantInfoFromRemoteParticipant
