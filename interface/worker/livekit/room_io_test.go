@@ -5801,3 +5801,30 @@ func TestRoomIOAgentTranscriptionWriteNeverLandsOnClosedStream(t *testing.T) {
 			"down underneath an in-flight write)")
 	}
 }
+
+func TestRoomIOShouldRecordAuxTrack(t *testing.T) {
+	enabled := RoomOptions{RecordRemoteParticipants: true}
+	cases := []struct {
+		name       string
+		options    RoomOptions
+		trackKind  webrtc.RTPCodecType
+		kind       lksdk.ParticipantKind
+		attributes map[string]string
+		want       bool
+	}{
+		{"records standard participant audio", enabled, webrtc.RTPCodecTypeAudio, lksdk.ParticipantStandard, nil, true},
+		{"records sip participant audio", enabled, webrtc.RTPCodecTypeAudio, lksdk.ParticipantSIP, nil, true},
+		{"skips when recording disabled", RoomOptions{}, webrtc.RTPCodecTypeAudio, lksdk.ParticipantStandard, nil, false},
+		{"skips when audio input disabled", RoomOptions{RecordRemoteParticipants: true, DisableAudioInput: true}, webrtc.RTPCodecTypeAudio, lksdk.ParticipantStandard, nil, false},
+		{"skips video tracks", enabled, webrtc.RTPCodecTypeVideo, lksdk.ParticipantStandard, nil, false},
+		{"skips agent participants", enabled, webrtc.RTPCodecTypeAudio, lksdk.ParticipantAgent, nil, false},
+		{"skips publish-on-behalf participants", enabled, webrtc.RTPCodecTypeAudio, lksdk.ParticipantStandard, map[string]string{RoomIOPublishOnBehalfAttribute: "agent-1"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRecordAuxTrack(tc.options, tc.trackKind, tc.kind, tc.attributes); got != tc.want {
+				t.Fatalf("shouldRecordAuxTrack() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

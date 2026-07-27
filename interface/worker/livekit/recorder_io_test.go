@@ -287,3 +287,70 @@ func TestRecorderIOPreservesElapsedSilence(t *testing.T) {
 		t.Fatalf("encoded timestamp = %d, want one second including trailing silence", recorder.timestamp)
 	}
 }
+
+func TestRecorderIORecordAuxKeepsPerTrackTimelines(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	now := time.Unix(100, 0)
+	recorder.now = func() time.Time { return now }
+	if err := recorder.Start(filepath.Join(t.TempDir(), "session.ogg"), 48000); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+
+	recorder.RecordAux("track-a", frame)
+	recorder.RecordAux("track-b", frame)
+	recorder.RecordAux("track-a", frame)
+	recorder.RecordAux("track-b", frame)
+
+	if got := recorder.auxFrames[1].receivedAt; !got.Equal(now) {
+		t.Fatalf("first frame of second track starts at %v, want wall time %v", got, now)
+	}
+	if got := recorder.auxFrames[2].receivedAt.Sub(recorder.auxFrames[0].receivedAt); got != 10*time.Millisecond {
+		t.Fatalf("consecutive frame offset for track-a = %v, want 10ms media duration", got)
+	}
+	if got := recorder.auxFrames[3].receivedAt.Sub(recorder.auxFrames[1].receivedAt); got != 10*time.Millisecond {
+		t.Fatalf("consecutive frame offset for track-b = %v, want 10ms media duration", got)
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
+func TestMixRecordedChannelSumsOverlapAndClamps(t *testing.T) {
+	stereo := []int16{100, 0, 32000, 0, -32000, 0}
+	frames := []normalizedRecordedFrame{{startSample: 0, samples: []int16{25, 1000, -1000}}}
+
+	mixRecordedChannel(stereo, frames, 0, 0)
+
+	if stereo[0] != 125 {
+		t.Fatalf("mixed sample = %d, want 125", stereo[0])
+	}
+	if stereo[2] != 32767 {
+		t.Fatalf("clipped positive sample = %d, want 32767", stereo[2])
+	}
+	if stereo[4] != -32768 {
+		t.Fatalf("clipped negative sample = %d, want -32768", stereo[4])
+	}
+	if stereo[1] != 0 || stereo[3] != 0 || stereo[5] != 0 {
+		t.Fatalf("other channel modified: %v", stereo)
+	}
+}
+
+func TestMixRecordedChannelHandlesFrameBeforeBuffer(t *testing.T) {
+	stereo := make([]int16, 4)
+	frames := []normalizedRecordedFrame{{startSample: -1, samples: []int16{111, 222, 333}}}
+
+	mixRecordedChannel(stereo, frames, 0, 1)
+
+	if stereo[1] != 222 || stereo[3] != 333 {
+		t.Fatalf("stereo = %v, want frame tail mixed from buffer start on channel 1", stereo)
+	}
+	if stereo[0] != 0 || stereo[2] != 0 {
+		t.Fatalf("channel 0 modified: %v", stereo)
+	}
+}
