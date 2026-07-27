@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -20,6 +21,8 @@ import (
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/twitchtv/twirp"
 )
@@ -5826,5 +5829,86 @@ func TestRoomIOShouldRecordAuxTrack(t *testing.T) {
 				t.Fatalf("shouldRecordAuxTrack() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+type fakeRTPStep struct {
+	pkt *rtp.Packet
+	err error
+}
+
+type fakeRTPTrack struct {
+	steps []fakeRTPStep
+	idx   int
+}
+
+func (f *fakeRTPTrack) ID() string { return "TR_fake" }
+
+func (f *fakeRTPTrack) Codec() webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 1,
+	}}
+}
+
+func (f *fakeRTPTrack) ReadRTP() (*rtp.Packet, interceptor.Attributes, error) {
+	if f.idx >= len(f.steps) {
+		return nil, nil, io.EOF
+	}
+	step := f.steps[f.idx]
+	f.idx++
+	return step.pkt, nil, step.err
+}
+
+func opusTestPacket(seq uint16) *rtp.Packet {
+	return &rtp.Packet{
+		Header:  rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: seq, Timestamp: uint32(seq) * 960, SSRC: 42},
+		Payload: []byte{0xf8, 0xff, 0xfe},
+	}
+}
+
+func TestRunAudioInputLoopExitsAfterConsecutiveReadErrors(t *testing.T) {
+	readErr := errors.New("srtp closed")
+	steps := make([]fakeRTPStep, 0, roomIOAudioInputMaxConsecutiveReadErrors)
+	for i := 0; i < roomIOAudioInputMaxConsecutiveReadErrors; i++ {
+		steps = append(steps, fakeRTPStep{err: readErr})
+	}
+	rio := &RoomIO{audioInputGeneration: 1}
+	rio.runAudioInputLoop(&fakeRTPTrack{steps: steps}, 1, newRoomIOInputAudioStream())
+
+	d := rio.AudioInputDiagnostics()
+	if d.ExitReason != "read_error" {
+		t.Fatalf("ExitReason = %q, want read_error", d.ExitReason)
+	}
+	if d.LastError == "" {
+		t.Fatal("LastError must record the read error")
+	}
+}
+
+func TestRunAudioInputLoopSurvivesTransientReadErrors(t *testing.T) {
+	readErr := errors.New("transient")
+	steps := []fakeRTPStep{
+		{pkt: opusTestPacket(1)},
+		{err: readErr},
+		{err: readErr},
+		{pkt: opusTestPacket(2)},
+		{pkt: opusTestPacket(3)},
+	}
+	rio := &RoomIO{audioInputGeneration: 1}
+	rio.runAudioInputLoop(&fakeRTPTrack{steps: steps}, 1, newRoomIOInputAudioStream())
+
+	d := rio.AudioInputDiagnostics()
+	if d.ExitReason != "eof" {
+		t.Fatalf("ExitReason = %q, want eof (transient errors must not kill the loop)", d.ExitReason)
+	}
+	if d.PacketsRead != 3 {
+		t.Fatalf("PacketsRead = %d, want 3", d.PacketsRead)
+	}
+}
+
+func TestRunAudioInputLoopExitsWhenSuperseded(t *testing.T) {
+	rio := &RoomIO{audioInputGeneration: 2}
+	rio.runAudioInputLoop(&fakeRTPTrack{}, 1, newRoomIOInputAudioStream())
+	if got := rio.AudioInputDiagnostics().ExitReason; got != "superseded" {
+		t.Fatalf("ExitReason = %q, want superseded", got)
 	}
 }
