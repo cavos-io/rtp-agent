@@ -384,6 +384,7 @@ func (f *fakePacerStream) PushText(text string) error {
 func (f *fakePacerStream) Flush() error {
 	return nil
 }
+func (f *fakePacerStream) EndInput() error { return f.Flush() }
 
 func (f *fakePacerStream) Close() error {
 	f.mu.Lock()
@@ -535,6 +536,7 @@ func (s *eofAfterOnePacerStream) PushText(string) error {
 func (s *eofAfterOnePacerStream) Flush() error {
 	return nil
 }
+func (s *eofAfterOnePacerStream) EndInput() error { return s.Flush() }
 
 func (s *eofAfterOnePacerStream) Close() error {
 	s.once.Do(func() {
@@ -583,6 +585,7 @@ func (s *nilThenAudioPacerStream) PushText(string) error {
 func (s *nilThenAudioPacerStream) Flush() error {
 	return nil
 }
+func (s *nilThenAudioPacerStream) EndInput() error { return s.Flush() }
 
 func (s *nilThenAudioPacerStream) Close() error {
 	s.once.Do(func() {
@@ -627,6 +630,7 @@ func (s *pushErrorPacerStream) PushText(string) error {
 func (s *pushErrorPacerStream) Flush() error {
 	return nil
 }
+func (s *pushErrorPacerStream) EndInput() error { return s.Flush() }
 
 func (s *pushErrorPacerStream) Close() error {
 	s.once.Do(func() {
@@ -663,6 +667,7 @@ func (s *blockingClosePacerStream) PushText(string) error {
 func (s *blockingClosePacerStream) Flush() error {
 	return nil
 }
+func (s *blockingClosePacerStream) EndInput() error { return s.Flush() }
 
 func (s *blockingClosePacerStream) Close() error {
 	s.closeOnce.Do(func() {

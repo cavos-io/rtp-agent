@@ -699,6 +699,8 @@ func (s *minimaxTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *minimaxTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *minimaxTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 	for {
 		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")

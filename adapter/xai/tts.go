@@ -394,6 +394,8 @@ func (s *xaiTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *xaiTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *xaiTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

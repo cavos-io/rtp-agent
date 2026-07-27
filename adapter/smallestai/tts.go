@@ -556,6 +556,8 @@ func (s *smallestaiTTSSynthesizeStream) Flush() error {
 	return s.conn.WriteMessage(websocket.TextMessage, payload)
 }
 
+func (s *smallestaiTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *smallestaiTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

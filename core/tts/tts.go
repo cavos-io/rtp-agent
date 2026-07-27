@@ -189,6 +189,7 @@ type ExceptionStream interface {
 type SynthesizeStream interface {
 	PushText(text string) error
 	Flush() error
+	EndInput() error
 	Close() error
 	Next() (*SynthesizedAudio, error)
 }

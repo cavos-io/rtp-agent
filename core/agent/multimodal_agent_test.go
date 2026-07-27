@@ -3913,7 +3913,8 @@ type blockingRealtimeFallbackTTSStream struct {
 
 func (s *blockingRealtimeFallbackTTSStream) PushText(string) error { return nil }
 
-func (s *blockingRealtimeFallbackTTSStream) Flush() error { return nil }
+func (s *blockingRealtimeFallbackTTSStream) Flush() error    { return nil }
+func (s *blockingRealtimeFallbackTTSStream) EndInput() error { return s.Flush() }
 
 func (s *blockingRealtimeFallbackTTSStream) Close() error { return nil }
 
@@ -3938,7 +3939,8 @@ type failingAfterAudioRealtimeFallbackTTSStream struct {
 
 func (s *failingAfterAudioRealtimeFallbackTTSStream) PushText(string) error { return nil }
 
-func (s *failingAfterAudioRealtimeFallbackTTSStream) Flush() error { return nil }
+func (s *failingAfterAudioRealtimeFallbackTTSStream) Flush() error    { return nil }
+func (s *failingAfterAudioRealtimeFallbackTTSStream) EndInput() error { return s.Flush() }
 
 func (s *failingAfterAudioRealtimeFallbackTTSStream) Close() error { return nil }
 
@@ -3963,7 +3965,8 @@ type interruptibleRealtimeFallbackTTSStream struct {
 
 func (s *interruptibleRealtimeFallbackTTSStream) PushText(string) error { return nil }
 
-func (s *interruptibleRealtimeFallbackTTSStream) Flush() error { return nil }
+func (s *interruptibleRealtimeFallbackTTSStream) Flush() error    { return nil }
+func (s *interruptibleRealtimeFallbackTTSStream) EndInput() error { return s.Flush() }
 
 func (s *interruptibleRealtimeFallbackTTSStream) Close() error { return nil }
 

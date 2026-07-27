@@ -615,6 +615,8 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *inworldTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *inworldTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 	for {
 		text := s.pendingText.String()

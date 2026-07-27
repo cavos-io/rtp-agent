@@ -16799,6 +16799,7 @@ type fakeAppTTSStream struct{}
 
 func (f *fakeAppTTSStream) PushText(string) error { return nil }
 func (f *fakeAppTTSStream) Flush() error          { return nil }
+func (f *fakeAppTTSStream) EndInput() error       { return f.Flush() }
 func (f *fakeAppTTSStream) Close() error          { return nil }
 func (f *fakeAppTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF

@@ -28,7 +28,7 @@ func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
 	}
 	defer chunked.Close()
 
-	wantCalls := []string{"push:hello world", "flush"}
+	wantCalls := []string{"push:hello world", "end_input"}
 	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
 	}
@@ -72,7 +72,7 @@ func TestSynthesizeWithStreamSkipsEmptyTextBeforeFlush(t *testing.T) {
 		t.Fatal("stream closed = true, want open stream after empty input setup")
 	}
 
-	wantCalls := []string{"flush"}
+	wantCalls := []string{"end_input"}
 	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
 	}
@@ -922,6 +922,22 @@ type fakeSynthesizeStream struct {
 	emptyErr error
 }
 
+type embeddedSynthesizeStream struct {
+	SynthesizeStream
+}
+
+func TestEndSynthesizeStreamInputThroughEmbeddedWrapper(t *testing.T) {
+	underlying := &fakeSynthesizeStream{}
+	wrapped := &embeddedSynthesizeStream{SynthesizeStream: underlying}
+
+	if err := EndSynthesizeStreamInput(wrapped); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+	if !reflect.DeepEqual(underlying.calls, []string{"end_input"}) {
+		t.Fatalf("underlying calls = %#v, want EndInput forwarded", underlying.calls)
+	}
+}
+
 func (f *fakeSynthesizeStream) PushText(text string) error {
 	f.calls = append(f.calls, "push:"+text)
 	return f.pushErr
@@ -929,6 +945,10 @@ func (f *fakeSynthesizeStream) PushText(text string) error {
 
 func (f *fakeSynthesizeStream) Flush() error {
 	f.calls = append(f.calls, "flush")
+	return nil
+}
+func (f *fakeSynthesizeStream) EndInput() error {
+	f.calls = append(f.calls, "end_input")
 	return nil
 }
 
@@ -970,6 +990,7 @@ func (s *oneFrameThenBlockingSynthesizeStream) PushText(string) error {
 func (s *oneFrameThenBlockingSynthesizeStream) Flush() error {
 	return nil
 }
+func (s *oneFrameThenBlockingSynthesizeStream) EndInput() error { return s.Flush() }
 
 func (s *oneFrameThenBlockingSynthesizeStream) Close() error {
 	if !s.closed {

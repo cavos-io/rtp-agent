@@ -80,10 +80,7 @@ func EndSynthesizeStreamInput(stream SynthesizeStream) error {
 	if isNilSynthesizeStream(stream) {
 		return fmt.Errorf("TTS returned nil synthesize stream")
 	}
-	if ending, ok := stream.(inputEndingSynthesizeStream); ok {
-		return ending.EndInput()
-	}
-	return stream.Flush()
+	return stream.EndInput()
 }
 
 type chunkedStreamFromSynthesizeStream struct {
