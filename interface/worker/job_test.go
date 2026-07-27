@@ -896,6 +896,134 @@ func TestJobContextStartSessionUsesRoomCallbackForSubscriptions(t *testing.T) {
 	}
 }
 
+func TestJobContextPrepareRoomMakesRoomNonNilWithoutConnecting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_prepare_room", Room: &livekit.Room{Name: "room-prepare"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	// This is what the server does before the entrypoint runs.
+	room := ctx.PrepareRoom()
+
+	if room == nil {
+		t.Fatal("PrepareRoom() returned nil")
+	}
+	if ctx.Room != room {
+		t.Fatal("PrepareRoom() did not make JobContext.Room non-nil")
+	}
+	if ctx.RoomConnected() {
+		t.Fatal("PrepareRoom() reported the room as connected; it must only allocate")
+	}
+	if ctx.PrepareRoom() != room {
+		t.Fatal("PrepareRoom() allocated a second room")
+	}
+}
+
+func TestJobContextRoomNeedsConnectKeysOnPreparedRoomPointer(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_needs_connect", Room: &livekit.Room{Name: "room-needs-connect"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	// Fresh context: no room yet, a join is owed.
+	if !ctx.roomNeedsConnect() {
+		t.Fatal("roomNeedsConnect() = false with no room; want true")
+	}
+
+	// After PrepareRoom, the prepared room is owed a join.
+	ctx.PrepareRoom()
+	if !ctx.roomNeedsConnect() {
+		t.Fatal("roomNeedsConnect() = false for the prepared room; want true")
+	}
+
+	// Downstream replaces the room with one of its own (assumed already live).
+	// Every real job calls PrepareRoom, so a bool "was prepared" flag would still
+	// report true here and StartSession would Join this room a second time.
+	ctx.Room = &lksdk.Room{}
+	if ctx.roomNeedsConnect() {
+		t.Fatal("roomNeedsConnect() = true after downstream assigned its own room; would cause a double Join")
+	}
+}
+
+func TestJobContextAddRoomCallbackDeliversToCallbacksRegisteredBeforeAndAfterStartSession(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_add_room_callback", Room: &livekit.Room{Name: "room-add-callback"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+
+	var capturedCallback *lksdk.RoomCallback
+	oldNewRoom := jobContextNewRoom
+	jobContextNewRoom = func(cb *lksdk.RoomCallback) *lksdk.Room {
+		capturedCallback = cb
+		return lksdk.NewRoom(cb)
+	}
+	t.Cleanup(func() { jobContextNewRoom = oldNewRoom })
+
+	// Room allocated before the entrypoint, then the entrypoint registers a callback.
+	ctx.PrepareRoom()
+	early := false
+	ctx.AddRoomCallback(&lksdk.RoomCallback{
+		OnDisconnected: func() {
+			early = true
+		},
+	})
+
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(_ context.Context, _ *lksdk.Room, _ string, _ lksdk.ConnectInfo, _ ...lksdk.ConnectOption) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomOptions: workerlivekit.RoomOptions{
+			DisableAudioInput:        true,
+			DisableAudioOutput:       true,
+			DisableTextInput:         true,
+			DisableCloseOnDisconnect: true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	if capturedCallback == nil {
+		t.Fatal("StartSession did not create a room callback")
+	}
+
+	// The room already exists here — the case LiveKit itself cannot serve, because
+	// its own callback is fixed at creation.
+	late := false
+	remove := ctx.AddRoomCallback(&lksdk.RoomCallback{
+		OnDisconnected: func() {
+			late = true
+		},
+	})
+
+	capturedCallback.OnDisconnected()
+
+	if !early {
+		t.Fatal("callback registered before StartSession received no room event")
+	}
+	if !late {
+		t.Fatal("callback registered after the room existed received no room event")
+	}
+
+	late = false
+	remove()
+	capturedCallback.OnDisconnected()
+
+	if late {
+		t.Fatal("removed callback still received a room event")
+	}
+}
+
 func TestJobContextStartSessionLeavesRoomAsPublicSubscriptionSurface(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_room_surface", Room: &livekit.Room{Name: "room-surface"}},
