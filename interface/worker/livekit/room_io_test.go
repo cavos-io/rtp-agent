@@ -5912,3 +5912,82 @@ func TestRunAudioInputLoopExitsWhenSuperseded(t *testing.T) {
 		t.Fatalf("ExitReason = %q, want superseded", got)
 	}
 }
+
+func TestEnsureAudioOutputPublishedRepublishesUnboundTrack(t *testing.T) {
+	oldTrack := newRoomIOTestAudioTrack(t)
+	rio := &RoomIO{}
+	rio.setAudioOutputTrack(oldTrack, "TR_old", nil)
+
+	published := make(chan *lksdk.LocalTrack, 1)
+	rio.publishAudioTrackFn = func(track *lksdk.LocalTrack, opts *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error) {
+		published <- track
+		return nil, nil
+	}
+
+	rio.ensureAudioOutputPublished(10 * time.Millisecond)
+
+	select {
+	case track := <-published:
+		if track == oldTrack {
+			t.Fatal("republish must create a fresh track, not reuse the stale one")
+		}
+	default:
+		t.Fatal("unbound track after reconnect must be republished")
+	}
+}
+
+func TestEnsureAudioOutputPublishedSkipsWhenOutputDisabled(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{DisableAudioOutput: true}}
+	called := false
+	rio.publishAudioTrackFn = func(*lksdk.LocalTrack, *lksdk.TrackPublicationOptions) (*lksdk.LocalTrackPublication, error) {
+		called = true
+		return nil, nil
+	}
+	rio.ensureAudioOutputPublished(time.Millisecond)
+	if called {
+		t.Fatal("must not publish when audio output disabled")
+	}
+}
+
+func TestPublishAudioDropsAndRecordsWhenTrackUnbound(t *testing.T) {
+	track := newRoomIOTestAudioTrack(t)
+	rio := &RoomIO{}
+	rio.setAudioOutputTrack(track, "TR_test", nil)
+	rio.mu.Lock()
+	rio.audioSubscribed = nil
+	rio.audioOutputBoundFn = roomIOTrackIsBound
+	rio.mu.Unlock()
+
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	if err := rio.PublishAudio(context.Background(), frame); err != nil {
+		t.Fatalf("PublishAudio must not fail hard on unbound track, got %v", err)
+	}
+
+	d := rio.AudioOutputDiagnostics()
+	if d.FramesPublished != 0 {
+		t.Fatalf("FramesPublished = %d, want 0 (nothing reached the wire)", d.FramesPublished)
+	}
+	if d.FramesDroppedUnbound == 0 {
+		t.Fatal("FramesDroppedUnbound must be recorded")
+	}
+	if d.LastError == "" {
+		t.Fatal("LastError must mention the unbound drop")
+	}
+	if d.TrackBound {
+		t.Fatal("TrackBound must be false for a never-bound track")
+	}
+}
+
+func TestRoomIOPlaybackControllerSatisfiesFlusher(t *testing.T) {
+	var controller agent.AudioPlaybackController = roomIOPlaybackController{}
+
+	if _, ok := controller.(interface{ Flush() }); !ok {
+		t.Fatal("roomIOPlaybackController does not satisfy interface{ Flush() }; " +
+			"flushAssistantPlayback would silently skip it and playback would never finish")
+	}
+}
