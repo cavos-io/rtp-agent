@@ -127,6 +127,7 @@ type RoomOptions struct {
 	TextInputCallback          TextInputCallback
 	ParticipantIdentity        string
 	ParticipantKinds           []lksdk.ParticipantKind
+	RecordRemoteParticipants   bool
 }
 
 const RoomIOChatTopic = "lk.chat"
@@ -339,10 +340,11 @@ type RoomIO struct {
 	encoder       AudioEncoder
 	audioDisabled bool
 
-	audioInputTrackID       string
-	audioInputParticipantID string
-	audioInputGeneration    uint64
-	audioInputTracks        map[string][]roomIOAudioInputTrack
+	audioInputTrackID        string
+	audioInputParticipantID  string
+	audioInputGeneration     uint64
+	audioInputHandlerRunning bool
+	audioInputTracks         map[string][]roomIOAudioInputTrack
 
 	audioPublication *lksdk.LocalTrackPublication
 	audioSubscribed  chan struct{}
@@ -1554,6 +1556,9 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 		return
 	}
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
+		if shouldRecordAuxTrack(rio.Options, track.Kind(), rp.Kind(), rp.Attributes()) {
+			go rio.handleAuxAudioTrack(track)
+		}
 		return
 	}
 	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
@@ -1694,13 +1699,23 @@ func (rio *RoomIO) activateAudioInputTrack(trackID string, participantIdentity s
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	rio.rememberAudioInputTrackLocked(trackID, participantIdentity)
-	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity {
+	if rio.audioInputTrackID == trackID && rio.audioInputParticipantID == participantIdentity &&
+		rio.audioInputHandlerRunning {
 		return rio.audioInputGeneration, false
 	}
 	rio.audioInputTrackID = trackID
 	rio.audioInputParticipantID = participantIdentity
 	rio.audioInputGeneration++
+	rio.audioInputHandlerRunning = true
 	return rio.audioInputGeneration, true
+}
+
+func (rio *RoomIO) markAudioInputHandlerDone(generation uint64) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.audioInputGeneration == generation {
+		rio.audioInputHandlerRunning = false
+	}
 }
 
 func (rio *RoomIO) audioInputTrackActive(generation uint64) bool {
@@ -1790,6 +1805,7 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64) {
+	defer rio.markAudioInputHandlerDone(generation)
 	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return
 	}
@@ -1857,6 +1873,71 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
 
 			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
+		}
+	}
+}
+
+func shouldRecordAuxTrack(options RoomOptions, trackKind webrtc.RTPCodecType, participantKind lksdk.ParticipantKind, attributes map[string]string) bool {
+	if !options.RecordRemoteParticipants || options.DisableAudioInput {
+		return false
+	}
+	if trackKind != webrtc.RTPCodecTypeAudio {
+		return false
+	}
+	if attributes[RoomIOPublishOnBehalfAttribute] != "" {
+		return false
+	}
+	return participantKindAllowed(participantKind, nil)
+}
+
+func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
+	dec, err := newOpusDecoder(48000, 1)
+	if err != nil {
+		logger.Logger.Warnw("aux audio track decoder init failed", err)
+		return
+	}
+	defer dec.Close()
+
+	inputStream := newRoomIOInputAudioStream()
+	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
+
+	recordFrames := func(frames []*model.AudioFrame) {
+		if rio.Recorder == nil {
+			return
+		}
+		for _, frame := range frames {
+			rio.Recorder.RecordAux(track.ID(), frame)
+		}
+	}
+
+	for {
+		rio.mu.Lock()
+		closed := rio.closed
+		rio.mu.Unlock()
+		if closed {
+			return
+		}
+
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				recordFrames(inputStream.Flush())
+			}
+			return
+		}
+
+		sb.Push(pkt)
+		for {
+			sample := sb.Pop()
+			if sample == nil {
+				break
+			}
+			pcm := sample.Data
+			if decoded, decErr := dec.Decode(sample.Data); decErr == nil {
+				pcm = decoded
+			}
+			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
+			recordFrames(inputStream.Push(frame.Data))
 		}
 	}
 }
