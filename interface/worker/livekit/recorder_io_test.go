@@ -354,3 +354,50 @@ func TestMixRecordedChannelHandlesFrameBeforeBuffer(t *testing.T) {
 		t.Fatalf("channel 0 modified: %v", stereo)
 	}
 }
+
+type capturingRecordingWriter struct {
+	pcm []int16
+}
+
+func (w *capturingRecordingWriter) WritePCM(samples []int16) (int, error) {
+	w.pcm = append(w.pcm, samples...)
+	return len(samples) / 2, nil
+}
+
+func (w *capturingRecordingWriter) Close() error { return nil }
+
+func TestRecorderIOFlushMixesAuxOntoOutputChannel(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	now := time.Unix(100, 0)
+	recorder.now = func() time.Time { return now }
+	writer := &capturingRecordingWriter{}
+	recorder.started = true
+	recorder.writer = writer
+
+	pcm := make([]byte, 480*2)
+	for i := 0; i < 480; i++ {
+		pcm[i*2] = 16
+	}
+	recorder.RecordAux("track-a", &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	})
+	recorder.flush(48000, now.Add(10*time.Millisecond))
+
+	if len(writer.pcm) == 0 {
+		t.Fatal("no samples written")
+	}
+	var left, right int64
+	for i := 0; i+1 < len(writer.pcm); i += 2 {
+		left += int64(writer.pcm[i])
+		right += int64(writer.pcm[i+1])
+	}
+	if left != 0 {
+		t.Fatalf("aux audio on input channel, sum = %d, want 0", left)
+	}
+	if right != 480*16 {
+		t.Fatalf("aux audio on output channel sum = %d, want %d", right, 480*16)
+	}
+}

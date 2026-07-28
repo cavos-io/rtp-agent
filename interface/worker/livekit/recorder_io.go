@@ -324,7 +324,7 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	stereoBuf := make([]int16, (endSample-startSample)*2)
 	copyRecordedChannel(stereoBuf, in, startSample, 0)
 	copyRecordedChannel(stereoBuf, out, startSample, 1)
-	mixRecordedChannel(stereoBuf, aux, startSample, 0)
+	mixRecordedChannel(stereoBuf, aux, startSample, 1)
 
 	writtenSamples, err := r.writer.WritePCM(stereoBuf)
 	if err != nil {
