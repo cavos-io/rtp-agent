@@ -629,7 +629,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			_ = roomIO.Close()
 			return err
 		}
-		roomIO.AttachRoom(room)
+		roomIO.AttachRoomPre(room)
 	}
 
 	if c.Room != nil {
@@ -664,6 +664,9 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 	if err := session.Start(sessionCtx); err != nil {
 		return err
+	}
+	if roomIO != nil {
+		roomIO.ReconcileParticipants()
 	}
 	_, err := c.MakeSessionReport(session)
 	return err
