@@ -23,6 +23,7 @@ type RecorderIO struct {
 
 	inFrames  []recordedAudioFrame
 	outFrames []recordedAudioFrame
+	auxFrames []recordedAudioFrame
 
 	writer recordingWriter
 
@@ -35,6 +36,7 @@ type RecorderIO struct {
 	OutputStartTime *time.Time
 	inputNextTime   time.Time
 	outputNextTime  time.Time
+	auxNextTimes    map[string]time.Time
 
 	timestamp      uint32
 	timelineStart  *time.Time
@@ -139,6 +141,8 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.OutputStartTime = nil
 	r.inputNextTime = time.Time{}
 	r.outputNextTime = time.Time{}
+	r.auxNextTimes = nil
+	r.auxFrames = nil
 
 	go r.recordLoop(sampleRate, r.done, r.closeComplete)
 
@@ -202,6 +206,26 @@ func (r *RecorderIO) RecordInput(frame *model.AudioFrame) {
 		r.timelineStart = &now
 	}
 	r.inFrames = append(r.inFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
+}
+
+func (r *RecorderIO) RecordAux(trackID string, frame *model.AudioFrame) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.started || r.closed || r.err != nil {
+		return
+	}
+
+	now := r.now()
+	receivedAt := nextRecordedFrameTime(now, r.auxNextTimes[trackID])
+	if r.auxNextTimes == nil {
+		r.auxNextTimes = make(map[string]time.Time)
+	}
+	r.auxNextTimes[trackID] = receivedAt.Add(audioFrameDuration(frame))
+	if r.timelineStart == nil {
+		r.timelineStart = &now
+	}
+	r.auxFrames = append(r.auxFrames, recordedAudioFrame{frame: frame, receivedAt: receivedAt})
 }
 
 func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
@@ -270,10 +294,12 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	}
 	inFrames := r.inFrames
 	outFrames := r.outFrames
+	auxFrames := r.auxFrames
 	timelineStart := r.timelineStart
 	startSample := r.writtenSamples
 	r.inFrames = nil
 	r.outFrames = nil
+	r.auxFrames = nil
 	r.mu.Unlock()
 
 	if timelineStart == nil {
@@ -283,7 +309,8 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	endSample := int64(endTime.Sub(*timelineStart).Seconds() * float64(sampleRate))
 	in := normalizeRecordedFrames(inFrames, uint32(sampleRate), *timelineStart)
 	out := normalizeRecordedFrames(outFrames, uint32(sampleRate), *timelineStart)
-	for _, frames := range [][]normalizedRecordedFrame{in, out} {
+	aux := normalizeRecordedFrames(auxFrames, uint32(sampleRate), *timelineStart)
+	for _, frames := range [][]normalizedRecordedFrame{in, out, aux} {
 		for _, f := range frames {
 			if frameEnd := f.startSample + int64(len(f.samples)); frameEnd > endSample {
 				endSample = frameEnd
@@ -297,6 +324,7 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	stereoBuf := make([]int16, (endSample-startSample)*2)
 	copyRecordedChannel(stereoBuf, in, startSample, 0)
 	copyRecordedChannel(stereoBuf, out, startSample, 1)
+	mixRecordedChannel(stereoBuf, aux, startSample, 1)
 
 	writtenSamples, err := r.writer.WritePCM(stereoBuf)
 	if err != nil {
@@ -413,6 +441,30 @@ func resampleRecordedAudioFrame(frame *model.AudioFrame, outputRate uint32) (*mo
 		SamplesPerChannel: outSamples,
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+func mixRecordedChannel(stereo []int16, frames []normalizedRecordedFrame, baseSample int64, channel int) {
+	for _, frame := range frames {
+		start := frame.startSample - baseSample
+		sourceStart := int64(0)
+		if start < 0 {
+			sourceStart = -start
+			start = 0
+		}
+		for i := sourceStart; i < int64(len(frame.samples)); i++ {
+			destination := (start+i-sourceStart)*2 + int64(channel)
+			if destination < 0 || destination >= int64(len(stereo)) {
+				break
+			}
+			sum := int32(stereo[destination]) + int32(frame.samples[i])
+			if sum > 32767 {
+				sum = 32767
+			} else if sum < -32768 {
+				sum = -32768
+			}
+			stereo[destination] = int16(sum)
+		}
+	}
 }
 
 func copyRecordedChannel(stereo []int16, frames []normalizedRecordedFrame, baseSample int64, channel int) {
