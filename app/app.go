@@ -2402,6 +2402,9 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 	if err := a.Session.Start(sessionCtx); err != nil {
 		return err
 	}
+	if a.RoomIO != nil {
+		a.RoomIO.ReconcileParticipants()
+	}
 	if ctx != nil {
 		a.populateRecorderSessionReport(ctx)
 		if _, err := ctx.MakeSessionReport(a.Session); err != nil {
