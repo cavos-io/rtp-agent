@@ -623,12 +623,12 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		roomIO = livekitNewRoomIO(nil, session, roomOptions)
 		detachRoomIO := c.AddRoomCallback(roomIO.GetCallback())
 		room := c.PrepareRoom(opts.ConnectOptions...)
+		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
 			detachRoomIO()
 			_ = roomIO.Close()
 			return err
 		}
-		roomIO.AttachRoom(room)
 	}
 
 	if c.Room != nil {
