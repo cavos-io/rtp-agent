@@ -437,7 +437,6 @@ type StartSessionOptions struct {
 type jobSessionRoomIO interface {
 	GetCallback() *RoomCallback
 	AttachRoom(*SDKRoom)
-	AttachRoomPre(*SDKRoom)
 	ReconcileParticipants()
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
@@ -629,7 +628,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			_ = roomIO.Close()
 			return err
 		}
-		roomIO.AttachRoomPre(room)
+		roomIO.AttachRoom(room)
 	}
 
 	if c.Room != nil {
