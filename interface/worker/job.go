@@ -437,6 +437,8 @@ type StartSessionOptions struct {
 type jobSessionRoomIO interface {
 	GetCallback() *RoomCallback
 	AttachRoom(*SDKRoom)
+	AttachRoomPre(*SDKRoom)
+	ReconcileParticipants()
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
 	PopulateSessionReport(*agent.SessionReport)
