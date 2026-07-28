@@ -148,6 +148,8 @@ type AcceptedJobRoomConnectOptions = workerlivekit.AcceptedJobRoomConnectOptions
 
 type RoomCallbackHandlers = workerlivekit.RoomCallbackHandlers
 
+type RoomCallbackRegistry = workerlivekit.RoomCallbackRegistry
+
 type RemoteTrackSubscriptionResult = workerlivekit.RemoteTrackSubscriptionResult
 
 type RoomConnector = workerlivekit.RoomConnector

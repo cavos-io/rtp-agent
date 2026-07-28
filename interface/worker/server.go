@@ -1946,6 +1946,12 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 			return fmt.Errorf("worker setup failed: %w", err)
 		}
 	}
+	// Entrypoints get a non-nil JobContext.Room. The room is allocated only, not
+	// joined: StartSession still owns the connect, so RoomIO is always registered
+	// before the first room event can fire. Fake/local jobs have no real room.
+	if !jobCtx.IsFakeJob() {
+		jobCtx.PrepareRoom()
+	}
 	return runWithJobContext(jobCtx, func() error {
 		return s.entrypointFnc(jobCtx)
 	})

@@ -232,6 +232,11 @@ type JobContext struct {
 	participantTasks       map[ParticipantTaskKey]uint64
 	participantTaskSeq     uint64
 	participantTasksMu     sync.Mutex
+	roomCallbacks          *RoomCallbackRegistry
+	roomCallbacksOnce      sync.Once
+	roomOnce               sync.Once
+	preparedRoom           *SDKRoom
+	roomConnected          atomic.Bool
 
 	api       *JobAPI
 	apiKey    string
@@ -430,7 +435,7 @@ type StartSessionOptions struct {
 }
 
 type jobSessionRoomIO interface {
-	WithCallback(*RoomCallback) *RoomCallback
+	GetCallback() *RoomCallback
 	AttachRoom(*SDKRoom)
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
@@ -445,22 +450,100 @@ func normalizeStartSessionOptions(options ...StartSessionOptions) StartSessionOp
 	return options[0]
 }
 
+// RoomCallbacks returns the registry backing this job's room callbacks. The
+// registry is created on first use and lives for the whole job.
+func (c *JobContext) RoomCallbacks() *RoomCallbackRegistry {
+	if c == nil {
+		return nil
+	}
+	c.roomCallbacksOnce.Do(func() {
+		if c.roomCallbacks == nil {
+			c.roomCallbacks = livekitNewRoomCallbackRegistry()
+		}
+	})
+	return c.roomCallbacks
+}
+
+// AddRoomCallback subscribes cb to this job's room events and returns a function
+// that unsubscribes it again. It may be called any number of times, before or
+// after the room exists, because the room is created with a stable fan-out
+// callback that dispatches to whatever is registered when an event fires.
+//
+// Callbacks only receive events for rooms this JobContext created — rooms built
+// through NewRoom, Connect, PrepareRoom, or StartSession. A room assigned to
+// JobContext.Room from elsewhere carries its own callback and is not routed here.
+func (c *JobContext) AddRoomCallback(cb *RoomCallback) func() {
+	if c == nil || cb == nil {
+		return func() {}
+	}
+	return c.RoomCallbacks().Add(cb)
+}
+
+// PrepareRoom allocates JobContext.Room without connecting it, and returns the
+// room. It is safe to call repeatedly; the room is created once.
+//
+// This is what makes JobContext.Room non-nil inside the entrypoint. The room is
+// created with the callback registry's fan-out callback, so AddRoomCallback keeps
+// working afterward. Nothing is joined yet, so no room event can fire until
+// ConnectPreparedRoom runs.
+//
+// The room is a handle for registering callbacks, not a live connection. Methods
+// that need a joined room — SID, Name, GetRemoteParticipants, publishing — are not
+// usable until StartSession connects it. SID in particular BLOCKS until the join.
+func (c *JobContext) PrepareRoom(options ...ConnectOptions) *SDKRoom {
+	if c == nil {
+		return nil
+	}
+	c.roomOnce.Do(func() {
+		if c.Room == nil {
+			c.Room = c.NewRoom(nil, options...)
+			c.preparedRoom = c.Room
+		}
+	})
+	return c.Room
+}
+
+// RoomConnected reports whether this job's room has completed its join.
+func (c *JobContext) RoomConnected() bool {
+	if c == nil {
+		return false
+	}
+	return c.roomConnected.Load()
+}
+
+// roomNeedsConnect reports whether this job still has to join its room.
+//
+// It is keyed on the room pointer, not a "was PrepareRoom called" flag: a join is
+// owed only when there is no room yet, or when JobContext.Room is still the exact
+// room this context prepared. If downstream replaces JobContext.Room with a room
+// of its own — assumed already live — the pointers differ and no join is owed,
+// preserving the old "assigning Room skips connect" behavior even though every
+// real job now calls PrepareRoom.
+func (c *JobContext) roomNeedsConnect() bool {
+	if c == nil || c.roomConnected.Load() {
+		return false
+	}
+	return c.Room == nil || c.Room == c.preparedRoom
+}
+
 func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
 	opts := livekitJobContextNormalizeConnectOptions(options...)
-	return jobContextNewRoom(c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe))
+	c.AddRoomCallback(cb)
+	return jobContextNewRoom(c.roomCallbackWithEntrypoints(c.RoomCallbacks().Callback(), opts.AutoSubscribe))
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...ConnectOptions) error {
-	if c.Room != nil {
+	if !c.roomNeedsConnect() {
 		return nil
 	}
 	opts := livekitJobContextNormalizeConnectOptions(options...)
-	room := c.NewRoom(cb, opts)
+	c.AddRoomCallback(cb)
+	room := c.PrepareRoom(opts)
 	return c.ConnectPreparedRoom(ctx, room, opts)
 }
 
 func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, options ...ConnectOptions) error {
-	if c.Room != nil {
+	if !c.roomNeedsConnect() {
 		return nil
 	}
 	if room == nil {
@@ -484,7 +567,16 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	}); err != nil {
 		return err
 	}
-	c.Room = room
+	// Avoid re-writing JobContext.Room in the common (prepared) path, where room is
+	// already c.Room. PrepareRoom sets c.Room once, before the entrypoint runs and
+	// before downstream can spawn goroutines that read it; skipping the redundant
+	// write here keeps c.Room write-once, so those concurrent reads do not race the
+	// join. The write only happens when a caller connects a room that was not the
+	// one on the context.
+	if c.Room != room {
+		c.Room = room
+	}
+	c.roomConnected.Store(true)
 	c.participantsAvailable(livekitJobContextRemoteParticipantViews(room))
 	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", livekitJobContextRoomName(c.Job))
@@ -519,10 +611,19 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 
 	var roomIO jobSessionRoomIO
-	if c.Room == nil {
+	if c.roomNeedsConnect() {
+		// RoomIO must be registered before the join, so that no track event can
+		// fire before it is listening. PrepareRoom only allocates; the join is
+		// ConnectPreparedRoom below.
+		//
+		// Registration order mirrors the previous WithCallback composition: the
+		// caller's handlers run before RoomIO's.
+		c.AddRoomCallback(opts.RoomCallback)
 		roomIO = livekitNewRoomIO(nil, session, roomOptions)
-		room := c.NewRoom(roomIO.WithCallback(opts.RoomCallback), opts.ConnectOptions...)
+		detachRoomIO := c.AddRoomCallback(roomIO.GetCallback())
+		room := c.PrepareRoom(opts.ConnectOptions...)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
+			detachRoomIO()
 			_ = roomIO.Close()
 			return err
 		}
@@ -533,6 +634,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		session.Room = c.Room
 		if roomIO == nil {
 			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+			c.AddRoomCallback(roomIO.GetCallback())
 		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
