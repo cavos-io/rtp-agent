@@ -384,8 +384,9 @@ type RoomIO struct {
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
 
-	participantAvailable  bool
-	connectedParticipants map[string]struct{}
+	participantAvailable   bool
+	participantsReconciled bool
+	connectedParticipants  map[string]struct{}
 
 	userTranscriptionCancel        context.CancelFunc
 	userTranscriptionTrackID       string
@@ -492,6 +493,11 @@ func (c roomIOPlaybackController) WaitForPlayout(ctx context.Context) (agent.Aud
 }
 
 func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
+	rio.AttachRoomPre(room)
+	rio.ReconcileParticipants()
+}
+
+func (rio *RoomIO) AttachRoomPre(room *lksdk.Room) {
 	if rio == nil || room == nil {
 		return
 	}
@@ -504,7 +510,14 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 	if !rio.Options.DisableTextInput {
 		rio.registerTextInput()
 	}
-	for _, participant := range room.GetRemoteParticipants() {
+}
+
+func (rio *RoomIO) ReconcileParticipants() {
+	if rio == nil || rio.Room == nil || rio.participantsReconciled {
+		return
+	}
+	rio.participantsReconciled = true
+	for _, participant := range rio.Room.GetRemoteParticipants() {
 		rio.onParticipantConnected(participant)
 	}
 }
