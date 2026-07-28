@@ -7075,7 +7075,8 @@ type cancelAwarePreemptiveTTSStream struct {
 
 func (s *cancelAwarePreemptiveTTSStream) PushText(string) error { return nil }
 
-func (s *cancelAwarePreemptiveTTSStream) Flush() error { return nil }
+func (s *cancelAwarePreemptiveTTSStream) Flush() error    { return nil }
+func (s *cancelAwarePreemptiveTTSStream) EndInput() error { return s.Flush() }
 
 func (s *cancelAwarePreemptiveTTSStream) Close() error { return nil }
 

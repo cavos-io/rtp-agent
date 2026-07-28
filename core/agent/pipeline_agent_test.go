@@ -6238,7 +6238,8 @@ type interruptAwarePipelineTTSStream struct {
 
 func (i *interruptAwarePipelineTTSStream) PushText(string) error { return nil }
 
-func (i *interruptAwarePipelineTTSStream) Flush() error { return nil }
+func (i *interruptAwarePipelineTTSStream) Flush() error    { return nil }
+func (i *interruptAwarePipelineTTSStream) EndInput() error { return i.Flush() }
 
 func (i *interruptAwarePipelineTTSStream) Close() error { return nil }
 
@@ -6307,6 +6308,7 @@ type blockingPipelineTTSStream struct {
 
 func (b *blockingPipelineTTSStream) PushText(string) error { return nil }
 func (b *blockingPipelineTTSStream) Flush() error          { return nil }
+func (b *blockingPipelineTTSStream) EndInput() error       { return b.Flush() }
 func (b *blockingPipelineTTSStream) Close() error          { return nil }
 func (b *blockingPipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if b.started != nil {
@@ -6492,7 +6494,8 @@ func (f *fakePipelineTTSStream) PushText(text string) error {
 	return nil
 }
 
-func (f *fakePipelineTTSStream) Flush() error { return nil }
+func (f *fakePipelineTTSStream) Flush() error    { return nil }
+func (f *fakePipelineTTSStream) EndInput() error { return f.Flush() }
 
 func (f *fakePipelineTTSStream) Close() error { return nil }
 

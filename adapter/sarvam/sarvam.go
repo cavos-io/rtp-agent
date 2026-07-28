@@ -1752,6 +1752,8 @@ func (s *sarvamTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *sarvamTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *sarvamTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 	for {
 		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")

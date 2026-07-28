@@ -2530,7 +2530,8 @@ type fakeGenerationTTSStream struct {
 
 func (f *fakeGenerationTTSStream) PushText(string) error { return nil }
 
-func (f *fakeGenerationTTSStream) Flush() error { return nil }
+func (f *fakeGenerationTTSStream) Flush() error    { return nil }
+func (f *fakeGenerationTTSStream) EndInput() error { return f.Flush() }
 
 func (f *fakeGenerationTTSStream) Close() error {
 	f.closed = true

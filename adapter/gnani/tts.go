@@ -428,6 +428,8 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *gnaniTTSSynthesizeStream) EndInput() error { return s.Flush() }
+
 func (s *gnaniTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

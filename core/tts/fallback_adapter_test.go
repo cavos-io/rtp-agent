@@ -4347,6 +4347,7 @@ func (s *contextAwareRecoverySynthesizeStream) PushText(string) error {
 func (s *contextAwareRecoverySynthesizeStream) Flush() error {
 	return nil
 }
+func (s *contextAwareRecoverySynthesizeStream) EndInput() error { return s.Flush() }
 
 func (s *contextAwareRecoverySynthesizeStream) Close() error {
 	return nil
@@ -4487,6 +4488,7 @@ func (m *metadataSynthesizeStream) Flush() error {
 	m.calls = append(m.calls, "flush")
 	return nil
 }
+func (m *metadataSynthesizeStream) EndInput() error { return m.Flush() }
 
 func (m *metadataSynthesizeStream) Close() error {
 	m.closed = true
@@ -4517,6 +4519,7 @@ func (s *blockingFailSynthesizeStream) PushText(string) error {
 func (s *blockingFailSynthesizeStream) Flush() error {
 	return nil
 }
+func (s *blockingFailSynthesizeStream) EndInput() error { return s.Flush() }
 
 func (s *blockingFailSynthesizeStream) Close() error {
 	return nil
@@ -4619,6 +4622,7 @@ func (s *finalFrameThenBlockingSynthesizeStream) PushText(string) error {
 func (s *finalFrameThenBlockingSynthesizeStream) Flush() error {
 	return nil
 }
+func (s *finalFrameThenBlockingSynthesizeStream) EndInput() error { return s.Flush() }
 
 func (s *finalFrameThenBlockingSynthesizeStream) Close() error {
 	if !s.closed {

@@ -608,6 +608,8 @@ func (s *ttsStream) sendTextLocked(text string) error {
 	return nil
 }
 
+func (s *ttsStream) EndInput() error { return s.Flush() }
+
 func (s *ttsStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
