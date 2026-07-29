@@ -35,12 +35,11 @@ func defaultTTSEndpoint(baseURL, model string) string {
 }
 
 func defaultSLNGEndpoint(baseURL, kind, modelName string) string {
-	host := strings.Split(baseURL, ":")[0]
-	scheme := "wss"
-	if host == "localhost" || host == "127.0.0.1" {
-		scheme = "ws"
+	endpoint, err := bridgeEndpoint(baseURL, kind, modelName)
+	if err != nil {
+		return ""
 	}
-	return fmt.Sprintf("%s://%s/v1/%s/%s", scheme, strings.TrimRight(baseURL, "/"), kind, modelName)
+	return endpoint
 }
 
 func normalizeRegionOverride(region any) string {

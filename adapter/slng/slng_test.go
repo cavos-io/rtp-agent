@@ -50,7 +50,7 @@ func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 
 func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	sttProvider := NewSTT("test-key")
-	if sttProvider.endpoint != "wss://api.slng.ai/v1/stt/deepgram/nova:3" {
+	if sttProvider.endpoint != "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3" {
 		t.Fatalf("STT endpoint = %q, want reference default", sttProvider.endpoint)
 	}
 	if !sttProvider.Capabilities().Streaming || !sttProvider.Capabilities().InterimResults || sttProvider.Capabilities().OfflineRecognize {
@@ -64,7 +64,7 @@ func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	}
 
 	ttsProvider := NewTTS("test-key")
-	if ttsProvider.endpoint != "wss://api.slng.ai/v1/tts/deepgram/aura:2" {
+	if ttsProvider.endpoint != "wss://api.slng.ai/v1/bridges/unmute/tts/deepgram/aura:2" {
 		t.Fatalf("TTS endpoint = %q, want reference default", ttsProvider.endpoint)
 	}
 	if ttsProvider.voice != "aura-2-thalia-en" {
@@ -181,7 +181,7 @@ func TestSLNGTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 
 func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("localhost:9000"))
-	if provider.endpoint != "ws://localhost:9000/v1/stt/deepgram/nova:3" {
+	if provider.endpoint != "ws://localhost:9000/v1/bridges/unmute/stt/deepgram/nova:3" {
 		t.Fatalf("endpoint = %q, want ws localhost endpoint", provider.endpoint)
 	}
 }
