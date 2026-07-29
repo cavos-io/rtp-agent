@@ -504,7 +504,13 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 	if !rio.Options.DisableTextInput {
 		rio.registerTextInput()
 	}
-	for _, participant := range room.GetRemoteParticipants() {
+}
+
+func (rio *RoomIO) ReconcileParticipants() {
+	if rio == nil || rio.Room == nil {
+		return
+	}
+	for _, participant := range rio.Room.GetRemoteParticipants() {
 		rio.onParticipantConnected(participant)
 	}
 }

@@ -437,6 +437,7 @@ type StartSessionOptions struct {
 type jobSessionRoomIO interface {
 	GetCallback() *RoomCallback
 	AttachRoom(*SDKRoom)
+	ReconcileParticipants()
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
 	PopulateSessionReport(*agent.SessionReport)
@@ -622,12 +623,13 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		roomIO = livekitNewRoomIO(nil, session, roomOptions)
 		detachRoomIO := c.AddRoomCallback(roomIO.GetCallback())
 		room := c.PrepareRoom(opts.ConnectOptions...)
+		roomIO.AttachRoom(room)
 		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
 			detachRoomIO()
 			_ = roomIO.Close()
 			return err
 		}
-		roomIO.AttachRoom(room)
+		roomIO.ReconcileParticipants()
 	}
 
 	if c.Room != nil {
@@ -635,6 +637,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		if roomIO == nil {
 			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
 			c.AddRoomCallback(roomIO.GetCallback())
+			roomIO.ReconcileParticipants()
 		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
