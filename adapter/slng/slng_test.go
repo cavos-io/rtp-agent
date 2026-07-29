@@ -186,6 +186,44 @@ func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTExplicitBridgeEndpointDerivesModel(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want bridge model", provider.model)
+	}
+	assertSLNGField(t, buildSTTInitPayload(provider), "model", "nova-2")
+}
+
+func TestSLNGSTTExplicitBridgeModelEndpointsDeriveModel(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTModelEndpoints(endpoint, "wss://backup.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3"))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want bridge model", provider.model)
+	}
+	assertSLNGField(t, buildSTTInitPayload(provider), "model", "nova-2")
+}
+
+func TestSLNGSTTExplicitLegacyEndpointIsPreserved(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want legacy model", provider.model)
+	}
+}
+
 func TestSLNGRegionOverrideNormalizesLikeReference(t *testing.T) {
 	got := normalizeRegionOverride([]string{" US-East ", "EU-WEST"})
 	if got != "us-east, eu-west" {

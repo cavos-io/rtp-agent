@@ -53,7 +53,7 @@ func bridgeModel(endpoint, service string) (string, error) {
 	if !strings.HasPrefix(parsed.Path, prefix) {
 		return "", fmt.Errorf("invalid bridge endpoint %q", endpoint)
 	}
-	model := strings.TrimPrefix(parsed.Path, prefix)
+	model := strings.TrimRight(strings.TrimPrefix(parsed.Path, prefix), "/")
 	if _, err := parseModelRef(model); err != nil {
 		return "", err
 	}
@@ -90,42 +90,50 @@ func bridgeService(service string) bool {
 }
 
 type candidateState struct {
-	cooldown time.Duration
-	retryAt  []time.Time
+	count           int
+	active          int
+	cooldown        time.Duration
+	primaryFailedAt time.Time
 }
 
 func newCandidateState(count int, cooldown time.Duration) *candidateState {
+	if count < 0 {
+		count = 0
+	}
 	return &candidateState{
+		count:    count,
+		active:   0,
 		cooldown: cooldown,
-		retryAt:  make([]time.Time, count),
 	}
 }
 
 func (s *candidateState) start(now time.Time) int {
-	for index, retryAt := range s.retryAt {
-		if !now.Before(retryAt) {
-			return index
-		}
+	if s.count == 0 {
+		return -1
 	}
-	return -1
+	if !s.primaryFailedAt.IsZero() && !now.Before(s.primaryFailedAt.Add(s.cooldown)) {
+		return 0
+	}
+	return s.active
 }
 
 func (s *candidateState) advance(index int, now time.Time) (int, bool) {
-	if index < 0 || index >= len(s.retryAt) {
+	if index < 0 || index >= s.count {
 		return -1, false
 	}
-	s.retryAt[index] = now.Add(s.cooldown)
-	for offset := 1; offset < len(s.retryAt); offset++ {
-		next := (index + offset) % len(s.retryAt)
-		if !now.Before(s.retryAt[next]) {
-			return next, true
-		}
+	if index == 0 {
+		s.primaryFailedAt = now
 	}
-	return -1, false
+	next := index + 1
+	if next >= s.count {
+		return -1, false
+	}
+	s.active = next
+	return next, true
 }
 
 func (s *candidateState) selectCandidate(index int) {
-	if index >= 0 && index < len(s.retryAt) {
-		s.retryAt[index] = time.Time{}
+	if index >= 0 && index < s.count {
+		s.active = index
 	}
 }

@@ -21,6 +21,17 @@ func TestBridgeModelRejectsLegacyPath(t *testing.T) {
 	}
 }
 
+func TestBridgeModelRoundTripsTrimmedPath(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3/"
+	got, err := bridgeModel(endpoint, "stt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "deepgram/nova:3"; got != want {
+		t.Fatalf("bridgeModel() = %q, want %q", got, want)
+	}
+}
+
 func TestCandidateStateRetriesPrimaryAfterCooldown(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := newCandidateState(2, time.Minute)
@@ -32,5 +43,23 @@ func TestCandidateStateRetriesPrimaryAfterCooldown(t *testing.T) {
 	}
 	if got := state.start(now.Add(time.Minute)); got != 0 {
 		t.Fatalf("start() after cooldown = %d", got)
+	}
+}
+
+func TestCandidateStateSelectsActiveCandidate(t *testing.T) {
+	state := newCandidateState(3, time.Minute)
+	state.selectCandidate(2)
+	if got := state.start(time.Unix(100, 0)); got != 2 {
+		t.Fatalf("start() = %d, want selected candidate 2", got)
+	}
+}
+
+func TestCandidateStateDoesNotWrapAfterLastCandidate(t *testing.T) {
+	state := newCandidateState(3, time.Minute)
+	if next, ok := state.advance(1, time.Unix(100, 0)); !ok || next != 2 {
+		t.Fatalf("advance(1) = %d, %v, want 2, true", next, ok)
+	}
+	if next, ok := state.advance(2, time.Unix(100, 0)); ok || next != -1 {
+		t.Fatalf("advance(2) = %d, %v, want -1, false", next, ok)
 	}
 }

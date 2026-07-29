@@ -70,7 +70,7 @@ func WithSTTEndpoint(endpoint string) STTOption {
 		if endpoint != "" {
 			s.endpoint = endpoint
 			s.modelEndpoints = []string{endpoint}
-			if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+			if model := sttModelFromEndpoint(endpoint); model != "" {
 				s.model = model
 			}
 		}
@@ -90,7 +90,7 @@ func WithSTTModelEndpoints(endpoints ...string) STTOption {
 		}
 		s.modelEndpoints = cleaned
 		s.endpoint = cleaned[0]
-		if model := extractSTTModelFromEndpoint(cleaned[0]); model != "" {
+		if model := sttModelFromEndpoint(cleaned[0]); model != "" {
 			s.model = model
 		}
 	}
@@ -341,7 +341,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	for endpointIndex, endpoint := range endpoints {
 		attempt := *s
 		attempt.endpoint = endpoint
-		if model := extractSTTModelFromEndpoint(endpoint); model != "" {
+		if model := sttModelFromEndpoint(endpoint); model != "" {
 			attempt.model = model
 		}
 		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
@@ -477,6 +477,13 @@ func extractSTTModelFromEndpoint(endpoint string) string {
 		model = model[:query]
 	}
 	return strings.TrimRight(model, "/")
+}
+
+func sttModelFromEndpoint(endpoint string) string {
+	if model, err := bridgeModel(endpoint, "stt"); err == nil {
+		return model
+	}
+	return extractSTTModelFromEndpoint(endpoint)
 }
 
 func (s *STT) resolveLanguage(language string) string {
