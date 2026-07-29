@@ -655,6 +655,10 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}
 	}
 
+	if roomIO != nil {
+		roomIO.ReconcileParticipants()
+	}
+
 	c.primaryRoomIO = roomIO
 
 	info := c.AvatarStartInfo()
@@ -663,9 +667,6 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 	if err := session.Start(sessionCtx); err != nil {
 		return err
-	}
-	if roomIO != nil {
-		roomIO.ReconcileParticipants()
 	}
 	_, err := c.MakeSessionReport(session)
 	return err

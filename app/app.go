@@ -2393,6 +2393,9 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 			}
 		}
 	}
+	if a.RoomIO != nil {
+		a.RoomIO.ReconcileParticipants()
+	}
 	if ctx != nil {
 		info := ctx.AvatarStartInfo()
 		if info.LiveKitURL != "" && info.LiveKitToken != "" {
@@ -2401,9 +2404,6 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 	}
 	if err := a.Session.Start(sessionCtx); err != nil {
 		return err
-	}
-	if a.RoomIO != nil {
-		a.RoomIO.ReconcileParticipants()
 	}
 	if ctx != nil {
 		a.populateRecorderSessionReport(ctx)
