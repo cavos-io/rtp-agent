@@ -2367,11 +2367,13 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 				_ = roomIO.Close()
 				return err
 			}
+			roomIO.ReconcileParticipants()
 		}
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room
 			if roomIO == nil {
 				roomIO = workerlivekit.NewRoomIO(ctx.Room, a.Session, roomOptions)
+				roomIO.ReconcileParticipants()
 			}
 			a.RoomIO = roomIO
 			if err := ctx.AddShutdownCallback(func() {
@@ -2392,9 +2394,6 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 				}
 			}
 		}
-	}
-	if a.RoomIO != nil {
-		a.RoomIO.ReconcileParticipants()
 	}
 	if ctx != nil {
 		info := ctx.AvatarStartInfo()

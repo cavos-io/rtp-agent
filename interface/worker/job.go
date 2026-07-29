@@ -629,6 +629,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			_ = roomIO.Close()
 			return err
 		}
+		roomIO.ReconcileParticipants()
 	}
 
 	if c.Room != nil {
@@ -636,6 +637,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		if roomIO == nil {
 			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
 			c.AddRoomCallback(roomIO.GetCallback())
+			roomIO.ReconcileParticipants()
 		}
 		if err := c.AddShutdownCallback(func() {
 			_ = session.Stop(context.Background())
@@ -653,10 +655,6 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 				return err
 			}
 		}
-	}
-
-	if roomIO != nil {
-		roomIO.ReconcileParticipants()
 	}
 
 	c.primaryRoomIO = roomIO
