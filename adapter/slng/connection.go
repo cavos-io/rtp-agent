@@ -24,6 +24,27 @@ type TTSConnectionConfig struct {
 	Init     map[string]any
 }
 
+type sttConnectionCandidate struct {
+	endpoint       string
+	model          string
+	headers        http.Header
+	init           map[string]any
+	legacyEndpoint bool
+}
+
+func cloneSTTConnectionConfigs(configs []STTConnectionConfig) []STTConnectionConfig {
+	cloned := make([]STTConnectionConfig, len(configs))
+	for i, config := range configs {
+		cloned[i] = STTConnectionConfig{
+			Endpoint: config.Endpoint,
+			Model:    config.Model,
+			Headers:  config.Headers.Clone(),
+			Init:     cloneSLNGMap(config.Init),
+		}
+	}
+	return cloned
+}
+
 func bridgeEndpoint(baseURL, service, model string) (string, error) {
 	if !bridgeService(service) {
 		return "", fmt.Errorf("unsupported bridge service %q", service)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,32 +22,46 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	defaultSLNGSTTFallbackRecoveryCooldown = time.Minute
+	maxSLNGSTTSilentReconnects             = 3
+)
+
+var (
+	slngSTTNow               = time.Now
+	slngSTTKeepaliveInterval = 5 * time.Second
+)
+
 type STT struct {
-	mu                      sync.Mutex
-	apiKey                  string
-	providerAPIKey          string
-	model                   string
-	endpoint                string
-	modelEndpoints          []string
-	regionOverride          string
-	worldPartOverride       string
-	externalAgentID         string
-	externalSessionID       string
-	extraHeaders            http.Header
-	sampleRate              int
-	bufferSizeSeconds       float64
-	encoding                string
-	enablePartialTranscript bool
-	vadThreshold            float64
-	vadMinSilenceDurationMS int
-	vadSpeechPadMS          int
-	enableDiarization       bool
-	minSpeakers             *int
-	maxSpeakers             *int
-	language                string
-	modelOptions            map[string]any
-	streams                 map[*sttStream]struct{}
-	closed                  bool
+	mu                       sync.Mutex
+	apiKey                   string
+	providerAPIKey           string
+	model                    string
+	endpoint                 string
+	modelEndpoints           []string
+	connections              []STTConnectionConfig
+	candidateState           *candidateState
+	fallbackRecoveryCooldown time.Duration
+	finalTimeout             time.Duration
+	regionOverride           string
+	worldPartOverride        string
+	externalAgentID          string
+	externalSessionID        string
+	extraHeaders             http.Header
+	sampleRate               int
+	bufferSizeSeconds        float64
+	encoding                 string
+	enablePartialTranscript  bool
+	vadThreshold             float64
+	vadMinSilenceDurationMS  int
+	vadSpeechPadMS           int
+	enableDiarization        bool
+	minSpeakers              *int
+	maxSpeakers              *int
+	language                 string
+	modelOptions             map[string]any
+	streams                  map[*sttStream]struct{}
+	closed                   bool
 }
 
 type STTOption func(*STT)
@@ -56,6 +71,7 @@ func WithSTTBaseURL(baseURL string) STTOption {
 		if baseURL != "" {
 			s.endpoint = defaultSTTEndpoint(strings.TrimRight(baseURL, "/"), s.model)
 			s.modelEndpoints = nil
+			s.connections = nil
 		}
 	}
 }
@@ -66,6 +82,7 @@ func WithSTTModel(modelName string) STTOption {
 			s.model = modelName
 			s.endpoint = defaultSTTEndpoint(defaultSLNGBaseURL, modelName)
 			s.modelEndpoints = nil
+			s.connections = nil
 		}
 	}
 }
@@ -75,6 +92,7 @@ func WithSTTEndpoint(endpoint string) STTOption {
 		if endpoint != "" {
 			s.endpoint = endpoint
 			s.modelEndpoints = []string{endpoint}
+			s.connections = nil
 			if model := sttModelFromEndpoint(endpoint); model != "" {
 				s.model = model
 			}
@@ -94,10 +112,37 @@ func WithSTTModelEndpoints(endpoints ...string) STTOption {
 			return
 		}
 		s.modelEndpoints = cleaned
+		s.connections = nil
 		s.endpoint = cleaned[0]
 		if model := sttModelFromEndpoint(cleaned[0]); model != "" {
 			s.model = model
 		}
+	}
+}
+
+func WithSTTConnections(connections ...STTConnectionConfig) STTOption {
+	return func(s *STT) {
+		if len(connections) == 0 {
+			return
+		}
+		s.connections = cloneSTTConnectionConfigs(connections)
+		s.modelEndpoints = nil
+		s.endpoint = connections[0].Endpoint
+		if model := sttModelFromEndpoint(connections[0].Endpoint); model != "" {
+			s.model = model
+		}
+	}
+}
+
+func WithSTTFallbackRecoveryCooldown(cooldown time.Duration) STTOption {
+	return func(s *STT) {
+		s.fallbackRecoveryCooldown = max(cooldown, 0)
+	}
+}
+
+func WithSTTFinalTimeout(timeout time.Duration) STTOption {
+	return func(s *STT) {
+		s.finalTimeout = max(timeout, 0)
 	}
 }
 
@@ -207,21 +252,23 @@ func NewSTT(apiKey string, opts ...STTOption) *STT {
 		apiKey = os.Getenv(slngAPIKeyEnv)
 	}
 	provider := &STT{
-		apiKey:                  apiKey,
-		model:                   defaultSLNGSTTModel,
-		endpoint:                defaultSTTEndpoint(defaultSLNGBaseURL, defaultSLNGSTTModel),
-		sampleRate:              defaultSLNGSTTSampleRate,
-		bufferSizeSeconds:       defaultSLNGBufferSeconds,
-		encoding:                defaultSLNGSTTEncoding,
-		enablePartialTranscript: true,
-		vadThreshold:            defaultSLNGVADThreshold,
-		vadMinSilenceDurationMS: defaultSLNGVADMinSilenceMS,
-		vadSpeechPadMS:          defaultSLNGVADSpeechPadMS,
-		language:                defaultSLNGLanguage,
+		apiKey:                   apiKey,
+		model:                    defaultSLNGSTTModel,
+		endpoint:                 defaultSTTEndpoint(defaultSLNGBaseURL, defaultSLNGSTTModel),
+		sampleRate:               defaultSLNGSTTSampleRate,
+		bufferSizeSeconds:        defaultSLNGBufferSeconds,
+		encoding:                 defaultSLNGSTTEncoding,
+		enablePartialTranscript:  true,
+		vadThreshold:             defaultSLNGVADThreshold,
+		vadMinSilenceDurationMS:  defaultSLNGVADMinSilenceMS,
+		vadSpeechPadMS:           defaultSLNGVADSpeechPadMS,
+		language:                 defaultSLNGLanguage,
+		fallbackRecoveryCooldown: defaultSLNGSTTFallbackRecoveryCooldown,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.candidateState = newCandidateState(provider.sttCandidateCount(), provider.fallbackRecoveryCooldown)
 	return provider
 }
 
@@ -370,64 +417,100 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	if err := s.requireAPIKey(); err != nil {
 		return nil, err
 	}
-	endpoints := s.sttEndpoints()
+	candidates, err := s.resolvedSTTCandidates()
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("slng stt websocket endpoint is empty")
+	}
+
+	s.mu.Lock()
+	if s.candidateState == nil || s.candidateState.count != len(candidates) {
+		s.candidateState = newCandidateState(len(candidates), s.fallbackRecoveryCooldown)
+	}
+	candidateIndex := s.candidateState.start(slngSTTNow())
+	s.mu.Unlock()
+
 	var lastErr error
-	for endpointIndex, endpoint := range endpoints {
-		attempt := *s
-		attempt.endpoint = endpoint
-		if model := sttModelFromEndpoint(endpoint); model != "" {
-			attempt.model = model
-		}
-		headers, err := buildSTTWebsocketHeaders(&attempt)
+	for candidateIndex >= 0 && candidateIndex < len(candidates) {
+		candidate := candidates[candidateIndex]
+		attempt := s.sttAttempt(candidate)
+		var candidateErr error
+		headers, err := buildSTTWebsocketHeadersForCandidate(&attempt, candidate.headers)
 		if err != nil {
 			return nil, err
 		}
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+		conn, response, err := websocket.DefaultDialer.DialContext(ctx, candidate.endpoint, headers)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil, context.Canceled
 			}
-			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng stt websocket: %v", err))
+			candidateErr = slngSTTDialError(response, err)
+		} else {
+			initPayload := buildSTTInitPayload(&attempt)
+			if candidate.init != nil {
+				initPayload, err = json.Marshal(candidate.init)
+			}
+			if err == nil {
+				err = conn.WriteMessage(websocket.TextMessage, initPayload)
+			}
+			if err != nil {
+				_ = conn.Close()
+				candidateErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng stt websocket: %v", err))
+			}
+		}
+
+		if candidateErr != nil {
+			lastErr = candidateErr
+			if !isSLNGFallbackEligible(candidateErr) {
+				return nil, candidateErr
+			}
+			s.mu.Lock()
+			nextIndex, ok := s.candidateState.advance(candidateIndex, slngSTTNow())
+			s.mu.Unlock()
+			if !ok {
+				return nil, lastErr
+			}
+			candidateIndex = nextIndex
 			continue
 		}
+
 		if s.isClosed() {
-			conn.Close()
+			_ = conn.Close()
 			return nil, io.ErrClosedPipe
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
-			conn.Close()
-			lastErr = err
-			continue
-		}
-		s.endpoint = endpoint
-		s.model = attempt.model
-		if len(s.modelEndpoints) > 0 && endpointIndex > 0 {
-			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
-		}
+		s.mu.Lock()
+		s.endpoint = candidate.endpoint
+		s.model = candidate.model
+		s.candidateState.selectCandidate(candidateIndex)
+		s.mu.Unlock()
 		stream := &sttStream{
 			ctx:                     ctx,
 			provider:                s,
 			conn:                    conn,
-			language:                s.resolveLanguage(language),
-			partials:                s.enablePartialTranscript,
-			sampleRate:              s.sampleRate,
-			bufferSizeSeconds:       s.bufferSizeSeconds,
-			encoding:                s.encoding,
-			diarization:             s.enableDiarization,
-			vadThreshold:            s.vadThreshold,
-			vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
-			vadSpeechPadMS:          s.vadSpeechPadMS,
+			candidateIndex:          candidateIndex,
+			legacyEndpoint:          candidate.legacyEndpoint,
+			language:                attempt.resolveLanguage(language),
+			partials:                attempt.enablePartialTranscript,
+			sampleRate:              attempt.sampleRate,
+			bufferSizeSeconds:       attempt.bufferSizeSeconds,
+			encoding:                attempt.encoding,
+			diarization:             attempt.enableDiarization,
+			vadThreshold:            attempt.vadThreshold,
+			vadMinSilenceDurationMS: attempt.vadMinSilenceDurationMS,
+			vadSpeechPadMS:          attempt.vadSpeechPadMS,
+			finalTimeout:            attempt.finalTimeout,
+			lifecycleDone:           make(chan struct{}),
 		}
 		if !s.registerStream(stream) {
 			stream.Close()
 			return nil, io.ErrClosedPipe
 		}
+		go stream.runLifecycle()
 		return stream, nil
 	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, errors.New("slng stt websocket endpoint is empty")
+	return nil, lastErr
 }
 
 func (s *STT) Close() error {
@@ -504,6 +587,95 @@ func (s *STT) sttEndpoints() []string {
 	return []string{s.endpoint}
 }
 
+func (s *STT) sttCandidateCount() int {
+	if len(s.connections) > 0 {
+		return len(s.connections)
+	}
+	return len(s.sttEndpoints())
+}
+
+func (s *STT) resolvedSTTCandidates() ([]sttConnectionCandidate, error) {
+	s.mu.Lock()
+	connections := cloneSTTConnectionConfigs(s.connections)
+	endpoints := append([]string(nil), s.sttEndpoints()...)
+	defaultModel := s.model
+	s.mu.Unlock()
+
+	if len(connections) > 0 {
+		candidates := make([]sttConnectionCandidate, 0, len(connections))
+		for _, config := range connections {
+			model, err := bridgeModel(config.Endpoint, "stt")
+			if err != nil {
+				return nil, err
+			}
+			if config.Model != "" && config.Model != model {
+				return nil, errors.New("STT connection model must match its endpoint")
+			}
+			candidates = append(candidates, sttConnectionCandidate{
+				endpoint: config.Endpoint,
+				model:    model,
+				headers:  config.Headers.Clone(),
+				init:     cloneSLNGMap(config.Init),
+			})
+		}
+		return candidates, nil
+	}
+
+	candidates := make([]sttConnectionCandidate, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		model, err := bridgeModel(endpoint, "stt")
+		legacy := err != nil
+		if legacy {
+			model = extractSTTModelFromEndpoint(endpoint)
+		}
+		if model == "" {
+			model = defaultModel
+		}
+		candidates = append(candidates, sttConnectionCandidate{
+			endpoint:       endpoint,
+			model:          model,
+			legacyEndpoint: legacy,
+		})
+	}
+	return candidates, nil
+}
+
+func (s *STT) sttAttempt(candidate sttConnectionCandidate) STT {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attempt := STT{
+		apiKey:                  s.apiKey,
+		providerAPIKey:          s.providerAPIKey,
+		model:                   candidate.model,
+		endpoint:                candidate.endpoint,
+		regionOverride:          s.regionOverride,
+		worldPartOverride:       s.worldPartOverride,
+		externalAgentID:         s.externalAgentID,
+		externalSessionID:       s.externalSessionID,
+		extraHeaders:            s.extraHeaders.Clone(),
+		sampleRate:              s.sampleRate,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		encoding:                s.encoding,
+		enablePartialTranscript: s.enablePartialTranscript,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
+		enableDiarization:       s.enableDiarization,
+		language:                s.language,
+		modelOptions:            cloneSLNGMap(s.modelOptions),
+		finalTimeout:            s.finalTimeout,
+	}
+	if s.minSpeakers != nil {
+		value := *s.minSpeakers
+		attempt.minSpeakers = &value
+	}
+	if s.maxSpeakers != nil {
+		value := *s.maxSpeakers
+		attempt.maxSpeakers = &value
+	}
+	return attempt
+}
+
 func extractSTTModelFromEndpoint(endpoint string) string {
 	marker := "/v1/stt/"
 	index := strings.Index(endpoint, marker)
@@ -532,6 +704,10 @@ func (s *STT) resolveLanguage(language string) string {
 }
 
 func buildSTTWebsocketHeaders(s *STT) (http.Header, error) {
+	return buildSTTWebsocketHeadersForCandidate(s, nil)
+}
+
+func buildSTTWebsocketHeadersForCandidate(s *STT, candidate http.Header) (http.Header, error) {
 	return (gatewayHeaders{
 		APIKey:            s.apiKey,
 		ProviderAPIKey:    s.providerAPIKey,
@@ -540,7 +716,20 @@ func buildSTTWebsocketHeaders(s *STT) (http.Header, error) {
 		ExternalAgentID:   s.externalAgentID,
 		ExternalSessionID: s.externalSessionID,
 		Extra:             s.extraHeaders,
-	}).build(nil)
+	}).build(candidate)
+}
+
+func slngSTTDialError(response *http.Response, err error) error {
+	if response == nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng stt websocket: %v", err))
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	message := strings.TrimSpace(string(body))
+	if message == "" {
+		message = http.StatusText(response.StatusCode)
+	}
+	return llm.NewAPIStatusError(message, response.StatusCode, response.Header.Get("X-Request-ID"), string(body))
 }
 
 func buildSTTInitPayload(s *STT) []byte {
@@ -700,6 +889,7 @@ type sttStream struct {
 	ctx                     context.Context
 	provider                *STT
 	conn                    *websocket.Conn
+	candidateIndex          int
 	language                string
 	partials                bool
 	sampleRate              int
@@ -714,13 +904,83 @@ type sttStream struct {
 	speechStarted           bool
 	speechDuration          float64
 	reconnectRequested      bool
+	legacyEndpoint          bool
+	inputEnded              bool
+	finalTimeout            time.Duration
+	silentReconnects        int
+	lifecycleDone           chan struct{}
+	lifecycleDoneOnce       sync.Once
 	closed                  bool
+}
+
+func (s *sttStream) runLifecycle() {
+	interval := slngSTTKeepaliveInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			s.closeFromLifecycle()
+			return
+		case <-s.lifecycleDone:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			if s.inputEnded || s.reconnectRequested || s.conn == nil {
+				s.mu.Unlock()
+				continue
+			}
+			err := s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"keepalive"}`))
+			if err != nil {
+				s.closed = true
+				conn := s.conn
+				provider := s.provider
+				s.mu.Unlock()
+				_ = conn.Close()
+				if provider != nil {
+					provider.unregisterStream(s)
+				}
+				return
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *sttStream) closeFromLifecycle() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	conn := s.conn
+	provider := s.provider
+	s.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if provider != nil {
+		provider.unregisterStream(s)
+	}
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if frame == nil || len(frame.Data) == 0 {
@@ -757,12 +1017,52 @@ func (s *sttStream) Flush() error {
 	return s.writeAlignedAudio(chunk)
 }
 
+func (s *sttStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if len(s.audioBuffer) > 0 {
+		chunk := append([]byte(nil), s.audioBuffer...)
+		s.audioBuffer = nil
+		if err := s.writeAlignedAudio(chunk); err != nil {
+			return err
+		}
+	}
+	messageType := "finalize"
+	if s.legacyEndpoint {
+		messageType = "flush"
+	}
+	payload, _ := json.Marshal(map[string]string{"type": messageType})
+	if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		s.closed = true
+		s.stopLifecycleLocked()
+		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return err
+	}
+	s.inputEnded = true
+	if s.finalTimeout > 0 {
+		if err := s.conn.SetReadDeadline(time.Now().Add(s.finalTimeout)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 	if len(chunk)%slngSTTBytesPerSample(s.encoding) != 0 {
 		return nil
 	}
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 		s.closed = true
+		s.stopLifecycleLocked()
 		_ = s.conn.Close()
 		if s.provider != nil {
 			s.provider.unregisterStream(s)
@@ -837,63 +1137,57 @@ func (s *sttStream) reconnectLocked() error {
 		return io.ErrClosedPipe
 	}
 
-	provider.mu.Lock()
-	attempt := STT{
-		apiKey:                  provider.apiKey,
-		providerAPIKey:          provider.providerAPIKey,
-		endpoint:                provider.endpoint,
-		model:                   provider.model,
-		regionOverride:          provider.regionOverride,
-		worldPartOverride:       provider.worldPartOverride,
-		externalAgentID:         provider.externalAgentID,
-		externalSessionID:       provider.externalSessionID,
-		extraHeaders:            provider.extraHeaders.Clone(),
-		sampleRate:              s.sampleRate,
-		bufferSizeSeconds:       s.bufferSizeSeconds,
-		encoding:                s.encoding,
-		enablePartialTranscript: s.partials,
-		vadThreshold:            s.vadThreshold,
-		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
-		vadSpeechPadMS:          s.vadSpeechPadMS,
-		enableDiarization:       s.diarization,
-		language:                s.language,
-		modelOptions:            cloneSLNGMap(provider.modelOptions),
+	candidates, err := provider.resolvedSTTCandidates()
+	if err != nil {
+		return err
 	}
-	if provider.minSpeakers != nil {
-		minSpeakers := *provider.minSpeakers
-		attempt.minSpeakers = &minSpeakers
+	if s.candidateIndex < 0 || s.candidateIndex >= len(candidates) {
+		return errors.New("slng stt active connection candidate is unavailable")
 	}
-	if provider.maxSpeakers != nil {
-		maxSpeakers := *provider.maxSpeakers
-		attempt.maxSpeakers = &maxSpeakers
-	}
-	provider.mu.Unlock()
-	endpoint := attempt.endpoint
+	candidate := candidates[s.candidateIndex]
+	attempt := provider.sttAttempt(candidate)
+	attempt.sampleRate = s.sampleRate
+	attempt.bufferSizeSeconds = s.bufferSizeSeconds
+	attempt.encoding = s.encoding
+	attempt.enablePartialTranscript = s.partials
+	attempt.vadThreshold = s.vadThreshold
+	attempt.vadMinSilenceDurationMS = s.vadMinSilenceDurationMS
+	attempt.vadSpeechPadMS = s.vadSpeechPadMS
+	attempt.enableDiarization = s.diarization
+	attempt.language = s.language
 	ctx := s.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	headers, err := buildSTTWebsocketHeaders(&attempt)
+	headers, err := buildSTTWebsocketHeadersForCandidate(&attempt, candidate.headers)
 	if err != nil {
 		return err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+	conn, response, err := websocket.DefaultDialer.DialContext(ctx, candidate.endpoint, headers)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect slng stt websocket: %v", err))
+		return slngSTTDialError(response, err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
+	initPayload := buildSTTInitPayload(&attempt)
+	if candidate.init != nil {
+		initPayload, err = json.Marshal(candidate.init)
+	}
+	if err == nil {
+		err = conn.WriteMessage(websocket.TextMessage, initPayload)
+	}
+	if err != nil {
 		_ = conn.Close()
-		return err
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng stt websocket: %v", err))
 	}
 	if s.closed {
 		_ = conn.Close()
 		return io.ErrClosedPipe
 	}
 	s.conn = conn
+	s.legacyEndpoint = candidate.legacyEndpoint
 	s.reconnectRequested = false
 	s.audioBuffer = nil
 	s.pendingEvents = nil
@@ -916,6 +1210,7 @@ func (s *sttStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.stopLifecycleLocked()
 	if s.provider != nil {
 		defer s.provider.unregisterStream(s)
 	}
@@ -951,6 +1246,9 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		s.mu.Unlock()
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
+			if s.isFinalTimeout(err) {
+				return nil, llm.NewAPITimeoutError("SLNG STT timed out waiting for final transcript")
+			}
 			if s.shouldReconnect() {
 				s.mu.Lock()
 				err := s.reconnectLocked()
@@ -960,13 +1258,25 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 				}
 				continue
 			}
+			if reconnected, reconnectErr := s.trySilentReconnect(err); reconnected {
+				if reconnectErr != nil {
+					return nil, reconnectErr
+				}
+				continue
+			}
 			if s.isClosed() {
 				return nil, io.EOF
+			}
+			if s.ctx != nil && s.ctx.Err() != nil {
+				return nil, s.ctx.Err()
 			}
 			return nil, slngSTTReadError(err)
 		}
 		if msgType != websocket.TextMessage {
 			continue
+		}
+		if slngSTTMessageIsFinal(payload) {
+			_ = conn.SetReadDeadline(time.Time{})
 		}
 		events, speechStarted, speechDuration, err := sttEventsFromMessageWithSpeechState(payload, s.language, s.partials, s.speechStarted, s.speechDuration)
 		if err != nil {
@@ -975,11 +1285,66 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		s.speechStarted = speechStarted
 		s.speechDuration = speechDuration
 		if len(events) > 0 {
+			s.silentReconnects = 0
 			event := events[0]
 			s.pendingEvents = append(s.pendingEvents, events[1:]...)
 			return event, nil
 		}
 	}
+}
+
+func (s *sttStream) isFinalTimeout(err error) bool {
+	s.mu.Lock()
+	inputEnded := s.inputEnded
+	timeout := s.finalTimeout
+	s.mu.Unlock()
+	var netErr net.Error
+	return inputEnded && timeout > 0 && errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func (s *sttStream) trySilentReconnect(readErr error) (bool, error) {
+	var closeErr *websocket.CloseError
+	if !errors.As(readErr, &closeErr) || closeErr.Code != websocket.CloseNormalClosure {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded || s.reconnectRequested {
+		return false, nil
+	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return true, s.ctx.Err()
+	}
+	s.silentReconnects++
+	if s.silentReconnects >= maxSLNGSTTSilentReconnects {
+		return true, llm.NewAPIStatusError(
+			"SLNG STT closed the connection repeatedly without producing transcripts",
+			closeErr.Code,
+			"",
+			nil,
+		)
+	}
+	if err := s.reconnectLocked(); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (s *sttStream) stopLifecycleLocked() {
+	if s.lifecycleDone != nil {
+		s.lifecycleDoneOnce.Do(func() { close(s.lifecycleDone) })
+	}
+}
+
+func slngSTTMessageIsFinal(payload []byte) bool {
+	var message map[string]any
+	if json.Unmarshal(payload, &message) != nil {
+		return false
+	}
+	if slngString(message["type"]) == "final_transcript" {
+		return true
+	}
+	return slngString(message["type"]) == "Results" && slngBool(message["is_final"])
 }
 
 func (s *sttStream) shouldReconnect() bool {
@@ -1003,4 +1368,9 @@ func slngSTTReadError(err error) error {
 		return llm.NewAPIStatusError("SLNG connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
 	return err
+}
+
+func isSTTBridgeEndpoint(endpoint string) bool {
+	_, err := bridgeModel(endpoint, "stt")
+	return err == nil
 }
