@@ -1249,7 +1249,7 @@ func (s *ttsStream) flushWordChunksLocked() error {
 }
 
 func (s *ttsStream) bufferWordTokenLocked(token string) error {
-	piece := token + " "
+	piece := token
 	hasLetter := strings.ContainsFunc(token, unicode.IsLetter)
 	if s.wordBuffer == "" {
 		s.wordBuffer = piece
@@ -1264,7 +1264,7 @@ func (s *ttsStream) bufferWordTokenLocked(token string) error {
 		s.wordBufferHasLetter = true
 		return nil
 	}
-	s.wordBuffer += piece
+	s.wordBuffer += " " + piece
 	s.wordBufferHasLetter = s.wordBufferHasLetter || hasLetter
 	return nil
 }

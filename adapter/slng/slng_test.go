@@ -1451,6 +1451,61 @@ complete:
 	}
 }
 
+func TestSLNGTTSSynthesizeWordFramesDoNotAddTrailingSpace(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) != nil {
+				continue
+			}
+			messages <- message
+			if message["type"] == "flush" {
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	defer provider.Close()
+	stream, err := provider.Synthesize(context.Background(), "hello world")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			if message["type"] == "text" {
+				got = append(got, slngString(message["text"]))
+			}
+			if message["type"] == "flush" {
+				goto complete
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for chunked synthesis messages")
+		}
+	}
+complete:
+	want := []string{"hello", "world"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Synthesize() text frames = %#v, want no terminal spaces %#v", got, want)
+	}
+}
+
 func TestSLNGTTSRejectsInvalidChunking(t *testing.T) {
 	provider := NewTTS("key", WithTTSTextChunking("sentence", 60))
 	if provider.optionError == nil {
