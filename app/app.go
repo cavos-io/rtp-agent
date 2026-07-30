@@ -3721,7 +3721,11 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
 		}
 		if len(cfg.STTModelEndpoints) > 0 {
-			sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+			if connections := slngSTTConnections(cfg.STTModelEndpoints); len(connections) > 0 {
+				sttOpts = append(sttOpts, slng.WithSTTConnections(connections...))
+			} else {
+				sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+			}
 		} else if cfg.STTBaseURL != "" {
 			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
 				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
@@ -3767,9 +3771,7 @@ func fallbackSTTFromProviderWithVAD(cfg AppConfig, provider string, detector cor
 			}
 			sttOpts = append(sttOpts, slng.WithSTTDiarization(*cfg.STTDiarization, minSpeakers, maxSpeakers))
 		}
-		if len(cfg.STTModelOptions) > 0 {
-			sttOpts = append(sttOpts, slng.WithSTTModelOptions(cfg.STTModelOptions))
-		}
+		sttOpts = append(sttOpts, slngSTTModelOptions(cfg.STTModelOptions)...)
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
 	case providerLiveKit:
 		sttOpts := []adapterlivekit.STTOption{}
@@ -5681,9 +5683,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSpeed != 0 {
 			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
 		}
-		if len(cfg.TTSModelOptions) > 0 {
-			ttsOpts = append(ttsOpts, slng.WithTTSModelOptions(cfg.TTSModelOptions))
-		}
+		ttsOpts = append(ttsOpts, slngTTSModelOptions(cfg.TTSModelOptions)...)
 		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
 	case providerTelnyx:
 		ttsOpts := []telnyx.TTSOption{}
@@ -6168,7 +6168,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
 		}
 		if len(cfg.STTModelEndpoints) > 0 {
-			sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+			if connections := slngSTTConnections(cfg.STTModelEndpoints); len(connections) > 0 {
+				sttOpts = append(sttOpts, slng.WithSTTConnections(connections...))
+			} else {
+				sttOpts = append(sttOpts, slng.WithSTTModelEndpoints(cfg.STTModelEndpoints...))
+			}
 		} else if cfg.STTBaseURL != "" {
 			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
 				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
@@ -6214,9 +6218,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			}
 			sttOpts = append(sttOpts, slng.WithSTTDiarization(*cfg.STTDiarization, minSpeakers, maxSpeakers))
 		}
-		if len(cfg.STTModelOptions) > 0 {
-			sttOpts = append(sttOpts, slng.WithSTTModelOptions(cfg.STTModelOptions))
-		}
+		sttOpts = append(sttOpts, slngSTTModelOptions(cfg.STTModelOptions)...)
 		a.STT = slng.NewSTT(cfg.SLNGAPIKey, sttOpts...)
 	case providerSarvam:
 		sttOpts := []sarvam.SarvamSTTOption{}
@@ -7385,9 +7387,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSpeed != 0 {
 			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
 		}
-		if len(cfg.TTSModelOptions) > 0 {
-			ttsOpts = append(ttsOpts, slng.WithTTSModelOptions(cfg.TTSModelOptions))
-		}
+		ttsOpts = append(ttsOpts, slngTTSModelOptions(cfg.TTSModelOptions)...)
 		a.TTS = slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.TTSOption{}
@@ -8421,6 +8421,97 @@ func modelOptionIntValue(options map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func slngSTTModelOptions(options map[string]any) []slng.STTOption {
+	sttOpts := []slng.STTOption{}
+	if apiKey := modelOptionString(options, "provider_api_key"); apiKey != "" {
+		sttOpts = append(sttOpts, slng.WithSTTProviderAPIKey(apiKey))
+	}
+	if worldPart := modelOptionString(options, "world_part_override"); worldPart != "" {
+		sttOpts = append(sttOpts, slng.WithSTTWorldPartOverride(worldPart))
+	}
+	if agentID, sessionID := modelOptionString(options, "external_agent_id"), modelOptionString(options, "external_session_id"); agentID != "" || sessionID != "" {
+		sttOpts = append(sttOpts, slng.WithSTTExternalTracking(agentID, sessionID))
+	}
+	if cooldown, ok := slngModelOptionDuration(options, "fallback_recovery_cooldown_s"); ok {
+		sttOpts = append(sttOpts, slng.WithSTTFallbackRecoveryCooldown(cooldown))
+	}
+	if providerOptions := slngProviderModelOptions(options); len(providerOptions) > 0 {
+		sttOpts = append(sttOpts, slng.WithSTTModelOptions(providerOptions))
+	}
+	return sttOpts
+}
+
+func slngTTSModelOptions(options map[string]any) []slng.TTSOption {
+	ttsOpts := []slng.TTSOption{}
+	if apiKey := modelOptionString(options, "provider_api_key"); apiKey != "" {
+		ttsOpts = append(ttsOpts, slng.WithTTSProviderAPIKey(apiKey))
+	}
+	if worldPart := modelOptionString(options, "world_part_override"); worldPart != "" {
+		ttsOpts = append(ttsOpts, slng.WithTTSWorldPartOverride(worldPart))
+	}
+	if agentID, sessionID := modelOptionString(options, "external_agent_id"), modelOptionString(options, "external_session_id"); agentID != "" || sessionID != "" {
+		ttsOpts = append(ttsOpts, slng.WithTTSExternalTracking(agentID, sessionID))
+	}
+	if cooldown, ok := slngModelOptionDuration(options, "fallback_recovery_cooldown_s"); ok {
+		ttsOpts = append(ttsOpts, slng.WithTTSFallbackRecoveryCooldown(cooldown))
+	}
+	if timeout, ok := slngModelOptionDuration(options, "first_audio_timeout_s"); ok {
+		ttsOpts = append(ttsOpts, slng.WithTTSFirstAudioTimeout(timeout))
+	}
+	if warmStandby := modelOptionBool(options, "warm_standby_enabled"); warmStandby != nil {
+		ttsOpts = append(ttsOpts, slng.WithTTSWarmStandby(*warmStandby))
+	}
+	if mode := modelOptionString(options, "text_chunking"); mode != "" {
+		phraseMaxChars := 60
+		if value, ok := modelOptionIntValue(options, "phrase_max_chars"); ok {
+			phraseMaxChars = value
+		}
+		ttsOpts = append(ttsOpts, slng.WithTTSTextChunking(slng.TTSChunkingMode(mode), phraseMaxChars))
+	}
+	if providerOptions := slngProviderModelOptions(options); len(providerOptions) > 0 {
+		ttsOpts = append(ttsOpts, slng.WithTTSModelOptions(providerOptions))
+	}
+	return ttsOpts
+}
+
+func slngSTTConnections(endpoints []string) []slng.STTConnectionConfig {
+	connections := make([]slng.STTConnectionConfig, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		trimmed := strings.TrimSpace(endpoint)
+		if (!strings.HasPrefix(trimmed, "ws://") && !strings.HasPrefix(trimmed, "wss://")) ||
+			!strings.Contains(trimmed, "/v1/bridges/unmute/stt/") {
+			return nil
+		}
+		connections = append(connections, slng.STTConnectionConfig{Endpoint: endpoint})
+	}
+	return connections
+}
+
+func slngModelOptionDuration(options map[string]any, key string) (time.Duration, bool) {
+	if seconds := modelOptionFloat(options, key); seconds != nil {
+		return time.Duration(*seconds * float64(time.Second)), true
+	}
+	if seconds, ok := modelOptionIntValue(options, key); ok {
+		return time.Duration(seconds) * time.Second, true
+	}
+	return 0, false
+}
+
+func slngProviderModelOptions(options map[string]any) map[string]any {
+	filtered := make(map[string]any, len(options))
+	for key, value := range options {
+		switch key {
+		case "provider_api_key", "world_part_override", "external_agent_id", "external_session_id", "fallback_recovery_cooldown_s", "first_audio_timeout_s", "warm_standby_enabled", "text_chunking", "phrase_max_chars":
+			continue
+		}
+		filtered[key] = value
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
 }
 
 func modelOptionStringList(options map[string]any, key string) []string {
