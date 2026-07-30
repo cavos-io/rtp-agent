@@ -68,6 +68,21 @@
       }
     },
     {
+      "name": "bridge-model-invalid-path",
+      "operation": "bridge_model",
+      "input": {
+        "endpoint": "wss://api.slng.ai/v1/stt/deepgram/nova:3",
+        "service": "stt"
+      },
+      "expected": {
+        "result": null,
+        "error": {
+          "type": "ValueError",
+          "message": "STT endpoint must target the Unmute Bridge path /v1/bridges/unmute/stt/"
+        }
+      }
+    },
+    {
       "name": "region-normalization",
       "operation": "normalize_region_override",
       "input": {

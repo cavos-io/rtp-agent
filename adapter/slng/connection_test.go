@@ -16,8 +16,10 @@ func TestBridgeEndpointMatchesReference(t *testing.T) {
 }
 
 func TestBridgeModelRejectsLegacyPath(t *testing.T) {
-	if _, err := bridgeModel("wss://api.slng.ai/v1/stt/deepgram/nova:3", "stt"); err == nil {
-		t.Fatal("bridgeModel() error = nil")
+	_, err := bridgeModel("wss://api.slng.ai/v1/stt/deepgram/nova:3", "stt")
+	want := "STT endpoint must target the Unmute Bridge path /v1/bridges/unmute/stt/"
+	if err == nil || err.Error() != want {
+		t.Fatalf("bridgeModel() error = %v, want %q", err, want)
 	}
 }
 

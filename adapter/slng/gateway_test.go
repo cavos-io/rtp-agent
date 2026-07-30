@@ -227,6 +227,12 @@ func TestSLNGProviderFramesReturnTypedStatusError(t *testing.T) {
 	}
 }
 
+func TestSLNGMissingProviderStatusUsesGoUnknownStatusSentinel(t *testing.T) {
+	if got := extractSLNGErrorStatus(map[string]any{"data": map[string]any{"message": "failed"}}); got != -1 {
+		t.Fatalf("extractSLNGErrorStatus() = %d, want -1", got)
+	}
+}
+
 func TestSLNGSTTLowercaseProviderFrameReturnsTypedStatusError(t *testing.T) {
 	_, err := sttEventsFromMessage([]byte(`{"type":"error","data":{"code":"rate_limit","message":"slow down"}}`), "en", true)
 	var statusErr *llm.APIStatusError

@@ -90,17 +90,21 @@ func bridgeModel(endpoint, service string) (string, error) {
 
 	parsed, err := url.ParseRequestURI(endpoint)
 	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
-		return "", fmt.Errorf("invalid bridge endpoint %q", endpoint)
+		return "", bridgeModelEndpointError(service)
 	}
 	prefix := "/v1/bridges/unmute/" + service + "/"
 	if !strings.HasPrefix(parsed.Path, prefix) {
-		return "", fmt.Errorf("invalid bridge endpoint %q", endpoint)
+		return "", bridgeModelEndpointError(service)
 	}
 	model := strings.TrimRight(strings.TrimPrefix(parsed.Path, prefix), "/")
 	if _, err := parseModelRef(model); err != nil {
 		return "", err
 	}
 	return model, nil
+}
+
+func bridgeModelEndpointError(service string) error {
+	return fmt.Errorf("%s endpoint must target the Unmute Bridge path /v1/bridges/unmute/%s/", strings.ToUpper(service), service)
 }
 
 func bridgeBaseURL(baseURL string) (*url.URL, error) {

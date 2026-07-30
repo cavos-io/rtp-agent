@@ -85,6 +85,7 @@ func runSLNGParityCase(t *testing.T, scenario slngParityCase) slngParityCaseOutp
 	result, err := runSLNGParityOperation(scenario.Operation, scenario.Input)
 	actual := slngParityExpected{Result: result}
 	if err != nil {
+		actual.Result = nil
 		actual.Error = &slngParityError{Type: "ValueError", Message: err.Error()}
 	}
 	var expected slngParityExpected
