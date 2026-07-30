@@ -8425,14 +8425,17 @@ func modelOptionIntValue(options map[string]any, key string) (int, bool) {
 
 func slngSTTModelOptions(options map[string]any) []slng.STTOption {
 	sttOpts := []slng.STTOption{}
-	if apiKey := modelOptionString(options, "provider_api_key"); apiKey != "" {
+	if apiKey, ok := modelOptionStringValue(options, "provider_api_key"); ok {
 		sttOpts = append(sttOpts, slng.WithSTTProviderAPIKey(apiKey))
 	}
 	if worldPart := modelOptionString(options, "world_part_override"); worldPart != "" {
 		sttOpts = append(sttOpts, slng.WithSTTWorldPartOverride(worldPart))
 	}
-	if agentID, sessionID := modelOptionString(options, "external_agent_id"), modelOptionString(options, "external_session_id"); agentID != "" || sessionID != "" {
-		sttOpts = append(sttOpts, slng.WithSTTExternalTracking(agentID, sessionID))
+	if agentID, ok := modelOptionStringValue(options, "external_agent_id"); ok {
+		sttOpts = append(sttOpts, slng.WithSTTExternalAgentID(agentID))
+	}
+	if sessionID, ok := modelOptionStringValue(options, "external_session_id"); ok {
+		sttOpts = append(sttOpts, slng.WithSTTExternalSessionID(sessionID))
 	}
 	if cooldown, ok := slngModelOptionDuration(options, "fallback_recovery_cooldown_s"); ok {
 		sttOpts = append(sttOpts, slng.WithSTTFallbackRecoveryCooldown(cooldown))
@@ -8445,14 +8448,17 @@ func slngSTTModelOptions(options map[string]any) []slng.STTOption {
 
 func slngTTSModelOptions(options map[string]any) []slng.TTSOption {
 	ttsOpts := []slng.TTSOption{}
-	if apiKey := modelOptionString(options, "provider_api_key"); apiKey != "" {
+	if apiKey, ok := modelOptionStringValue(options, "provider_api_key"); ok {
 		ttsOpts = append(ttsOpts, slng.WithTTSProviderAPIKey(apiKey))
 	}
 	if worldPart := modelOptionString(options, "world_part_override"); worldPart != "" {
 		ttsOpts = append(ttsOpts, slng.WithTTSWorldPartOverride(worldPart))
 	}
-	if agentID, sessionID := modelOptionString(options, "external_agent_id"), modelOptionString(options, "external_session_id"); agentID != "" || sessionID != "" {
-		ttsOpts = append(ttsOpts, slng.WithTTSExternalTracking(agentID, sessionID))
+	if agentID, ok := modelOptionStringValue(options, "external_agent_id"); ok {
+		ttsOpts = append(ttsOpts, slng.WithTTSExternalAgentID(agentID))
+	}
+	if sessionID, ok := modelOptionStringValue(options, "external_session_id"); ok {
+		ttsOpts = append(ttsOpts, slng.WithTTSExternalSessionID(sessionID))
 	}
 	if cooldown, ok := slngModelOptionDuration(options, "fallback_recovery_cooldown_s"); ok {
 		ttsOpts = append(ttsOpts, slng.WithTTSFallbackRecoveryCooldown(cooldown))
@@ -8463,10 +8469,14 @@ func slngTTSModelOptions(options map[string]any) []slng.TTSOption {
 	if warmStandby := modelOptionBool(options, "warm_standby_enabled"); warmStandby != nil {
 		ttsOpts = append(ttsOpts, slng.WithTTSWarmStandby(*warmStandby))
 	}
-	if mode := modelOptionString(options, "text_chunking"); mode != "" {
-		phraseMaxChars := 60
-		if value, ok := modelOptionIntValue(options, "phrase_max_chars"); ok {
-			phraseMaxChars = value
+	mode, modeSet := modelOptionStringValue(options, "text_chunking")
+	phraseMaxChars, phraseMaxCharsSet := modelOptionIntValue(options, "phrase_max_chars")
+	if modeSet || phraseMaxCharsSet {
+		if !modeSet {
+			mode = string(slng.TTSChunkingWord)
+		}
+		if !phraseMaxCharsSet {
+			phraseMaxChars = 60
 		}
 		ttsOpts = append(ttsOpts, slng.WithTTSTextChunking(slng.TTSChunkingMode(mode), phraseMaxChars))
 	}
@@ -8484,7 +8494,7 @@ func slngSTTConnections(endpoints []string) []slng.STTConnectionConfig {
 			!strings.Contains(trimmed, "/v1/bridges/unmute/stt/") {
 			return nil
 		}
-		connections = append(connections, slng.STTConnectionConfig{Endpoint: endpoint})
+		connections = append(connections, slng.STTConnectionConfig{Endpoint: trimmed})
 	}
 	return connections
 }

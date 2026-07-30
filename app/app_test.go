@@ -5343,6 +5343,63 @@ func TestSLNGTTSConfigPassesGatewayOptions(t *testing.T) {
 	}
 }
 
+func TestSLNGConfigPreservesExplicitEmptyGatewayOptionPresence(t *testing.T) {
+	sttProvider := slng.NewSTT("slng-key", slngSTTModelOptions(map[string]any{
+		"provider_api_key":    "",
+		"external_agent_id":   "",
+		"external_session_id": "",
+	})...)
+	sttState := reflect.ValueOf(sttProvider).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if !sttState.FieldByName(field).Bool() {
+			t.Fatalf("STT %s = false, want explicit presence", field)
+		}
+	}
+
+	ttsProvider := slng.NewTTS("slng-key", slngTTSModelOptions(map[string]any{
+		"provider_api_key":    "",
+		"external_agent_id":   "",
+		"external_session_id": "",
+	})...)
+	ttsState := reflect.ValueOf(ttsProvider).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if !ttsState.FieldByName(field).Bool() {
+			t.Fatalf("TTS %s = false, want explicit presence", field)
+		}
+	}
+
+	omitted := reflect.ValueOf(slng.NewTTS("slng-key", slngTTSModelOptions(nil)...)).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if omitted.FieldByName(field).Bool() {
+			t.Fatalf("omitted TTS %s = true, want false", field)
+		}
+	}
+}
+
+func TestSLNGTTSConfigAppliesPhraseMaxCharsWithoutChunkingMode(t *testing.T) {
+	provider := slng.NewTTS("slng-key", slngTTSModelOptions(map[string]any{
+		"phrase_max_chars": 80,
+	})...)
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("textChunking").String(), string(slng.TTSChunkingWord); got != want {
+		t.Fatalf("text chunking = %q, want compatibility default %q", got, want)
+	}
+	if got, want := int(state.FieldByName("phraseMaxChars").Int()), 80; got != want {
+		t.Fatalf("phrase max chars = %d, want %d", got, want)
+	}
+}
+
+func TestSLNGSTTConnectionsStoreTrimmedEndpoints(t *testing.T) {
+	const want = "wss://primary.slng.example/v1/bridges/unmute/stt/deepgram/nova:3"
+	connections := slngSTTConnections([]string{" \t" + want + "\n "})
+	if len(connections) != 1 {
+		t.Fatalf("connections = %d, want 1", len(connections))
+	}
+	if got := connections[0].Endpoint; got != want {
+		t.Fatalf("connection endpoint = %q, want %q", got, want)
+	}
+}
+
 func TestSLNGSTTConfigBuildsConnectionCandidates(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		SLNGAPIKey: "slng-key",

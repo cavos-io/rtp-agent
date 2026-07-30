@@ -15,6 +15,35 @@ func TestBridgeEndpointMatchesReference(t *testing.T) {
 	}
 }
 
+func TestBridgeEndpointAcceptsReferenceHTTPBaseURLs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{
+			name:    "remote HTTPS",
+			baseURL: "https://api.slng.ai/",
+			want:    "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3",
+		},
+		{
+			name:    "localhost HTTP",
+			baseURL: "http://localhost:8080/",
+			want:    "ws://localhost:8080/v1/bridges/unmute/stt/deepgram/nova:3",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := bridgeEndpoint(test.baseURL, "stt", "deepgram/nova:3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("bridgeEndpoint() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBridgeModelRejectsLegacyPath(t *testing.T) {
 	_, err := bridgeModel("wss://api.slng.ai/v1/stt/deepgram/nova:3", "stt")
 	want := "STT endpoint must target the Unmute Bridge path /v1/bridges/unmute/stt/"

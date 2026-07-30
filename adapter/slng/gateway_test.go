@@ -89,6 +89,53 @@ func TestGatewayHeadersCountTrackingIDCharacters(t *testing.T) {
 	}
 }
 
+func TestGatewayOptionsRejectExplicitEmptyValues(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		build func() error
+		want  string
+	}{
+		{
+			name: "STT provider API key",
+			build: func() error {
+				_, err := buildSTTWebsocketHeaders(NewSTT("slng-key", WithSTTProviderAPIKey("")))
+				return err
+			},
+			want: "provider_api_key must not be empty",
+		},
+		{
+			name: "TTS provider API key",
+			build: func() error {
+				_, err := buildTTSWebsocketHeaders(NewTTS("slng-key", WithTTSProviderAPIKey("")))
+				return err
+			},
+			want: "provider_api_key must not be empty",
+		},
+		{
+			name: "STT external agent ID",
+			build: func() error {
+				_, err := buildSTTWebsocketHeaders(NewSTT("slng-key", WithSTTExternalTracking("", "session")))
+				return err
+			},
+			want: "external_agent_id must not be empty",
+		},
+		{
+			name: "TTS external session ID",
+			build: func() error {
+				_, err := buildTTSWebsocketHeaders(NewTTS("slng-key", WithTTSExternalTracking("agent", "")))
+				return err
+			},
+			want: "external_session_id must not be empty",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.build(); err == nil || err.Error() != test.want {
+				t.Fatalf("build headers error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestSLNGStatusErrorMapsBridgeCode(t *testing.T) {
 	err := slngStatusError(map[string]any{
 		"type": "error",
@@ -105,6 +152,19 @@ func TestSLNGStatusErrorTruncatesAtRuneBoundary(t *testing.T) {
 	})
 	if !utf8.ValidString(err.Message) || utf8.RuneCountInString(err.Message) != slngErrorMessageMaxLen {
 		t.Fatalf("message valid=%v length=%d, want valid length %d", utf8.ValidString(err.Message), utf8.RuneCountInString(err.Message), slngErrorMessageMaxLen)
+	}
+}
+
+func TestSLNGStatusErrorDoesNotRetainUnboundedFrame(t *testing.T) {
+	err := slngStatusError(map[string]any{
+		"data": map[string]any{
+			"code":    "provider_error",
+			"message": "provider failed",
+			"detail":  strings.Repeat("untrusted", 2048),
+		},
+	})
+	if got := err.Error(); len(got) > 1000 || strings.Contains(got, "untrusted") {
+		t.Fatalf("APIStatusError.Error() retained provider frame: length=%d", len(got))
 	}
 }
 

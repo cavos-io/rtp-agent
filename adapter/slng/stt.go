@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -24,18 +25,28 @@ import (
 const (
 	defaultSLNGSTTFallbackRecoveryCooldown = time.Minute
 	maxSLNGSTTSilentReconnects             = 3
+	maxSLNGSTTSameEndpointReplays          = 3
+	maxSLNGSTTReplaySeconds                = 600
+	slngSTTEncodingError                   = "only pcm_s16le encoding is supported: LiveKit audio frames are 16-bit PCM and the plugin does not transcode"
 )
 
 var (
 	slngSTTNow               = time.Now
 	slngSTTAfterFunc         = time.AfterFunc
 	slngSTTKeepaliveInterval = 5 * time.Second
+	slngSTTReadyTimeout      = 10 * time.Second
+	slngSTTWriteTimeout      = 5 * time.Second
 )
 
 type STT struct {
 	mu                       sync.Mutex
+	optionError              error
+	modelConfigured          bool
+	connectionsConfigured    bool
+	waitReady                bool
 	apiKey                   string
 	providerAPIKey           string
+	providerAPIKeySet        bool
 	model                    string
 	endpoint                 string
 	modelEndpoints           []string
@@ -46,7 +57,9 @@ type STT struct {
 	regionOverride           string
 	worldPartOverride        string
 	externalAgentID          string
+	externalAgentIDSet       bool
 	externalSessionID        string
+	externalSessionIDSet     bool
 	extraHeaders             http.Header
 	sampleRate               int
 	bufferSizeSeconds        float64
@@ -68,22 +81,35 @@ type STTOption func(*STT)
 
 func WithSTTBaseURL(baseURL string) STTOption {
 	return func(s *STT) {
-		if baseURL != "" {
-			s.endpoint = defaultSTTEndpoint(strings.TrimRight(baseURL, "/"), s.model)
-			s.modelEndpoints = nil
-			s.connections = nil
+		endpoint, err := bridgeEndpoint(strings.TrimRight(baseURL, "/"), "stt", s.model)
+		if err != nil {
+			s.setOptionError(err)
+			return
 		}
+		s.endpoint = endpoint
+		s.modelEndpoints = nil
+		s.connections = nil
+		s.waitReady = true
 	}
 }
 
 func WithSTTModel(modelName string) STTOption {
 	return func(s *STT) {
-		if modelName != "" {
-			s.model = modelName
-			s.endpoint = defaultSTTEndpoint(defaultSLNGBaseURL, modelName)
-			s.modelEndpoints = nil
-			s.connections = nil
+		s.modelConfigured = true
+		if s.connectionsConfigured {
+			s.setOptionError(errors.New("use model or connections, not both"))
+			return
 		}
+		endpoint, err := bridgeEndpoint(defaultSLNGBaseURL, "stt", modelName)
+		if err != nil {
+			s.setOptionError(err)
+			return
+		}
+		s.model = modelName
+		s.endpoint = endpoint
+		s.modelEndpoints = nil
+		s.connections = nil
+		s.waitReady = true
 	}
 }
 
@@ -93,6 +119,7 @@ func WithSTTEndpoint(endpoint string) STTOption {
 			s.endpoint = endpoint
 			s.modelEndpoints = []string{endpoint}
 			s.connections = nil
+			s.waitReady = false
 			if model := sttModelFromEndpoint(endpoint); model != "" {
 				s.model = model
 			}
@@ -114,6 +141,7 @@ func WithSTTModelEndpoints(endpoints ...string) STTOption {
 		s.modelEndpoints = cleaned
 		s.connections = nil
 		s.endpoint = cleaned[0]
+		s.waitReady = false
 		if model := sttModelFromEndpoint(cleaned[0]); model != "" {
 			s.model = model
 		}
@@ -123,6 +151,11 @@ func WithSTTModelEndpoints(endpoints ...string) STTOption {
 func WithSTTConnections(connections ...STTConnectionConfig) STTOption {
 	return func(s *STT) {
 		if len(connections) == 0 {
+			return
+		}
+		s.connectionsConfigured = true
+		if s.modelConfigured {
+			s.setOptionError(errors.New("use model or connections, not both"))
 			return
 		}
 		s.connections = cloneSTTConnectionConfigs(connections)
@@ -155,6 +188,7 @@ func WithSTTRegionOverride(region any) STTOption {
 func WithSTTProviderAPIKey(apiKey string) STTOption {
 	return func(s *STT) {
 		s.providerAPIKey = apiKey
+		s.providerAPIKeySet = true
 	}
 }
 
@@ -167,7 +201,23 @@ func WithSTTWorldPartOverride(worldPart string) STTOption {
 func WithSTTExternalTracking(agentID, sessionID string) STTOption {
 	return func(s *STT) {
 		s.externalAgentID = agentID
+		s.externalAgentIDSet = true
 		s.externalSessionID = sessionID
+		s.externalSessionIDSet = true
+	}
+}
+
+func WithSTTExternalAgentID(agentID string) STTOption {
+	return func(s *STT) {
+		s.externalAgentID = agentID
+		s.externalAgentIDSet = true
+	}
+}
+
+func WithSTTExternalSessionID(sessionID string) STTOption {
+	return func(s *STT) {
+		s.externalSessionID = sessionID
+		s.externalSessionIDSet = true
 	}
 }
 
@@ -181,6 +231,9 @@ func WithSTTEncoding(encoding string) STTOption {
 	return func(s *STT) {
 		if encoding != "" {
 			s.encoding = encoding
+			if encoding != "pcm_s16le" && encoding != "pcm_mulaw" {
+				s.setOptionError(errors.New(slngSTTEncodingError))
+			}
 		}
 	}
 }
@@ -264,12 +317,32 @@ func NewSTT(apiKey string, opts ...STTOption) *STT {
 		vadSpeechPadMS:           defaultSLNGVADSpeechPadMS,
 		language:                 defaultSLNGLanguage,
 		fallbackRecoveryCooldown: defaultSLNGSTTFallbackRecoveryCooldown,
+		waitReady:                true,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.optionError == nil {
+		candidates, err := provider.resolvedSTTCandidates()
+		if err != nil {
+			provider.optionError = err
+		} else if provider.encoding != "pcm_s16le" {
+			for _, candidate := range candidates {
+				if !candidate.legacyEndpoint {
+					provider.optionError = errors.New(slngSTTEncodingError)
+					break
+				}
+			}
+		}
+	}
 	provider.candidateState = newCandidateState(provider.sttCandidateCount(), provider.fallbackRecoveryCooldown)
 	return provider
+}
+
+func (s *STT) setOptionError(err error) {
+	if err != nil && s.optionError == nil {
+		s.optionError = err
+	}
 }
 
 func (s *STT) Label() string { return "slng.STT" }
@@ -336,6 +409,9 @@ type slngSTTActiveOptions struct {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if s.optionError != nil {
+		return nil, s.optionError
+	}
 	if err := s.requireAPIKey(); err != nil {
 		return nil, err
 	}
@@ -414,6 +490,9 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if s.optionError != nil {
+		return nil, s.optionError
+	}
 	if err := s.requireAPIKey(); err != nil {
 		return nil, err
 	}
@@ -438,6 +517,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		vadMinSilenceDurationMS: attempt.vadMinSilenceDurationMS,
 		vadSpeechPadMS:          attempt.vadSpeechPadMS,
 		finalTimeout:            attempt.finalTimeout,
+		lastClientSendAt:        time.Now(),
 		lifecycleDone:           make(chan struct{}),
 	}
 	if !s.registerStream(stream) {
@@ -449,6 +529,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 }
 
 func (s *STT) dialSTTCandidates(ctx context.Context, active *sttStream) (*websocket.Conn, sttConnectionCandidate, int, STT, error) {
+	return s.dialSTTCandidatesFrom(ctx, active, -1)
+}
+
+func (s *STT) dialSTTCandidatesFrom(ctx context.Context, active *sttStream, candidateIndex int) (*websocket.Conn, sttConnectionCandidate, int, STT, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -464,7 +548,9 @@ func (s *STT) dialSTTCandidates(ctx context.Context, active *sttStream) (*websoc
 	if s.candidateState == nil || s.candidateState.count != len(candidates) {
 		s.candidateState = newCandidateState(len(candidates), s.fallbackRecoveryCooldown)
 	}
-	candidateIndex := s.candidateState.start(slngSTTNow())
+	if candidateIndex < 0 {
+		candidateIndex = s.candidateState.start(slngSTTNow())
+	}
 	s.mu.Unlock()
 
 	var lastErr error
@@ -510,6 +596,11 @@ func (s *STT) dialSTTCandidates(ctx context.Context, active *sttStream) (*websoc
 					return nil, sttConnectionCandidate{}, -1, STT{}, ctxErr
 				}
 				candidateErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng stt websocket: %v", err))
+			} else if candidate.waitReady {
+				candidateErr = waitForSLNGSTTReady(ctx, conn)
+				if candidateErr != nil {
+					_ = conn.Close()
+				}
 			}
 		}
 		if candidateErr != nil {
@@ -538,6 +629,28 @@ func (s *STT) dialSTTCandidates(ctx context.Context, active *sttStream) (*websoc
 		return conn, candidate, candidateIndex, attempt, nil
 	}
 	return nil, sttConnectionCandidate{}, -1, STT{}, lastErr
+}
+
+func (s *STT) nextSTTRecoveryCandidate(current int) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := s.sttCandidateCount()
+	if s.candidateState == nil || s.candidateState.count != count {
+		s.candidateState = newCandidateState(count, s.fallbackRecoveryCooldown)
+	}
+	if current < 0 || current >= count {
+		current = s.candidateState.active
+	}
+	return s.candidateState.advance(current, slngSTTNow())
+}
+
+func (s *STT) activeSTTCandidateIndex(fallback int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.candidateState == nil || s.candidateState.active < 0 || s.candidateState.active >= s.candidateState.count {
+		return fallback
+	}
+	return s.candidateState.active
 }
 
 func (s *STT) Close() error {
@@ -626,6 +739,7 @@ func (s *STT) resolvedSTTCandidates() ([]sttConnectionCandidate, error) {
 	connections := cloneSTTConnectionConfigs(s.connections)
 	endpoints := append([]string(nil), s.sttEndpoints()...)
 	defaultModel := s.model
+	waitReady := s.waitReady
 	s.mu.Unlock()
 
 	if len(connections) > 0 {
@@ -639,10 +753,11 @@ func (s *STT) resolvedSTTCandidates() ([]sttConnectionCandidate, error) {
 				return nil, errors.New("STT connection model must match its endpoint")
 			}
 			candidates = append(candidates, sttConnectionCandidate{
-				endpoint: config.Endpoint,
-				model:    model,
-				headers:  config.Headers.Clone(),
-				init:     cloneSLNGMap(config.Init),
+				endpoint:  config.Endpoint,
+				model:     model,
+				headers:   config.Headers.Clone(),
+				init:      cloneSLNGMap(config.Init),
+				waitReady: true,
 			})
 		}
 		return candidates, nil
@@ -662,9 +777,74 @@ func (s *STT) resolvedSTTCandidates() ([]sttConnectionCandidate, error) {
 			endpoint:       endpoint,
 			model:          model,
 			legacyEndpoint: legacy,
+			waitReady:      waitReady && !legacy,
 		})
 	}
 	return candidates, nil
+}
+
+func waitForSLNGSTTReady(ctx context.Context, conn *websocket.Conn) error {
+	timeout := slngSTTReadyTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to set SLNG STT ready deadline: %v", err))
+	}
+	readDone := make(chan struct{})
+	watcherDone := make(chan struct{})
+	if ctx.Done() != nil {
+		go func() {
+			defer close(watcherDone)
+			select {
+			case <-ctx.Done():
+				_ = conn.SetReadDeadline(time.Now())
+			case <-readDone:
+			}
+		}()
+	} else {
+		close(watcherDone)
+	}
+	defer func() {
+		close(readDone)
+		<-watcherDone
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+
+	for {
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return llm.NewAPIConnectionError("timed out waiting for SLNG STT ready")
+			}
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				return llm.NewAPIConnectionError("SLNG STT closed before ready")
+			}
+			return llm.NewAPIConnectionError(fmt.Sprintf("failed waiting for SLNG STT ready: %v", err))
+		}
+		if messageType != websocket.TextMessage {
+			continue
+		}
+		var message map[string]any
+		if json.Unmarshal(payload, &message) != nil {
+			continue
+		}
+		switch slngString(message["type"]) {
+		case "ready":
+			return nil
+		case "Error", "error":
+			return slngStatusError(message)
+		}
+	}
 }
 
 func (s *STT) sttAttempt(candidate sttConnectionCandidate) STT {
@@ -673,12 +853,15 @@ func (s *STT) sttAttempt(candidate sttConnectionCandidate) STT {
 	attempt := STT{
 		apiKey:                  s.apiKey,
 		providerAPIKey:          s.providerAPIKey,
+		providerAPIKeySet:       s.providerAPIKeySet,
 		model:                   candidate.model,
 		endpoint:                candidate.endpoint,
 		regionOverride:          s.regionOverride,
 		worldPartOverride:       s.worldPartOverride,
 		externalAgentID:         s.externalAgentID,
+		externalAgentIDSet:      s.externalAgentIDSet,
 		externalSessionID:       s.externalSessionID,
+		externalSessionIDSet:    s.externalSessionIDSet,
 		extraHeaders:            s.extraHeaders.Clone(),
 		sampleRate:              s.sampleRate,
 		bufferSizeSeconds:       s.bufferSizeSeconds,
@@ -736,13 +919,16 @@ func buildSTTWebsocketHeaders(s *STT) (http.Header, error) {
 
 func buildSTTWebsocketHeadersForCandidate(s *STT, candidate http.Header) (http.Header, error) {
 	return (gatewayHeaders{
-		APIKey:            s.apiKey,
-		ProviderAPIKey:    s.providerAPIKey,
-		RegionOverride:    s.regionOverride,
-		WorldPartOverride: s.worldPartOverride,
-		ExternalAgentID:   s.externalAgentID,
-		ExternalSessionID: s.externalSessionID,
-		Extra:             s.extraHeaders,
+		APIKey:               s.apiKey,
+		ProviderAPIKey:       s.providerAPIKey,
+		ProviderAPIKeySet:    s.providerAPIKeySet,
+		RegionOverride:       s.regionOverride,
+		WorldPartOverride:    s.worldPartOverride,
+		ExternalAgentID:      s.externalAgentID,
+		ExternalAgentIDSet:   s.externalAgentIDSet,
+		ExternalSessionID:    s.externalSessionID,
+		ExternalSessionIDSet: s.externalSessionIDSet,
+		Extra:                s.extraHeaders,
 	}).build(candidate)
 }
 
@@ -817,14 +1003,21 @@ func resolveDeepgramSTTModel(ref modelRef) string {
 	return ""
 }
 func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool) ([]*stt.SpeechEvent, error) {
-	events, _, _, err := sttEventsFromMessageWithSpeechState(payload, defaultLanguage, partials, false, 0)
+	events, _, _, _, _, err := sttEventsFromMessageWithSpeechState(payload, defaultLanguage, partials, false, 0, false)
 	return events, err
 }
 
-func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string, partials bool, speechStarted bool, speechDuration float64) ([]*stt.SpeechEvent, bool, float64, error) {
+func sttEventsFromMessageWithSpeechState(
+	payload []byte,
+	defaultLanguage string,
+	partials bool,
+	speechStarted bool,
+	speechDuration float64,
+	pendingNonEmptyTranscript bool,
+) ([]*stt.SpeechEvent, bool, float64, bool, bool, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, speechStarted, speechDuration, nil
+		return nil, speechStarted, speechDuration, pendingNonEmptyTranscript, false, nil
 	}
 	messageType := slngString(message["type"])
 	if messageType == "Results" {
@@ -832,21 +1025,33 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 		messageType = slngString(message["type"])
 	}
 	if messageType == "Error" || messageType == "error" {
-		return nil, speechStarted, speechDuration, slngStatusError(message)
-	}
-	if messageType == "partial_transcript" && !partials {
-		return nil, speechStarted, speechDuration, nil
+		return nil, speechStarted, speechDuration, pendingNonEmptyTranscript, false, slngStatusError(message)
 	}
 	if messageType != "partial_transcript" && messageType != "final_transcript" {
-		return nil, speechStarted, speechDuration, nil
+		return nil, speechStarted, speechDuration, pendingNonEmptyTranscript, false, nil
 	}
 	isFinal := messageType == "final_transcript"
 	text := slngString(message["transcript"])
+	if !isFinal && text != "" {
+		pendingNonEmptyTranscript = true
+	}
+	if !isFinal && !partials {
+		return nil, speechStarted, speechDuration, pendingNonEmptyTranscript, false, nil
+	}
 	if text == "" {
-		if isFinal && speechDuration > 0 {
-			return []*stt.SpeechEvent{slngSTTRecognitionUsageEvent(speechDuration)}, speechStarted, 0, nil
+		if !isFinal || pendingNonEmptyTranscript {
+			return nil, speechStarted, speechDuration, pendingNonEmptyTranscript, false, nil
 		}
-		return nil, speechStarted, speechDuration, nil
+		events := []*stt.SpeechEvent{}
+		if speechStarted {
+			events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+			speechStarted = false
+		}
+		if speechDuration > 0 {
+			events = append(events, slngSTTRecognitionUsageEvent(speechDuration))
+			speechDuration = 0
+		}
+		return events, speechStarted, speechDuration, false, true, nil
 	}
 	eventType := stt.SpeechEventInterimTranscript
 	if isFinal {
@@ -874,6 +1079,7 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 		Alternatives: []stt.SpeechData{alternative},
 	})
 	if isFinal {
+		pendingNonEmptyTranscript = false
 		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 		speechStarted = false
 		if speechDuration > 0 {
@@ -881,7 +1087,7 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 			speechDuration = 0
 		}
 	}
-	return events, speechStarted, speechDuration, nil
+	return events, speechStarted, speechDuration, pendingNonEmptyTranscript, isFinal, nil
 }
 
 func slngSTTRecognitionUsageEvent(audioDuration float64) *stt.SpeechEvent {
@@ -912,36 +1118,42 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 }
 
 type sttStream struct {
-	mu                      sync.Mutex
-	ctx                     context.Context
-	provider                *STT
-	conn                    *websocket.Conn
-	connGeneration          uint64
-	candidateIndex          int
-	language                string
-	partials                bool
-	sampleRate              int
-	bufferSizeSeconds       float64
-	encoding                string
-	diarization             bool
-	vadThreshold            float64
-	vadMinSilenceDurationMS int
-	vadSpeechPadMS          int
-	audioBuffer             []byte
-	pendingEvents           []*stt.SpeechEvent
-	speechStarted           bool
-	speechDuration          float64
-	reconnectRequested      bool
-	legacyEndpoint          bool
-	inputEnded              bool
-	finalTimeout            time.Duration
-	finalTimer              *time.Timer
-	finalTimerGeneration    uint64
-	terminalErr             error
-	silentReconnects        int
-	lifecycleDone           chan struct{}
-	lifecycleDoneOnce       sync.Once
-	closed                  bool
+	mu                         sync.Mutex
+	ctx                        context.Context
+	provider                   *STT
+	conn                       *websocket.Conn
+	connGeneration             uint64
+	candidateIndex             int
+	language                   string
+	partials                   bool
+	sampleRate                 int
+	bufferSizeSeconds          float64
+	encoding                   string
+	diarization                bool
+	vadThreshold               float64
+	vadMinSilenceDurationMS    int
+	vadSpeechPadMS             int
+	audioBuffer                []byte
+	utteranceAudio             []byte
+	pendingEvents              []*stt.SpeechEvent
+	speechStarted              bool
+	speechDuration             float64
+	pendingNonEmptyTranscript  bool
+	sentAudioSinceFinalize     bool
+	finalizeRequested          bool
+	lastClientSendAt           time.Time
+	reconnectRequested         bool
+	legacyEndpoint             bool
+	inputEnded                 bool
+	finalTimeout               time.Duration
+	finalTimer                 *time.Timer
+	finalTimerGeneration       uint64
+	terminalErr                error
+	silentReconnects           int
+	sameEndpointReplayAttempts int
+	lifecycleDone              chan struct{}
+	lifecycleDoneOnce          sync.Once
+	closed                     bool
 }
 
 func (s *sttStream) runLifecycle() {
@@ -973,13 +1185,21 @@ func (s *sttStream) runLifecycle() {
 				s.mu.Unlock()
 				continue
 			}
-			err := s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"keepalive"}`))
-			if err != nil {
-				s.closed = true
-				conn := s.conn
-				provider := s.provider
+			if !s.lastClientSendAt.IsZero() && time.Since(s.lastClientSendAt) < interval {
 				s.mu.Unlock()
-				_ = conn.Close()
+				continue
+			}
+			err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"keepalive"}`))
+			if err != nil {
+				if recovered, _ := s.recoverRuntimeLocked(err); recovered {
+					s.mu.Unlock()
+					continue
+				}
+				conn, provider := s.terminateLocked()
+				s.mu.Unlock()
+				if conn != nil {
+					_ = conn.Close()
+				}
 				if provider != nil {
 					provider.unregisterStream(s)
 				}
@@ -1046,12 +1266,17 @@ func (s *sttStream) Flush() error {
 			return err
 		}
 	}
-	if len(s.audioBuffer) == 0 {
+	if len(s.audioBuffer) > 0 {
+		chunk := append([]byte(nil), s.audioBuffer...)
+		s.audioBuffer = nil
+		if err := s.writeAlignedAudio(chunk); err != nil {
+			return err
+		}
+	}
+	if s.legacyEndpoint {
 		return nil
 	}
-	chunk := append([]byte(nil), s.audioBuffer...)
-	s.audioBuffer = nil
-	return s.writeAlignedAudio(chunk)
+	return s.sendFinalizeIfNeededLocked()
 }
 
 func (s *sttStream) EndInput() error {
@@ -1075,23 +1300,56 @@ func (s *sttStream) EndInput() error {
 			return err
 		}
 	}
-	messageType := "finalize"
 	if s.legacyEndpoint {
-		messageType = "flush"
-	}
-	payload, _ := json.Marshal(map[string]string{"type": messageType})
-	if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-		s.closed = true
-		s.stopFinalTimerLocked()
-		s.stopLifecycleLocked()
-		_ = s.conn.Close()
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
+		if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"flush"}`)); err != nil {
+			return s.failWriteLocked(err)
 		}
+		s.inputEnded = true
+		s.finalizeRequested = true
+		s.startFinalTimerLocked()
+		return nil
+	}
+	if err := s.sendFinalizeIfNeededLocked(); err != nil {
 		return err
 	}
 	s.inputEnded = true
-	s.startFinalTimerLocked()
+	if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"close"}`)); err != nil {
+		recovered, recoveryErr := s.recoverRuntimeLocked(err)
+		if recovered {
+			if s.finalizeRequested {
+				s.startFinalTimerLocked()
+			}
+			return nil
+		}
+		if recoveryErr != nil {
+			err = recoveryErr
+		}
+		return s.failWriteLocked(err)
+	}
+	if s.finalizeRequested {
+		s.startFinalTimerLocked()
+	}
+	return nil
+}
+
+func (s *sttStream) sendFinalizeIfNeededLocked() error {
+	if !s.sentAudioSinceFinalize {
+		return nil
+	}
+	s.finalizeRequested = true
+	if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"finalize"}`)); err != nil {
+		recovered, recoveryErr := s.recoverRuntimeLocked(err)
+		if recovered {
+			s.sentAudioSinceFinalize = false
+			return nil
+		}
+		if recoveryErr != nil {
+			err = recoveryErr
+		}
+		s.finalizeRequested = false
+		return s.failWriteLocked(err)
+	}
+	s.sentAudioSinceFinalize = false
 	return nil
 }
 
@@ -1099,18 +1357,172 @@ func (s *sttStream) writeAlignedAudio(chunk []byte) error {
 	if len(chunk)%slngSTTBytesPerSample(s.encoding) != 0 {
 		return nil
 	}
-	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
-		s.closed = true
-		s.stopFinalTimerLocked()
-		s.stopLifecycleLocked()
-		_ = s.conn.Close()
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
+	for {
+		if err := s.writeMessageLocked(websocket.BinaryMessage, chunk); err != nil {
+			recovered, recoveryErr := s.recoverRuntimeLocked(err)
+			if recovered {
+				continue
+			}
+			if recoveryErr != nil {
+				err = recoveryErr
+			}
+			return s.failWriteLocked(err)
+		}
+		s.speechDuration += s.audioDuration(chunk)
+		s.sentAudioSinceFinalize = true
+		s.retainUtteranceAudioLocked(chunk)
+		return nil
+	}
+}
+
+func (s *sttStream) retainUtteranceAudioLocked(chunk []byte) {
+	if len(chunk) == 0 || s.legacyEndpoint {
+		return
+	}
+	sampleRate := s.sampleRate
+	if sampleRate <= 0 {
+		sampleRate = defaultSLNGSTTSampleRate
+	}
+	maxBytes := sampleRate * slngSTTBytesPerSample(s.encoding) * maxSLNGSTTReplaySeconds
+	if maxBytes <= 0 {
+		return
+	}
+	if len(chunk) >= maxBytes {
+		s.utteranceAudio = append(s.utteranceAudio[:0], chunk[len(chunk)-maxBytes:]...)
+		return
+	}
+	s.utteranceAudio = append(s.utteranceAudio, chunk...)
+	if excess := len(s.utteranceAudio) - maxBytes; excess > 0 {
+		copy(s.utteranceAudio, s.utteranceAudio[excess:])
+		s.utteranceAudio = s.utteranceAudio[:maxBytes]
+	}
+}
+
+func (s *sttStream) recoverRuntimeLocked(cause error) (bool, error) {
+	if s.closed || s.legacyEndpoint || s.reconnectRequested || !isSLNGFallbackEligible(cause) {
+		return false, cause
+	}
+	provider := s.provider
+	if provider == nil {
+		return false, cause
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	currentIndex := s.candidateIndex
+	lastErr := cause
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		nextIndex, advanced := provider.nextSTTRecoveryCandidate(currentIndex)
+		if !advanced {
+			if s.sameEndpointReplayAttempts >= maxSLNGSTTSameEndpointReplays {
+				return false, lastErr
+			}
+			s.sameEndpointReplayAttempts++
+			nextIndex = currentIndex
+		} else {
+			s.sameEndpointReplayAttempts = 0
+		}
+
+		conn, candidate, candidateIndex, _, err := provider.dialSTTCandidatesFrom(ctx, s, nextIndex)
+		if err != nil {
+			lastErr = err
+			if !isSLNGFallbackEligible(err) {
+				return false, err
+			}
+			currentIndex = provider.activeSTTCandidateIndex(currentIndex)
+			continue
+		}
+
+		oldConn := s.conn
+		s.conn = conn
+		s.connGeneration++
+		s.candidateIndex = candidateIndex
+		s.legacyEndpoint = candidate.legacyEndpoint
+		s.lastClientSendAt = time.Now()
+		if oldConn != nil && oldConn != conn {
+			_ = oldConn.Close()
+		}
+		currentIndex = candidateIndex
+
+		if len(s.utteranceAudio) > 0 {
+			if err := s.writeMessageLocked(websocket.BinaryMessage, s.utteranceAudio); err != nil {
+				lastErr = err
+				_ = conn.Close()
+				continue
+			}
+		}
+		if s.finalizeRequested {
+			if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"finalize"}`)); err != nil {
+				lastErr = err
+				_ = conn.Close()
+				continue
+			}
+		}
+		if s.inputEnded {
+			if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"close"}`)); err != nil {
+				lastErr = err
+				_ = conn.Close()
+				continue
+			}
+		}
+		s.silentReconnects = 0
+		return true, nil
+	}
+}
+
+func (s *sttStream) writeMessageLocked(messageType int, payload []byte) error {
+	if s.conn == nil {
+		return io.ErrClosedPipe
+	}
+	timeout := slngSTTWriteTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	if s.ctx != nil {
+		if ctxDeadline, ok := s.ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+			deadline = ctxDeadline
+		}
+		if err := s.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if err := s.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	if err := s.conn.WriteMessage(messageType, payload); err != nil {
+		if s.ctx != nil && s.ctx.Err() != nil {
+			return s.ctx.Err()
 		}
 		return err
 	}
-	s.speechDuration += s.audioDuration(chunk)
+	s.lastClientSendAt = time.Now()
 	return nil
+}
+
+func (s *sttStream) failWriteLocked(err error) error {
+	conn, provider := s.terminateLocked()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if provider != nil {
+		provider.unregisterStream(s)
+	}
+	return err
+}
+
+func (s *sttStream) terminateLocked() (*websocket.Conn, *STT) {
+	s.closed = true
+	s.stopFinalTimerLocked()
+	s.stopLifecycleLocked()
+	conn := s.conn
+	s.conn = nil
+	s.connGeneration++
+	return conn, s.provider
 }
 
 func (s *sttStream) audioDuration(chunk []byte) float64 {
@@ -1195,8 +1607,17 @@ func (s *sttStream) reconnectLocked() error {
 	s.candidateIndex = candidateIndex
 	s.legacyEndpoint = candidate.legacyEndpoint
 	s.reconnectRequested = false
-	s.pendingEvents = nil
+	if s.speechStarted {
+		s.pendingEvents = append(s.pendingEvents, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+	}
 	s.speechStarted = false
+	s.speechDuration = 0
+	s.pendingNonEmptyTranscript = false
+	s.utteranceAudio = nil
+	s.sentAudioSinceFinalize = false
+	s.finalizeRequested = false
+	s.sameEndpointReplayAttempts = 0
+	s.lastClientSendAt = time.Now()
 	if oldConn != nil && oldConn != conn {
 		_ = oldConn.Close()
 	}
@@ -1278,6 +1699,17 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 				s.mu.Unlock()
 				return nil, ctxErr
 			}
+			if len(s.utteranceAudio) > 0 && !s.legacyEndpoint {
+				recovered, recoveryErr := s.recoverRuntimeLocked(slngSTTReadError(err))
+				if recovered {
+					s.mu.Unlock()
+					continue
+				}
+				if recoveryErr != nil {
+					s.mu.Unlock()
+					return nil, recoveryErr
+				}
+			}
 			if reconnected, reconnectErr := s.trySilentReconnectLocked(err); reconnected {
 				s.mu.Unlock()
 				if reconnectErr != nil {
@@ -1296,16 +1728,36 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 			s.mu.Unlock()
 			continue
 		}
-		if slngSTTMessageIsFinal(payload) {
-			s.stopFinalTimerLocked()
-		}
-		events, speechStarted, speechDuration, err := sttEventsFromMessageWithSpeechState(payload, s.language, s.partials, s.speechStarted, s.speechDuration)
+		events, speechStarted, speechDuration, pendingTranscript, acceptedFinal, err := sttEventsFromMessageWithSpeechState(
+			payload,
+			s.language,
+			s.partials,
+			s.speechStarted,
+			s.speechDuration,
+			s.pendingNonEmptyTranscript,
+		)
 		if err != nil {
+			recovered, recoveryErr := s.recoverRuntimeLocked(err)
+			if recovered {
+				s.mu.Unlock()
+				continue
+			}
+			if recoveryErr != nil {
+				err = recoveryErr
+			}
 			s.mu.Unlock()
 			return nil, err
 		}
 		s.speechStarted = speechStarted
 		s.speechDuration = speechDuration
+		s.pendingNonEmptyTranscript = pendingTranscript
+		if acceptedFinal {
+			s.stopFinalTimerLocked()
+			s.finalizeRequested = false
+			s.sentAudioSinceFinalize = false
+			s.utteranceAudio = nil
+			s.sameEndpointReplayAttempts = 0
+		}
 		if len(events) > 0 {
 			s.silentReconnects = 0
 			event := events[0]
@@ -1394,17 +1846,6 @@ func (s *sttStream) stopFinalTimerLocked() {
 	}
 }
 
-func slngSTTMessageIsFinal(payload []byte) bool {
-	var message map[string]any
-	if json.Unmarshal(payload, &message) != nil {
-		return false
-	}
-	if slngString(message["type"]) == "final_transcript" {
-		return true
-	}
-	return slngString(message["type"]) == "Results" && slngBool(message["is_final"])
-}
-
 func (s *sttStream) isClosed() bool {
 	if s == nil {
 		return true
@@ -1420,9 +1861,4 @@ func slngSTTReadError(err error) error {
 		return llm.NewAPIStatusError("SLNG connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
 	return err
-}
-
-func isSTTBridgeEndpoint(endpoint string) bool {
-	_, err := bridgeModel(endpoint, "stt")
-	return err == nil
 }

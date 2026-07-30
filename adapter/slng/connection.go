@@ -2,7 +2,6 @@ package slng
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,6 +29,7 @@ type sttConnectionCandidate struct {
 	headers        http.Header
 	init           map[string]any
 	legacyEndpoint bool
+	waitReady      bool
 }
 
 type ttsConnectionCandidate struct {
@@ -112,19 +112,27 @@ func bridgeBaseURL(baseURL string) (*url.URL, error) {
 	if raw == "" {
 		return nil, fmt.Errorf("bridge base URL must not be empty")
 	}
-	if !strings.Contains(raw, "://") {
-		scheme := "wss"
-		host, _, err := net.SplitHostPort(raw)
-		if err != nil {
-			host = strings.Trim(raw, "[]")
-		}
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-			scheme = "ws"
-		}
-		raw = scheme + "://" + raw
+	explicitScheme := strings.Contains(raw, "://")
+	if !explicitScheme {
+		raw = "wss://" + raw
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
+	if err != nil || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid bridge base URL %q", baseURL)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		parsed.Scheme = "wss"
+		if host := parsed.Hostname(); host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			parsed.Scheme = "ws"
+		}
+	case "ws", "wss":
+		if !explicitScheme {
+			if host := parsed.Hostname(); host == "localhost" || host == "127.0.0.1" || host == "::1" {
+				parsed.Scheme = "ws"
+			}
+		}
+	default:
 		return nil, fmt.Errorf("invalid bridge base URL %q", baseURL)
 	}
 	parsed.RawQuery = ""

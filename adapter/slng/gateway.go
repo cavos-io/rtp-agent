@@ -33,13 +33,16 @@ var slngBridgeErrorStatus = map[string]int{
 }
 
 type gatewayHeaders struct {
-	APIKey            string
-	ProviderAPIKey    string
-	RegionOverride    string
-	WorldPartOverride string
-	ExternalAgentID   string
-	ExternalSessionID string
-	Extra             http.Header
+	APIKey               string
+	ProviderAPIKey       string
+	ProviderAPIKeySet    bool
+	RegionOverride       string
+	WorldPartOverride    string
+	ExternalAgentID      string
+	ExternalAgentIDSet   bool
+	ExternalSessionID    string
+	ExternalSessionIDSet bool
+	Extra                http.Header
 }
 
 func (h gatewayHeaders) build(candidate http.Header) (http.Header, error) {
@@ -55,17 +58,23 @@ func (h gatewayHeaders) build(candidate http.Header) (http.Header, error) {
 		headers.Set("X-World-Part-Override", worldPart)
 	}
 	mergeSLNGHeaders(headers, candidate)
-	if h.ProviderAPIKey != "" {
+	if h.ProviderAPIKeySet || h.ProviderAPIKey != "" {
 		providerAPIKey := strings.TrimSpace(h.ProviderAPIKey)
 		if providerAPIKey == "" {
 			return nil, fmt.Errorf("provider_api_key must not be empty")
 		}
 		headers.Set("X-Slng-Provider-Key", providerAPIKey)
 	}
+	if h.ExternalAgentIDSet && h.ExternalAgentID == "" {
+		return nil, fmt.Errorf("external_agent_id must not be empty")
+	}
 	if agentID, err := validateSLNGTrackingID(h.ExternalAgentID, "external_agent_id"); err != nil {
 		return nil, err
 	} else if agentID != "" {
 		headers.Set("X-SLNG-Agent-Id", agentID)
+	}
+	if h.ExternalSessionIDSet && h.ExternalSessionID == "" {
+		return nil, fmt.Errorf("external_session_id must not be empty")
 	}
 	if sessionID, err := validateSLNGTrackingID(h.ExternalSessionID, "external_session_id"); err != nil {
 		return nil, err
@@ -132,7 +141,7 @@ func slngErrorStatus(value any) (int, bool) {
 }
 
 func slngStatusError(message map[string]any) *llm.APIStatusError {
-	return llm.NewAPIStatusError(slngGatewayErrorMessage(message), extractSLNGErrorStatus(message), "", message)
+	return llm.NewAPIStatusError(slngGatewayErrorMessage(message), extractSLNGErrorStatus(message), "", nil)
 }
 
 func slngGatewayErrorMessage(message map[string]any) string {

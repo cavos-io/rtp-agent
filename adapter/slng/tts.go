@@ -56,38 +56,43 @@ const (
 )
 
 type TTS struct {
-	mu                sync.Mutex
-	optionError       error
-	apiKey            string
-	providerAPIKey    string
-	model             string
-	endpoint          string
-	connections       []TTSConnectionConfig
-	candidateState    *candidateState
-	fallbackCooldown  time.Duration
-	regionOverride    string
-	worldPartOverride string
-	externalAgentID   string
-	externalSessionID string
-	extraHeaders      http.Header
-	voice             string
-	language          string
-	sampleRate        int
-	speed             float64
-	encoding          string
-	modelOptions      map[string]any
-	runtimeInit       map[string]any
-	textChunking      TTSChunkingMode
-	phraseMaxChars    int
-	firstAudioTimeout time.Duration
-	warmStandby       bool
-	standby           *ttsStandbyConnection
-	standbyEpoch      uint64
-	standbyCancel     context.CancelFunc
-	standbyDone       chan struct{}
-	standbyTaskID     uint64
-	streams           map[*ttsStream]struct{}
-	closed            bool
+	mu                    sync.Mutex
+	optionError           error
+	modelConfigured       bool
+	connectionsConfigured bool
+	apiKey                string
+	providerAPIKey        string
+	providerAPIKeySet     bool
+	model                 string
+	endpoint              string
+	connections           []TTSConnectionConfig
+	candidateState        *candidateState
+	fallbackCooldown      time.Duration
+	regionOverride        string
+	worldPartOverride     string
+	externalAgentID       string
+	externalAgentIDSet    bool
+	externalSessionID     string
+	externalSessionIDSet  bool
+	extraHeaders          http.Header
+	voice                 string
+	language              string
+	sampleRate            int
+	speed                 float64
+	encoding              string
+	modelOptions          map[string]any
+	runtimeInit           map[string]any
+	textChunking          TTSChunkingMode
+	phraseMaxChars        int
+	firstAudioTimeout     time.Duration
+	warmStandby           bool
+	standby               *ttsStandbyConnection
+	standbyEpoch          uint64
+	standbyCancel         context.CancelFunc
+	standbyDone           chan struct{}
+	standbyTaskID         uint64
+	streams               map[*ttsStream]struct{}
+	closed                bool
 }
 
 type ttsStandbyConnection struct {
@@ -99,49 +104,63 @@ type ttsStandbyConnection struct {
 }
 
 type ttsStandbySettings struct {
-	apiKey            string
-	providerAPIKey    string
-	model             string
-	endpoint          string
-	connections       []TTSConnectionConfig
-	regionOverride    string
-	worldPartOverride string
-	externalAgentID   string
-	externalSessionID string
-	extraHeaders      http.Header
-	voice             string
-	language          string
-	sampleRate        int
-	speed             float64
-	encoding          string
-	modelOptions      map[string]any
-	runtimeInit       map[string]any
-	textChunking      TTSChunkingMode
-	phraseMaxChars    int
-	firstAudioTimeout time.Duration
-	warmStandby       bool
+	apiKey               string
+	providerAPIKey       string
+	providerAPIKeySet    bool
+	model                string
+	endpoint             string
+	connections          []TTSConnectionConfig
+	regionOverride       string
+	worldPartOverride    string
+	externalAgentID      string
+	externalAgentIDSet   bool
+	externalSessionID    string
+	externalSessionIDSet bool
+	extraHeaders         http.Header
+	voice                string
+	language             string
+	sampleRate           int
+	speed                float64
+	encoding             string
+	modelOptions         map[string]any
+	runtimeInit          map[string]any
+	textChunking         TTSChunkingMode
+	phraseMaxChars       int
+	firstAudioTimeout    time.Duration
+	warmStandby          bool
 }
 
 type TTSOption func(*TTS)
 
 func WithTTSBaseURL(baseURL string) TTSOption {
 	return func(t *TTS) {
-		if baseURL != "" {
-			t.endpoint = defaultTTSEndpoint(strings.TrimRight(baseURL, "/"), t.model)
-			t.connections = nil
+		endpoint, err := bridgeEndpoint(strings.TrimRight(baseURL, "/"), "tts", t.model)
+		if err != nil {
+			t.setOptionError(err)
+			return
 		}
+		t.endpoint = endpoint
+		t.connections = nil
 	}
 }
 
 func WithTTSModel(modelName string) TTSOption {
 	return func(t *TTS) {
-		if modelName != "" {
-			t.model = modelName
-			t.endpoint = defaultTTSEndpoint(defaultSLNGBaseURL, modelName)
-			t.voice = normalizeTTSVoice(modelName, t.voice)
-			t.language = normalizeLanguageForModel(modelName, t.language, t.modelOptions)
-			t.connections = nil
+		t.modelConfigured = true
+		if t.connectionsConfigured {
+			t.setOptionError(errors.New("use model or connections, not both"))
+			return
 		}
+		endpoint, err := bridgeEndpoint(defaultSLNGBaseURL, "tts", modelName)
+		if err != nil {
+			t.setOptionError(err)
+			return
+		}
+		t.model = modelName
+		t.endpoint = endpoint
+		t.voice = normalizeTTSVoice(modelName, t.voice)
+		t.language = normalizeLanguageForModel(modelName, t.language, t.modelOptions)
+		t.connections = nil
 	}
 }
 
@@ -160,6 +179,11 @@ func WithTTSEndpoint(endpoint string) TTSOption {
 func WithTTSConnections(connections ...TTSConnectionConfig) TTSOption {
 	return func(t *TTS) {
 		if len(connections) == 0 {
+			return
+		}
+		t.connectionsConfigured = true
+		if t.modelConfigured {
+			t.setOptionError(errors.New("use model or connections, not both"))
 			return
 		}
 		t.connections = cloneTTSConnectionConfigs(connections)
@@ -185,6 +209,7 @@ func WithTTSRegionOverride(region any) TTSOption {
 func WithTTSProviderAPIKey(apiKey string) TTSOption {
 	return func(t *TTS) {
 		t.providerAPIKey = apiKey
+		t.providerAPIKeySet = true
 	}
 }
 
@@ -197,7 +222,23 @@ func WithTTSWorldPartOverride(worldPart string) TTSOption {
 func WithTTSExternalTracking(agentID, sessionID string) TTSOption {
 	return func(t *TTS) {
 		t.externalAgentID = agentID
+		t.externalAgentIDSet = true
 		t.externalSessionID = sessionID
+		t.externalSessionIDSet = true
+	}
+}
+
+func WithTTSExternalAgentID(agentID string) TTSOption {
+	return func(t *TTS) {
+		t.externalAgentID = agentID
+		t.externalAgentIDSet = true
+	}
+}
+
+func WithTTSExternalSessionID(sessionID string) TTSOption {
+	return func(t *TTS) {
+		t.externalSessionID = sessionID
+		t.externalSessionIDSet = true
 	}
 }
 
@@ -293,8 +334,19 @@ func NewTTS(apiKey string, opts ...TTSOption) *TTS {
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.optionError == nil {
+		if _, err := provider.resolvedTTSCandidates(); err != nil {
+			provider.optionError = err
+		}
+	}
 	provider.candidateState = newCandidateState(provider.ttsCandidateCount(), provider.fallbackCooldown)
 	return provider
+}
+
+func (t *TTS) setOptionError(err error) {
+	if err != nil && t.optionError == nil {
+		t.optionError = err
+	}
 }
 
 func slngPhraseChunks(text string, maxChars int) []string {
@@ -386,27 +438,30 @@ func (t *TTS) UpdateOptions(opts ...TTSOption) {
 
 func (t *TTS) standbySettingsLocked() ttsStandbySettings {
 	return ttsStandbySettings{
-		apiKey:            t.apiKey,
-		providerAPIKey:    t.providerAPIKey,
-		model:             t.model,
-		endpoint:          t.endpoint,
-		connections:       cloneTTSConnectionConfigs(t.connections),
-		regionOverride:    t.regionOverride,
-		worldPartOverride: t.worldPartOverride,
-		externalAgentID:   t.externalAgentID,
-		externalSessionID: t.externalSessionID,
-		extraHeaders:      t.extraHeaders.Clone(),
-		voice:             t.voice,
-		language:          t.language,
-		sampleRate:        t.sampleRate,
-		speed:             t.speed,
-		encoding:          t.encoding,
-		modelOptions:      cloneSLNGMap(t.modelOptions),
-		runtimeInit:       cloneSLNGMap(t.runtimeInit),
-		textChunking:      t.textChunking,
-		phraseMaxChars:    t.phraseMaxChars,
-		firstAudioTimeout: t.firstAudioTimeout,
-		warmStandby:       t.warmStandby,
+		apiKey:               t.apiKey,
+		providerAPIKey:       t.providerAPIKey,
+		providerAPIKeySet:    t.providerAPIKeySet,
+		model:                t.model,
+		endpoint:             t.endpoint,
+		connections:          cloneTTSConnectionConfigs(t.connections),
+		regionOverride:       t.regionOverride,
+		worldPartOverride:    t.worldPartOverride,
+		externalAgentID:      t.externalAgentID,
+		externalAgentIDSet:   t.externalAgentIDSet,
+		externalSessionID:    t.externalSessionID,
+		externalSessionIDSet: t.externalSessionIDSet,
+		extraHeaders:         t.extraHeaders.Clone(),
+		voice:                t.voice,
+		language:             t.language,
+		sampleRate:           t.sampleRate,
+		speed:                t.speed,
+		encoding:             t.encoding,
+		modelOptions:         cloneSLNGMap(t.modelOptions),
+		runtimeInit:          cloneSLNGMap(t.runtimeInit),
+		textChunking:         t.textChunking,
+		phraseMaxChars:       t.phraseMaxChars,
+		firstAudioTimeout:    t.firstAudioTimeout,
+		warmStandby:          t.warmStandby,
 	}
 }
 
@@ -438,7 +493,7 @@ func (t *TTS) Prewarm() {
 
 func (t *TTS) startTTSStandby() {
 	t.mu.Lock()
-	if !t.warmStandby || t.closed || t.standby != nil || t.standbyCancel != nil {
+	if !t.warmStandby || t.optionError != nil || t.closed || t.standby != nil || t.standbyCancel != nil {
 		t.mu.Unlock()
 		return
 	}
@@ -674,24 +729,27 @@ func (t *TTS) ttsAttempt(candidate ttsConnectionCandidate) *TTS {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return &TTS{
-		apiKey:            t.apiKey,
-		providerAPIKey:    t.providerAPIKey,
-		model:             candidate.model,
-		endpoint:          candidate.endpoint,
-		regionOverride:    t.regionOverride,
-		worldPartOverride: t.worldPartOverride,
-		externalAgentID:   t.externalAgentID,
-		externalSessionID: t.externalSessionID,
-		extraHeaders:      t.extraHeaders.Clone(),
-		voice:             normalizeTTSVoice(candidate.model, candidate.voice),
-		language:          t.language,
-		sampleRate:        t.sampleRate,
-		speed:             t.speed,
-		encoding:          t.encoding,
-		modelOptions:      cloneSLNGMap(t.modelOptions),
-		textChunking:      t.textChunking,
-		phraseMaxChars:    t.phraseMaxChars,
-		firstAudioTimeout: t.firstAudioTimeout,
+		apiKey:               t.apiKey,
+		providerAPIKey:       t.providerAPIKey,
+		providerAPIKeySet:    t.providerAPIKeySet,
+		model:                candidate.model,
+		endpoint:             candidate.endpoint,
+		regionOverride:       t.regionOverride,
+		worldPartOverride:    t.worldPartOverride,
+		externalAgentID:      t.externalAgentID,
+		externalAgentIDSet:   t.externalAgentIDSet,
+		externalSessionID:    t.externalSessionID,
+		externalSessionIDSet: t.externalSessionIDSet,
+		extraHeaders:         t.extraHeaders.Clone(),
+		voice:                normalizeTTSVoice(candidate.model, candidate.voice),
+		language:             t.language,
+		sampleRate:           t.sampleRate,
+		speed:                t.speed,
+		encoding:             t.encoding,
+		modelOptions:         cloneSLNGMap(t.modelOptions),
+		textChunking:         t.textChunking,
+		phraseMaxChars:       t.phraseMaxChars,
+		firstAudioTimeout:    t.firstAudioTimeout,
 	}
 }
 
@@ -866,13 +924,16 @@ func buildTTSWebsocketHeaders(t *TTS) (http.Header, error) {
 
 func buildTTSWebsocketHeadersForCandidate(t *TTS, candidate http.Header) (http.Header, error) {
 	return (gatewayHeaders{
-		APIKey:            t.apiKey,
-		ProviderAPIKey:    t.providerAPIKey,
-		RegionOverride:    t.regionOverride,
-		WorldPartOverride: t.worldPartOverride,
-		ExternalAgentID:   t.externalAgentID,
-		ExternalSessionID: t.externalSessionID,
-		Extra:             t.extraHeaders,
+		APIKey:               t.apiKey,
+		ProviderAPIKey:       t.providerAPIKey,
+		ProviderAPIKeySet:    t.providerAPIKeySet,
+		RegionOverride:       t.regionOverride,
+		WorldPartOverride:    t.worldPartOverride,
+		ExternalAgentID:      t.externalAgentID,
+		ExternalAgentIDSet:   t.externalAgentIDSet,
+		ExternalSessionID:    t.externalSessionID,
+		ExternalSessionIDSet: t.externalSessionIDSet,
+		Extra:                t.extraHeaders,
 	}).build(candidate)
 }
 func buildTTSInitPayload(t *TTS) []byte {
@@ -1002,7 +1063,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		return nil, false, nil
 	}
 	if isSLNGTTSEndEvent(message) {
-		return slngTTSFinalMarker(), true, nil
+		return slngTTSTerminalAudio(message, sampleRate)
 	}
 	messageType := slngString(message["type"])
 	switch messageType {
@@ -1024,7 +1085,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			},
 		}, false, nil
 	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
-		return slngTTSFinalMarker(), true, nil
+		return slngTTSTerminalAudio(message, sampleRate)
 	case "Error", "error":
 		return nil, false, slngStatusError(message)
 	case "":
@@ -1043,8 +1104,9 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 					NumChannels:       slngNumChannels,
 					SamplesPerChannel: uint32(len(data) / 2),
 				},
+				IsFinal: slngBool(message["isFinal"]),
 			}
-			return audio, slngBool(message["isFinal"]), nil
+			return audio, audio.IsFinal, nil
 		}
 		if slngBool(message["isFinal"]) {
 			return slngTTSFinalMarker(), true, nil
@@ -1054,6 +1116,26 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		}
 	}
 	return nil, false, nil
+}
+
+func slngTTSTerminalAudio(message map[string]any, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+	encoded := extractSLNGAudio(message)
+	if encoded == "" {
+		return slngTTSFinalMarker(), true, nil
+	}
+	data, err := slngDecodeBase64Audio(encoded)
+	if err != nil {
+		return slngTTSFinalMarker(), true, nil
+	}
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			Data:              data,
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       slngNumChannels,
+			SamplesPerChannel: uint32(len(data) / 2),
+		},
+		IsFinal: true,
+	}, true, nil
 }
 
 func slngDecodeBase64Audio(data string) ([]byte, error) {
@@ -1144,6 +1226,9 @@ func (s *ttsStream) PushText(text string) error {
 
 func (s *ttsStream) pushTextLocked(text string) error {
 	s.pendingText += text
+	if !s.appendTextSpace {
+		return nil
+	}
 	if s.textChunking == TTSChunkingAuto || s.textChunking == TTSChunkingPhrase {
 		return s.sendPhraseChunksLocked(false)
 	}
@@ -1166,7 +1251,12 @@ func (s *ttsStream) Flush() error {
 }
 
 func (s *ttsStream) flushLocked() error {
-	if s.pendingText != "" && (s.textChunking == TTSChunkingAuto || s.textChunking == TTSChunkingPhrase) {
+	if !s.appendTextSpace && s.pendingText != "" {
+		if err := s.sendTextLocked(s.pendingText); err != nil {
+			return err
+		}
+		s.pendingText = ""
+	} else if s.pendingText != "" && (s.textChunking == TTSChunkingAuto || s.textChunking == TTSChunkingPhrase) {
 		if err := s.sendPhraseChunksLocked(true); err != nil {
 			return err
 		}
@@ -1419,11 +1509,24 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			_ = conn.SetReadDeadline(time.Time{})
 		}
 		if done {
-			s.mu.Lock()
-			s.firstAudioDeadline = time.Time{}
-			s.mu.Unlock()
-			_ = conn.SetReadDeadline(time.Time{})
-			return nil, io.EOF
+			if audio == nil || audio.Frame == nil {
+				s.mu.Lock()
+				audioSeen := s.audioFrames > 0
+				s.mu.Unlock()
+				if !audioSeen {
+					candidateErr := llm.NewAPIConnectionError("TTS produced no audio")
+					if fallbackErr, ok := s.fallbackBeforeFirstAudio(candidateErr); ok {
+						if fallbackErr == nil {
+							continue
+						}
+						return nil, fallbackErr
+					}
+					return nil, candidateErr
+				}
+			}
+			audio.IsFinal = true
+			_ = s.Close()
+			return audio, nil
 		}
 		if audio != nil {
 			return audio, nil
