@@ -38,19 +38,24 @@ var slngElevenLabsTTSModelOptionKeys = []string{
 }
 
 type TTS struct {
-	mu             sync.Mutex
-	apiKey         string
-	model          string
-	endpoint       string
-	regionOverride string
-	voice          string
-	language       string
-	sampleRate     int
-	speed          float64
-	encoding       string
-	modelOptions   map[string]any
-	streams        map[*ttsStream]struct{}
-	closed         bool
+	mu                sync.Mutex
+	apiKey            string
+	providerAPIKey    string
+	model             string
+	endpoint          string
+	regionOverride    string
+	worldPartOverride string
+	externalAgentID   string
+	externalSessionID string
+	extraHeaders      http.Header
+	voice             string
+	language          string
+	sampleRate        int
+	speed             float64
+	encoding          string
+	modelOptions      map[string]any
+	streams           map[*ttsStream]struct{}
+	closed            bool
 }
 
 type TTSOption func(*TTS)
@@ -85,6 +90,31 @@ func WithTTSEndpoint(endpoint string) TTSOption {
 func WithTTSRegionOverride(region any) TTSOption {
 	return func(t *TTS) {
 		t.regionOverride = normalizeRegionOverride(region)
+	}
+}
+
+func WithTTSProviderAPIKey(apiKey string) TTSOption {
+	return func(t *TTS) {
+		t.providerAPIKey = apiKey
+	}
+}
+
+func WithTTSWorldPartOverride(worldPart string) TTSOption {
+	return func(t *TTS) {
+		t.worldPartOverride = worldPart
+	}
+}
+
+func WithTTSExternalTracking(agentID, sessionID string) TTSOption {
+	return func(t *TTS) {
+		t.externalAgentID = agentID
+		t.externalSessionID = sessionID
+	}
+}
+
+func WithTTSExtraHeaders(headers http.Header) TTSOption {
+	return func(t *TTS) {
+		t.extraHeaders = headers.Clone()
 	}
 }
 
@@ -191,7 +221,11 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 	if err := t.requireAPIKey(); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.endpoint, buildTTSWebsocketHeaders(t))
+	headers, err := buildTTSWebsocketHeaders(t)
+	if err != nil {
+		return nil, err
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.endpoint, headers)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
@@ -274,14 +308,16 @@ func (t *TTS) requireAPIKey() error {
 	}
 	return nil
 }
-func buildTTSWebsocketHeaders(t *TTS) http.Header {
-	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+t.apiKey)
-	headers.Set("X-API-Key", t.apiKey)
-	if t.regionOverride != "" {
-		headers.Set("X-Region-Override", t.regionOverride)
-	}
-	return headers
+func buildTTSWebsocketHeaders(t *TTS) (http.Header, error) {
+	return (gatewayHeaders{
+		APIKey:            t.apiKey,
+		ProviderAPIKey:    t.providerAPIKey,
+		RegionOverride:    t.regionOverride,
+		WorldPartOverride: t.worldPartOverride,
+		ExternalAgentID:   t.externalAgentID,
+		ExternalSessionID: t.externalSessionID,
+		Extra:             t.extraHeaders,
+	}).build(nil)
 }
 func buildTTSInitPayload(t *TTS) []byte {
 	language := normalizeLanguageForModel(t.model, t.language, t.modelOptions)
@@ -434,7 +470,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
 		return slngTTSFinalMarker(), true, nil
 	case "Error", "error":
-		return nil, false, llm.NewAPIStatusError("SLNG TTS error: "+extractSLNGError(message), -1, "", message)
+		return nil, false, slngStatusError(message)
 	case "":
 		if encoded := slngString(message["audio"]); encoded != "" {
 			data, err := slngDecodeBase64Audio(encoded)
@@ -458,7 +494,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			return slngTTSFinalMarker(), true, nil
 		}
 		if message["error"] != nil {
-			return nil, false, llm.NewAPIStatusError("SLNG TTS error: "+extractSLNGError(message), -1, "", message)
+			return nil, false, slngStatusError(message)
 		}
 	}
 	return nil, false, nil

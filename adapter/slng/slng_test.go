@@ -231,7 +231,10 @@ func TestSLNGRegionOverrideNormalizesLikeReference(t *testing.T) {
 	}
 
 	provider := NewTTS("test-key", WithTTSRegionOverride(" US-East,EU-WEST "))
-	headers := buildTTSWebsocketHeaders(provider)
+	headers, err := buildTTSWebsocketHeaders(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if headers.Get("X-Region-Override") != "us-east, eu-west" {
 		t.Fatalf("region header = %q, want normalized header", headers.Get("X-Region-Override"))
 	}
@@ -1718,7 +1721,10 @@ func assertSLNGNestedArrayField(t *testing.T, payload []byte, parent, key string
 
 func TestBuildSLNGHeaders(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTRegionOverride("us-east"))
-	headers := buildSTTWebsocketHeaders(provider)
+	headers, err := buildSTTWebsocketHeaders(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if headers.Get("Authorization") != "Bearer test-key" || headers.Get("X-API-Key") != "test-key" {
 		t.Fatalf("headers = %+v, want auth headers", headers)
 	}

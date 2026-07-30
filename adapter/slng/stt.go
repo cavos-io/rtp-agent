@@ -24,10 +24,15 @@ import (
 type STT struct {
 	mu                      sync.Mutex
 	apiKey                  string
+	providerAPIKey          string
 	model                   string
 	endpoint                string
 	modelEndpoints          []string
 	regionOverride          string
+	worldPartOverride       string
+	externalAgentID         string
+	externalSessionID       string
+	extraHeaders            http.Header
 	sampleRate              int
 	bufferSizeSeconds       float64
 	encoding                string
@@ -99,6 +104,31 @@ func WithSTTModelEndpoints(endpoints ...string) STTOption {
 func WithSTTRegionOverride(region any) STTOption {
 	return func(s *STT) {
 		s.regionOverride = normalizeRegionOverride(region)
+	}
+}
+
+func WithSTTProviderAPIKey(apiKey string) STTOption {
+	return func(s *STT) {
+		s.providerAPIKey = apiKey
+	}
+}
+
+func WithSTTWorldPartOverride(worldPart string) STTOption {
+	return func(s *STT) {
+		s.worldPartOverride = worldPart
+	}
+}
+
+func WithSTTExternalTracking(agentID, sessionID string) STTOption {
+	return func(s *STT) {
+		s.externalAgentID = agentID
+		s.externalSessionID = sessionID
+	}
+}
+
+func WithSTTExtraHeaders(headers http.Header) STTOption {
+	return func(s *STT) {
+		s.extraHeaders = headers.Clone()
 	}
 }
 
@@ -283,11 +313,12 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	if s.regionOverride != "" {
-		req.Header.Set("X-Region-Override", s.regionOverride)
+	headers, err := buildSTTWebsocketHeaders(s)
+	if err != nil {
+		return nil, err
 	}
+	req.Header = headers
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -295,7 +326,10 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("slng stt error: %s", string(respBody))
+		return nil, slngStatusError(map[string]any{
+			"status_code": resp.StatusCode,
+			"message":     strings.TrimSpace(string(respBody)),
+		})
 	}
 	var result struct {
 		Text     string `json:"text"`
@@ -344,7 +378,11 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if model := sttModelFromEndpoint(endpoint); model != "" {
 			attempt.model = model
 		}
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
+		headers, err := buildSTTWebsocketHeaders(&attempt)
+		if err != nil {
+			return nil, err
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil, context.Canceled
@@ -493,14 +531,16 @@ func (s *STT) resolveLanguage(language string) string {
 	return s.language
 }
 
-func buildSTTWebsocketHeaders(s *STT) http.Header {
-	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+s.apiKey)
-	headers.Set("X-API-Key", s.apiKey)
-	if s.regionOverride != "" {
-		headers.Set("X-Region-Override", s.regionOverride)
-	}
-	return headers
+func buildSTTWebsocketHeaders(s *STT) (http.Header, error) {
+	return (gatewayHeaders{
+		APIKey:            s.apiKey,
+		ProviderAPIKey:    s.providerAPIKey,
+		RegionOverride:    s.regionOverride,
+		WorldPartOverride: s.worldPartOverride,
+		ExternalAgentID:   s.externalAgentID,
+		ExternalSessionID: s.externalSessionID,
+		Extra:             s.extraHeaders,
+	}).build(nil)
 }
 
 func buildSTTInitPayload(s *STT) []byte {
@@ -576,7 +616,7 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 		messageType = slngString(message["type"])
 	}
 	if messageType == "Error" {
-		return nil, speechStarted, speechDuration, fmt.Errorf("slng stt error: %s", extractSLNGError(message))
+		return nil, speechStarted, speechDuration, slngStatusError(message)
 	}
 	if messageType == "partial_transcript" && !partials {
 		return nil, speechStarted, speechDuration, nil
@@ -800,9 +840,14 @@ func (s *sttStream) reconnectLocked() error {
 	provider.mu.Lock()
 	attempt := STT{
 		apiKey:                  provider.apiKey,
+		providerAPIKey:          provider.providerAPIKey,
 		endpoint:                provider.endpoint,
 		model:                   provider.model,
 		regionOverride:          provider.regionOverride,
+		worldPartOverride:       provider.worldPartOverride,
+		externalAgentID:         provider.externalAgentID,
+		externalSessionID:       provider.externalSessionID,
+		extraHeaders:            provider.extraHeaders.Clone(),
 		sampleRate:              s.sampleRate,
 		bufferSizeSeconds:       s.bufferSizeSeconds,
 		encoding:                s.encoding,
@@ -829,7 +874,11 @@ func (s *sttStream) reconnectLocked() error {
 		ctx = context.Background()
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
+	headers, err := buildSTTWebsocketHeaders(&attempt)
+	if err != nil {
+		return err
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
