@@ -32,12 +32,34 @@ type sttConnectionCandidate struct {
 	legacyEndpoint bool
 }
 
+type ttsConnectionCandidate struct {
+	endpoint string
+	model    string
+	voice    string
+	headers  http.Header
+	init     map[string]any
+}
+
 func cloneSTTConnectionConfigs(configs []STTConnectionConfig) []STTConnectionConfig {
 	cloned := make([]STTConnectionConfig, len(configs))
 	for i, config := range configs {
 		cloned[i] = STTConnectionConfig{
 			Endpoint: config.Endpoint,
 			Model:    config.Model,
+			Headers:  config.Headers.Clone(),
+			Init:     cloneSLNGMap(config.Init),
+		}
+	}
+	return cloned
+}
+
+func cloneTTSConnectionConfigs(configs []TTSConnectionConfig) []TTSConnectionConfig {
+	cloned := make([]TTSConnectionConfig, len(configs))
+	for i, config := range configs {
+		cloned[i] = TTSConnectionConfig{
+			Endpoint: config.Endpoint,
+			Model:    config.Model,
+			Voice:    config.Voice,
 			Headers:  config.Headers.Clone(),
 			Init:     cloneSLNGMap(config.Init),
 		}
