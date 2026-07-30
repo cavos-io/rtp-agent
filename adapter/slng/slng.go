@@ -2,6 +2,7 @@ package slng
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -24,6 +25,11 @@ const (
 	slngNumChannels            = 1
 	slngFlushMessage           = `{"type":"flush"}`
 	slngCancelMessage          = `{"type":"cancel"}`
+	slngModelIdentifierError   = "model must be a provider/model identifier, for example 'deepgram/nova:3'"
+)
+
+var slngModelIdentifierPattern = regexp.MustCompile(
+	`^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)+(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$`,
 )
 
 func defaultSTTEndpoint(baseURL, model string) string {
@@ -79,35 +85,15 @@ type modelRef struct {
 }
 
 func parseModelRef(modelName string) (modelRef, error) {
-	raw := strings.TrimSpace(modelName)
-	if raw == "" {
-		return modelRef{}, fmt.Errorf("model must not be empty")
+	if !slngModelIdentifierPattern.MatchString(modelName) {
+		return modelRef{}, fmt.Errorf("%s", slngModelIdentifierError)
 	}
-	modelPath, variant, _ := strings.Cut(raw, ":")
-	if strings.Contains(raw, ":") {
-		before, after, _ := strings.Cut(raw, ":")
-		modelPath, variant = before, after
-		if variant == "" {
-			return modelRef{}, fmt.Errorf("model variant must not be empty")
-		}
-	}
+	modelPath, variant, _ := strings.Cut(modelName, ":")
 	parts := strings.Split(modelPath, "/")
-	cleaned := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part != "" {
-			cleaned = append(cleaned, part)
-		}
+	if parts[0] == "slng" && len(parts) >= 3 {
+		return modelRef{raw: modelName, routeProvider: parts[1], routeModel: strings.Join(parts[2:], "/"), variant: variant}, nil
 	}
-	if len(cleaned) < 2 {
-		return modelRef{}, fmt.Errorf("invalid model %q", raw)
-	}
-	if cleaned[0] == "slng" {
-		if len(cleaned) < 3 {
-			return modelRef{}, fmt.Errorf("invalid model %q", raw)
-		}
-		return modelRef{raw: raw, routeProvider: cleaned[1], routeModel: strings.Join(cleaned[2:], "/"), variant: variant}, nil
-	}
-	return modelRef{raw: raw, routeProvider: cleaned[0], routeModel: strings.Join(cleaned[1:], "/"), variant: variant}, nil
+	return modelRef{raw: modelName, routeProvider: parts[0], routeModel: strings.Join(parts[1:], "/"), variant: variant}, nil
 }
 
 func normalizeLanguageForModel(modelName, language string, options map[string]any) string {

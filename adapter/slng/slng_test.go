@@ -404,6 +404,33 @@ func TestSLNGRegionOverrideNormalizesLikeReference(t *testing.T) {
 	}
 }
 
+func TestSLNGModelIdentifierValidationMatchesReference(t *testing.T) {
+	for _, model := range []string{
+		"deepgram/nova:3",
+		"elevenlabs/eleven-flash:2.5",
+		"slng/deepgram/nova:3",
+	} {
+		if _, err := parseModelRef(model); err != nil {
+			t.Errorf("parseModelRef(%q) error = %v", model, err)
+		}
+	}
+
+	const want = "model must be a provider/model identifier, for example 'deepgram/nova:3'"
+	for _, model := range []string{
+		"",
+		"deepgram",
+		" deepgram/nova:3 ",
+		"/deepgram/nova:3",
+		"deepgram//nova:3",
+		"deepgram/nova:",
+	} {
+		_, err := parseModelRef(model)
+		if err == nil || err.Error() != want {
+			t.Errorf("parseModelRef(%q) error = %v, want %q", model, err, want)
+		}
+	}
+}
+
 func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 	sttProvider := NewSTT("test-key",
 		WithSTTModel("slng/deepgram/nova:3"),

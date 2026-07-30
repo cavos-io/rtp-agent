@@ -45,6 +45,37 @@ func TestGatewayHeadersRejectInvalidTrackingID(t *testing.T) {
 	}
 }
 
+func TestGatewayHeadersValidationErrorsMatchReference(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		headers gatewayHeaders
+		want    string
+	}{
+		{
+			name:    "provider API key",
+			headers: gatewayHeaders{ProviderAPIKey: " "},
+			want:    "provider_api_key must not be empty",
+		},
+		{
+			name:    "external agent ID",
+			headers: gatewayHeaders{ExternalAgentID: "bad,id"},
+			want:    "external_agent_id must not contain commas or control characters",
+		},
+		{
+			name:    "external session ID",
+			headers: gatewayHeaders{ExternalSessionID: strings.Repeat("界", 129)},
+			want:    "external_session_id must be 128 characters or fewer",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.headers.build(nil)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("build() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestGatewayHeadersCountTrackingIDCharacters(t *testing.T) {
 	headers, err := (gatewayHeaders{ExternalAgentID: strings.Repeat("界", 128)}).build(nil)
 	if err != nil {

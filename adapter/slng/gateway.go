@@ -58,16 +58,16 @@ func (h gatewayHeaders) build(candidate http.Header) (http.Header, error) {
 	if h.ProviderAPIKey != "" {
 		providerAPIKey := strings.TrimSpace(h.ProviderAPIKey)
 		if providerAPIKey == "" {
-			return nil, fmt.Errorf("provider API key must not be empty")
+			return nil, fmt.Errorf("provider_api_key must not be empty")
 		}
 		headers.Set("X-Slng-Provider-Key", providerAPIKey)
 	}
-	if agentID, err := validateSLNGTrackingID(h.ExternalAgentID, "external agent ID"); err != nil {
+	if agentID, err := validateSLNGTrackingID(h.ExternalAgentID, "external_agent_id"); err != nil {
 		return nil, err
 	} else if agentID != "" {
 		headers.Set("X-SLNG-Agent-Id", agentID)
 	}
-	if sessionID, err := validateSLNGTrackingID(h.ExternalSessionID, "external session ID"); err != nil {
+	if sessionID, err := validateSLNGTrackingID(h.ExternalSessionID, "external_session_id"); err != nil {
 		return nil, err
 	} else if sessionID != "" {
 		headers.Set("X-SLNG-Session-Id", sessionID)
