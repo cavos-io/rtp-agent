@@ -615,7 +615,7 @@ func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string,
 		message = normalizeSLNGResults(message)
 		messageType = slngString(message["type"])
 	}
-	if messageType == "Error" {
+	if messageType == "Error" || messageType == "error" {
 		return nil, speechStarted, speechDuration, slngStatusError(message)
 	}
 	if messageType == "partial_transcript" && !partials {

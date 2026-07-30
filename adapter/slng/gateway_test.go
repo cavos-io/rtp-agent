@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -43,6 +45,19 @@ func TestGatewayHeadersRejectInvalidTrackingID(t *testing.T) {
 	}
 }
 
+func TestGatewayHeadersCountTrackingIDCharacters(t *testing.T) {
+	headers, err := (gatewayHeaders{ExternalAgentID: strings.Repeat("界", 128)}).build(nil)
+	if err != nil {
+		t.Fatalf("128-character tracking ID error = %v", err)
+	}
+	if got := utf8.RuneCountInString(headers.Get("X-SLNG-Agent-Id")); got != 128 {
+		t.Fatalf("tracking ID length = %d, want 128", got)
+	}
+	if _, err := (gatewayHeaders{ExternalAgentID: strings.Repeat("界", 129)}).build(nil); err == nil {
+		t.Fatal("129-character tracking ID error = nil")
+	}
+}
+
 func TestSLNGStatusErrorMapsBridgeCode(t *testing.T) {
 	err := slngStatusError(map[string]any{
 		"type": "error",
@@ -50,6 +65,15 @@ func TestSLNGStatusErrorMapsBridgeCode(t *testing.T) {
 	})
 	if err.StatusCode != 429 || err.Message != "slow down" {
 		t.Fatalf("slngStatusError() = %#v", err)
+	}
+}
+
+func TestSLNGStatusErrorTruncatesAtRuneBoundary(t *testing.T) {
+	err := slngStatusError(map[string]any{
+		"data": map[string]any{"message": strings.Repeat("界", 501)},
+	})
+	if !utf8.ValidString(err.Message) || utf8.RuneCountInString(err.Message) != slngErrorMessageMaxLen {
+		t.Fatalf("message valid=%v length=%d, want valid length %d", utf8.ValidString(err.Message), utf8.RuneCountInString(err.Message), slngErrorMessageMaxLen)
 	}
 }
 
@@ -111,6 +135,14 @@ func TestSLNGProviderFramesReturnTypedStatusError(t *testing.T) {
 	_, _, err = ttsAudioFromMessage([]byte(`{"type":"error","data":{"code":"rate_limit","message":"slow down"}}`), 24000)
 	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("ttsAudioFromMessage() error = %#v", err)
+	}
+}
+
+func TestSLNGSTTLowercaseProviderFrameReturnsTypedStatusError(t *testing.T) {
+	_, err := sttEventsFromMessage([]byte(`{"type":"error","data":{"code":"rate_limit","message":"slow down"}}`), "en", true)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("sttEventsFromMessage() error = %#v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -88,7 +89,7 @@ func validateSLNGTrackingID(value, name string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("%s must not be empty", name)
 	}
-	if len(value) > 128 {
+	if utf8.RuneCountInString(value) > 128 {
 		return "", fmt.Errorf("%s must be 128 characters or fewer", name)
 	}
 	for i := 0; i < len(value); i++ {
@@ -137,7 +138,8 @@ func slngStatusError(message map[string]any) *llm.APIStatusError {
 func slngGatewayErrorMessage(message map[string]any) string {
 	for _, frame := range []map[string]any{slngMap(message["data"]), message} {
 		if text := extractSLNGError(frame); text != "Unknown error" {
-			return text[:min(len(text), slngErrorMessageMaxLen)]
+			runes := []rune(text)
+			return string(runes[:min(len(runes), slngErrorMessageMaxLen)])
 		}
 	}
 	return "Unknown error"
