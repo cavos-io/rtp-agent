@@ -112,6 +112,8 @@ func (s *candidateState) start(now time.Time) int {
 		return -1
 	}
 	if !s.primaryFailedAt.IsZero() && !now.Before(s.primaryFailedAt.Add(s.cooldown)) {
+		s.active = 0
+		s.primaryFailedAt = time.Time{}
 		return 0
 	}
 	return s.active

@@ -46,6 +46,19 @@ func TestCandidateStateRetriesPrimaryAfterCooldown(t *testing.T) {
 	}
 }
 
+func TestCandidateStateCanSelectFallbackAfterPrimaryCooldown(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := newCandidateState(2, time.Minute)
+	state.advance(0, now)
+	if got := state.start(now.Add(time.Minute)); got != 0 {
+		t.Fatalf("start() after cooldown = %d, want primary", got)
+	}
+	state.selectCandidate(1)
+	if got := state.start(now.Add(time.Minute)); got != 1 {
+		t.Fatalf("start() after selecting fallback = %d, want 1", got)
+	}
+}
+
 func TestCandidateStateSelectsActiveCandidate(t *testing.T) {
 	state := newCandidateState(3, time.Minute)
 	state.selectCandidate(2)
