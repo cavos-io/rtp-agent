@@ -316,6 +316,7 @@ type TTSGenerationData struct {
 	ForwardedAudio    bool
 	StartedSpeakingAt float64
 	StoppedSpeakingAt float64
+	Cancel            func()
 }
 
 type TTSInferenceOptions struct {
@@ -378,6 +379,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	data := &TTSGenerationData{
 		AudioCh:     make(chan *model.AudioFrame, 100),
 		TimedTextCh: make(chan tts.TimedString, 100),
+		Cancel:      func() {},
 	}
 
 	var options TTSInferenceOptions
@@ -475,6 +477,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	if options.StreamPacer != nil {
 		stream = tts.NewSentenceStreamPacerWithOptions(streamCtx, stream, *options.StreamPacer)
 	}
+
+	var cancelOnce sync.Once
+	data.Cancel = func() { cancelOnce.Do(cancelStream) }
 
 	go func() {
 		defer close(data.AudioCh)

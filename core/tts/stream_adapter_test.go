@@ -1638,3 +1638,131 @@ func TestStreamAdapterCloseWhileSpeakingDoesNotDeadlockOrLeak(t *testing.T) {
 			leaked, base, runtime.NumGoroutine())
 	}
 }
+
+func TestStreamAdapterEndsStreamPromptlyAfterEndInput(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if stream == nil {
+		t.Fatal("Stream() = nil")
+	}
+
+	const greeting = "Halo, Selamat Siang, perkenalkan, saya Salsa dari Danai. " +
+		"Benar saya berbicara dengan Kak Budi?"
+	if err := stream.PushText(greeting); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+
+	type result struct {
+		frames  int
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan result, 1)
+	go func() {
+		start := time.Now()
+		frames := 0
+		for {
+			audio, err := stream.Next()
+			if err != nil {
+				done <- result{frames: frames, err: err, elapsed: time.Since(start)}
+				return
+			}
+			if audio != nil && audio.Frame != nil {
+				frames++
+			}
+		}
+	}()
+
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, io.EOF) {
+			t.Fatalf("Next() terminal error = %v, want io.EOF", got.err)
+		}
+		if got.frames == 0 {
+			t.Fatal("no audio frames were produced; the fake provider should emit audio")
+		}
+		if got.elapsed > 2*time.Second {
+			t.Fatalf("stream took %s to report EOF after EndInput; a lingering stream strands "+
+				"the agent in the speaking state until the stall watchdog fires", got.elapsed)
+		}
+		t.Logf("stream reported EOF %s after EndInput (%d frames)", got.elapsed, got.frames)
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream never reported EOF after EndInput; the spoken turn would never finish " +
+			"and the agent would stay in the speaking state indefinitely")
+	}
+}
+
+type slowTailStreamAdapterTTS struct {
+	fakeStreamAdapterTTS
+
+	slowAfterCall int
+	delay         time.Duration
+	calls         int
+}
+
+func (f *slowTailStreamAdapterTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	f.calls++
+	if f.calls >= f.slowAfterCall {
+		time.Sleep(f.delay)
+	}
+	return f.fakeStreamAdapterTTS.Synthesize(ctx, text)
+}
+
+func TestStreamAdapterStreamOutlivesAudioWhenTrailingSegmentIsSlow(t *testing.T) {
+	const tailDelay = 700 * time.Millisecond
+
+	provider := &slowTailStreamAdapterTTS{slowAfterCall: 2, delay: tailDelay}
+	adapter := NewStreamAdapter(provider)
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.PushText("Halo, Selamat Siang, perkenalkan, saya Salsa dari Danai. Benar saya berbicara dengan Kak ?"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+
+	start := time.Now()
+	var lastAudioAt time.Time
+	frames := 0
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next() terminal error = %v, want io.EOF", err)
+			}
+			break
+		}
+		if audio != nil && audio.Frame != nil {
+			frames++
+			lastAudioAt = time.Now()
+		}
+	}
+	eofAt := time.Now()
+
+	if frames == 0 {
+		t.Fatal("no audio frames were produced")
+	}
+
+	streamOpen := eofAt.Sub(start)
+	tail := eofAt.Sub(lastAudioAt)
+	t.Logf("stream stayed open %s; EOF arrived %s after the last audio frame", streamOpen, tail)
+
+	if streamOpen < tailDelay {
+		t.Fatalf("stream closed in %s, faster than the %s trailing-segment stall; "+
+			"this test no longer reproduces the production shape", streamOpen, tailDelay)
+	}
+}
