@@ -214,7 +214,7 @@ type JobContext struct {
 	workerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
-	primaryRoomIO          jobSessionRoomIO
+	primaryRoomIO          SessionRoomIO
 	tempDirectory          string
 	sessionDirectory       string
 	logContextFields       map[string]any
@@ -372,6 +372,13 @@ func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
 	return c.primarySession, nil
 }
 
+func (c *JobContext) PrimaryRoomIO() SessionRoomIO {
+	if c == nil {
+		return nil
+	}
+	return c.primaryRoomIO
+}
+
 func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.SessionReport, error) {
 	var session *agent.AgentSession
 	if len(sessions) > 0 {
@@ -434,12 +441,13 @@ type StartSessionOptions struct {
 	SessionContext context.Context
 }
 
-type jobSessionRoomIO interface {
+type SessionRoomIO interface {
 	GetCallback() *RoomCallback
 	AttachRoom(*SDKRoom)
 	ReconcileParticipants()
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
+	StopRecorder() error
 	PopulateSessionReport(*agent.SessionReport)
 	Close() error
 }
@@ -611,7 +619,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}
 	}
 
-	var roomIO jobSessionRoomIO
+	var roomIO SessionRoomIO
 	if c.roomNeedsConnect() {
 		// RoomIO must be registered before the join, so that no track event can
 		// fire before it is listening. PrepareRoom only allocates; the join is

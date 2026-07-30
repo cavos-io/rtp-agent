@@ -1514,6 +1514,13 @@ func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
 	return rio.Recorder.Start(outputPath, sampleRate)
 }
 
+func (rio *RoomIO) StopRecorder() error {
+	if rio == nil || rio.Recorder == nil {
+		return nil
+	}
+	return rio.Recorder.Stop()
+}
+
 func (rio *RoomIO) PopulateSessionReport(report *agent.SessionReport) {
 	if rio == nil || rio.Recorder == nil {
 		return
