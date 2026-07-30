@@ -1392,6 +1392,65 @@ func TestSLNGTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T) {
 	readMessage("flush")
 }
 
+func TestSLNGTTSWordChunkingBuffersLetterlessTokens(t *testing.T) {
+	messages := make(chan map[string]any, 8)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil {
+				messages <- message
+				if message["type"] == "flush" {
+					return
+				}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("— hello 4.5 world !"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			if message["type"] == "text" {
+				got = append(got, slngString(message["text"]))
+			}
+			if message["type"] == "flush" {
+				goto complete
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for provider-safe word messages")
+		}
+	}
+complete:
+	want := []string{"— hello 4.5 ", "world ! "}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("text frames = %#v, want letter-aware frames %#v", got, want)
+	}
+}
+
 func TestSLNGTTSRejectsInvalidChunking(t *testing.T) {
 	provider := NewTTS("key", WithTTSTextChunking("sentence", 60))
 	if provider.optionError == nil {
@@ -1497,6 +1556,135 @@ func TestSLNGTTSFirstAudioTimeout(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSFirstAudioTimeoutArmsWhileNextIsBlocked(t *testing.T) {
+	initReceived := make(chan struct{}, 1)
+	textReceived := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		initReceived <- struct{}{}
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil && message["type"] == "text" {
+				select {
+				case textReceived <- struct{}{}:
+				default:
+				}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(20*time.Millisecond),
+	)
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	<-initReceived
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("Next() returned before text: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	<-textReceived
+	select {
+	case err := <-result:
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next() did not observe timeout armed after its read began")
+	}
+}
+
+func TestSLNGTTSExhaustedFirstAudioTimeoutClosesStream(t *testing.T) {
+	connectionClosed := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				connectionClosed <- struct{}{}
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(20*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+	if err := stream.PushText("late text"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText() after timeout = %v, want io.ErrClosedPipe", err)
+	}
+	select {
+	case <-connectionClosed:
+	case <-time.After(time.Second):
+		t.Fatal("exhausted timeout did not close websocket")
+	}
+	provider.mu.Lock()
+	registered := len(provider.streams)
+	provider.mu.Unlock()
+	if registered != 0 {
+		t.Fatalf("registered streams = %d, want 0 after terminal timeout", registered)
+	}
+	raw := stream.(*ttsStream)
+	raw.mu.Lock()
+	deadline := raw.firstAudioDeadline
+	raw.mu.Unlock()
+	if !deadline.IsZero() {
+		t.Fatalf("first audio deadline = %v, want cleared", deadline)
+	}
+}
+
 func TestSLNGTTSFirstAudioTimeoutStopsOnCancellation(t *testing.T) {
 	textReceived := make(chan struct{}, 1)
 	upgrader := websocket.Upgrader{}
@@ -1599,6 +1787,102 @@ func TestSLNGTTSFallsBackBeforeFirstAudio(t *testing.T) {
 	}
 	if got := []string{<-texts, <-texts}; !reflect.DeepEqual(got, []string{"hello ", "hello "}) {
 		t.Fatalf("replayed texts = %#v, want primary then fallback copy", got)
+	}
+}
+
+func TestSLNGTTSCloseDuringFallbackDialDiscardsNewConnection(t *testing.T) {
+	oldDial := slngTTSDialContext
+	t.Cleanup(func() { slngTTSDialContext = oldDial })
+
+	fallbackDialReady := make(chan struct{}, 1)
+	releaseFallbackDial := make(chan struct{})
+	fallbackDone := make(chan struct{})
+	var fallbackReplayed atomic.Bool
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade primary websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteJSON(map[string]any{
+				"type":        "Error",
+				"message":     "unavailable",
+				"status_code": http.StatusServiceUnavailable,
+			})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(fallbackDone)
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			for {
+				_, payload, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				var message map[string]any
+				if json.Unmarshal(payload, &message) == nil && message["type"] == "text" {
+					fallbackReplayed.Store(true)
+					return
+				}
+			}
+		}),
+	)
+	fallbackEndpoint := endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"
+	slngTTSDialContext = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		conn, response, err := oldDial(ctx, endpoint, headers)
+		if endpoint == fallbackEndpoint && err == nil {
+			fallbackDialReady <- struct{}{}
+			<-releaseFallbackDial
+		}
+		return conn, response, err
+	}
+
+	provider := NewTTS("test-key", WithTTSConnections(
+		TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		TTSConnectionConfig{Endpoint: fallbackEndpoint},
+	))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+	select {
+	case <-fallbackDialReady:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback dial")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseFallbackDial)
+	select {
+	case <-fallbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("fallback connection remained open after stream close")
+	}
+	if fallbackReplayed.Load() {
+		t.Fatal("closed stream replayed text to newly dialed fallback")
+	}
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Next() remained blocked after closing during fallback")
 	}
 }
 
@@ -1994,6 +2278,39 @@ func TestSLNGTTSUpdateOptionsDiscardsStaleStandby(t *testing.T) {
 	}
 	if connections.Load() != 2 {
 		t.Fatalf("connections = %d, want stale standby plus fresh dial", connections.Load())
+	}
+}
+
+func TestSLNGTTSUpdateOptionsInvalidatesStandbyForAttemptSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  TTSOption
+	}{
+		{name: "endpoint", opt: WithTTSEndpoint("ws://updated.local/v1/bridges/unmute/tts/deepgram/aura:2")},
+		{name: "connections", opt: WithTTSConnections(TTSConnectionConfig{Endpoint: "ws://candidate.local/v1/bridges/unmute/tts/deepgram/aura:2"})},
+		{name: "provider key", opt: WithTTSProviderAPIKey("provider-key")},
+		{name: "region", opt: WithTTSRegionOverride("eu")},
+		{name: "world part", opt: WithTTSWorldPartOverride("ap")},
+		{name: "tracking", opt: WithTTSExternalTracking("agent", "session")},
+		{name: "extra headers", opt: WithTTSExtraHeaders(http.Header{"X-Extra": {"updated"}})},
+		{name: "voice", opt: WithTTSVoice("updated-voice")},
+		{name: "language", opt: WithTTSLanguage("id")},
+		{name: "sample rate", opt: WithTTSSampleRate(16000)},
+		{name: "speed", opt: WithTTSSpeed(1.2)},
+		{name: "model options", opt: WithTTSModelOptions(map[string]any{"temperature": 0.3})},
+		{name: "runtime init", opt: WithTTSRuntimeInit(map[string]any{"type": "init", "custom": true})},
+		{name: "chunking", opt: WithTTSTextChunking(TTSChunkingPhrase, 32)},
+		{name: "first audio timeout", opt: WithTTSFirstAudioTimeout(time.Second)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := NewTTS("test-key", WithTTSWarmStandby(true))
+			before := provider.standbyEpoch
+			provider.UpdateOptions(test.opt)
+			if provider.standbyEpoch != before+1 {
+				t.Fatalf("standby epoch = %d, want %d", provider.standbyEpoch, before+1)
+			}
+		})
 	}
 }
 

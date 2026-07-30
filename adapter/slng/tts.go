@@ -41,6 +41,9 @@ var slngElevenLabsTTSModelOptionKeys = []string{
 }
 
 var slngTTSNow = time.Now
+var slngTTSDialContext = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
+}
 
 const defaultSLNGTTSFallbackRecoveryCooldown = time.Minute
 
@@ -93,6 +96,30 @@ type ttsStandbyConnection struct {
 	candidateIndex int
 	attempt        *TTS
 	epoch          uint64
+}
+
+type ttsStandbySettings struct {
+	apiKey            string
+	providerAPIKey    string
+	model             string
+	endpoint          string
+	connections       []TTSConnectionConfig
+	regionOverride    string
+	worldPartOverride string
+	externalAgentID   string
+	externalSessionID string
+	extraHeaders      http.Header
+	voice             string
+	language          string
+	sampleRate        int
+	speed             float64
+	encoding          string
+	modelOptions      map[string]any
+	runtimeInit       map[string]any
+	textChunking      TTSChunkingMode
+	phraseMaxChars    int
+	firstAudioTimeout time.Duration
+	warmStandby       bool
 }
 
 type TTSOption func(*TTS)
@@ -321,21 +348,13 @@ func (t *TTS) NumChannels() int { return slngNumChannels }
 
 func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	t.mu.Lock()
-	voice := t.voice
-	language := t.language
-	speed := t.speed
-	runtimeInit := cloneSLNGMap(t.runtimeInit)
-	warmStandby := t.warmStandby
+	before := t.standbySettingsLocked()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(t)
 		}
 	}
-	invalidateStandby := voice != t.voice ||
-		language != t.language ||
-		speed != t.speed ||
-		!reflect.DeepEqual(runtimeInit, t.runtimeInit) ||
-		(warmStandby && !t.warmStandby)
+	invalidateStandby := !reflect.DeepEqual(before, t.standbySettingsLocked())
 	if t.candidateState == nil ||
 		t.candidateState.count != t.ttsCandidateCount() ||
 		t.candidateState.cooldown != t.fallbackCooldown {
@@ -362,6 +381,32 @@ func (t *TTS) UpdateOptions(opts ...TTSOption) {
 	}
 	if standby != nil {
 		_ = standby.conn.Close()
+	}
+}
+
+func (t *TTS) standbySettingsLocked() ttsStandbySettings {
+	return ttsStandbySettings{
+		apiKey:            t.apiKey,
+		providerAPIKey:    t.providerAPIKey,
+		model:             t.model,
+		endpoint:          t.endpoint,
+		connections:       cloneTTSConnectionConfigs(t.connections),
+		regionOverride:    t.regionOverride,
+		worldPartOverride: t.worldPartOverride,
+		externalAgentID:   t.externalAgentID,
+		externalSessionID: t.externalSessionID,
+		extraHeaders:      t.extraHeaders.Clone(),
+		voice:             t.voice,
+		language:          t.language,
+		sampleRate:        t.sampleRate,
+		speed:             t.speed,
+		encoding:          t.encoding,
+		modelOptions:      cloneSLNGMap(t.modelOptions),
+		runtimeInit:       cloneSLNGMap(t.runtimeInit),
+		textChunking:      t.textChunking,
+		phraseMaxChars:    t.phraseMaxChars,
+		firstAudioTimeout: t.firstAudioTimeout,
+		warmStandby:       t.warmStandby,
 	}
 }
 
@@ -462,9 +507,14 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 	if err != nil {
 		return nil, err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &ttsStream{
 		provider:          t,
-		ctx:               ctx,
+		ctx:               streamCtx,
+		cancel:            cancel,
 		conn:              conn,
 		candidateIndex:    candidateIndex,
 		sampleRate:        attempt.sampleRate,
@@ -684,12 +734,16 @@ func (t *TTS) dialTTSStandby(ctx context.Context, candidateIndex int) (*websocke
 	if err != nil {
 		return nil, ttsConnectionCandidate{}, nil, err
 	}
-	conn, response, err := websocket.DefaultDialer.DialContext(ctx, candidate.endpoint, headers)
+	conn, response, err := slngTTSDialContext(ctx, candidate.endpoint, headers)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ttsConnectionCandidate{}, nil, ctxErr
 		}
 		return nil, ttsConnectionCandidate{}, nil, slngTTSDialError(response, err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		_ = conn.Close()
+		return nil, ttsConnectionCandidate{}, nil, ctxErr
 	}
 	initPayload := buildTTSInitPayload(attempt)
 	if candidate.init != nil {
@@ -734,13 +788,16 @@ func (t *TTS) dialTTSCandidates(ctx context.Context, candidateIndex int) (*webso
 		if err != nil {
 			return nil, ttsConnectionCandidate{}, -1, nil, err
 		}
-		conn, response, dialErr := websocket.DefaultDialer.DialContext(ctx, candidate.endpoint, headers)
+		conn, response, dialErr := slngTTSDialContext(ctx, candidate.endpoint, headers)
 		var candidateErr error
 		if dialErr != nil {
 			if err := ctx.Err(); err != nil {
 				return nil, ttsConnectionCandidate{}, -1, nil, err
 			}
 			candidateErr = slngTTSDialError(response, dialErr)
+		} else if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return nil, ttsConnectionCandidate{}, -1, nil, err
 		} else {
 			initPayload := buildTTSInitPayload(attempt)
 			if candidate.init != nil {
@@ -1038,25 +1095,28 @@ func isSLNGTTSEndEvent(message map[string]any) bool {
 }
 
 type ttsStream struct {
-	mu                 sync.Mutex
-	provider           *TTS
-	ctx                context.Context
-	conn               *websocket.Conn
-	candidateIndex     int
-	sampleRate         int
-	model              string
-	audioFrames        int
-	audioBytes         int
-	textMessages       int
-	pendingText        string
-	lastMessageType    string
-	appendTextSpace    bool
-	firstAudioTimeout  time.Duration
-	firstAudioDeadline time.Time
-	textChunking       TTSChunkingMode
-	phraseMaxChars     int
-	replay             []ttsInputAction
-	closed             bool
+	mu                  sync.Mutex
+	provider            *TTS
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	conn                *websocket.Conn
+	candidateIndex      int
+	sampleRate          int
+	model               string
+	audioFrames         int
+	audioBytes          int
+	textMessages        int
+	pendingText         string
+	wordBuffer          string
+	wordBufferHasLetter bool
+	lastMessageType     string
+	appendTextSpace     bool
+	firstAudioTimeout   time.Duration
+	firstAudioDeadline  time.Time
+	textChunking        TTSChunkingMode
+	phraseMaxChars      int
+	replay              []ttsInputAction
+	closed              bool
 }
 
 type ttsInputAction struct {
@@ -1110,10 +1170,8 @@ func (s *ttsStream) flushLocked() error {
 		if err := s.sendPhraseChunksLocked(true); err != nil {
 			return err
 		}
-	} else if s.pendingText != "" {
-		text := strings.Join(tokenize.NewBasicWordTokenizer().Tokenize(s.pendingText, ""), " ")
-		s.pendingText = ""
-		if err := s.sendTextLocked(text); err != nil {
+	} else {
+		if err := s.flushWordChunksLocked(); err != nil {
 			return err
 		}
 	}
@@ -1151,21 +1209,64 @@ func (s *ttsStream) sendPhraseChunksLocked(flush bool) error {
 }
 
 func (s *ttsStream) sendCompleteWordsLocked() error {
-	for {
-		tokens := tokenize.NewBasicWordTokenizer().Tokenize(s.pendingText, "")
-		if len(tokens) <= 1 {
-			return nil
-		}
-		word := tokens[0]
-		if err := s.sendTextLocked(word); err != nil {
+	tokens := tokenize.SplitWords(s.pendingText, false, false, false)
+	if len(tokens) == 0 {
+		return nil
+	}
+	for _, token := range tokens[:len(tokens)-1] {
+		if err := s.bufferWordTokenLocked(token.Token); err != nil {
 			return err
 		}
-		wordIdx := strings.Index(s.pendingText, word)
-		if wordIdx < 0 {
-			return nil
-		}
-		s.pendingText = strings.TrimLeftFunc(s.pendingText[wordIdx+len(word):], unicode.IsSpace)
 	}
+	last := tokens[len(tokens)-1]
+	if strings.ContainsFunc(last.Token, unicode.IsLetter) && s.wordBufferHasLetter {
+		if err := s.sendTextLocked(s.wordBuffer); err != nil {
+			return err
+		}
+		s.wordBuffer = ""
+		s.wordBufferHasLetter = false
+	}
+	runes := []rune(s.pendingText)
+	s.pendingText = string(runes[last.Start:])
+	return nil
+}
+
+func (s *ttsStream) flushWordChunksLocked() error {
+	for _, token := range tokenize.SplitWords(s.pendingText, false, false, false) {
+		if err := s.bufferWordTokenLocked(token.Token); err != nil {
+			return err
+		}
+	}
+	s.pendingText = ""
+	if s.wordBufferHasLetter {
+		if err := s.sendTextLocked(s.wordBuffer); err != nil {
+			return err
+		}
+	}
+	s.wordBuffer = ""
+	s.wordBufferHasLetter = false
+	return nil
+}
+
+func (s *ttsStream) bufferWordTokenLocked(token string) error {
+	piece := token + " "
+	hasLetter := strings.ContainsFunc(token, unicode.IsLetter)
+	if s.wordBuffer == "" {
+		s.wordBuffer = piece
+		s.wordBufferHasLetter = hasLetter
+		return nil
+	}
+	if hasLetter && s.wordBufferHasLetter {
+		if err := s.sendTextLocked(s.wordBuffer); err != nil {
+			return err
+		}
+		s.wordBuffer = piece
+		s.wordBufferHasLetter = true
+		return nil
+	}
+	s.wordBuffer += piece
+	s.wordBufferHasLetter = s.wordBufferHasLetter || hasLetter
+	return nil
 }
 
 func (s *ttsStream) sendTextLocked(text string) error {
@@ -1186,6 +1287,7 @@ func (s *ttsStream) sendTextLocked(text string) error {
 	}
 	if s.audioFrames == 0 && s.firstAudioTimeout > 0 && s.firstAudioDeadline.IsZero() {
 		s.firstAudioDeadline = time.Now().Add(s.firstAudioTimeout)
+		_ = s.conn.SetReadDeadline(s.firstAudioDeadline)
 	}
 	if s.provider != nil {
 		s.provider.startTTSStandby()
@@ -1197,19 +1299,31 @@ func (s *ttsStream) EndInput() error { return s.Flush() }
 
 func (s *ttsStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	if s.provider != nil {
-		defer s.provider.unregisterStream(s)
+	s.firstAudioDeadline = time.Time{}
+	cancel := s.cancel
+	s.cancel = nil
+	provider := s.provider
+	conn := s.conn
+	s.conn = nil
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
-	if s.conn == nil {
-		return nil
+	var err error
+	if conn != nil {
+		_ = conn.SetReadDeadline(time.Now())
+		err = conn.Close()
 	}
-	_ = s.conn.SetReadDeadline(time.Time{})
-	return s.conn.Close()
+	if provider != nil {
+		provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
@@ -1217,12 +1331,13 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Lock()
 		closed := s.closed
 		conn := s.conn
-		firstAudioDeadline := s.firstAudioDeadline
-		s.mu.Unlock()
 		if closed || conn == nil {
+			s.mu.Unlock()
 			return nil, io.EOF
 		}
-		if err := conn.SetReadDeadline(firstAudioDeadline); err != nil {
+		err := conn.SetReadDeadline(s.firstAudioDeadline)
+		s.mu.Unlock()
+		if err != nil {
 			return nil, err
 		}
 		cancelRead := make(chan struct{})
@@ -1244,7 +1359,10 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 		if err != nil {
 			candidateErr := s.readError(err)
 			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() && !firstAudioDeadline.IsZero() {
+			s.mu.Lock()
+			armedDeadline := s.firstAudioDeadline
+			s.mu.Unlock()
+			if errors.As(err, &netErr) && netErr.Timeout() && !armedDeadline.IsZero() {
 				candidateErr = llm.NewAPITimeoutError("SLNG TTS first audio timed out")
 			}
 			if fallbackErr, ok := s.fallbackBeforeFirstAudio(candidateErr); ok {
@@ -1322,23 +1440,35 @@ func (s *ttsStream) fallbackBeforeFirstAudio(failure error) (error, bool) {
 	provider := s.provider
 	ctx := s.ctx
 	candidateIndex := s.candidateIndex
+	originalConn := s.conn
 	s.mu.Unlock()
 
 	conn, candidate, nextIndex, attempt, err := provider.advanceTTSCandidate(ctx, candidateIndex)
 	if err != nil {
 		if strings.Contains(err.Error(), "fallback candidates exhausted") {
+			_ = s.Close()
 			return failure, true
 		}
 		return err, true
 	}
 
 	s.mu.Lock()
-	oldConn := s.conn
+	if s.closed || s.conn != originalConn || (ctx != nil && ctx.Err() != nil) {
+		s.mu.Unlock()
+		_ = conn.Close()
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err(), true
+		}
+		return io.ErrClosedPipe, true
+	}
+	oldConn := originalConn
 	s.conn = conn
 	s.candidateIndex = nextIndex
 	s.sampleRate = attempt.sampleRate
 	s.model = candidate.model
 	s.pendingText = ""
+	s.wordBuffer = ""
+	s.wordBufferHasLetter = false
 	s.textMessages = 0
 	s.lastMessageType = ""
 	s.firstAudioTimeout = attempt.firstAudioTimeout
@@ -1360,7 +1490,7 @@ func (s *ttsStream) fallbackBeforeFirstAudio(failure error) (error, bool) {
 	s.mu.Unlock()
 	_ = oldConn.Close()
 	if replayErr != nil {
-		_ = conn.Close()
+		_ = s.Close()
 		return replayErr, true
 	}
 	return nil, true

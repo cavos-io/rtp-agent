@@ -125,6 +125,64 @@ func TestTTSGatewayOptionsBuildHeaders(t *testing.T) {
 	}
 }
 
+func TestSTTCandidateHeadersCannotOverrideReservedProviderTrackingHeaders(t *testing.T) {
+	provider := NewSTT("slng-key",
+		WithSTTProviderAPIKey("provider-key"),
+		WithSTTExternalTracking("agent-id", "session-id"),
+		WithSTTExtraHeaders(http.Header{
+			"X-Slng-Provider-Key": {"caller-provider"},
+			"X-SLNG-Agent-Id":     {"caller-agent"},
+			"X-SLNG-Session-Id":   {"caller-session"},
+		}),
+	)
+	headers, err := buildSTTWebsocketHeadersForCandidate(provider, http.Header{
+		"X-Slng-Provider-Key": {"candidate-provider"},
+		"X-SLNG-Agent-Id":     {"candidate-agent"},
+		"X-SLNG-Session-Id":   {"candidate-session"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"X-Slng-Provider-Key": "provider-key",
+		"X-SLNG-Agent-Id":     "agent-id",
+		"X-SLNG-Session-Id":   "session-id",
+	} {
+		if got := headers.Get(key); got != want {
+			t.Fatalf("%s = %q, want reserved value %q", key, got, want)
+		}
+	}
+}
+
+func TestTTSCandidateHeadersCannotOverrideReservedProviderTrackingHeaders(t *testing.T) {
+	provider := NewTTS("slng-key",
+		WithTTSProviderAPIKey("provider-key"),
+		WithTTSExternalTracking("agent-id", "session-id"),
+		WithTTSExtraHeaders(http.Header{
+			"X-Slng-Provider-Key": {"caller-provider"},
+			"X-SLNG-Agent-Id":     {"caller-agent"},
+			"X-SLNG-Session-Id":   {"caller-session"},
+		}),
+	)
+	headers, err := buildTTSWebsocketHeadersForCandidate(provider, http.Header{
+		"X-Slng-Provider-Key": {"candidate-provider"},
+		"X-SLNG-Agent-Id":     {"candidate-agent"},
+		"X-SLNG-Session-Id":   {"candidate-session"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"X-Slng-Provider-Key": "provider-key",
+		"X-SLNG-Agent-Id":     "agent-id",
+		"X-SLNG-Session-Id":   "session-id",
+	} {
+		if got := headers.Get(key); got != want {
+			t.Fatalf("%s = %q, want reserved value %q", key, got, want)
+		}
+	}
+}
+
 func TestSLNGProviderFramesReturnTypedStatusError(t *testing.T) {
 	_, err := sttEventsFromMessage([]byte(`{"type":"Error","data":{"code":"rate_limit","message":"slow down"}}`), "en", true)
 	var statusErr *llm.APIStatusError

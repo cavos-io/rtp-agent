@@ -107,7 +107,9 @@ Headers support:
 - candidate-specific headers.
 
 Tracking IDs are trimmed, limited to 128 characters, and reject commas and
-control characters. Explicit candidate headers take final precedence.
+control characters. Caller and candidate headers are applied before reserved
+provider-key and tracking headers, so candidates cannot override credentials
+or usage attribution.
 
 Provider error frames map numeric and symbolic bridge codes to typed core API
 errors. Error messages are bounded before inclusion in diagnostic metadata.

@@ -54,6 +54,7 @@ func (h gatewayHeaders) build(candidate http.Header) (http.Header, error) {
 	if worldPart := strings.ToLower(strings.TrimSpace(h.WorldPartOverride)); worldPart != "" && headers.Get("X-World-Part-Override") == "" {
 		headers.Set("X-World-Part-Override", worldPart)
 	}
+	mergeSLNGHeaders(headers, candidate)
 	if h.ProviderAPIKey != "" {
 		providerAPIKey := strings.TrimSpace(h.ProviderAPIKey)
 		if providerAPIKey == "" {
@@ -71,7 +72,6 @@ func (h gatewayHeaders) build(candidate http.Header) (http.Header, error) {
 	} else if sessionID != "" {
 		headers.Set("X-SLNG-Session-Id", sessionID)
 	}
-	mergeSLNGHeaders(headers, candidate)
 	return headers, nil
 }
 
