@@ -28,6 +28,7 @@ const (
 
 var (
 	slngSTTNow               = time.Now
+	slngSTTAfterFunc         = time.AfterFunc
 	slngSTTKeepaliveInterval = 5 * time.Second
 )
 
@@ -935,6 +936,7 @@ type sttStream struct {
 	inputEnded              bool
 	finalTimeout            time.Duration
 	finalTimer              *time.Timer
+	finalTimerGeneration    uint64
 	terminalErr             error
 	silentReconnects        int
 	lifecycleDone           chan struct{}
@@ -1352,9 +1354,16 @@ func (s *sttStream) startFinalTimerLocked() {
 		return
 	}
 	s.stopFinalTimerLocked()
-	s.finalTimer = time.AfterFunc(s.finalTimeout, func() {
+	generation := s.finalTimerGeneration
+	var timer *time.Timer
+	timer = slngSTTAfterFunc(s.finalTimeout, func() {
 		timeoutErr := llm.NewAPITimeoutError("SLNG STT timed out waiting for final transcript")
 		s.mu.Lock()
+		if s.finalTimerGeneration != generation || s.finalTimer != timer {
+			s.mu.Unlock()
+			return
+		}
+		s.finalTimer = nil
 		if s.closed || !s.inputEnded || s.terminalErr != nil {
 			s.mu.Unlock()
 			return
@@ -1374,9 +1383,11 @@ func (s *sttStream) startFinalTimerLocked() {
 			provider.unregisterStream(s)
 		}
 	})
+	s.finalTimer = timer
 }
 
 func (s *sttStream) stopFinalTimerLocked() {
+	s.finalTimerGeneration++
 	if s.finalTimer != nil {
 		s.finalTimer.Stop()
 		s.finalTimer = nil

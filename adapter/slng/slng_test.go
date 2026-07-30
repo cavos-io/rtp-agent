@@ -2158,6 +2158,72 @@ func TestSLNGSTTFinalTimeoutReturnsTypedTimeoutError(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFinalAtTimeoutBoundaryKeepsPendingFinal(t *testing.T) {
+	oldAfterFunc := slngSTTAfterFunc
+	callbacks := make(chan func(), 1)
+	var timer *time.Timer
+	slngSTTAfterFunc = func(_ time.Duration, callback func()) *time.Timer {
+		callbacks <- callback
+		timer = time.AfterFunc(time.Hour, func() {})
+		return timer
+	}
+	t.Cleanup(func() {
+		slngSTTAfterFunc = oldAfterFunc
+		if timer != nil {
+			timer.Stop()
+		}
+	})
+
+	provider := NewSTT("test-key")
+	stream := &sttStream{
+		provider:      provider,
+		inputEnded:    true,
+		finalTimeout:  time.Second,
+		lifecycleDone: make(chan struct{}),
+	}
+	provider.registerStream(stream)
+	defer stream.Close()
+
+	stream.mu.Lock()
+	stream.startFinalTimerLocked()
+	callback := <-callbacks
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		callback()
+		close(done)
+	}()
+	<-started
+	stream.stopFinalTimerLocked()
+	stream.pendingEvents = append(stream.pendingEvents, &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Language: "en",
+			Text:     "boundary final",
+		}},
+	})
+	stream.mu.Unlock()
+	<-done
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want pending final", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next() event = %#v, want final transcript", event)
+	}
+	if stream.isClosed() {
+		t.Fatal("timeout callback closed stream after final was accepted")
+	}
+	provider.mu.Lock()
+	activeStreams := len(provider.streams)
+	provider.mu.Unlock()
+	if activeStreams != 1 {
+		t.Fatalf("active streams after boundary final = %d, want 1", activeStreams)
+	}
+}
+
 func TestSLNGSTTSendsKeepaliveWhileInputOpen(t *testing.T) {
 	oldInterval := slngSTTKeepaliveInterval
 	slngSTTKeepaliveInterval = 10 * time.Millisecond
