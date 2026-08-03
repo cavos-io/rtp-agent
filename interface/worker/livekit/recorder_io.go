@@ -142,6 +142,8 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.inputNextTime = time.Time{}
 	r.outputNextTime = time.Time{}
 	r.auxNextTimes = nil
+	r.inFrames = nil
+	r.outFrames = nil
 	r.auxFrames = nil
 
 	go r.recordLoop(sampleRate, r.done, r.closeComplete)

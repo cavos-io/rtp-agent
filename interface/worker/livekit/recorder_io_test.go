@@ -154,6 +154,63 @@ func TestRecorderIOStopFlushesAndClosesOutput(t *testing.T) {
 	}
 }
 
+func TestRecorderIORotatesToNewFileOnStopThenStart(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	dir := t.TempDir()
+	const sampleRate = 48000
+
+	frame := func() *model.AudioFrame {
+		f := &model.AudioFrame{
+			Data:              make([]byte, 960*2),
+			SampleRate:        sampleRate,
+			NumChannels:       1,
+			SamplesPerChannel: 960,
+		}
+		for i := 0; i < len(f.Data); i += 2 {
+			f.Data[i] = byte(i)
+			f.Data[i+1] = byte(i >> 8)
+		}
+		return f
+	}
+
+	firstPath := filepath.Join(dir, "audio.ogg")
+	if err := recorder.Start(firstPath, sampleRate); err != nil {
+		t.Fatalf("Start(first) error = %v", err)
+	}
+	recorder.RecordInput(frame())
+	if !recorder.Recording() {
+		t.Fatal("Recording() = false during first segment, want true")
+	}
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop(first) error = %v", err)
+	}
+	if recorder.Recording() {
+		t.Fatal("Recording() = true after Stop(first), want false")
+	}
+
+	secondPath := filepath.Join(dir, "room-transfer-topic.ogg")
+	if err := recorder.Start(secondPath, sampleRate); err != nil {
+		t.Fatalf("Start(second) error = %v", err)
+	}
+	if got := recorder.OutputPath(); got != secondPath {
+		t.Fatalf("OutputPath() = %q after rotation, want %q", got, secondPath)
+	}
+	recorder.RecordInput(frame())
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop(second) error = %v", err)
+	}
+
+	for _, path := range []string{firstPath, secondPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%q) after rotation: %v", path, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("segment %q size = 0, want flushed and closed output", path)
+		}
+	}
+}
+
 func TestRecorderIOStopReturnsWriteFailure(t *testing.T) {
 	wantErr := errors.New("disk full")
 	recorder := NewRecorderIO(&agent.AgentSession{})
