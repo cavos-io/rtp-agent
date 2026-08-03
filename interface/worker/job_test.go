@@ -840,6 +840,35 @@ func TestJobContextStartSessionConnectsRoomCreatesRoomIOAndStartsSession(t *test
 	if got, err := session.JobContext(); err != nil || got != ctx {
 		t.Fatalf("AgentSession.JobContext() = %v, %v; want job context", got, err)
 	}
+	if ctx.PrimaryRoomIO() == nil {
+		t.Fatal("PrimaryRoomIO() = nil after StartSession, want the session RoomIO")
+	}
+}
+
+func TestJobContextPrimaryRoomIONilBeforeStartSession(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_no_session", Room: &livekit.Room{Name: "room-none"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	if got := ctx.PrimaryRoomIO(); got != nil {
+		t.Fatalf("PrimaryRoomIO() = %v before StartSession, want nil", got)
+	}
+	var nilCtx *JobContext
+	if got := nilCtx.PrimaryRoomIO(); got != nil {
+		t.Fatalf("PrimaryRoomIO() on nil context = %v, want nil", got)
+	}
+}
+
+func TestRoomIOStopRecorderNilSafe(t *testing.T) {
+	var rio *workerlivekit.RoomIO
+	if err := rio.StopRecorder(); err != nil {
+		t.Fatalf("StopRecorder() on nil RoomIO = %v, want nil", err)
+	}
+	if err := (&workerlivekit.RoomIO{}).StopRecorder(); err != nil {
+		t.Fatalf("StopRecorder() without recorder = %v, want nil", err)
+	}
 }
 
 func TestJobContextStartSessionUsesRoomCallbackForSubscriptions(t *testing.T) {
