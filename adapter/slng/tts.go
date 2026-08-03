@@ -1191,6 +1191,7 @@ type ttsStream struct {
 	pendingText         string
 	wordBuffer          string
 	wordBufferHasLetter bool
+	pendingPCM          []byte
 	lastMessageType     string
 	appendTextSpace     bool
 	firstAudioTimeout   time.Duration
@@ -1467,6 +1468,14 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, candidateErr
 		}
 		if msgType == websocket.BinaryMessage {
+			audio := s.alignPCMAudio(&tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              payload,
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       slngNumChannels,
+					SamplesPerChannel: uint32(len(payload) / 2),
+				},
+			}, false)
 			s.mu.Lock()
 			s.audioFrames++
 			s.audioBytes += len(payload)
@@ -1475,14 +1484,10 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			s.replay = nil
 			s.mu.Unlock()
 			_ = conn.SetReadDeadline(time.Time{})
-			return &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              payload,
-					SampleRate:        uint32(s.sampleRate),
-					NumChannels:       slngNumChannels,
-					SamplesPerChannel: uint32(len(payload) / 2),
-				},
-			}, nil
+			if audio == nil {
+				continue
+			}
+			return audio, nil
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -1499,10 +1504,15 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, err
 		}
+		receivedAudioBytes := 0
 		if audio != nil && audio.Frame != nil {
+			receivedAudioBytes = len(audio.Frame.Data)
+		}
+		audio = s.alignPCMAudio(audio, done)
+		if receivedAudioBytes > 0 {
 			s.mu.Lock()
 			s.audioFrames++
-			s.audioBytes += len(audio.Frame.Data)
+			s.audioBytes += receivedAudioBytes
 			s.firstAudioDeadline = time.Time{}
 			s.replay = nil
 			s.mu.Unlock()
@@ -1532,6 +1542,41 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			return audio, nil
 		}
 	}
+}
+
+func (s *ttsStream) alignPCMAudio(audio *tts.SynthesizedAudio, done bool) *tts.SynthesizedAudio {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if audio == nil || audio.Frame == nil {
+		if done {
+			s.pendingPCM = nil
+		}
+		return audio
+	}
+	data := audio.Frame.Data
+	if len(s.pendingPCM) > 0 {
+		combined := make([]byte, 0, len(s.pendingPCM)+len(data))
+		combined = append(combined, s.pendingPCM...)
+		data = append(combined, data...)
+		s.pendingPCM = nil
+	}
+	if len(data)%2 != 0 {
+		s.pendingPCM = append(s.pendingPCM[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	if done {
+		s.pendingPCM = nil
+	}
+	if len(data) == 0 {
+		if done {
+			audio.Frame = nil
+			return audio
+		}
+		return nil
+	}
+	audio.Frame.Data = data
+	audio.Frame.SamplesPerChannel = uint32(len(data) / 2)
+	return audio
 }
 
 func (s *ttsStream) fallbackBeforeFirstAudio(failure error) (error, bool) {
@@ -1572,6 +1617,7 @@ func (s *ttsStream) fallbackBeforeFirstAudio(failure error) (error, bool) {
 	s.pendingText = ""
 	s.wordBuffer = ""
 	s.wordBufferHasLetter = false
+	s.pendingPCM = nil
 	s.textMessages = 0
 	s.lastMessageType = ""
 	s.firstAudioTimeout = attempt.firstAudioTimeout

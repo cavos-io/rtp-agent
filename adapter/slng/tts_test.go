@@ -2,6 +2,7 @@ package slng
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -234,6 +235,70 @@ func TestTTSStreamReturnsCompletionBoundaryAfterAudio(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("third Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestTTSStreamPreservesPCMSampleBoundariesAcrossMessages(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, input, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(input, &message) != nil || message["type"] != "flush" {
+				continue
+			}
+			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{0x11, 0x22, 0x33})
+			_ = conn.WriteJSON(map[string]any{
+				"type": "audio_chunk",
+				"data": base64.StdEncoding.EncodeToString([]byte{0x44, 0x55, 0x66}),
+			})
+			_ = conn.WriteJSON(map[string]any{
+				"audio":   base64.StdEncoding.EncodeToString([]byte{0x77}),
+				"isFinal": true,
+			})
+			return
+		}
+	}))[0]
+
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	defer provider.Close()
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio.Frame == nil {
+			if !audio.IsFinal {
+				t.Fatalf("boundary = %#v, want final marker", audio)
+			}
+			continue
+		}
+		if len(audio.Frame.Data)%2 != 0 {
+			t.Fatalf("PCM frame has %d bytes, want complete 16-bit samples", len(audio.Frame.Data))
+		}
+		got = append(got, audio.Frame.Data...)
+	}
+	if want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("PCM bytes = %v, want %v", got, want)
 	}
 }
 
