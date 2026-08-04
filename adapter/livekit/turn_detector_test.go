@@ -15,6 +15,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+const testMultilingualRevision = "v0.4.3-intl"
+
 func TestTurnDetectorPluginMetadataMatchesReference(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.livekit" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.livekit", PluginTitle)
@@ -59,8 +61,8 @@ func TestTurnDetectorModelDefinitionsMatchReference(t *testing.T) {
 	if multilingual.Model() != ModelMultilingual {
 		t.Fatalf("multilingual model = %q, want %q", multilingual.Model(), ModelMultilingual)
 	}
-	if multilingual.ModelRevision() != "v0.4.1-intl" {
-		t.Fatalf("multilingual revision = %q, want v0.4.1-intl", multilingual.ModelRevision())
+	if multilingual.ModelRevision() != testMultilingualRevision {
+		t.Fatalf("multilingual revision = %q, want %s", multilingual.ModelRevision(), testMultilingualRevision)
 	}
 	if multilingual.InferenceMethod() != "lk_end_of_utterance_multilingual" {
 		t.Fatalf("multilingual inference method = %q, want lk_end_of_utterance_multilingual", multilingual.InferenceMethod())
@@ -224,9 +226,9 @@ func TestTurnDetectorPluginDownloadFilesDownloadsReferenceFiles(t *testing.T) {
 		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/onnx/model_q8.onnx",
 		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/tokenizer.json",
 		"https://huggingface.co/livekit/turn-detector/resolve/v1.2.2-en/languages.json",
-		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/onnx/model_q8.onnx",
-		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/tokenizer.json",
-		"https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/languages.json",
+		"https://huggingface.co/livekit/turn-detector/resolve/" + testMultilingualRevision + "/onnx/model_q8.onnx",
+		"https://huggingface.co/livekit/turn-detector/resolve/" + testMultilingualRevision + "/tokenizer.json",
+		"https://huggingface.co/livekit/turn-detector/resolve/" + testMultilingualRevision + "/languages.json",
 	}
 	if strings.Join(gotURLs, "\n") != strings.Join(wantURLs, "\n") {
 		t.Fatalf("download URLs = %#v, want %#v", gotURLs, wantURLs)
