@@ -1,0 +1,255 @@
+{
+  "name": "slng-reference-bridge-scenarios",
+  "case_type": "cross-runtime",
+  "compare_mode": "json_equal",
+  "ignored_fields": [],
+  "input": [
+    {
+      "name": "bridge-endpoint-remote",
+      "operation": "bridge_endpoint",
+      "input": {
+        "base_url": "api.slng.ai",
+        "service": "stt",
+        "model": "deepgram/nova:3"
+      },
+      "expected": {
+        "result": "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3",
+        "error": null
+      }
+    },
+    {
+      "name": "bridge-endpoint-localhost",
+      "operation": "bridge_endpoint",
+      "input": {
+        "base_url": "localhost:8080",
+        "service": "tts",
+        "model": "deepgram/aura:2"
+      },
+      "expected": {
+        "result": "ws://localhost:8080/v1/bridges/unmute/tts/deepgram/aura:2",
+        "error": null
+      }
+    },
+    {
+      "name": "model-identifier-valid",
+      "operation": "validate_model_identifier",
+      "input": {
+        "model": "elevenlabs/eleven-flash:2.5"
+      },
+      "expected": {
+        "result": "elevenlabs/eleven-flash:2.5",
+        "error": null
+      }
+    },
+    {
+      "name": "model-identifier-invalid",
+      "operation": "validate_model_identifier",
+      "input": {
+        "model": "deepgram"
+      },
+      "expected": {
+        "result": null,
+        "error": {
+          "type": "ValueError",
+          "message": "model must be a provider/model identifier, for example 'deepgram/nova:3'"
+        }
+      }
+    },
+    {
+      "name": "bridge-model-extraction",
+      "operation": "bridge_model",
+      "input": {
+        "endpoint": "wss://api.slng.ai/v1/bridges/unmute/tts/elevenlabs/eleven-flash:2.5/",
+        "service": "tts"
+      },
+      "expected": {
+        "result": "elevenlabs/eleven-flash:2.5",
+        "error": null
+      }
+    },
+    {
+      "name": "bridge-model-invalid-path",
+      "operation": "bridge_model",
+      "input": {
+        "endpoint": "wss://api.slng.ai/v1/stt/deepgram/nova:3",
+        "service": "stt"
+      },
+      "expected": {
+        "result": null,
+        "error": {
+          "type": "ValueError",
+          "message": "STT endpoint must target the Unmute Bridge path /v1/bridges/unmute/stt/"
+        }
+      }
+    },
+    {
+      "name": "region-normalization",
+      "operation": "normalize_region_override",
+      "input": {
+        "region_override": " US-East, EU-WEST, "
+      },
+      "expected": {
+        "result": "us-east, eu-west",
+        "error": null
+      }
+    },
+    {
+      "name": "world-part-normalization",
+      "operation": "normalize_world_part_override",
+      "input": {
+        "world_part_override": " AP "
+      },
+      "expected": {
+        "result": "ap",
+        "error": null
+      }
+    },
+    {
+      "name": "external-tracking-headers-valid",
+      "operation": "external_tracking_headers",
+      "input": {
+        "external_agent_id": " agent-1 ",
+        "external_session_id": " session-1 "
+      },
+      "expected": {
+        "result": {
+          "x-slng-agent-id": "agent-1",
+          "x-slng-session-id": "session-1"
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "external-tracking-headers-invalid",
+      "operation": "external_tracking_headers",
+      "input": {
+        "external_agent_id": "bad,id",
+        "external_session_id": null
+      },
+      "expected": {
+        "result": null,
+        "error": {
+          "type": "ValueError",
+          "message": "external_agent_id must not contain commas or control characters"
+        }
+      }
+    },
+    {
+      "name": "provider-error-status-numeric",
+      "operation": "extract_error_status",
+      "input": {
+        "frame": {
+          "data": {
+            "status_code": 429
+          }
+        }
+      },
+      "expected": {
+        "result": 429,
+        "error": null
+      }
+    },
+    {
+      "name": "provider-error-status-symbolic",
+      "operation": "extract_error_status",
+      "input": {
+        "frame": {
+          "data": {
+            "code": "rate_limit"
+          }
+        }
+      },
+      "expected": {
+        "result": 429,
+        "error": null
+      }
+    },
+    {
+      "name": "stt-init-payload",
+      "operation": "build_stt_init_payload",
+      "input": {
+        "model": "soniox/stt-rt-v4",
+        "language": "en",
+        "sample_rate": 16000,
+        "encoding": "pcm_s16le",
+        "vad_threshold": 0.5,
+        "vad_min_silence_duration_ms": 300,
+        "vad_speech_pad_ms": 30,
+        "enable_diarization": true,
+        "enable_partial_transcripts": false,
+        "min_speakers": 2,
+        "max_speakers": 4,
+        "model_options": {
+          "punctuate": true
+        }
+      },
+      "expected": {
+        "result": {
+          "type": "init",
+          "config": {
+            "language": "en",
+            "sample_rate": 16000,
+            "encoding": "linear16",
+            "vad_threshold": 0.5,
+            "vad_min_silence_duration_ms": 300,
+            "vad_speech_pad_ms": 30,
+            "enable_diarization": true,
+            "enable_partials": false,
+            "enable_partial_transcripts": false,
+            "punctuate": true,
+            "min_speakers": 2,
+            "max_speakers": 4
+          }
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "tts-init-payload",
+      "operation": "build_tts_init_payload",
+      "input": {
+        "model": "elevenlabs/eleven-flash:2.5",
+        "voice": "Rachel",
+        "language": "en",
+        "sample_rate": 24000,
+        "encoding": "linear16",
+        "speed": 1.1,
+        "model_options": {}
+      },
+      "expected": {
+        "result": {
+          "type": "init",
+          "model": "elevenlabs/eleven-flash:2.5",
+          "voice": "Rachel",
+          "language": "en",
+          "config": {
+            "language": "en",
+            "encoding": "linear16",
+            "sample_rate": 24000,
+            "speed": 1.1
+          }
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "candidate-primary-recovery",
+      "operation": "candidate_primary_recovery",
+      "input": {
+        "count": 2,
+        "cooldown_seconds": 60,
+        "failed_at_seconds": 100,
+        "before_seconds": 159,
+        "after_seconds": 160
+      },
+      "expected": {
+        "result": {
+          "next_after_primary_failure": 1,
+          "before_cooldown": 1,
+          "after_cooldown": 0
+        },
+        "error": null
+      }
+    }
+  ]
+}

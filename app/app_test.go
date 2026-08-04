@@ -5257,6 +5257,254 @@ func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTConfigPassesGatewayOptions(t *testing.T) {
+	modelOptions := slngGatewayModelOptions()
+	modelOptions["model_specific"] = "kept"
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey:      "slng-key",
+		STTModel:        "deepgram/nova:3",
+		STTModelOptions: modelOptions,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("providerAPIKey").String(), "provider-key"; got != want {
+		t.Fatalf("provider API key = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("worldPartOverride").String(), "eu"; got != want {
+		t.Fatalf("world part override = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("externalAgentID").String(), "agent-1"; got != want {
+		t.Fatalf("external agent ID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("externalSessionID").String(), "session-1"; got != want {
+		t.Fatalf("external session ID = %q, want %q", got, want)
+	}
+	if got, want := time.Duration(state.FieldByName("fallbackRecoveryCooldown").Int()), 30*time.Second; got != want {
+		t.Fatalf("fallback recovery cooldown = %s, want %s", got, want)
+	}
+	providerOptions := state.FieldByName("modelOptions")
+	if got, want := providerOptions.Len(), 1; got != want {
+		t.Fatalf("model options count = %d, want %d", got, want)
+	}
+	if got, want := providerOptions.MapIndex(reflect.ValueOf("model_specific")).Elem().String(), "kept"; got != want {
+		t.Fatalf("model-specific option = %q, want %q", got, want)
+	}
+}
+
+func TestSLNGTTSConfigPassesGatewayOptions(t *testing.T) {
+	modelOptions := slngGatewayModelOptions()
+	modelOptions["model_specific"] = "kept"
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SLNGAPIKey:      "slng-key",
+		TTSModel:        "deepgram/aura:2",
+		TTSModelOptions: modelOptions,
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("providerAPIKey").String(), "provider-key"; got != want {
+		t.Fatalf("provider API key = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("worldPartOverride").String(), "eu"; got != want {
+		t.Fatalf("world part override = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("externalAgentID").String(), "agent-1"; got != want {
+		t.Fatalf("external agent ID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("externalSessionID").String(), "session-1"; got != want {
+		t.Fatalf("external session ID = %q, want %q", got, want)
+	}
+	if got, want := time.Duration(state.FieldByName("fallbackCooldown").Int()), 30*time.Second; got != want {
+		t.Fatalf("fallback recovery cooldown = %s, want %s", got, want)
+	}
+	if got, want := time.Duration(state.FieldByName("firstAudioTimeout").Int()), 2*time.Second; got != want {
+		t.Fatalf("first audio timeout = %s, want %s", got, want)
+	}
+	if !state.FieldByName("warmStandby").Bool() {
+		t.Fatal("warm standby = false, want true")
+	}
+	if got, want := state.FieldByName("textChunking").String(), string(slng.TTSChunkingPhrase); got != want {
+		t.Fatalf("text chunking = %q, want %q", got, want)
+	}
+	if got, want := int(state.FieldByName("phraseMaxChars").Int()), 80; got != want {
+		t.Fatalf("phrase max chars = %d, want %d", got, want)
+	}
+	providerOptions := state.FieldByName("modelOptions")
+	if got, want := providerOptions.Len(), 1; got != want {
+		t.Fatalf("model options count = %d, want %d", got, want)
+	}
+	if got, want := providerOptions.MapIndex(reflect.ValueOf("model_specific")).Elem().String(), "kept"; got != want {
+		t.Fatalf("model-specific option = %q, want %q", got, want)
+	}
+}
+
+func TestSLNGConfigPreservesExplicitEmptyGatewayOptionPresence(t *testing.T) {
+	sttProvider := slng.NewSTT("slng-key", slngSTTModelOptions(map[string]any{
+		"provider_api_key":    "",
+		"external_agent_id":   "",
+		"external_session_id": "",
+	})...)
+	sttState := reflect.ValueOf(sttProvider).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if !sttState.FieldByName(field).Bool() {
+			t.Fatalf("STT %s = false, want explicit presence", field)
+		}
+	}
+
+	ttsProvider := slng.NewTTS("slng-key", slngTTSModelOptions(map[string]any{
+		"provider_api_key":    "",
+		"external_agent_id":   "",
+		"external_session_id": "",
+	})...)
+	ttsState := reflect.ValueOf(ttsProvider).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if !ttsState.FieldByName(field).Bool() {
+			t.Fatalf("TTS %s = false, want explicit presence", field)
+		}
+	}
+
+	omitted := reflect.ValueOf(slng.NewTTS("slng-key", slngTTSModelOptions(nil)...)).Elem()
+	for _, field := range []string{"providerAPIKeySet", "externalAgentIDSet", "externalSessionIDSet"} {
+		if omitted.FieldByName(field).Bool() {
+			t.Fatalf("omitted TTS %s = true, want false", field)
+		}
+	}
+}
+
+func TestSLNGTTSConfigAppliesPhraseMaxCharsWithoutChunkingMode(t *testing.T) {
+	provider := slng.NewTTS("slng-key", slngTTSModelOptions(map[string]any{
+		"phrase_max_chars": 80,
+	})...)
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("textChunking").String(), string(slng.TTSChunkingWord); got != want {
+		t.Fatalf("text chunking = %q, want compatibility default %q", got, want)
+	}
+	if got, want := int(state.FieldByName("phraseMaxChars").Int()), 80; got != want {
+		t.Fatalf("phrase max chars = %d, want %d", got, want)
+	}
+}
+
+func TestSLNGSTTConnectionsStoreTrimmedEndpoints(t *testing.T) {
+	const want = "wss://primary.slng.example/v1/bridges/unmute/stt/deepgram/nova:3"
+	connections := slngSTTConnections([]string{" \t" + want + "\n "})
+	if len(connections) != 1 {
+		t.Fatalf("connections = %d, want 1", len(connections))
+	}
+	if got := connections[0].Endpoint; got != want {
+		t.Fatalf("connection endpoint = %q, want %q", got, want)
+	}
+}
+
+func TestSLNGSTTConfigBuildsConnectionCandidates(t *testing.T) {
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		SLNGAPIKey: "slng-key",
+		STTModelEndpoints: []string{
+			"wss://primary.slng.example/v1/bridges/unmute/stt/deepgram/nova:3",
+			"wss://fallback.slng.example/v1/bridges/unmute/stt/deepgram/nova:3",
+		},
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	connections := reflect.ValueOf(provider).Elem().FieldByName("connections")
+	if got, want := connections.Len(), 2; got != want {
+		t.Fatalf("connection candidates = %d, want %d", got, want)
+	}
+	if got, want := connections.Index(1).FieldByName("Endpoint").String(), "wss://fallback.slng.example/v1/bridges/unmute/stt/deepgram/nova:3"; got != want {
+		t.Fatalf("fallback endpoint = %q, want %q", got, want)
+	}
+}
+
+func TestSLNGTTSConfigBuildsConnectionCandidates(t *testing.T) {
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		SLNGAPIKey: "slng-key",
+		TTSModel:   "deepgram/aura:2",
+	}, providerSLNG)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	state := reflect.ValueOf(provider).Elem()
+	candidateState := state.FieldByName("candidateState").Elem()
+	if got, want := int(candidateState.FieldByName("count").Int()), 1; got != want {
+		t.Fatalf("connection candidates = %d, want %d", got, want)
+	}
+	if got, want := state.FieldByName("endpoint").String(), "wss://api.slng.ai/v1/bridges/unmute/tts/deepgram/aura:2"; got != want {
+		t.Fatalf("endpoint = %q, want %q", got, want)
+	}
+}
+
+func TestSLNGCompatibilityEndpointRemainsExplicit(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sttEndpoint string
+		ttsEndpoint string
+	}{
+		{
+			name:        "legacy paths",
+			sttEndpoint: "wss://legacy.slng.example/v1/stt/deepgram/nova:3",
+			ttsEndpoint: "wss://legacy.slng.example/v1/tts/deepgram/aura:2",
+		},
+		{
+			name:        "current bridge paths",
+			sttEndpoint: "wss://api.slng.example/v1/bridges/unmute/stt/deepgram/nova:3",
+			ttsEndpoint: "wss://api.slng.example/v1/bridges/unmute/tts/deepgram/aura:2",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sttProvider, err := fallbackSTTFromProvider(AppConfig{
+				SLNGAPIKey: "slng-key",
+				STTBaseURL: test.sttEndpoint,
+			}, providerSLNG)
+			if err != nil {
+				t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+			}
+			sttState := reflect.ValueOf(sttProvider).Elem()
+			if got := sttState.FieldByName("connections").Len(); got != 0 {
+				t.Fatalf("STT connection candidates = %d, want 0", got)
+			}
+			if got := sttState.FieldByName("endpoint").String(); got != test.sttEndpoint {
+				t.Fatalf("STT endpoint = %q, want %q", got, test.sttEndpoint)
+			}
+
+			ttsProvider, err := fallbackTTSFromProvider(AppConfig{
+				SLNGAPIKey: "slng-key",
+				TTSBaseURL: test.ttsEndpoint,
+			}, providerSLNG)
+			if err != nil {
+				t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+			}
+			ttsState := reflect.ValueOf(ttsProvider).Elem()
+			if got := ttsState.FieldByName("connections").Len(); got != 0 {
+				t.Fatalf("TTS connection candidates = %d, want 0", got)
+			}
+			if got := ttsState.FieldByName("endpoint").String(); got != test.ttsEndpoint {
+				t.Fatalf("TTS endpoint = %q, want %q", got, test.ttsEndpoint)
+			}
+		})
+	}
+}
+
+func slngGatewayModelOptions() map[string]any {
+	return map[string]any{
+		"provider_api_key":             "provider-key",
+		"world_part_override":          "eu",
+		"external_agent_id":            "agent-1",
+		"external_session_id":          "session-1",
+		"fallback_recovery_cooldown_s": 30,
+		"first_audio_timeout_s":        2,
+		"warm_standby_enabled":         true,
+		"text_chunking":                "phrase",
+		"phrase_max_chars":             80,
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSonioxSpeechProviders(t *testing.T) {
 	t.Setenv("SONIOX_API_KEY", "test-soniox-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "soniox")

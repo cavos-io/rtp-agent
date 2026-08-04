@@ -1,6 +1,7 @@
 package slng
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,7 +52,7 @@ func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 
 func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	sttProvider := NewSTT("test-key")
-	if sttProvider.endpoint != "wss://api.slng.ai/v1/stt/deepgram/nova:3" {
+	if sttProvider.endpoint != "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3" {
 		t.Fatalf("STT endpoint = %q, want reference default", sttProvider.endpoint)
 	}
 	if !sttProvider.Capabilities().Streaming || !sttProvider.Capabilities().InterimResults || sttProvider.Capabilities().OfflineRecognize {
@@ -64,7 +66,7 @@ func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	}
 
 	ttsProvider := NewTTS("test-key")
-	if ttsProvider.endpoint != "wss://api.slng.ai/v1/tts/deepgram/aura:2" {
+	if ttsProvider.endpoint != "wss://api.slng.ai/v1/bridges/unmute/tts/deepgram/aura:2" {
 		t.Fatalf("TTS endpoint = %q, want reference default", ttsProvider.endpoint)
 	}
 	if ttsProvider.voice != "aura-2-thalia-en" {
@@ -181,8 +183,355 @@ func TestSLNGTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 
 func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("localhost:9000"))
-	if provider.endpoint != "ws://localhost:9000/v1/stt/deepgram/nova:3" {
+	if provider.endpoint != "ws://localhost:9000/v1/bridges/unmute/stt/deepgram/nova:3" {
 		t.Fatalf("endpoint = %q, want ws localhost endpoint", provider.endpoint)
+	}
+}
+
+func TestSLNGSTTExplicitBridgeEndpointDerivesModel(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want bridge model", provider.model)
+	}
+	assertSLNGField(t, buildSTTInitPayload(provider), "model", "nova-2")
+}
+
+func TestSLNGSTTExplicitBridgeModelEndpointsDeriveModel(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/bridges/unmute/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTModelEndpoints(endpoint, "wss://backup.slng.ai/v1/bridges/unmute/stt/deepgram/nova:3"))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want bridge model", provider.model)
+	}
+	assertSLNGField(t, buildSTTInitPayload(provider), "model", "nova-2")
+}
+
+func TestSLNGSTTExplicitLegacyEndpointIsPreserved(t *testing.T) {
+	endpoint := "wss://api.slng.ai/v1/stt/deepgram/nova:2"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+
+	if provider.endpoint != endpoint {
+		t.Fatalf("endpoint = %q, want caller-provided endpoint", provider.endpoint)
+	}
+	if provider.model != "deepgram/nova:2" {
+		t.Fatalf("model = %q, want legacy model", provider.model)
+	}
+}
+
+func TestSLNGSTTFallsBackOnRetryableServerError(t *testing.T) {
+	order := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			order <- "primary"
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			order <- "fallback"
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade fallback websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`))
+		}),
+	)
+	provider := NewSTT("test-key", WithSTTConnections(
+		STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+		STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+	))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := []string{<-order, <-order}; !reflect.DeepEqual(got, []string{"primary", "fallback"}) {
+		t.Fatalf("connection order = %v, want primary then fallback", got)
+	}
+}
+
+func TestSLNGSTTWaitsForReadyBeforeSelectingCandidate(t *testing.T) {
+	initSeen := make(chan struct{})
+	sendReady := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		close(initSeen)
+		<-sendReady
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			t.Errorf("write ready: %v", err)
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	provider := NewSTT("test-key", WithSTTConnections(STTConnectionConfig{Endpoint: endpoint}))
+
+	type result struct {
+		stream stt.RecognizeStream
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		stream, err := provider.Stream(context.Background(), "")
+		resultCh <- result{stream: stream, err: err}
+	}()
+	<-initSeen
+	select {
+	case got := <-resultCh:
+		if got.stream != nil {
+			got.stream.Close()
+		}
+		t.Fatalf("Stream returned before ready: err=%v", got.err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(sendReady)
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Stream() error = %v", got.err)
+		}
+		got.stream.Close()
+	case <-time.After(time.Second):
+		t.Fatal("Stream did not return after ready")
+	}
+}
+
+func TestSLNGSTTFallsBackOnPreReadyError(t *testing.T) {
+	order := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := func(name string, response string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			order <- name
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade %s websocket: %v", name, err)
+				return
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(response)); err != nil {
+				t.Errorf("write %s response: %v", name, err)
+				return
+			}
+			_, _, _ = conn.ReadMessage()
+		}
+	}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		handler("primary", `{"type":"error","data":{"code":"not_ready","message":"warming"}}`),
+		handler("fallback", `{"type":"ready"}`),
+	)
+	provider := NewSTT("test-key", WithSTTConnections(
+		STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+		STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+	))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := []string{<-order, <-order}; !reflect.DeepEqual(got, []string{"primary", "fallback"}) {
+		t.Fatalf("connection order = %v, want primary then fallback", got)
+	}
+}
+
+func TestSLNGSTTFallsBackWhenReadyTimesOut(t *testing.T) {
+	oldTimeout := slngSTTReadyTimeout
+	slngSTTReadyTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { slngSTTReadyTimeout = oldTimeout })
+
+	order := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	primary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		order <- "primary"
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade primary websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	})
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		order <- "fallback"
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade fallback websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`))
+		<-r.Context().Done()
+	})
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, primary, fallback)
+	stream, err := NewSTT("test-key", WithSTTConnections(
+		STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+		STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+	)).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := []string{<-order, <-order}; !reflect.DeepEqual(got, []string{"primary", "fallback"}) {
+		t.Fatalf("connection order = %v, want primary then fallback", got)
+	}
+}
+
+func TestSLNGSTTDoesNotFallbackOnInvalidRequest(t *testing.T) {
+	fallbackHit := make(chan struct{}, 1)
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fallbackHit <- struct{}{}
+			http.Error(w, "unexpected fallback", http.StatusInternalServerError)
+		}),
+	)
+	provider := NewSTT("test-key", WithSTTConnections(
+		STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+		STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+	))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		stream.Close()
+		t.Fatalf("Stream() = %#v, want nil", stream)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Stream() error = %T %v, want APIStatusError 400", err, err)
+	}
+	select {
+	case <-fallbackHit:
+		t.Fatal("invalid request tried fallback candidate")
+	default:
+	}
+}
+
+func TestSLNGSTTStopsFallbackOnPayloadTooLarge(t *testing.T) {
+	fallbackHit := make(chan struct{}, 1)
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fallbackHit <- struct{}{}
+			http.Error(w, "unexpected fallback", http.StatusInternalServerError)
+		}),
+	)
+	provider := NewSTT("test-key", WithSTTConnections(
+		STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+		STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+	))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		stream.Close()
+		t.Fatalf("Stream() = %#v, want nil", stream)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("Stream() error = %T %v, want APIStatusError 413", err, err)
+	}
+	select {
+	case <-fallbackHit:
+		t.Fatal("payload-too-large error tried fallback candidate")
+	default:
+	}
+}
+
+func TestSLNGSTTRetriesPrimaryAfterCooldown(t *testing.T) {
+	oldNow := slngSTTNow
+	now := time.Unix(100, 0)
+	slngSTTNow = func() time.Time { return now }
+	t.Cleanup(func() { slngSTTNow = oldNow })
+
+	var primaryHits atomic.Int32
+	order := make(chan string, 4)
+	upgrader := websocket.Upgrader{}
+	accept := func(name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			order <- name
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade %s websocket: %v", name, err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`))
+		}
+	}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if primaryHits.Add(1) == 1 {
+				order <- "primary-failed"
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			accept("primary")(w, r)
+		}),
+		accept("fallback"),
+	)
+	const cooldown = time.Minute
+	provider := NewSTT("test-key",
+		WithSTTConnections(
+			STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+			STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+		),
+		WithSTTFallbackRecoveryCooldown(cooldown),
+	)
+
+	first, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	first.Close()
+	second, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	second.Close()
+	now = now.Add(cooldown)
+	third, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("third Stream() error = %v", err)
+	}
+	third.Close()
+
+	got := []string{<-order, <-order, <-order, <-order}
+	want := []string{"primary-failed", "fallback", "fallback", "primary"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connection order = %v, want %v", got, want)
 	}
 }
 
@@ -193,16 +542,46 @@ func TestSLNGRegionOverrideNormalizesLikeReference(t *testing.T) {
 	}
 
 	provider := NewTTS("test-key", WithTTSRegionOverride(" US-East,EU-WEST "))
-	headers := buildTTSWebsocketHeaders(provider)
+	headers, err := buildTTSWebsocketHeaders(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if headers.Get("X-Region-Override") != "us-east, eu-west" {
 		t.Fatalf("region header = %q, want normalized header", headers.Get("X-Region-Override"))
+	}
+}
+
+func TestSLNGModelIdentifierValidationMatchesReference(t *testing.T) {
+	for _, model := range []string{
+		"deepgram/nova:3",
+		"elevenlabs/eleven-flash:2.5",
+		"slng/deepgram/nova:3",
+	} {
+		if _, err := parseModelRef(model); err != nil {
+			t.Errorf("parseModelRef(%q) error = %v", model, err)
+		}
+	}
+
+	const want = "model must be a provider/model identifier, for example 'deepgram/nova:3'"
+	for _, model := range []string{
+		"",
+		"deepgram",
+		" deepgram/nova:3 ",
+		"/deepgram/nova:3",
+		"deepgram//nova:3",
+		"deepgram/nova:",
+	} {
+		_, err := parseModelRef(model)
+		if err == nil || err.Error() != want {
+			t.Errorf("parseModelRef(%q) error = %v, want %q", model, err, want)
+		}
 	}
 }
 
 func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 	sttProvider := NewSTT("test-key",
 		WithSTTModel("slng/deepgram/nova:3"),
-		WithSTTEncoding("pcm_mulaw"),
+		WithSTTEncoding("pcm_s16le"),
 		WithSTTLanguage("es"),
 		WithSTTPartialTranscripts(false),
 		WithSTTDiarization(true, 2, 4),
@@ -210,7 +589,7 @@ func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 	sttPayload := buildSTTInitPayload(sttProvider)
 	assertSLNGField(t, sttPayload, "type", "init")
 	assertSLNGField(t, sttPayload, "model", "nova-3")
-	assertSLNGNestedField(t, sttPayload, "config", "encoding", "pcm_mulaw")
+	assertSLNGNestedField(t, sttPayload, "config", "encoding", "linear16")
 	assertSLNGNestedField(t, sttPayload, "config", "sample_rate", float64(16000))
 	assertSLNGNestedField(t, sttPayload, "config", "language", "es")
 	assertSLNGNestedField(t, sttPayload, "config", "enable_partials", false)
@@ -511,6 +890,67 @@ func TestSLNGSTTUpdateOptionsReconnectsActiveStreamBeforeAudio(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTConnectionInitOverrideWinsAfterUpdateReconnect(t *testing.T) {
+	initPayloads := make(chan map[string]any, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			t.Errorf("write ready: %v", err)
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	override := map[string]any{
+		"type": "init",
+		"config": map[string]any{
+			"language": "candidate",
+		},
+	}
+	provider := NewSTT("test-key",
+		WithSTTConnections(STTConnectionConfig{Endpoint: endpoint, Init: override}),
+		WithSTTLanguage("provider"),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if got := <-initPayloads; !reflect.DeepEqual(got, override) {
+		t.Fatalf("initial init = %#v, want candidate override %#v", got, override)
+	}
+
+	provider.UpdateOptions(WithSTTLanguage("updated"))
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if got := <-initPayloads; !reflect.DeepEqual(got, override) {
+		t.Fatalf("reconnect init = %#v, want candidate override %#v", got, override)
+	}
+}
+
 func TestSLNGSTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -540,6 +980,207 @@ func TestSLNGSTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("reconnect error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestSLNGSTTReconnectFallsBackAndRecoversPrimaryAfterCooldown(t *testing.T) {
+	oldNow := slngSTTNow
+	now := time.Unix(200, 0)
+	slngSTTNow = func() time.Time { return now }
+	t.Cleanup(func() { slngSTTNow = oldNow })
+
+	order := make(chan string, 4)
+	var primaryHits atomic.Int32
+	upgrader := websocket.Upgrader{}
+	accept := func(name string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			order <- name
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade %s websocket: %v", name, err)
+				return
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+				t.Errorf("write %s ready: %v", name, err)
+				return
+			}
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}
+	}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if primaryHits.Add(1) == 2 {
+				order <- "primary-failed"
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			accept("primary")(w, r)
+		}),
+		accept("fallback"),
+	)
+	const cooldown = time.Minute
+	provider := NewSTT("test-key",
+		WithSTTConnections(
+			STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+			STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+		),
+		WithSTTFallbackRecoveryCooldown(cooldown),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(WithSTTLanguage("id"))
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("fallback PushFrame() error = %v", err)
+	}
+	now = now.Add(cooldown)
+	provider.UpdateOptions(WithSTTLanguage("en"))
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("recovery PushFrame() error = %v", err)
+	}
+
+	got := []string{<-order, <-order, <-order, <-order}
+	want := []string{"primary", "primary-failed", "fallback", "primary"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connection order = %v, want %v", got, want)
+	}
+}
+
+func TestSLNGSTTInitialDialPreservesCallerDeadline(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := NewSTT("test-key", WithSTTEndpoint("ws://slng.test/v1/stt/deepgram/nova:3")).Stream(ctx, "")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stream() error = %T %v, want context deadline", err, err)
+	}
+}
+
+func TestSLNGSTTReconnectPreservesCallerDeadline(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	stream := &sttStream{
+		ctx:                ctx,
+		provider:           NewSTT("test-key", WithSTTEndpoint("ws://slng.test/v1/stt/deepgram/nova:3")),
+		reconnectRequested: true,
+		sampleRate:         defaultSLNGSTTSampleRate,
+		encoding:           defaultSLNGSTTEncoding,
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 0}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("PushFrame() error = %T %v, want context deadline", err, err)
+	}
+}
+
+func TestSLNGSTTNextDiscardsStaleSocketErrorAfterReconnect(t *testing.T) {
+	var connections atomic.Int32
+	firstReady := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if connection == 1 {
+			firstReady <- struct{}{}
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"final_transcript","transcript":"replacement","language":"en"}`,
+				))
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	<-firstReady
+
+	type nextResult struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	next := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		next <- nextResult{event: event, err: err}
+	}()
+	time.Sleep(10 * time.Millisecond)
+	concrete := stream.(*sttStream)
+	concrete.mu.Lock()
+	concrete.reconnectRequested = true
+	err = concrete.reconnectLocked()
+	concrete.mu.Unlock()
+	if err != nil {
+		t.Fatalf("reconnectLocked() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	select {
+	case result := <-next:
+		if result.err != nil {
+			t.Fatalf("Next() error = %v, want replacement transcript", result.err)
+		}
+		if result.event == nil || result.event.Type != stt.SpeechEventStartOfSpeech {
+			t.Fatalf("Next() event = %#v, want start_of_speech", result.event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replacement transcript")
 	}
 }
 
@@ -936,6 +1577,1151 @@ func TestSLNGTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T) {
 	readMessage("flush")
 }
 
+func TestSLNGTTSWordChunkingBuffersLetterlessTokens(t *testing.T) {
+	messages := make(chan map[string]any, 8)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil {
+				messages <- message
+				if message["type"] == "flush" {
+					return
+				}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("— hello 4.5 world !"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			if message["type"] == "text" {
+				got = append(got, slngString(message["text"]))
+			}
+			if message["type"] == "flush" {
+				goto complete
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for provider-safe word messages")
+		}
+	}
+complete:
+	want := []string{"— hello 4.5 ", "world ! "}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("text frames = %#v, want letter-aware frames %#v", got, want)
+	}
+}
+
+func TestSLNGTTSSynthesizeSendsFullInputWithoutTrailingSpace(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) != nil {
+				continue
+			}
+			messages <- message
+			if message["type"] == "flush" {
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	defer provider.Close()
+	stream, err := provider.Synthesize(context.Background(), "hello world")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	var got []string
+	for {
+		select {
+		case message := <-messages:
+			if message["type"] == "text" {
+				got = append(got, slngString(message["text"]))
+			}
+			if message["type"] == "flush" {
+				goto complete
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for chunked synthesis messages")
+		}
+	}
+complete:
+	want := []string{"hello world"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Synthesize() text frames = %#v, want one exact input frame %#v", got, want)
+	}
+}
+
+func TestSLNGTTSRejectsInvalidChunking(t *testing.T) {
+	provider := NewTTS("key", WithTTSTextChunking("sentence", 60))
+	if provider.optionError == nil {
+		t.Fatal("optionError = nil")
+	}
+}
+
+func TestSLNGTTSPhraseChunkingKeepsUnicodeWords(t *testing.T) {
+	got := slngPhraseChunks("नमस्ते — दुनिया 4.5", 20)
+	want := []string{"नमस्ते — दुनिया 4.5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("slngPhraseChunks() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSLNGTTSPhraseChunkingBatchesTextFrames(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for i := 0; i < 4; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			_ = json.Unmarshal(payload, &message)
+			messages <- message
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSTextChunking(TTSChunkingPhrase, 60),
+	)
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("Hello world. More text"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var got []string
+	for i := 0; i < 4; i++ {
+		select {
+		case message := <-messages:
+			if message["type"] == "text" {
+				got = append(got, slngString(message["text"]))
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for phrase messages")
+		}
+	}
+	if want := []string{"Hello world. ", "More text "}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("text frames = %#v, want phrase batches %#v", got, want)
+	}
+}
+
+func TestSLNGTTSFirstAudioTimeout(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for i := 0; i < 2; i++ {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+		<-r.Context().Done()
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(20*time.Millisecond),
+	)
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestSLNGTTSFirstAudioTimeoutArmsWhileNextIsBlocked(t *testing.T) {
+	initReceived := make(chan struct{}, 1)
+	textReceived := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		initReceived <- struct{}{}
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil && message["type"] == "text" {
+				select {
+				case textReceived <- struct{}{}:
+				default:
+				}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(20*time.Millisecond),
+	)
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	<-initReceived
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("Next() returned before text: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	<-textReceived
+	select {
+	case err := <-result:
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next() did not observe timeout armed after its read began")
+	}
+}
+
+func TestSLNGTTSExhaustedFirstAudioTimeoutClosesStream(t *testing.T) {
+	connectionClosed := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				connectionClosed <- struct{}{}
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(20*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+	if err := stream.PushText("late text"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText() after timeout = %v, want io.ErrClosedPipe", err)
+	}
+	select {
+	case <-connectionClosed:
+	case <-time.After(time.Second):
+		t.Fatal("exhausted timeout did not close websocket")
+	}
+	provider.mu.Lock()
+	registered := len(provider.streams)
+	provider.mu.Unlock()
+	if registered != 0 {
+		t.Fatalf("registered streams = %d, want 0 after terminal timeout", registered)
+	}
+	raw := stream.(*ttsStream)
+	raw.mu.Lock()
+	deadline := raw.firstAudioDeadline
+	raw.mu.Unlock()
+	if !deadline.IsZero() {
+		t.Fatalf("first audio deadline = %v, want cleared", deadline)
+	}
+}
+
+func TestSLNGTTSFirstAudioTimeoutStopsOnCancellation(t *testing.T) {
+	textReceived := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage()
+		textReceived <- struct{}{}
+		<-r.Context().Done()
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSFirstAudioTimeout(200*time.Millisecond),
+	)
+	defer provider.Close()
+	stream, err := provider.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+	<-textReceived
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next() error = %T %v, want context.Canceled", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next() did not stop after cancellation")
+	}
+}
+
+func TestSLNGTTSFallsBackBeforeFirstAudio(t *testing.T) {
+	texts := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := func(status int, audio []byte) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Errorf("decode text message: %v", err)
+				return
+			}
+			texts <- slngString(message["text"])
+			if status != 0 {
+				_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "unavailable", "status_code": status})
+				return
+			}
+			_ = conn.WriteMessage(websocket.BinaryMessage, audio)
+		}
+	}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		handler(http.StatusServiceUnavailable, nil),
+		handler(0, []byte{1, 2}),
+	)
+	provider := NewTTS("test-key", WithTTSConnections(
+		TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		TTSConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+	))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !reflect.DeepEqual(audio.Frame.Data, []byte{1, 2}) {
+		t.Fatalf("Next() audio = %#v, want fallback audio", audio)
+	}
+	if got := []string{<-texts, <-texts}; !reflect.DeepEqual(got, []string{"hello ", "hello "}) {
+		t.Fatalf("replayed texts = %#v, want primary then fallback copy", got)
+	}
+}
+
+func TestSLNGTTSCloseDuringFallbackDialDiscardsNewConnection(t *testing.T) {
+	oldDial := slngTTSDialContext
+	t.Cleanup(func() { slngTTSDialContext = oldDial })
+
+	fallbackDialReady := make(chan struct{}, 1)
+	releaseFallbackDial := make(chan struct{})
+	fallbackDone := make(chan struct{})
+	var fallbackReplayed atomic.Bool
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade primary websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteJSON(map[string]any{
+				"type":        "Error",
+				"message":     "unavailable",
+				"status_code": http.StatusServiceUnavailable,
+			})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(fallbackDone)
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			for {
+				_, payload, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				var message map[string]any
+				if json.Unmarshal(payload, &message) == nil && message["type"] == "text" {
+					fallbackReplayed.Store(true)
+					return
+				}
+			}
+		}),
+	)
+	fallbackEndpoint := endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"
+	slngTTSDialContext = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		conn, response, err := oldDial(ctx, endpoint, headers)
+		if endpoint == fallbackEndpoint && err == nil {
+			fallbackDialReady <- struct{}{}
+			<-releaseFallbackDial
+		}
+		return conn, response, err
+	}
+
+	provider := NewTTS("test-key", WithTTSConnections(
+		TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		TTSConnectionConfig{Endpoint: fallbackEndpoint},
+	))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+	select {
+	case <-fallbackDialReady:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback dial")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseFallbackDial)
+	select {
+	case <-fallbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("fallback connection remained open after stream close")
+	}
+	if fallbackReplayed.Load() {
+		t.Fatal("closed stream replayed text to newly dialed fallback")
+	}
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Next() remained blocked after closing during fallback")
+	}
+}
+
+func TestSLNGTTSDoesNotFallbackAfterAudio(t *testing.T) {
+	fallbackHit := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade primary websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{1, 2})
+			_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "late failure", "status_code": http.StatusServiceUnavailable})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fallbackHit <- struct{}{}
+			http.Error(w, "unexpected fallback", http.StatusInternalServerError)
+		}),
+	)
+	provider := NewTTS("test-key", WithTTSConnections(
+		TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		TTSConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+	))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("second Next() error = %T %v, want APIStatusError 503", err, err)
+	}
+	select {
+	case <-fallbackHit:
+		t.Fatal("post-audio failure replayed text to fallback")
+	default:
+	}
+}
+
+func TestSLNGTTSDoesNotFallbackOnInvalidRequest(t *testing.T) {
+	testSLNGTTSNonFallbackStatus(t, http.StatusBadRequest)
+}
+
+func TestSLNGTTSStopsFallbackOnPayloadTooLarge(t *testing.T) {
+	testSLNGTTSNonFallbackStatus(t, http.StatusRequestEntityTooLarge)
+}
+
+func TestSLNGTTSRetriesPrimaryAfterCooldown(t *testing.T) {
+	oldNow := slngTTSNow
+	now := time.Unix(100, 0)
+	slngTTSNow = func() time.Time { return now }
+	t.Cleanup(func() { slngTTSNow = oldNow })
+
+	var primaryHits atomic.Int32
+	order := make(chan string, 4)
+	upgrader := websocket.Upgrader{}
+	handler := func(name string, failFirst bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade %s websocket: %v", name, err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			if failFirst && primaryHits.Add(1) == 1 {
+				order <- "primary-failed"
+				_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "unavailable", "status_code": http.StatusServiceUnavailable})
+				return
+			}
+			order <- name
+			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{1, 2})
+		}
+	}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		handler("primary", true),
+		handler("fallback", false),
+	)
+	const cooldown = time.Minute
+	provider := NewTTS("test-key",
+		WithTTSConnections(
+			TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+			TTSConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		),
+		WithTTSFallbackRecoveryCooldown(cooldown),
+	)
+	defer provider.Close()
+
+	nextAudio := func(text string) {
+		t.Helper()
+		stream, err := provider.Stream(context.Background())
+		if err != nil {
+			t.Fatalf("Stream() error = %v", err)
+		}
+		if err := stream.PushText(text + " tail"); err != nil {
+			t.Fatalf("PushText() error = %v", err)
+		}
+		if _, err := stream.Next(); err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		_ = stream.Close()
+	}
+	nextAudio("first")
+	nextAudio("second")
+	now = now.Add(cooldown)
+	nextAudio("third")
+
+	got := []string{<-order, <-order, <-order, <-order}
+	want := []string{"primary-failed", "fallback", "fallback", "primary"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connection order = %v, want %v", got, want)
+	}
+}
+
+func TestSLNGTTSCandidateVoiceAndInitOverride(t *testing.T) {
+	fallbackInit := make(chan map[string]any, 2)
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade primary websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "unavailable", "status_code": http.StatusServiceUnavailable})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("X-Candidate"); got != "fallback" {
+				t.Errorf("X-Candidate = %q, want fallback", got)
+			}
+			if got := r.Header.Get("X-Shared"); got != "candidate" {
+				t.Errorf("X-Shared = %q, want candidate override", got)
+			}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade fallback websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, payload, _ := conn.ReadMessage()
+			var init map[string]any
+			_ = json.Unmarshal(payload, &init)
+			fallbackInit <- init
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "unavailable", "status_code": http.StatusServiceUnavailable})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("X-Candidate"); got != "runtime" {
+				t.Errorf("X-Candidate = %q, want runtime", got)
+			}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade runtime websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, payload, _ := conn.ReadMessage()
+			var init map[string]any
+			_ = json.Unmarshal(payload, &init)
+			fallbackInit <- init
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteMessage(websocket.BinaryMessage, []byte{1, 2})
+		}),
+	)
+	runtimeInit := map[string]any{"type": "init", "voice": "runtime-voice", "custom": true}
+	provider := NewTTS("test-key",
+		WithTTSVoice("default-voice"),
+		WithTTSExtraHeaders(http.Header{"X-Shared": {"default"}}),
+		WithTTSConnections(
+			TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+			TTSConnectionConfig{
+				Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2",
+				Voice:    "fallback-voice",
+				Headers:  http.Header{"X-Candidate": {"fallback"}, "X-Shared": {"candidate"}},
+			},
+			TTSConnectionConfig{
+				Endpoint: endpoints[2] + "/v1/bridges/unmute/tts/deepgram/aura:2",
+				Headers:  http.Header{"X-Candidate": {"runtime"}},
+				Init:     runtimeInit,
+			},
+		),
+	)
+	defer provider.Close()
+	runtimeInit["custom"] = false
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	voiceInit := <-fallbackInit
+	if voiceInit["voice"] != "fallback-voice" {
+		t.Fatalf("candidate voice init = %#v, want fallback voice", voiceInit)
+	}
+	init := <-fallbackInit
+	if !reflect.DeepEqual(init, map[string]any{"type": "init", "voice": "runtime-voice", "custom": true}) {
+		t.Fatalf("fallback init = %#v, want cloned runtime override", init)
+	}
+}
+
+func testSLNGTTSNonFallbackStatus(t *testing.T, status int) {
+	t.Helper()
+	fallbackHit := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade primary websocket: %v", err)
+				return
+			}
+			defer conn.Close()
+			_, _, _ = conn.ReadMessage()
+			_, _, _ = conn.ReadMessage()
+			_ = conn.WriteJSON(map[string]any{"type": "Error", "message": http.StatusText(status), "status_code": status})
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			fallbackHit <- struct{}{}
+			http.Error(w, "unexpected fallback", http.StatusInternalServerError)
+		}),
+	)
+	provider := NewTTS("test-key", WithTTSConnections(
+		TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		TTSConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+	))
+	defer provider.Close()
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != status {
+		t.Fatalf("Next() error = %T %v, want APIStatusError %d", err, err, status)
+	}
+	select {
+	case <-fallbackHit:
+		t.Fatalf("status %d tried fallback candidate", status)
+	default:
+	}
+}
+
+func TestSLNGTTSWarmStandbyReusesReadyConnection(t *testing.T) {
+	var connections atomic.Int32
+	ready := make(chan int32, 2)
+	textConnection := make(chan int32, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		ready <- connection
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil && message["type"] == "text" {
+				textConnection <- connection
+				_ = conn.WriteMessage(websocket.BinaryMessage, []byte{1, 2})
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSWarmStandby(true),
+	)
+	defer provider.Close()
+	provider.Prewarm()
+	select {
+	case connection := <-ready:
+		if connection != 1 {
+			t.Fatalf("prewarmed connection = %d, want 1", connection)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for warm standby")
+	}
+	waitSLNGTTSStandby(t, provider)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	select {
+	case connection := <-textConnection:
+		if connection != 1 {
+			t.Fatalf("text used connection %d, want prewarmed connection 1", connection)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for text on warm standby")
+	}
+}
+
+func TestSLNGTTSUpdateOptionsDiscardsStaleStandby(t *testing.T) {
+	initPayloads := make(chan map[string]any, 2)
+	standbyClosed := make(chan struct{}, 1)
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var init map[string]any
+		_ = json.Unmarshal(payload, &init)
+		initPayloads <- init
+		if _, _, err := conn.ReadMessage(); err != nil && connection == 1 {
+			standbyClosed <- struct{}{}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSVoice("voice-before"),
+		WithTTSWarmStandby(true),
+	)
+	defer provider.Close()
+	provider.Prewarm()
+	select {
+	case init := <-initPayloads:
+		if init["voice"] != "voice-before" {
+			t.Fatalf("standby voice = %#v, want voice-before", init["voice"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for standby init")
+	}
+	waitSLNGTTSStandby(t, provider)
+
+	provider.UpdateOptions(WithTTSVoice("voice-after"))
+	select {
+	case <-standbyClosed:
+	case <-time.After(time.Second):
+		t.Fatal("stale standby connection was not closed")
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	select {
+	case init := <-initPayloads:
+		if init["voice"] != "voice-after" {
+			t.Fatalf("new connection voice = %#v, want voice-after", init["voice"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fresh init")
+	}
+	if connections.Load() != 2 {
+		t.Fatalf("connections = %d, want stale standby plus fresh dial", connections.Load())
+	}
+}
+
+func TestSLNGTTSUpdateOptionsInvalidatesStandbyForAttemptSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  TTSOption
+	}{
+		{name: "endpoint", opt: WithTTSEndpoint("ws://updated.local/v1/bridges/unmute/tts/deepgram/aura:2")},
+		{name: "connections", opt: WithTTSConnections(TTSConnectionConfig{Endpoint: "ws://candidate.local/v1/bridges/unmute/tts/deepgram/aura:2"})},
+		{name: "provider key", opt: WithTTSProviderAPIKey("provider-key")},
+		{name: "region", opt: WithTTSRegionOverride("eu")},
+		{name: "world part", opt: WithTTSWorldPartOverride("ap")},
+		{name: "tracking", opt: WithTTSExternalTracking("agent", "session")},
+		{name: "extra headers", opt: WithTTSExtraHeaders(http.Header{"X-Extra": {"updated"}})},
+		{name: "voice", opt: WithTTSVoice("updated-voice")},
+		{name: "language", opt: WithTTSLanguage("id")},
+		{name: "sample rate", opt: WithTTSSampleRate(16000)},
+		{name: "speed", opt: WithTTSSpeed(1.2)},
+		{name: "model options", opt: WithTTSModelOptions(map[string]any{"temperature": 0.3})},
+		{name: "runtime init", opt: WithTTSRuntimeInit(map[string]any{"type": "init", "custom": true})},
+		{name: "chunking", opt: WithTTSTextChunking(TTSChunkingPhrase, 32)},
+		{name: "first audio timeout", opt: WithTTSFirstAudioTimeout(time.Second)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := NewTTS("test-key", WithTTSWarmStandby(true))
+			before := provider.standbyEpoch
+			provider.UpdateOptions(test.opt)
+			if provider.standbyEpoch != before+1 {
+				t.Fatalf("standby epoch = %d, want %d", provider.standbyEpoch, before+1)
+			}
+		})
+	}
+}
+
+func TestSLNGTTSCloseClosesStandbyConnection(t *testing.T) {
+	standbyReady := make(chan struct{}, 1)
+	standbyClosed := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		standbyReady <- struct{}{}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			standbyClosed <- struct{}{}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	provider := NewTTS("test-key",
+		WithTTSEndpoint(endpoint),
+		WithTTSWarmStandby(true),
+	)
+	provider.Prewarm()
+	select {
+	case <-standbyReady:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for standby init")
+	}
+	waitSLNGTTSStandby(t, provider)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-standbyClosed:
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not close standby websocket")
+	}
+}
+
+func TestSLNGTTSFallbackDiscardsPrimaryStandby(t *testing.T) {
+	var primaryConnections atomic.Int32
+	var fallbackConnections atomic.Int32
+	standbyConnected := make(chan struct{}, 1)
+	releaseStandbyInit := make(chan struct{})
+	primaryStandbyUsed := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	primary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade primary websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := primaryConnections.Add(1)
+		if connection == 2 {
+			standbyConnected <- struct{}{}
+			<-releaseStandbyInit
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if connection == 1 {
+			<-standbyConnected
+			_ = conn.WriteJSON(map[string]any{"type": "Error", "message": "unavailable", "status_code": http.StatusServiceUnavailable})
+			return
+		}
+		primaryStandbyUsed <- struct{}{}
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{9, 9})
+	})
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade fallback websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		fallbackConnections.Add(1)
+		_, _, _ = conn.ReadMessage()
+		_, _, _ = conn.ReadMessage()
+		_ = conn.WriteMessage(websocket.BinaryMessage, []byte{1, 2})
+	})
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, primary, fallback)
+	provider := NewTTS("test-key",
+		WithTTSConnections(
+			TTSConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+			TTSConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/tts/deepgram/aura:2"},
+		),
+		WithTTSWarmStandby(true),
+	)
+	defer provider.Close()
+	first, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	if err := first.PushText("first tail"); err != nil {
+		t.Fatalf("first PushText() error = %v", err)
+	}
+	if _, err := first.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	_ = first.Close()
+	close(releaseStandbyInit)
+	waitSLNGTTSStandbyTask(t, provider)
+
+	second, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	if err := second.PushText("second tail"); err != nil {
+		t.Fatalf("second PushText() error = %v", err)
+	}
+	if _, err := second.Next(); err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	_ = second.Close()
+	select {
+	case <-primaryStandbyUsed:
+		t.Fatal("primary standby was reused after fallback became active")
+	default:
+	}
+	if got := fallbackConnections.Load(); got != 2 {
+		t.Fatalf("fallback connections = %d, want 2 active streams", got)
+	}
+}
+
+func waitSLNGTTSStandby(t *testing.T, provider *TTS) {
+	t.Helper()
+	timeout := time.After(time.Second)
+	for {
+		provider.mu.Lock()
+		ready := provider.standby != nil
+		provider.mu.Unlock()
+		if ready {
+			return
+		}
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for standby installation")
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func waitSLNGTTSStandbyTask(t *testing.T, provider *TTS) {
+	t.Helper()
+	timeout := time.After(time.Second)
+	for {
+		provider.mu.Lock()
+		done := provider.standbyCancel == nil
+		provider.mu.Unlock()
+		if done {
+			return
+		}
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for standby task")
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
 func TestSLNGSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	events, err := sttEventsFromMessage([]byte(`{"type":"Results","is_final":false,"language":"en","channel":{"alternatives":[{"transcript":"hel","confidence":0.5}]}}`), "en", true)
 	if err != nil {
@@ -1013,6 +2799,75 @@ func TestSLNGSTTStreamNextPreservesReferenceEventSequence(t *testing.T) {
 		event := nextSLNGTestSpeechEvent(t, stream)
 		if event.Type != wantType {
 			t.Fatalf("event type = %s, want %s", event.Type, wantType)
+		}
+	}
+}
+
+func TestSLNGSTTOrdersPartialFinalSpeechAndUsage(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType != websocket.BinaryMessage {
+				continue
+			}
+			for _, message := range []string{
+				`{"type":"partial_transcript","transcript":"hel","confidence":0.5,"language":"en"}`,
+				`{"type":"final_transcript","transcript":"hello","confidence":0.9,"language":"en","words":[{"start":0.1,"end":0.4}]}`,
+			} {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+					return
+				}
+			}
+			return
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	want := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventRecognitionUsage,
+	}
+	for _, wantType := range want {
+		event := nextSLNGTestSpeechEvent(t, stream)
+		if event.Type != wantType {
+			t.Fatalf("event type = %s, want %s", event.Type, wantType)
+		}
+		if wantType == stt.SpeechEventRecognitionUsage &&
+			(event.RecognitionUsage == nil || event.RecognitionUsage.AudioDuration != 0.001) {
+			t.Fatalf("recognition usage = %#v, want 0.001s", event.RecognitionUsage)
 		}
 	}
 }
@@ -1125,6 +2980,477 @@ func TestSLNGSTTStreamEmptyFinalEmitsReferenceUsage(t *testing.T) {
 	}
 	if event.RecognitionUsage.AudioDuration != 0.001 {
 		t.Fatalf("AudioDuration = %v, want 0.001", event.RecognitionUsage.AudioDuration)
+	}
+}
+
+func TestSLNGSTTInterimKeepsSpeechOpenAcrossEmptyFinal(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType != websocket.BinaryMessage {
+				continue
+			}
+			for _, message := range []string{
+				`{"type":"partial_transcript","transcript":"hel","confidence":0.5,"language":"en"}`,
+				`{"type":"final_transcript","transcript":"","confidence":0,"language":"en"}`,
+				`{"type":"final_transcript","transcript":"hello","confidence":0.9,"language":"en"}`,
+			} {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+					return
+				}
+			}
+			<-r.Context().Done()
+			return
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	for i, want := range []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventRecognitionUsage,
+	} {
+		if got := nextSLNGTestSpeechEvent(t, stream); got.Type != want {
+			t.Fatalf("event %d type = %s, want %s", i, got.Type, want)
+		}
+	}
+}
+
+func TestSLNGSTTUpdateOptionsClosesOpenSpeechWithoutDroppingInterim(t *testing.T) {
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if connection == 2 {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(
+				`{"type":"final_transcript","transcript":"new","confidence":0.9,"language":"en"}`,
+			))
+			<-r.Context().Done()
+			return
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"partial_transcript","transcript":"old","confidence":0.5,"language":"en"}`,
+				))
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	provider := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if got := nextSLNGTestSpeechEvent(t, stream); got.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %s, want start_of_speech", got.Type)
+	}
+
+	provider.UpdateOptions(WithSTTLanguage("id"))
+	if got := nextSLNGTestSpeechEvent(t, stream); got.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("queued event = %s, want interim_transcript", got.Type)
+	}
+	if got := nextSLNGTestSpeechEvent(t, stream); got.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("reconnect event = %s, want end_of_speech", got.Type)
+	}
+}
+
+func TestSLNGSTTReplaysUtteranceOnRuntimeProviderError(t *testing.T) {
+	audio := make([]byte, 32)
+	for i := range audio {
+		audio[i] = byte(i)
+	}
+	replayed := make(chan []byte, 1)
+	upgrader := websocket.Upgrader{}
+	primary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade primary websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage && string(payload) == `{"type":"finalize"}` {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"error","status_code":503,"message":"provider unavailable"}`,
+				))
+				return
+			}
+		}
+	})
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade fallback websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				replayed <- append([]byte(nil), payload...)
+			}
+			if messageType == websocket.TextMessage && string(payload) == `{"type":"finalize"}` {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"final_transcript","transcript":"hello","confidence":0.9,"language":"en"}`,
+				))
+				<-r.Context().Done()
+				return
+			}
+		}
+	})
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, primary, fallback)
+	provider := NewSTT(
+		"test-key",
+		WithSTTConnections(
+			STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+			STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+		),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: audio}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	for i, want := range []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventRecognitionUsage,
+	} {
+		event := nextSLNGTestSpeechEvent(t, stream)
+		if event.Type != want {
+			t.Fatalf("event %d type = %s, want %s", i, event.Type, want)
+		}
+		if want == stt.SpeechEventRecognitionUsage &&
+			(event.RecognitionUsage == nil || event.RecognitionUsage.AudioDuration != 0.001) {
+			t.Fatalf("recognition usage = %#v, want 0.001s", event.RecognitionUsage)
+		}
+	}
+	select {
+	case got := <-replayed:
+		if !bytes.Equal(got, audio) {
+			t.Fatalf("replayed audio = %v, want %v", got, audio)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replayed audio")
+	}
+}
+
+func TestSLNGSTTRetriesSameEndpointWithUtteranceReplay(t *testing.T) {
+	var connections atomic.Int32
+	replayed := make(chan []byte, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if connection > 1 && messageType == websocket.BinaryMessage {
+				replayed <- append([]byte(nil), payload...)
+			}
+			if messageType != websocket.TextMessage || string(payload) != `{"type":"finalize"}` {
+				continue
+			}
+			if connection == 1 {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"error","status_code":503,"message":"retry same endpoint"}`,
+				))
+				return
+			}
+			_ = conn.WriteMessage(websocket.TextMessage, []byte(
+				`{"type":"final_transcript","transcript":"recovered","confidence":0.9,"language":"en"}`,
+			))
+			<-r.Context().Done()
+			return
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTConnections(STTConnectionConfig{Endpoint: endpoint}),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	audio := make([]byte, 32)
+	if err := stream.PushFrame(&model.AudioFrame{Data: audio}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	for _, want := range []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventRecognitionUsage,
+	} {
+		if got := nextSLNGTestSpeechEvent(t, stream); got.Type != want {
+			t.Fatalf("event = %s, want %s", got.Type, want)
+		}
+	}
+	select {
+	case got := <-replayed:
+		if !bytes.Equal(got, audio) {
+			t.Fatalf("replayed audio = %v, want %v", got, audio)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for same-endpoint replay")
+	}
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("connections = %d, want 2", got)
+	}
+}
+
+func TestSLNGSTTWriteFailureReplaysPriorAudioAndRetriesCurrentChunk(t *testing.T) {
+	primaryAudio := make(chan struct{}, 1)
+	fallbackAudio := make(chan []byte, 2)
+	upgrader := websocket.Upgrader{}
+	primary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade primary websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				primaryAudio <- struct{}{}
+			}
+		}
+	})
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade fallback websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				fallbackAudio <- append([]byte(nil), payload...)
+			}
+		}
+	})
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, primary, fallback)
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTConnections(
+			STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+			STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+		),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	first := bytes.Repeat([]byte{1}, 32)
+	second := bytes.Repeat([]byte{2}, 32)
+	if err := stream.PushFrame(&model.AudioFrame{Data: first}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	select {
+	case <-primaryAudio:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for primary audio")
+	}
+	concrete := stream.(*sttStream)
+	concrete.mu.Lock()
+	_ = concrete.conn.Close()
+	concrete.mu.Unlock()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: second}); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	for i, want := range [][]byte{first, second} {
+		select {
+		case got := <-fallbackAudio:
+			if !bytes.Equal(got, want) {
+				t.Fatalf("fallback frame %d = %v, want %v", i, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for fallback frame %d", i)
+		}
+	}
+}
+
+func TestSLNGSTTDoesNotReplayRuntimeInvalidRequest(t *testing.T) {
+	fallbackHit := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	primary := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade primary websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ready"}`)); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage && string(payload) == `{"type":"finalize"}` {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(
+					`{"type":"error","status_code":400,"message":"invalid request"}`,
+				))
+				return
+			}
+		}
+	})
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackHit <- struct{}{}
+		http.Error(w, "unexpected fallback", http.StatusInternalServerError)
+	})
+	endpoints := newSLNGInMemoryWebsocketEndpoints(t, primary, fallback)
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTConnections(
+			STTConnectionConfig{Endpoint: endpoints[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"},
+			STTConnectionConfig{Endpoint: endpoints[1] + "/v1/bridges/unmute/stt/deepgram/nova:2"},
+		),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next() event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Next() error = %T %v, want APIStatusError 400", err, err)
+	}
+	select {
+	case <-fallbackHit:
+		t.Fatal("runtime invalid request tried fallback candidate")
+	default:
 	}
 }
 
@@ -1307,6 +3633,792 @@ func TestSLNGSTTStreamFlushSkipsMisalignedAudio(t *testing.T) {
 	case got := <-binaryLengths:
 		t.Fatalf("sent misaligned %d-byte audio chunk", got)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSLNGSTTFlushFinalizesOnlyNewAudio(t *testing.T) {
+	frames := make(chan string, 8)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				frames <- "binary"
+			} else if messageType == websocket.TextMessage {
+				frames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	pushAndFlush := func() {
+		t.Helper()
+		if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+		if err := stream.Flush(); err != nil {
+			t.Fatalf("Flush() error = %v", err)
+		}
+	}
+	pushAndFlush()
+	if got := <-frames; got != "binary" {
+		t.Fatalf("first frame = %q, want binary", got)
+	}
+	if got := <-frames; got != `{"type":"finalize"}` {
+		t.Fatalf("second frame = %q, want finalize", got)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("empty Flush() error = %v", err)
+	}
+	select {
+	case got := <-frames:
+		t.Fatalf("empty Flush() sent %q", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	pushAndFlush()
+	if got := <-frames; got != "binary" {
+		t.Fatalf("third frame = %q, want binary", got)
+	}
+	if got := <-frames; got != `{"type":"finalize"}` {
+		t.Fatalf("fourth frame = %q, want finalize", got)
+	}
+}
+
+func TestSLNGSTTEndInputSendsReferenceFinalize(t *testing.T) {
+	textFrames := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+
+	provider := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	for i, want := range []string{`{"type":"finalize"}`, `{"type":"close"}`} {
+		select {
+		case got := <-textFrames:
+			if got != want {
+				t.Fatalf("EndInput frame %d = %s, want %s", i, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for STT EndInput frame %d", i)
+		}
+	}
+}
+
+func TestSLNGSTTEmptyEndInputSendsCloseOnly(t *testing.T) {
+	textFrames := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT("test-key", WithSTTEndpoint(endpoint)).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"close"}` {
+			t.Fatalf("empty EndInput frame = %s, want close", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for close")
+	}
+	select {
+	case got := <-textFrames:
+		t.Fatalf("empty EndInput sent extra frame %s", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+}
+
+func TestSLNGSTTEndInputReconnectsAfterUpdateOptions(t *testing.T) {
+	var connections atomic.Int32
+	secondFrames := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if connection != 2 {
+				continue
+			}
+			if messageType == websocket.BinaryMessage {
+				secondFrames <- "binary"
+			} else if messageType == websocket.TextMessage {
+				secondFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint), WithSTTBufferSizeSeconds(0.01))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	provider.UpdateOptions(WithSTTLanguage("id"))
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if got := <-secondFrames; got != "binary" {
+		t.Fatalf("first replacement frame = %q, want buffered binary audio", got)
+	}
+	if got := <-secondFrames; got != `{"type":"finalize"}` {
+		t.Fatalf("second replacement frame = %q, want finalize", got)
+	}
+}
+
+func TestSLNGSTTFlushReconnectsAfterUpdateOptions(t *testing.T) {
+	var connections atomic.Int32
+	replacementAudio := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connection := connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if connection == 2 && messageType == websocket.BinaryMessage {
+				replacementAudio <- struct{}{}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint), WithSTTBufferSizeSeconds(0.01))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	provider.UpdateOptions(WithSTTLanguage("id"))
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case <-replacementAudio:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replacement audio")
+	}
+}
+
+func TestSLNGSTTUpdateOptionsSkipsEndedInput(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	provider.UpdateOptions(WithSTTLanguage("id"))
+	concrete := stream.(*sttStream)
+	concrete.mu.Lock()
+	reconnectRequested := concrete.reconnectRequested
+	concrete.mu.Unlock()
+	if reconnectRequested {
+		t.Fatal("UpdateOptions requested reconnect after input ended")
+	}
+}
+
+func TestSLNGSTTLegacyEndInputSendsFlush(t *testing.T) {
+	textFrames := make(chan string, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+				return
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"flush"}` {
+			t.Fatalf("legacy EndInput frame = %s, want flush", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for legacy flush")
+	}
+}
+
+func TestSLNGSTTFinalTimeoutReturnsTypedTimeoutError(t *testing.T) {
+	finalizeSeen := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage && string(payload) == `{"type":"finalize"}` {
+				finalizeSeen <- struct{}{}
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+		WithSTTFinalTimeout(20*time.Millisecond),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case <-finalizeSeen:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for finalize frame")
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next() event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+	concrete := stream.(*sttStream)
+	if !concrete.isClosed() {
+		t.Fatal("stream remains open after final timeout")
+	}
+	provider := concrete.provider
+	provider.mu.Lock()
+	activeStreams := len(provider.streams)
+	provider.mu.Unlock()
+	if activeStreams != 0 {
+		t.Fatalf("active streams after final timeout = %d, want 0", activeStreams)
+	}
+	select {
+	case <-concrete.lifecycleDone:
+	default:
+		t.Fatal("lifecycle goroutine remains active after final timeout")
+	}
+}
+
+func TestSLNGSTTFinalAtTimeoutBoundaryKeepsPendingFinal(t *testing.T) {
+	oldAfterFunc := slngSTTAfterFunc
+	callbacks := make(chan func(), 1)
+	var timer *time.Timer
+	slngSTTAfterFunc = func(_ time.Duration, callback func()) *time.Timer {
+		callbacks <- callback
+		timer = time.AfterFunc(time.Hour, func() {})
+		return timer
+	}
+	t.Cleanup(func() {
+		slngSTTAfterFunc = oldAfterFunc
+		if timer != nil {
+			timer.Stop()
+		}
+	})
+
+	provider := NewSTT("test-key")
+	stream := &sttStream{
+		provider:      provider,
+		inputEnded:    true,
+		finalTimeout:  time.Second,
+		lifecycleDone: make(chan struct{}),
+	}
+	provider.registerStream(stream)
+	defer stream.Close()
+
+	stream.mu.Lock()
+	stream.startFinalTimerLocked()
+	callback := <-callbacks
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		callback()
+		close(done)
+	}()
+	<-started
+	stream.stopFinalTimerLocked()
+	stream.pendingEvents = append(stream.pendingEvents, &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Language: "en",
+			Text:     "boundary final",
+		}},
+	})
+	stream.mu.Unlock()
+	<-done
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want pending final", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next() event = %#v, want final transcript", event)
+	}
+	if stream.isClosed() {
+		t.Fatal("timeout callback closed stream after final was accepted")
+	}
+	provider.mu.Lock()
+	activeStreams := len(provider.streams)
+	provider.mu.Unlock()
+	if activeStreams != 1 {
+		t.Fatalf("active streams after boundary final = %d, want 1", activeStreams)
+	}
+}
+
+func TestSLNGSTTSendsKeepaliveWhileInputOpen(t *testing.T) {
+	oldInterval := slngSTTKeepaliveInterval
+	slngSTTKeepaliveInterval = 10 * time.Millisecond
+	t.Cleanup(func() { slngSTTKeepaliveInterval = oldInterval })
+
+	textFrames := make(chan string, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+
+	stream, err := NewSTT("test-key", WithSTTEndpoint(endpoint)).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"keepalive"}` {
+			t.Fatalf("idle frame = %s, want keepalive", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for STT keepalive")
+	}
+}
+
+func TestSLNGSTTRecentAudioSuppressesKeepalive(t *testing.T) {
+	oldInterval := slngSTTKeepaliveInterval
+	slngSTTKeepaliveInterval = 50 * time.Millisecond
+	t.Cleanup(func() { slngSTTKeepaliveInterval = oldInterval })
+
+	textFrames := make(chan string, 2)
+	audioSeen := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				audioSeen <- struct{}{}
+			} else if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	time.Sleep(35 * time.Millisecond)
+	if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 32)}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case <-audioSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio")
+	}
+	select {
+	case got := <-textFrames:
+		t.Fatalf("recent audio did not suppress %s", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"keepalive"}` {
+			t.Fatalf("idle frame = %s, want keepalive", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for keepalive after idle interval")
+	}
+}
+
+func TestSLNGSTTStopsKeepaliveAfterEndInput(t *testing.T) {
+	oldInterval := slngSTTKeepaliveInterval
+	slngSTTKeepaliveInterval = 10 * time.Millisecond
+	t.Cleanup(func() { slngSTTKeepaliveInterval = oldInterval })
+
+	textFrames := make(chan string, 8)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.TextMessage {
+				textFrames <- string(payload)
+			}
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"keepalive"}` {
+			t.Fatalf("idle frame = %s, want keepalive", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for first STT keepalive")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 32),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 16,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.(stt.InputEnding).EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	for {
+		select {
+		case frame := <-textFrames:
+			if frame == `{"type":"finalize"}` {
+				goto finalized
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timed out waiting for finalize frame")
+		}
+	}
+
+finalized:
+	select {
+	case got := <-textFrames:
+		if got != `{"type":"close"}` {
+			t.Fatalf("frame after finalize = %s, want close", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for close frame")
+	}
+	select {
+	case got := <-textFrames:
+		t.Fatalf("frame after close = %s, want keepalive stopped", got)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestSLNGSTTBoundsSilentReconnects(t *testing.T) {
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT("test-key", WithSTTEndpoint(endpoint)).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next() event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next() error = %T %v, want APIStatusError", err, err)
+	}
+	if got := connections.Load(); got != 3 {
+		t.Fatalf("websocket connections = %d, want bounded 3", got)
+	}
+}
+
+func TestSLNGSTTCancellationStopsReconnect(t *testing.T) {
+	var connections atomic.Int32
+	connected := make(chan struct{}, 1)
+	release := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		connections.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		connected <- struct{}{}
+		<-release
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := NewSTT("test-key", WithSTTEndpoint(endpoint)).Stream(ctx, "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	<-connected
+	cancel()
+	close(release)
+
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next() error = %T %v, want EOF or cancellation", err, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("websocket connections after cancellation = %d, want 1", got)
 	}
 }
 
@@ -1680,7 +4792,10 @@ func assertSLNGNestedArrayField(t *testing.T, payload []byte, parent, key string
 
 func TestBuildSLNGHeaders(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTRegionOverride("us-east"))
-	headers := buildSTTWebsocketHeaders(provider)
+	headers, err := buildSTTWebsocketHeaders(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if headers.Get("Authorization") != "Bearer test-key" || headers.Get("X-API-Key") != "test-key" {
 		t.Fatalf("headers = %+v, want auth headers", headers)
 	}
