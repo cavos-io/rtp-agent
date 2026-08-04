@@ -3256,7 +3256,7 @@ func TestPipelineAgentVADLoopEndsActiveSpeechWhenStreamCloses(t *testing.T) {
 }
 
 func TestPipelineAgentVADLoopSynthesizesEndOfSpeechOnStall(t *testing.T) {
-	endpointing := &recordingPipelineEndpointing{}
+	endpointing := &recordingPipelineEndpointing{endCalled: make(chan struct{}, 1)}
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
 	activity := NewAgentActivity(agent, session)
@@ -3281,6 +3281,11 @@ func TestPipelineAgentVADLoopSynthesizesEndOfSpeechOnStall(t *testing.T) {
 	waitForUserState(t, session, UserStateSpeaking)
 	// The watchdog, not the VAD stream, must move the user out of speaking.
 	waitForUserState(t, session, UserStateListening)
+	select {
+	case <-endpointing.endCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for endpointing end callback")
+	}
 
 	close(stream.release)
 	<-done
@@ -6708,6 +6713,7 @@ type recordingPipelineEndpointing struct {
 	endCount   int
 	startAt    float64
 	endAt      float64
+	endCalled  chan struct{}
 }
 
 func (r *recordingPipelineEndpointing) UpdateOptions(*float64, *float64) {}
@@ -6725,6 +6731,9 @@ func (r *recordingPipelineEndpointing) OnStartOfSpeech(startedAt float64, overla
 func (r *recordingPipelineEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
 	r.endCount++
 	r.endAt = endedAt
+	if r.endCalled != nil {
+		r.endCalled <- struct{}{}
+	}
 }
 
 type blockingPipelineTool struct {
