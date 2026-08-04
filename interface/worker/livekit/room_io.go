@@ -111,6 +111,9 @@ func (e *opusEncoder) Close() error {
 
 type RoomOptions struct {
 	AudioTrackName             string
+	AudioInputSampleRate       uint32
+	AudioInputFrameSizeMS      uint32
+	AudioInputProcessor        audio.FrameProcessor
 	AudioOutputSampleRate      uint32
 	AudioSubscriptionTimeout   time.Duration
 	PreConnectAudioTimeout     time.Duration
@@ -141,8 +144,8 @@ const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 const roomIOOpusClockRate uint32 = 48000
 const roomIOOpusFrameSamples uint32 = 960
-const roomIOInputSampleRate uint32 = 24000
-const roomIOInputFrameSizeMS uint32 = 50
+const roomIODefaultInputSampleRate uint32 = 24000
+const roomIODefaultInputFrameSizeMS uint32 = 50
 const roomIOAudioSubscriptionTimeout = 10 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 const roomIOOutputMaxLead = 200 * time.Millisecond
@@ -340,11 +343,13 @@ type RoomIO struct {
 	encoder       AudioEncoder
 	audioDisabled bool
 
-	audioInputTrackID        string
-	audioInputParticipantID  string
-	audioInputGeneration     uint64
-	audioInputHandlerRunning bool
-	audioInputTracks         map[string][]roomIOAudioInputTrack
+	audioInputTrackID         string
+	audioInputParticipantID   string
+	audioInputGeneration      uint64
+	audioInputHandlerRunning  bool
+	audioInputTracks          map[string][]roomIOAudioInputTrack
+	audioInputProcessorMu     sync.Mutex
+	audioInputProcessorClosed bool
 
 	audioPublication *lksdk.LocalTrackPublication
 	audioSubscribed  chan struct{}
@@ -424,7 +429,13 @@ type audioOutputWaitResult struct {
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
 	if opts.AudioOutputSampleRate == 0 {
-		opts.AudioOutputSampleRate = roomIOInputSampleRate
+		opts.AudioOutputSampleRate = roomIODefaultInputSampleRate
+	}
+	if opts.AudioInputSampleRate == 0 {
+		opts.AudioInputSampleRate = roomIODefaultInputSampleRate
+	}
+	if opts.AudioInputFrameSizeMS == 0 {
+		opts.AudioInputFrameSizeMS = roomIODefaultInputFrameSizeMS
 	}
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
@@ -1818,10 +1829,14 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 	if !rio.audioInputTrackActive(generation) {
 		return
 	}
+	// A new track is a new speaker as far as any input processor is concerned.
+	rio.resetAudioInputProcessor()
+
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	inputStream := newRoomIOInputAudioStream()
+	inputStream := rio.newInputAudioStream()
+	converter := newRoomIOInputConverter(rio.audioInputSampleRate())
 
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
@@ -1829,8 +1844,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 				return
 			}
 			for _, frame := range frames {
-				inputFrame := roomIOInputFrameFromFrame(frame)
-				if inputFrame != nil {
+				if inputFrame := converter.Convert(frame); inputFrame != nil {
 					rio.forwardRoomInputFrames(context.Background(), inputStream.Push(inputFrame.Data))
 				}
 			}
@@ -1854,8 +1868,11 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if tail := converter.Flush(); tail != nil {
+					rio.forwardRoomInputFrames(context.Background(), inputStream.Push(tail.Data))
+				}
 				rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
-				rio.forwardRoomInputFrame(context.Background(), roomIOInputSilenceFlushFrame())
+				rio.forwardRoomInputFrame(context.Background(), rio.inputSilenceFlushFrame())
 			} else {
 				// log error
 			}
@@ -1876,7 +1893,10 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 				}
 			}
 
-			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
+			frame := converter.Convert(roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1))
+			if frame == nil {
+				continue
+			}
 
 			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
 		}
@@ -1904,7 +1924,7 @@ func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
 	}
 	defer dec.Close()
 
-	inputStream := newRoomIOInputAudioStream()
+	inputStream := newRoomIOAuxAudioStream()
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 
 	recordFrames := func(frames []*model.AudioFrame) {
@@ -1948,28 +1968,57 @@ func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
 	}
 }
 
-func newRoomIOInputAudioStream() *audio.AudioByteStream {
-	samplesPerChannel := roomIOInputSampleRate * roomIOInputFrameSizeMS / 1000
-	return audio.NewAudioByteStream(roomIOInputSampleRate, 1, samplesPerChannel)
+// newRoomIOAuxAudioStream packs auxiliary recorded tracks at the default room
+// input format. Aux tracks only feed the recorder, so they deliberately ignore
+// AudioInputSampleRate / AudioInputFrameSizeMS: those tune what the session
+// hears, and recordings should not change format when they are set.
+func newRoomIOAuxAudioStream() *audio.AudioByteStream {
+	samplesPerChannel := roomIODefaultInputSampleRate * roomIODefaultInputFrameSizeMS / 1000
+	return audio.NewAudioByteStream(roomIODefaultInputSampleRate, 1, samplesPerChannel)
 }
 
-func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *model.AudioFrame {
-	if channels == 0 {
-		channels = 1
+func (rio *RoomIO) audioInputSampleRate() uint32 {
+	if rio == nil || rio.Options.AudioInputSampleRate == 0 {
+		return roomIODefaultInputSampleRate
 	}
-	frame := &model.AudioFrame{
-		Data:              pcm,
-		SampleRate:        sampleRate,
-		NumChannels:       channels,
-		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
+	return rio.Options.AudioInputSampleRate
+}
+
+func (rio *RoomIO) audioInputFrameSizeMS() uint32 {
+	if rio == nil || rio.Options.AudioInputFrameSizeMS == 0 {
+		return roomIODefaultInputFrameSizeMS
 	}
-	if sampleRate != 0 && sampleRate != roomIOInputSampleRate {
-		resampled, err := audio.ResampleAudioFrame(frame, roomIOInputSampleRate)
-		if err != nil {
-			logger.Logger.Warnw("room audio input resample failed", err, "from", sampleRate, "to", roomIOInputSampleRate)
-			return frame
-		}
-		frame = resampled
+	return rio.Options.AudioInputFrameSizeMS
+}
+
+func (rio *RoomIO) newInputAudioStream() *audio.AudioByteStream {
+	sampleRate := rio.audioInputSampleRate()
+	samplesPerChannel := sampleRate * rio.audioInputFrameSizeMS() / 1000
+	return audio.NewAudioByteStream(sampleRate, 1, samplesPerChannel)
+}
+
+// roomIOInputConverter normalizes decoded track audio to the room input format.
+// It keeps its resampler across calls so a track is converted as one continuous
+// signal rather than restarting the filter at every decoded chunk boundary.
+type roomIOInputConverter struct {
+	targetRate uint32
+	resampler  *audio.StreamingResampler
+	inputRate  uint32
+	channels   uint32
+}
+
+func newRoomIOInputConverter(targetRate uint32) *roomIOInputConverter {
+	if targetRate == 0 {
+		targetRate = roomIODefaultInputSampleRate
+	}
+	return &roomIOInputConverter{targetRate: targetRate}
+}
+
+// Convert returns audio at the room input rate, or nil while the resampler is
+// still accumulating the input its filter needs.
+func (c *roomIOInputConverter) Convert(frame *model.AudioFrame) *model.AudioFrame {
+	if c == nil || frame == nil {
+		return nil
 	}
 	if frame.NumChannels > 1 {
 		mono, err := roomIOMonoAudioFrame(frame)
@@ -1979,21 +2028,77 @@ func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *mo
 		}
 		frame = mono
 	}
-	return frame
+	var tail *model.AudioFrame
+	if c.resampler != nil && (c.inputRate != frame.SampleRate || c.channels != frame.NumChannels) {
+		// The source format changed mid-track. Release what the old resampler
+		// held so the switch does not swallow the samples in its filter window.
+		tail = c.resampler.Flush()
+		c.resampler = nil
+	}
+	if frame.SampleRate == 0 || frame.SampleRate == c.targetRate {
+		return joinRoomIOInputFrames(tail, frame)
+	}
+	if c.resampler == nil {
+		resampler, err := audio.NewStreamingResampler(frame.SampleRate, c.targetRate, frame.NumChannels)
+		if err != nil {
+			logger.Logger.Warnw("room audio input resampler setup failed", err, "from", frame.SampleRate, "to", c.targetRate)
+			return frame
+		}
+		c.resampler = resampler
+		c.inputRate = frame.SampleRate
+		c.channels = frame.NumChannels
+	}
+
+	converted, err := c.resampler.Push(frame)
+	if err != nil {
+		logger.Logger.Warnw("room audio input resample failed", err, "from", frame.SampleRate, "to", c.targetRate)
+		return frame
+	}
+	return joinRoomIOInputFrames(tail, converted)
 }
 
-func roomIOInputFrameFromFrame(frame *model.AudioFrame) *model.AudioFrame {
-	if frame == nil {
+// Flush releases audio the resampler was holding back for its filter.
+func (c *roomIOInputConverter) Flush() *model.AudioFrame {
+	if c == nil || c.resampler == nil {
 		return nil
 	}
-	return roomIOInputFrameFromPCM(frame.Data, frame.SampleRate, frame.NumChannels)
+	return c.resampler.Flush()
 }
 
-func roomIOInputSilenceFlushFrame() *model.AudioFrame {
-	samples := uint32(roomIOInputSilenceFlushDuration.Seconds() * float64(roomIOInputSampleRate))
+func joinRoomIOInputFrames(first *model.AudioFrame, second *model.AudioFrame) *model.AudioFrame {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return &model.AudioFrame{
+		Data:              append(append([]byte(nil), first.Data...), second.Data...),
+		SampleRate:        second.SampleRate,
+		NumChannels:       second.NumChannels,
+		SamplesPerChannel: first.SamplesPerChannel + second.SamplesPerChannel,
+		ParticipantID:     second.ParticipantID,
+	}
+}
+
+func roomIOInputFrameFromPCM(pcm []byte, sampleRate uint32, channels uint32) *model.AudioFrame {
+	if channels == 0 {
+		channels = 1
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(pcm)) / channels / 2,
+	}
+}
+
+func (rio *RoomIO) inputSilenceFlushFrame() *model.AudioFrame {
+	sampleRate := rio.audioInputSampleRate()
+	samples := uint32(roomIOInputSilenceFlushDuration.Seconds() * float64(sampleRate))
 	return &model.AudioFrame{
 		Data:              make([]byte, samples*2),
-		SampleRate:        roomIOInputSampleRate,
+		SampleRate:        sampleRate,
 		NumChannels:       1,
 		SamplesPerChannel: samples,
 	}
@@ -2009,11 +2114,59 @@ func (rio *RoomIO) forwardRoomInputFrame(ctx context.Context, frame *model.Audio
 	if rio == nil || frame == nil {
 		return
 	}
+	// Recording taps the untouched frame: an input processor exists to improve
+	// what the agent hears, not to rewrite the evidence of the call.
 	if rio.Recorder != nil {
 		rio.Recorder.RecordInput(frame)
 	}
-	if rio.AgentSession != nil {
-		rio.AgentSession.OnAudioFrame(ctx, frame)
+	if rio.AgentSession == nil {
+		return
+	}
+	for _, processed := range rio.processRoomInputFrame(ctx, frame) {
+		if processed != nil {
+			rio.AgentSession.OnAudioFrame(ctx, processed)
+		}
+	}
+}
+
+func (rio *RoomIO) processRoomInputFrame(ctx context.Context, frame *model.AudioFrame) []*model.AudioFrame {
+	rio.audioInputProcessorMu.Lock()
+	defer rio.audioInputProcessorMu.Unlock()
+	if rio.audioInputProcessorClosed || rio.Options.AudioInputProcessor == nil {
+		return []*model.AudioFrame{frame}
+	}
+	frames, err := rio.Options.AudioInputProcessor.Process(ctx, frame)
+	if err != nil {
+		logger.Logger.Warnw("room audio input processor failed", err, "sample_rate", frame.SampleRate)
+		return []*model.AudioFrame{frame}
+	}
+	return frames
+}
+
+func (rio *RoomIO) resetAudioInputProcessor() {
+	if rio == nil {
+		return
+	}
+	rio.audioInputProcessorMu.Lock()
+	defer rio.audioInputProcessorMu.Unlock()
+	if rio.audioInputProcessorClosed || rio.Options.AudioInputProcessor == nil {
+		return
+	}
+	rio.Options.AudioInputProcessor.Reset()
+}
+
+func (rio *RoomIO) closeAudioInputProcessor() {
+	if rio == nil {
+		return
+	}
+	rio.audioInputProcessorMu.Lock()
+	defer rio.audioInputProcessorMu.Unlock()
+	if rio.audioInputProcessorClosed || rio.Options.AudioInputProcessor == nil {
+		return
+	}
+	rio.audioInputProcessorClosed = true
+	if err := rio.Options.AudioInputProcessor.Close(); err != nil {
+		logger.Logger.Warnw("room audio input processor close failed", err)
 	}
 }
 
@@ -3027,6 +3180,7 @@ func (rio *RoomIO) Close() error {
 	rio.closeAgentTextStream()
 	rio.releaseAudioSubscriptionWaiters()
 	rio.finishPlayback(true, "")
+	rio.closeAudioInputProcessor()
 
 	if deleteRoomDone != nil {
 		select {
