@@ -1887,7 +1887,7 @@ func TestPipelineAgentResamplesToSTTInputSampleRate(t *testing.T) {
 	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
 	stt := &fakePipelineSTTWithSampleRate{
 		fakePipelineSTT: fakePipelineSTT{stream: sttStream},
-		inputSampleRate: 8000,
+		inputSampleRate: 16000,
 	}
 	agent := NewPipelineAgent(
 		&fakePipelineVAD{stream: &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}},
@@ -1902,15 +1902,24 @@ func TestPipelineAgentResamplesToSTTInputSampleRate(t *testing.T) {
 	go agent.run(ctx)
 
 	agent.OnAudioFrame(ctx, &model.AudioFrame{
-		Data:              make([]byte, 640),
-		SampleRate:        16000,
+		Data:              make([]byte, 960),
+		SampleRate:        24000,
 		NumChannels:       1,
-		SamplesPerChannel: 320,
+		SamplesPerChannel: 480,
 	})
 
 	pushed := receivePipelineFrame(t, sttStream.pushedCh)
-	if pushed.SampleRate != 8000 {
-		t.Fatalf("STT frame sample rate = %d, want 8000 (resampled to STT input rate)", pushed.SampleRate)
+	if pushed.SampleRate != 16000 {
+		t.Fatalf("STT frame sample rate = %d, want 16000", pushed.SampleRate)
+	}
+	if pushed.SamplesPerChannel != 320 {
+		t.Fatalf("STT frame samples per channel = %d, want 320", pushed.SamplesPerChannel)
+	}
+	if len(pushed.Data) != 640 {
+		t.Fatalf("STT frame PCM bytes = %d, want 640", len(pushed.Data))
+	}
+	if pushed.NumChannels != 1 {
+		t.Fatalf("STT frame channels = %d, want 1", pushed.NumChannels)
 	}
 }
 

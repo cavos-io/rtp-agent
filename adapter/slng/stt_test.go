@@ -15,6 +15,24 @@ func TestSTTConstructorContract(t *testing.T) {
 	}
 }
 
+func TestSTTInputSampleRate(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		provider *STT
+		want     uint32
+	}{
+		{name: "default", provider: NewSTT("key"), want: 16000},
+		{name: "configured", provider: NewSTT("key", WithSTTSampleRate(8000)), want: 8000},
+		{name: "nil receiver", provider: nil, want: 16000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.provider.InputSampleRate(); got != test.want {
+				t.Fatalf("InputSampleRate() = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSTTRejectsUnsupportedBridgeEncodingBeforeDial(t *testing.T) {
 	provider := NewSTT(
 		"test-key",
