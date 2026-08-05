@@ -1946,6 +1946,25 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.notifyUserTurnUpdated()
 	a.checkUserTurnLimit(transcript)
 
+	// Barge-in gate (worker policy, smart-turn only): classify the accumulated
+	// utterance while the agent is speaking. Only Interrupt proceeds to the
+	// normal interrupt + commit path below.
+	if decision, _, ok := a.evaluateBargeIn(pendingTranscript); ok {
+		switch decision {
+		case BargeInIgnore:
+			// backchannel / too-short over the agent: drop it so it never commits
+			// and clear the buffer so repeats don't accumulate into a false turn.
+			// The agent resumes via the false-interruption timer.
+			a.clearPendingUserTurn()
+			return
+		case BargeInContinue:
+			// needs more speech: keep the buffer, do not interrupt or commit yet.
+			return
+		case BargeInInterrupt:
+			// fall through to the existing interrupt + EOU path.
+		}
+	}
+
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
@@ -2366,6 +2385,11 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a == nil {
 		return
 	}
+	if decision, _, ok := a.evaluateBargeIn(a.currentInterruptionTranscript()); ok && decision != BargeInInterrupt {
+		// barge-in gate vetoed the hard interrupt; the agent stays paused
+		// and the false-interruption timer resumes it.
+		return
+	}
 	if a.Session != nil && a.Session.aecWarmupActive() {
 		return
 	}
@@ -2493,6 +2517,14 @@ func (a *AgentActivity) resumeFalseInterruption() {
 		return
 	}
 
+	// STT-first: user speech that arrives while the agent is talking is buffered in
+	// heldSTTEvents and is otherwise only flushed on a real interruption. When the barge-in
+	// resolves here as a false interruption, a genuine (non-short) utterance would be silently
+	// discarded. Commit it instead so we don't resume over the user.
+	if a.commitHeldBargeIn() {
+		return
+	}
+
 	resumed := false
 	controller := a.Session.AudioOutputController()
 	a.queueMu.Lock()
@@ -2508,6 +2540,44 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	}
 	logger.Logger.Infow("false_interruption.resolved", "resumed", resumed)
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
+}
+
+// commitHeldBargeIn processes user speech buffered in heldSTTEvents while the agent was
+// speaking, when a false interruption resolves. It returns true (caller must skip the resume)
+// only when the buffer holds a real, non-short utterance; short/empty buffers return false so
+// the sentence resumes as before. On commit it un-pauses output and stops holding so the
+// replayed OnFinalTranscript is processed (not re-parked) and drives the interrupt + reply,
+// exactly like a genuine barge-in.
+func (a *AgentActivity) commitHeldBargeIn() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.userTurnMu.Lock()
+	var b strings.Builder
+	for _, ev := range a.heldSTTEvents {
+		if ev == nil || ev.Type != stt.SpeechEventFinalTranscript || len(ev.Alternatives) == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(ev.Alternatives[0].Text)
+	}
+	heldText := strings.TrimSpace(b.String())
+	a.userTurnMu.Unlock()
+	if heldText == "" || a.shortInterruptionTranscript(heldText) {
+		return false
+	}
+	logger.Logger.Infow("false_interruption.commit_held_barge_in", "transcript", heldText)
+	if controller := a.Session.AudioOutputController(); controller != nil && controller.CanPauseAudioOutput() {
+		controller.ResumeAudioOutput()
+	}
+	a.userTurnMu.Lock()
+	a.holdSTTWhileAgentSpeaking = false
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	a.flushHeldSTTEvents()
+	return true
 }
 
 func (a *AgentActivity) cancelPausedFalseInterruption(interrupt bool) *pausedSpeechInfo {
@@ -3043,14 +3113,91 @@ func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo,
 	})
 }
 
+func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, string, bool) {
+	if a == nil || a.Session == nil || a.Agent == nil {
+		return 0, "", false
+	}
+	decider := a.Session.Options.BargeInDecider
+	if decider == nil || a.Agent.AudioTurnDetector == nil {
+		return 0, "", false
+	}
+	a.falseInterruptionMu.Lock()
+	spokeAtOnset := a.agentSpokeAtUserOnset
+	stPresent := a.latestSmartTurnPresent
+	stComplete := a.latestSmartTurnComplete
+	stProb := a.latestSmartTurnProbability
+	a.falseInterruptionMu.Unlock()
+	if !spokeAtOnset {
+		return 0, "", false
+	}
+	speechMs := 0
+	a.userTurnMu.Lock()
+	if !a.userSpeechStartedAt.IsZero() {
+		speechMs = int(time.Since(a.userSpeechStartedAt).Milliseconds())
+	}
+	a.userTurnMu.Unlock()
+	input := BargeInInput{
+		Transcript:           transcript,
+		SpeechMs:             speechMs,
+		WordCount:            a.bargeInWordCount(transcript),
+		AgentSpeaking:        true,
+		SmartTurnPresent:     stPresent,
+		SmartTurnComplete:    stComplete,
+		SmartTurnProbability: stProb,
+	}
+	decision, reason := decider.DecideBargeIn(input)
+	logger.Logger.Infow("barge_in.decision",
+		"decision", decision.String(),
+		"reason", reason,
+		"text", transcript,
+		"speech_ms", speechMs,
+		"words", input.WordCount)
+	return decision, reason, true
+}
+
+func (a *AgentActivity) bargeInWordCount(transcript string) int {
+	if a.Session != nil && a.Session.Options.WordTokenizer != nil {
+		return len(a.Session.Options.WordTokenizer.Tokenize(transcript, ""))
+	}
+	return len(tokenize.SplitWords(transcript, true, true, false))
+}
+
 func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle, transcript string) bool {
-	if currentSpeech == nil || !currentSpeech.AllowInterruptions || currentSpeech.IsInterrupted() || currentSpeech.IsDone() {
-		return false
+	// single lock: resolve the paused-speech fallback and snapshot the barge-in decision fields
+	// (written on the event + EOU goroutines) so the gate reads a consistent view.
+	a.falseInterruptionMu.Lock()
+	if currentSpeech == nil && a.pausedSpeech != nil {
+		currentSpeech = a.pausedSpeech.handle
 	}
-	if !a.InterruptionEnabled() {
-		return false
+	spokeAtOnset := a.agentSpokeAtUserOnset
+	stPresent := a.latestSmartTurnPresent
+	stComplete := a.latestSmartTurnComplete
+	a.falseInterruptionMu.Unlock()
+	skip := false
+	switch {
+	case currentSpeech == nil:
+	case !currentSpeech.AllowInterruptions:
+	case currentSpeech.IsInterrupted():
+	case currentSpeech.IsDone():
+	case !a.InterruptionEnabled():
+	case spokeAtOnset && a.Agent != nil && a.Agent.AudioTurnDetector != nil:
+		if decision, _, ok := a.evaluateBargeIn(transcript); ok {
+			// worker gate governs the commit: only Interrupt lets the turn reach the LLM.
+			skip = decision != BargeInInterrupt
+		} else {
+			switch {
+			case !stPresent:
+				skip = true
+			case stComplete:
+				skip = false
+			default:
+				skip = true
+			}
+		}
+	default:
+		skip = a.shortInterruptionTranscript(transcript)
 	}
-	return a.shortInterruptionTranscript(transcript)
+	return skip
 }
 
 func (a *AgentActivity) shortInterruptionTranscript(transcript string) bool {

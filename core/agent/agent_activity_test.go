@@ -771,6 +771,68 @@ func TestAgentActivityFalseInterruptionReleasesOutputWhenSpeechCannotResume(t *t
 	}
 }
 
+func TestAgentActivityResumeFalseInterruptionCommitsHeldBargeIn(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: current, agentState: AgentStateSpeaking}
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "tanggal 15 Juli 2025", Confidence: 0.9}},
+	}}
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	activity.resumeFalseInterruption()
+
+	if len(activity.heldSTTEvents) != 0 {
+		t.Fatalf("held STT events = %d, want flushed+committed on false-interruption resume", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "tanggal 15 Juli 2025" {
+			t.Fatalf("committed transcript = %q, want held barge-in", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("held barge-in transcript was discarded on resume instead of committed")
+	}
+}
+
+func TestAgentActivityResumeFalseInterruptionKeepsResumeForNoise(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: current, agentState: AgentStateSpeaking}
+
+	activity.resumeFalseInterruption()
+
+	if audioOutput.resumeCount != 1 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 1 when no held barge-in (noise resumes)", audioOutput.resumeCount)
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechCancelsPendingFalseInterruptionResume(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -3140,6 +3202,45 @@ func TestRunEOUDetectionSkipsSmartTurnWhenAgentSilent(t *testing.T) {
 	}
 	if audioDetector.calls != 0 {
 		t.Fatalf("audio detector calls = %d, want 0 when agent silent", audioDetector.calls)
+	}
+}
+
+func newBargeInGateActivity(t *testing.T) *AgentActivity {
+	t.Helper()
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.AudioTurnDetector = &recordingAudioTurnDetector{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true, MinInterruptionWords: 2})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.agentSpokeAtUserOnset = true
+	activity.falseInterruptionMu.Lock()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: NewSpeechHandle(true, DefaultInputDetails())}
+	activity.falseInterruptionMu.Unlock()
+	return activity
+}
+
+func TestBargeInGateSmartTurnDecidesKillVsResume(t *testing.T) {
+	// smart-turn complete -> kill (skip=false), commit proceeds
+	act := newBargeInGateActivity(t)
+	defer act.Stop()
+	act.latestSmartTurnPresent = true
+	act.latestSmartTurnComplete = true
+	if act.shouldSkipShortInterruption(nil, "boleh ganti pertanyaan") {
+		t.Fatal("smart-turn complete: want skip=false (kill)")
+	}
+
+	// smart-turn incomplete -> resume (skip=true)
+	act.latestSmartTurnComplete = false
+	if !act.shouldSkipShortInterruption(nil, "halo") {
+		t.Fatal("smart-turn incomplete: want skip=true (resume)")
+	}
+
+	// no smart-turn result -> fail-safe resume (skip=true)
+	act.latestSmartTurnPresent = false
+	if !act.shouldSkipShortInterruption(nil, "halo halo halo") {
+		t.Fatal("smart-turn absent: want skip=true (fail-safe resume)")
 	}
 }
 
