@@ -25,9 +25,9 @@ func TestFramesToMono16kResamples48kMono(t *testing.T) {
 	for i := range in {
 		in[i] = int16(i * 100)
 	}
-	got, err := framesToMono16k([]*model.AudioFrame{pcm16Frame(in, 48000, 1)})
+	got, err := framesToMono([]*model.AudioFrame{pcm16Frame(in, 48000, 1)}, 16000)
 	if err != nil {
-		t.Fatalf("framesToMono16k error = %v", err)
+		t.Fatalf("framesToMono error = %v", err)
 	}
 	if len(got) != 16 {
 		t.Fatalf("len = %d, want 16", len(got))
@@ -36,9 +36,9 @@ func TestFramesToMono16kResamples48kMono(t *testing.T) {
 
 func TestFramesToMono16kDownmixesStereo(t *testing.T) {
 	stereo := []int16{100, 200, -100, -200, 0, 0, 32767, 1}
-	got, err := framesToMono16k([]*model.AudioFrame{pcm16Frame(stereo, 16000, 2)})
+	got, err := framesToMono([]*model.AudioFrame{pcm16Frame(stereo, 16000, 2)}, 16000)
 	if err != nil {
-		t.Fatalf("framesToMono16k error = %v", err)
+		t.Fatalf("framesToMono error = %v", err)
 	}
 	if len(got) != 4 {
 		t.Fatalf("len = %d, want 4", len(got))
@@ -50,13 +50,13 @@ func TestFramesToMono16kDownmixesStereo(t *testing.T) {
 }
 
 func TestFramesToMono16kSkipsInvalid(t *testing.T) {
-	got, err := framesToMono16k([]*model.AudioFrame{
+	got, err := framesToMono([]*model.AudioFrame{
 		nil,
 		{Data: nil, SampleRate: 16000, NumChannels: 1},
 		{Data: []byte{1, 2}, SampleRate: 0, NumChannels: 1},
-	})
+	}, 16000)
 	if err != nil {
-		t.Fatalf("framesToMono16k error = %v", err)
+		t.Fatalf("framesToMono error = %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("len = %d, want 0", len(got))

@@ -14,11 +14,15 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/pipecat"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
-const targetSampleRate = 16000
-
 const defaultSmartTurnGRPCAddr = "localhost:9001"
+
+const (
+	defaultSmartTurnSampleRate   = 16000
+	defaultSmartTurnMaxAudioSecs = 8
+)
 
 const (
 	smartTurnMelBins   = 80
@@ -29,11 +33,13 @@ const (
 // SmartTurnServiceV1 service. The client extracts mel features locally and ships
 // the mel spectrogram; the server runs ONNX inference only.
 type SmartTurn struct {
-	conn      *grpc.ClientConn
-	client    spec.SmartTurnServiceV1Client
-	addr      string
-	extractor *pipecat.WhisperFeatureExtractor
-	mu        sync.Mutex
+	conn         *grpc.ClientConn
+	client       spec.SmartTurnServiceV1Client
+	addr         string
+	sampleRate   int
+	maxAudioSecs int
+	extractor    *pipecat.WhisperFeatureExtractor
+	mu           sync.Mutex
 }
 
 type SmartTurnOption func(*SmartTurn)
@@ -46,10 +52,28 @@ func WithSmartTurnAddr(addr string) SmartTurnOption {
 	}
 }
 
+func WithSmartTurnSampleRate(rate int) SmartTurnOption {
+	return func(s *SmartTurn) {
+		if rate > 0 {
+			s.sampleRate = rate
+		}
+	}
+}
+
+func WithSmartTurnMaxAudioSecs(secs int) SmartTurnOption {
+	return func(s *SmartTurn) {
+		if secs > 0 {
+			s.maxAudioSecs = secs
+		}
+	}
+}
+
 func NewSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
 	s := &SmartTurn{
-		addr:      defaultSmartTurnGRPCAddr,
-		extractor: pipecat.NewWhisperFeatureExtractor(),
+		addr:         defaultSmartTurnGRPCAddr,
+		sampleRate:   defaultSmartTurnSampleRate,
+		maxAudioSecs: defaultSmartTurnMaxAudioSecs,
+		extractor:    pipecat.NewWhisperFeatureExtractor(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -62,11 +86,13 @@ func NewSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
 	}
 	s.conn = conn
 	s.client = spec.NewSmartTurnServiceV1Client(conn)
+	logger.Logger.Infow("smart_turn.backend", "backend", "grpc", "grpc_addr", s.addr)
+	logger.Logger.Infow("smart_turn.grpc_channel_open", "addr", s.addr)
 	return s, nil
 }
 
 func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
-	samples, err := framesToMono16k(frames)
+	samples, err := framesToMono(frames, s.sampleRate)
 	if err != nil {
 		return 0, fmt.Errorf("cavos smart turn decode: %w", err)
 	}
@@ -99,15 +125,15 @@ func (s *SmartTurn) Close() error {
 	return nil
 }
 
-// framesToMono16k resamples each PCM16 frame to 16kHz and downmixes to mono,
+// framesToMono resamples each PCM16 frame to sampleRate and downmixes to mono,
 // returning normalized float32 samples [-1,1]. Invalid/empty frames are skipped.
-func framesToMono16k(frames []*model.AudioFrame) ([]float32, error) {
+func framesToMono(frames []*model.AudioFrame, sampleRate int) ([]float32, error) {
 	var samples []float32
 	for _, frame := range frames {
 		if frame == nil || len(frame.Data) == 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
 			continue
 		}
-		f, err := audio.ResampleAudioFrame(frame, targetSampleRate)
+		f, err := audio.ResampleAudioFrame(frame, uint32(sampleRate))
 		if err != nil {
 			return nil, err
 		}
