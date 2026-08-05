@@ -3082,6 +3082,67 @@ func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestRunEOUDetectionHonorsIsCompleteAndThreshold(t *testing.T) {
+	// prob 0.4 (below 0.55) but server says is_complete=true => must NOT wait max delay.
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	complete := true
+	agent.AudioTurnDetector = &recordingAudioTurnDetector{probability: 0.4, forceComplete: &complete}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01, MaxEndpointingDelay: 5.0})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.agentSpokeAtUserOnset = true
+	defer activity.Stop()
+
+	frame := &model.AudioFrame{Data: []byte{0x01, 0x00, 0x02, 0x00}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          []*model.AudioFrame{frame},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "done" {
+			t.Fatalf("turn text = %q, want done", msg.TextContent())
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("turn not completed quickly: is_complete=true was ignored (still waiting max delay)")
+	}
+}
+
+func TestRunEOUDetectionSkipsSmartTurnWhenAgentSilent(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	audioDetector := &recordingAudioTurnDetector{probability: 0.1}
+	agent.AudioTurnDetector = audioDetector
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01, MaxEndpointingDelay: 5.0})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	frame := &model.AudioFrame{Data: []byte{0x01, 0x00, 0x02, 0x00}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          []*model.AudioFrame{frame},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "done" {
+			t.Fatalf("turn text = %q, want done", msg.TextContent())
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("agent silent: turn should commit on min VAD delay, smart-turn must be skipped")
+	}
+	if audioDetector.calls != 0 {
+		t.Fatalf("audio detector calls = %d, want 0 when agent silent", audioDetector.calls)
+	}
+}
+
 func TestAgentSessionUpdateOptionsAffectsActiveEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
