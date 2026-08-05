@@ -78,6 +78,47 @@ func TestPipelineAgentBargeInResetStaysRootedUnderSessionCtx(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentBargeInResetSkippedWhileFalseInterruptionPaused(t *testing.T) {
+	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(session.Agent, session)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := agent.Start(ctx, session); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// no pause active -> barge-in resets (cancels) the generation ctx, as before
+	agent.mu.Lock()
+	prevCtx := agent.ctx
+	agent.mu.Unlock()
+	agent.resetGenerationCtxUnlessPaused()
+	select {
+	case <-prevCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no pause: barge-in did not reset the generation ctx")
+	}
+
+	// false-interruption pause active -> the in-flight reply's ctx must survive the barge-in
+	agent.mu.Lock()
+	pausedCtx := agent.ctx
+	agent.mu.Unlock()
+	session.activity.falseInterruptionMu.Lock()
+	session.activity.pausedSpeech = &pausedSpeechInfo{handle: NewSpeechHandle(false, DefaultInputDetails())}
+	session.activity.falseInterruptionMu.Unlock()
+
+	agent.resetGenerationCtxUnlessPaused()
+	if pausedCtx.Err() != nil {
+		t.Fatalf("paused: generation ctx was cancelled by barge-in, want preserved: %v", pausedCtx.Err())
+	}
+	agent.mu.Lock()
+	sameCtx := agent.ctx == pausedCtx
+	agent.mu.Unlock()
+	if !sameCtx {
+		t.Fatal("paused: generation ctx was replaced, want the same ctx kept so the reply can resume")
+	}
+}
+
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

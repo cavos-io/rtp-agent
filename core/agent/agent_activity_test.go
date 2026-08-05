@@ -7556,3 +7556,33 @@ func (f fixedWordTokenizer) Stream(string) tokenize.WordStream {
 func (f fixedWordTokenizer) FormatWords(words []string) string {
 	return strings.Join(words, " ")
 }
+
+func TestAgentActivityOnStartOfSpeechPausesWhileSpeaking(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		FalseInterruptionTimeout:    0.5,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+
+	// short barge-in onset (no duration, no transcript) must pause, not kill
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1 (immediate pause while speaking)", audioOutput.pauseCount)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted instead of paused on barge-in while speaking")
+	}
+	if activity.pausedSpeech == nil || activity.pausedSpeech.handle != current {
+		t.Fatal("pausedSpeech not set to current speech")
+	}
+	current.MarkDone()
+}

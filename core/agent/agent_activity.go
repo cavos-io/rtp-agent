@@ -1713,6 +1713,13 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.cancelPendingEOUDetection()
 
 	a.cancelFalseInterruptionTimer()
+	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
+	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
+	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+		if a.pauseSpeechForFalseInterruption(time.Time{}) {
+			return
+		}
+	}
 	if a.pauseThinkingSpeechForFalseInterruption() {
 		return
 	}
@@ -2025,6 +2032,18 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	a.userTurnMu.Lock()
 	a.holdSTTWhileAgentSpeaking = false
 	a.userTurnMu.Unlock()
+}
+
+// hasActiveFalseInterruptionPause reports whether a speech is currently paused for a false
+// interruption. Used to keep the in-flight reply's generation context alive across a barge-in
+// pause (see vadLoop): the paused sentence must survive so the resume timer can continue it.
+func (a *AgentActivity) hasActiveFalseInterruptionPause() bool {
+	if a == nil {
+		return false
+	}
+	a.falseInterruptionMu.Lock()
+	defer a.falseInterruptionMu.Unlock()
+	return a.pausedSpeech != nil
 }
 
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
@@ -2397,6 +2416,7 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 	a.falseInterruptionMu.Unlock()
 
 	controller.PauseAudioOutput()
+	logger.Logger.Infow("false_interruption.paused", "timeout", timeout.Seconds(), "handle", current.ID, "agent_state", a.Session.AgentState())
 	if updateAgentState {
 		a.Session.UpdateAgentState(AgentStateListening)
 	}
@@ -2454,10 +2474,12 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	if current == paused.handle && !paused.handle.IsDone() && controller != nil && controller.CanPauseAudioOutput() && a.Session.Options.ResumeFalseInterruption {
 		a.Session.UpdateAgentState(paused.agentState)
 		resumed = true
+		logger.Logger.Infow("false_interruption.resumed", "agent_state", paused.agentState)
 	}
 	if controller != nil && controller.CanPauseAudioOutput() {
 		controller.ResumeAudioOutput()
 	}
+	logger.Logger.Infow("false_interruption.resolved", "resumed", resumed)
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
 
@@ -3106,6 +3128,13 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	opts := a.Session.Options
 	mode := a.turnDetectionMode()
 	if !opts.PreemptiveGeneration || !a.hasLLMModel() || mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	pausedForFalseInterruption := a.pausedSpeech != nil
+	a.falseInterruptionMu.Unlock()
+	if pausedForFalseInterruption && a.shortInterruptionTranscript(transcript) {
+		// paused + short barge-in -> let the false-interruption resume the sentence, don't pre-generate a reply
 		return
 	}
 	a.queueMu.Lock()
