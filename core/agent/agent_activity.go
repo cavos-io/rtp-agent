@@ -1955,6 +1955,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			// backchannel / too-short over the agent: drop it so it never commits
 			// and clear the buffer so repeats don't accumulate into a false turn.
 			// The agent resumes via the false-interruption timer.
+			if a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
+				a.recordTranscriptOnlyUserMessage(pendingTranscript, confidenceSum/float64(confidenceCount))
+			}
 			a.clearPendingUserTurn()
 			return
 		case BargeInContinue:
@@ -2956,6 +2959,9 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
+		if a.Session != nil && a.Session.Options.RecordUncommittedTranscript {
+			a.recordTranscriptOnlyUserMessage(info.NewTranscript, info.TranscriptConfidence)
+		}
 		return nil, nil
 	}
 	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
@@ -2968,6 +2974,8 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if a.Session != nil && a.Session.isClosing() {
 			newMsg.Metrics = metricsReportFromEndOfTurn(info, 0)
 			a.commitUserMessage(newMsg)
+		} else if a.Session != nil && a.Session.Options.RecordUncommittedTranscript {
+			a.recordTranscriptOnlyUserMessage(info.NewTranscript, info.TranscriptConfidence)
 		}
 		return nil, nil
 	}
@@ -3471,6 +3479,23 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	if a.Session != nil {
 		a.Session.EmitConversationItemAdded(msg)
 	}
+}
+
+func (a *AgentActivity) recordTranscriptOnlyUserMessage(transcript string, confidence float64) {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return
+	}
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	a.Agent.ChatCtx.Append(&llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: transcript}},
+		TranscriptConfidence: &confidence,
+		CreatedAt:            time.Now(),
+		TranscriptOnly:       true,
+	})
 }
 
 func (a *AgentActivity) clearPendingUserTurn() {
