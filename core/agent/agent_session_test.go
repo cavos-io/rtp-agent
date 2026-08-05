@@ -2268,6 +2268,75 @@ func TestNewAgentSessionPreservesExplicitFalseDiscardAudioIfUninterruptible(t *t
 	}
 }
 
+func TestHalfDuplexSTTSilencesOnlyWhileAgentSentenceInFlight(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		HalfDuplexSTTWhileSpeaking: true,
+		STTResumeCooldown:          0.3,
+		STTResumeCooldownSet:       true,
+		// keep the unrelated silence gates out of the way (worker also sets AEC warmup 0)
+		DiscardAudioIfUninterruptible:    false,
+		DiscardAudioIfUninterruptibleSet: true,
+		AECWarmupDuration:                0,
+		AECWarmupDurationSet:             true,
+	})
+	session.activity = NewAgentActivity(agent, session)
+	act := session.activity
+
+	// idle agent -> STT live, real answers heard
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("idle agent: shouldSilenceInputAudio() = true, want false (real answers must be heard)")
+	}
+
+	// speaking -> silence
+	session.UpdateAgentState(AgentStateSpeaking)
+	if !session.shouldSilenceInputAudio() {
+		t.Fatal("agent speaking: shouldSilenceInputAudio() = false, want true")
+	}
+
+	// paused for false interruption, within cooldown after speech end -> still silence (echo tail guard)
+	session.UpdateAgentState(AgentStateListening)
+	act.falseInterruptionMu.Lock()
+	act.pausedSpeech = &pausedSpeechInfo{handle: NewSpeechHandle(false, DefaultInputDetails())}
+	act.agentSpeechEndedAt = time.Now()
+	act.falseInterruptionMu.Unlock()
+	if !session.shouldSilenceInputAudio() {
+		t.Fatal("paused within cooldown: shouldSilenceInputAudio() = false, want true (echo tail guard)")
+	}
+
+	// paused, past cooldown -> STT live so the barge-in transcribes (pause alone no longer silences)
+	act.falseInterruptionMu.Lock()
+	act.agentSpeechEndedAt = time.Now().Add(-time.Second)
+	act.falseInterruptionMu.Unlock()
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("paused past cooldown: shouldSilenceInputAudio() = true, want false (barge-in must transcribe)")
+	}
+
+	// pause cleared, within cooldown after speech end -> still silence
+	act.falseInterruptionMu.Lock()
+	act.pausedSpeech = nil
+	act.agentSpeechEndedAt = time.Now()
+	act.falseInterruptionMu.Unlock()
+	if !session.shouldSilenceInputAudio() {
+		t.Fatal("within STTResumeCooldown: shouldSilenceInputAudio() = false, want true")
+	}
+
+	// past cooldown -> STT live again
+	act.falseInterruptionMu.Lock()
+	act.agentSpeechEndedAt = time.Now().Add(-time.Second)
+	act.falseInterruptionMu.Unlock()
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("past STTResumeCooldown: shouldSilenceInputAudio() = true, want false")
+	}
+
+	// option off -> never silence, even while speaking
+	session.Options.HalfDuplexSTTWhileSpeaking = false
+	session.UpdateAgentState(AgentStateSpeaking)
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("option off: shouldSilenceInputAudio() = true, want false")
+	}
+}
+
 func TestAgentSessionInputAudioMuteControlsSilenceGate(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 

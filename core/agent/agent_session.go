@@ -111,6 +111,10 @@ type AgentSessionOptions struct {
 	MaxUnrecoverableErrors                   int
 	MaxUnrecoverableErrorsSet                bool
 	MockTools                                map[string]MockToolFunc
+
+	HalfDuplexSTTWhileSpeaking bool
+	STTResumeCooldown          float64
+	STTResumeCooldownSet       bool
 }
 
 type AgentSessionUpdateOptions struct {
@@ -1236,6 +1240,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.MaxUnrecoverableErrorsSet && opts.MaxUnrecoverableErrors == 0 {
 		opts.MaxUnrecoverableErrors = 3
 	}
+	if !opts.STTResumeCooldownSet && opts.STTResumeCooldown == 0 {
+		opts.STTResumeCooldown = 0.3
+	}
 	return opts
 }
 
@@ -2093,6 +2100,9 @@ func (s *AgentSession) shouldSilenceInputAudio() bool {
 	muted := s.inputAudioMuted
 	s.mu.Unlock()
 	if muted {
+		return true
+	}
+	if activity.sttSilencedWhileAgentSpeaking(time.Now()) {
 		return true
 	}
 	return discard && activity.uninterruptibleSpeechActive()
