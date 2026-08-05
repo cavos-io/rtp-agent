@@ -238,7 +238,6 @@ type inputTranscriptionClearer interface {
 
 type preemptiveGeneration struct {
 	speech     *SpeechHandle
-	userMsg    *llm.ChatMessage
 	transcript string
 	chatCtx    *llm.ChatContext
 	toolsKey   string
@@ -3388,7 +3387,6 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 	a.preemptiveMu.Lock()
 	a.preemptiveGeneration = &preemptiveGeneration{
 		speech:     handle,
-		userMsg:    msg,
 		transcript: transcript,
 		chatCtx:    chatCtx.Copy(),
 		toolsKey:   a.currentToolsKey(),
@@ -3420,7 +3418,7 @@ func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatConte
 		_ = preemptive.speech.Interrupt(true)
 		return nil, nil
 	}
-	preemptive.userMsg.Metrics = newMsg.Metrics
+	preemptive.speech.Generation.UserMessage = newMsg
 	if err := a.ScheduleSpeech(preemptive.speech, SpeechPriorityNormal, false); err != nil {
 		return nil, err
 	}
