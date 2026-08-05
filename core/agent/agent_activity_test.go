@@ -3040,6 +3040,7 @@ func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	})
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
+	activity.agentSpokeAtUserOnset = true
 	defer activity.Stop()
 
 	frameData := []byte{0x01, 0x00, 0x02, 0x00}
@@ -7212,16 +7213,21 @@ func (d thresholdTurnDetector) UnlikelyThreshold(language string) (float64, bool
 }
 
 type recordingAudioTurnDetector struct {
-	probability  float64
-	calls        int
-	frames       []*model.AudioFrame
-	originalData []byte
+	probability   float64
+	forceComplete *bool // nil => probability >= 0.5 (legacy default)
+	calls         int
+	frames        []*model.AudioFrame
+	originalData  []byte
 }
 
-func (d *recordingAudioTurnDetector) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
+func (d *recordingAudioTurnDetector) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (AudioTurnResult, error) {
 	d.calls++
 	d.frames = frames
-	return d.probability, nil
+	complete := d.probability >= 0.5
+	if d.forceComplete != nil {
+		complete = *d.forceComplete
+	}
+	return AudioTurnResult{Probability: d.probability, IsComplete: complete}, nil
 }
 
 func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {

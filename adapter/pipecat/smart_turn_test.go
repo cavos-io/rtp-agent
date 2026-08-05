@@ -157,12 +157,12 @@ func TestSmartTurnPredictEndOfTurnAudioConcatenatesFrames(t *testing.T) {
 		},
 	}
 
-	probability, err := detector.PredictEndOfTurnAudio(context.Background(), frames)
+	res, err := detector.PredictEndOfTurnAudio(context.Background(), frames)
 	if err != nil {
 		t.Fatalf("PredictEndOfTurnAudio error = %v", err)
 	}
-	if probability != 0.9 {
-		t.Fatalf("PredictEndOfTurnAudio probability = %v, want 0.9", probability)
+	if res.Probability != 0.9 {
+		t.Fatalf("PredictEndOfTurnAudio probability = %v, want 0.9", res.Probability)
 	}
 	if got[len(got)-2] != 0.5 || got[len(got)-1] != -0.5 {
 		t.Fatalf("audio tail = [%v %v], want [0.5 -0.5]", got[len(got)-2], got[len(got)-1])

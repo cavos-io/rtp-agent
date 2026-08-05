@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 const (
@@ -92,20 +95,31 @@ func (s *SmartTurn) PredictFrame(ctx context.Context, frame *model.AudioFrame) (
 	return s.PredictEndpoint(ctx, audio)
 }
 
-func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
+func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (agent.AudioTurnResult, error) {
 	audio := make([]float32, 0)
 	for _, frame := range frames {
 		frameAudio, err := PCM16MonoFloat32(frame)
 		if err != nil {
-			return 0, err
+			return agent.AudioTurnResult{}, err
 		}
 		audio = append(audio, frameAudio...)
 	}
+	start := time.Now()
 	result, err := s.PredictEndpoint(ctx, audio)
 	if err != nil {
-		return 0, err
+		logger.Logger.Errorw("smart_turn.onnx_failed falling back to not-complete", err)
+		return agent.AudioTurnResult{}, err
 	}
-	return result.Probability, nil
+	out := agent.AudioTurnResult{
+		Probability: result.Probability,
+		InferenceMs: float64(time.Since(start).Microseconds()) / 1000.0,
+		IsComplete:  result.Prediction == SmartTurnComplete,
+	}
+	logger.Logger.Infow("smart_turn.result",
+		"probability", out.Probability,
+		"inference_ms", out.InferenceMs,
+		"is_complete", out.IsComplete)
+	return out, nil
 }
 
 func SmartTurnAudioWindow(audio []float32, nSeconds int, sampleRate int) []float32 {

@@ -48,6 +48,8 @@ type AgentSessionOptions struct {
 	MinInterruptionDuration                  float64
 	MinInterruptionDurationSet               bool
 	MinInterruptionWords                     int
+	SmartTurnThreshold                       float64
+	SmartTurnThresholdSet                    bool
 	MinEndpointingDelay                      float64
 	MinEndpointingDelaySet                   bool
 	MaxEndpointingDelay                      float64
@@ -1175,6 +1177,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if !opts.MinInterruptionDurationSet && opts.MinInterruptionDuration == 0 {
 		opts.MinInterruptionDuration = 0.5
+	}
+	if !opts.SmartTurnThresholdSet && opts.SmartTurnThreshold == 0 {
+		opts.SmartTurnThreshold = 0.55
 	}
 	if !opts.MinEndpointingDelaySet && opts.MinEndpointingDelay == 0 {
 		opts.MinEndpointingDelay = 0.5

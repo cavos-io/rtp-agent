@@ -31,8 +31,14 @@ type turnDetectorThreshold interface {
 	UnlikelyThreshold(language string) (float64, bool)
 }
 
+type AudioTurnResult struct {
+	Probability float64
+	InferenceMs float64
+	IsComplete  bool
+}
+
 type AudioTurnDetector interface {
-	PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error)
+	PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (AudioTurnResult, error)
 }
 
 type AgentInterface interface {

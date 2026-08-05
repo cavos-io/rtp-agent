@@ -28,6 +28,8 @@ var (
 const agentInstructionsMessageID = "lk.agent_task.instructions"
 const audioTurnDetectorWindowSeconds = 8.0
 
+const smartTurnPredictTimeout = 5 * time.Second
+
 type instructionUpdatingAssistant interface {
 	UpdateInstructions(context.Context, string) error
 }
@@ -112,12 +114,16 @@ type AgentActivity struct {
 	startedCh          chan struct{}
 	startedOnce        sync.Once
 
-	sttEOSReceived       bool
-	speaking             bool
-	speakingMu           sync.RWMutex
-	interruptionDetected bool
-	overlapSpeechEnded   bool
-	manualTurnCommitted  bool
+	sttEOSReceived             bool
+	speaking                   bool
+	speakingMu                 sync.RWMutex
+	interruptionDetected       bool
+	overlapSpeechEnded         bool
+	manualTurnCommitted        bool
+	agentSpokeAtUserOnset      bool
+	latestSmartTurnPresent     bool
+	latestSmartTurnComplete    bool
+	latestSmartTurnProbability float64
 
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
@@ -1667,6 +1673,12 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
 	if !wasSpeaking {
+		spoke := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
+		a.falseInterruptionMu.Lock()
+		a.agentSpokeAtUserOnset = spoke
+		a.latestSmartTurnPresent = false
+		a.latestSmartTurnComplete = false
+		a.falseInterruptionMu.Unlock()
 		var startedAt time.Time
 		if sttStartedAt != nil {
 			startedAt = unixSecondsToTime(*sttStartedAt)
@@ -2261,7 +2273,20 @@ func (a *AgentActivity) trimUserAudioFramesLocked() {
 	}
 	if start > 0 {
 		a.userAudioFrames = append([]*model.AudioFrame(nil), a.userAudioFrames[start:]...)
+		logger.Logger.Debugw("turn_audio_buffer.capped",
+			"max_audio_secs", int(audioTurnDetectorWindowSeconds),
+			"size_bytes", audioFramesBytes(a.userAudioFrames))
 	}
+}
+
+func audioFramesBytes(frames []*model.AudioFrame) int {
+	total := 0
+	for _, frame := range frames {
+		if frame != nil {
+			total += len(frame.Data)
+		}
+	}
+	return total
 }
 
 func copyAudioFrame(frame *model.AudioFrame) *model.AudioFrame {
@@ -3486,15 +3511,35 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 		endpointingDelay := a.minEndpointingDelay()
 
-		if a.Agent.AudioTurnDetector != nil && len(info.AudioFrames) > 0 {
-			prob, err := a.Agent.AudioTurnDetector.PredictEndOfTurnAudio(ctx, info.AudioFrames)
+		a.falseInterruptionMu.Lock()
+		spokeAtOnset := a.agentSpokeAtUserOnset
+		a.falseInterruptionMu.Unlock()
+
+		if spokeAtOnset && a.Agent.AudioTurnDetector != nil && len(info.AudioFrames) > 0 {
+			logger.Logger.Infow("turn_audio_buffer.reset", "old_size_bytes", audioFramesBytes(info.AudioFrames))
+			predictCtx, predictCancel := context.WithTimeout(context.WithoutCancel(a.ctx), smartTurnPredictTimeout)
+			res, err := a.Agent.AudioTurnDetector.PredictEndOfTurnAudio(predictCtx, info.AudioFrames)
+			predictCancel()
 			if err == nil {
-				logger.Logger.Infow("Audio EOU prediction", "probability", prob)
-				if prob < 0.5 {
+				logger.Logger.Infow("smart_turn.result_observed",
+					"probability", res.Probability,
+					"inference_ms", res.InferenceMs,
+					"is_complete", res.IsComplete)
+				threshold := a.Session.Options.SmartTurnThreshold
+				if threshold <= 0 {
+					threshold = 0.55
+				}
+				a.falseInterruptionMu.Lock()
+				a.latestSmartTurnPresent = true
+				a.latestSmartTurnComplete = res.IsComplete || res.Probability >= threshold
+				a.latestSmartTurnProbability = res.Probability
+				a.falseInterruptionMu.Unlock()
+				if res.Probability < threshold && !res.IsComplete {
 					endpointingDelay = a.maxEndpointingDelay()
 				}
 			} else {
-				logger.Logger.Errorw("Audio EOU prediction failed", err)
+				logger.Logger.Errorw("smart_turn.predict_failed", err)
+				endpointingDelay = a.maxEndpointingDelay()
 			}
 		} else if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
