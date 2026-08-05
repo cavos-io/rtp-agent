@@ -60,6 +60,23 @@ func PerformLLMInferenceWithTextEvents(
 	return performLLMInference(ctx, l, chatCtx, tools, true, options...)
 }
 
+func excludeTranscriptOnlyItems(chatCtx *llm.ChatContext) *llm.ChatContext {
+	if chatCtx == nil {
+		return chatCtx
+	}
+	hasTranscriptOnly := false
+	for _, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && msg.TranscriptOnly {
+			hasTranscriptOnly = true
+			break
+		}
+	}
+	if !hasTranscriptOnly {
+		return chatCtx
+	}
+	return chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeTranscriptOnly: true})
+}
+
 func performLLMInference(
 	ctx context.Context,
 	l llm.LLM,
@@ -78,6 +95,8 @@ func performLLMInference(
 	if emitTextEvents {
 		data.TextEventCh = make(chan LLMTextEvent, 100)
 	}
+
+	chatCtx = excludeTranscriptOnlyItems(chatCtx)
 
 	chatOptions := make([]llm.ChatOption, 0, len(options)+1)
 	toolItems := make([]interface{}, 0, len(tools))
