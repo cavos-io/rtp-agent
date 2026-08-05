@@ -6694,6 +6694,14 @@ func TestAgentActivityPreemptiveGenerationSchedulesMatchingFinalTurn(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("ConversationItemAddedEvents did not receive scheduled preemptive message")
 	}
+	// The user turn must be added to chat history EXACTLY ONCE. commitUserMessage emits the
+	// committed turn; the matched-preemptive reuse must NOT emit a second copy (regression:
+	// a duplicate user line in the transcript/telephony).
+	select {
+	case ev := <-conversationEvents:
+		t.Fatalf("ConversationItemAddedEvents received a second user item %#v, want exactly one", ev)
+	default:
+	}
 	select {
 	case ev := <-speechEvents:
 		t.Fatalf("SpeechCreatedEvents received second generation %#v, want reused preemptive handle", ev)

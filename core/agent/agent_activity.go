@@ -3425,7 +3425,9 @@ func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatConte
 	if err := a.ScheduleSpeech(preemptive.speech, SpeechPriorityNormal, false); err != nil {
 		return nil, err
 	}
-	a.Session.EmitConversationItemAdded(preemptive.userMsg)
+	// Do NOT emit preemptive.userMsg here: commitUserMessage(newMsg) already emitted
+	// this user message before the preemptive-match branch runs, and a second emit
+	// duplicates the user line in ChatCtx and every transcript built from it.
 	a.Session.watchActiveRunSpeechHandle(preemptive.speech)
 	logger.Logger.Debugw("using preemptive generation", "preemptiveLeadTime", time.Since(preemptive.createdAt).Seconds())
 	return preemptive.speech, nil
