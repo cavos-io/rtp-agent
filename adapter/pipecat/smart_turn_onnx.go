@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
+
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 const (
@@ -73,6 +75,7 @@ func NewSmartTurnWithONNX(options SmartTurnONNXOptions, opts ...SmartTurnOption)
 	if err != nil {
 		return nil, err
 	}
+	logger.Logger.Infow("smart_turn.backend", "backend", "local", "model_path", options.ModelPath)
 	return newSmartTurnWithONNXRunner(options.FeatureExtractor, runner, opts...)
 }
 

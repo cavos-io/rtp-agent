@@ -17063,8 +17063,8 @@ type fakeAppAudioTurnDetector struct {
 	closeCalls int
 }
 
-func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
-	return 0.9, nil
+func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (agent.AudioTurnResult, error) {
+	return agent.AudioTurnResult{Probability: 0.9, IsComplete: true}, nil
 }
 
 func (f *fakeAppAudioTurnDetector) Close() error {

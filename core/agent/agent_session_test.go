@@ -7510,13 +7510,13 @@ type closeTrackingAudioTurnDetector struct {
 	closeCalls int
 }
 
-func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (float64, error) {
+func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (AudioTurnResult, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closeCalls > 0 {
-		return 0, errors.New("audio turn detector is closed")
+		return AudioTurnResult{}, errors.New("audio turn detector is closed")
 	}
-	return 0, nil
+	return AudioTurnResult{}, nil
 }
 
 func (d *closeTrackingAudioTurnDetector) Close() error {

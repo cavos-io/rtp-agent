@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/adapter/cavos/spec"
 	"github.com/cavos-io/rtp-agent/adapter/pipecat"
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -91,20 +92,22 @@ func NewSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
 	return s, nil
 }
 
-func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (float64, error) {
+func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (agent.AudioTurnResult, error) {
 	samples, err := framesToMono(frames, s.sampleRate)
 	if err != nil {
-		return 0, fmt.Errorf("cavos smart turn decode: %w", err)
+		return agent.AudioTurnResult{}, fmt.Errorf("cavos smart turn decode: %w", err)
 	}
 	if len(samples) == 0 {
-		return 0, nil
+		return agent.AudioTurnResult{}, nil
 	}
+
+	samples = pipecat.SmartTurnAudioWindow(samples, s.maxAudioSecs, s.sampleRate)
 
 	s.mu.Lock()
 	features, err := s.extractor.Extract(ctx, samples)
 	s.mu.Unlock()
 	if err != nil {
-		return 0, fmt.Errorf("cavos smart turn extract: %w", err)
+		return agent.AudioTurnResult{}, fmt.Errorf("cavos smart turn extract: %w", err)
 	}
 
 	resp, err := s.client.Predict(ctx, &spec.SmartTurnRequest{
@@ -113,9 +116,19 @@ func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.A
 		TimeSteps: smartTurnTimeSteps,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("cavos smart turn predict: %w", err)
+		logger.Logger.Errorw("smart_turn.grpc_failed falling back to not-complete", err, "addr", s.addr)
+		return agent.AudioTurnResult{}, fmt.Errorf("cavos smart turn predict: %w", err)
 	}
-	return float64(resp.GetProbability()), nil
+	result := agent.AudioTurnResult{
+		Probability: float64(resp.GetProbability()),
+		InferenceMs: float64(resp.GetInferenceMs()),
+		IsComplete:  resp.GetIsComplete(),
+	}
+	logger.Logger.Infow("smart_turn.grpc_result",
+		"probability", result.Probability,
+		"inference_ms", result.InferenceMs,
+		"is_complete", result.IsComplete)
+	return result, nil
 }
 
 func (s *SmartTurn) Close() error {
