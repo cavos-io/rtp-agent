@@ -187,6 +187,7 @@ type AgentActivity struct {
 	falseInterruptionMu    sync.Mutex
 	pausedSpeech           *pausedSpeechInfo
 	falseInterruptionTimer *time.Timer
+	agentSpeechEndedAt     time.Time
 
 	userTurnExceededCancel context.CancelFunc
 	userTurnExceededSeq    uint64
@@ -2032,6 +2033,9 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	a.userTurnMu.Lock()
 	a.holdSTTWhileAgentSpeaking = false
 	a.userTurnMu.Unlock()
+	a.falseInterruptionMu.Lock()
+	a.agentSpeechEndedAt = endedAt
+	a.falseInterruptionMu.Unlock()
 }
 
 // hasActiveFalseInterruptionPause reports whether a speech is currently paused for a false
@@ -2044,6 +2048,29 @@ func (a *AgentActivity) hasActiveFalseInterruptionPause() bool {
 	a.falseInterruptionMu.Lock()
 	defer a.falseInterruptionMu.Unlock()
 	return a.pausedSpeech != nil
+}
+
+// sttSilencedWhileAgentSpeaking reports whether the STT input should be fed silence because
+// the agent's sentence is in flight: it is speaking, paused for a false interruption, or
+// within STTResumeCooldown seconds after speech ended. Keeps VAD live (noise still
+// pauses+resumes) while blocking echo/noise from producing a phantom transcript. Idle agent
+// => false, so real answers are heard. Gated by opts.HalfDuplexSTTWhileSpeaking.
+func (a *AgentActivity) sttSilencedWhileAgentSpeaking(now time.Time) bool {
+	if a == nil || a.Session == nil || !a.Session.Options.HalfDuplexSTTWhileSpeaking {
+		return false
+	}
+	if a.Session.AgentStateValue() == AgentStateSpeaking {
+		return true
+	}
+	a.falseInterruptionMu.Lock()
+	endedAt := a.agentSpeechEndedAt
+	a.falseInterruptionMu.Unlock()
+	cooldown := a.Session.Options.STTResumeCooldown
+	if cooldown > 0 && !endedAt.IsZero() &&
+		now.Sub(endedAt) < time.Duration(cooldown*float64(time.Second)) {
+		return true
+	}
+	return false
 }
 
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
