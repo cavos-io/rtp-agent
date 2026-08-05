@@ -251,6 +251,7 @@ type ChatMessage struct {
 	Extra                map[string]any
 	Metrics              map[string]any
 	CreatedAt            time.Time
+	TranscriptOnly       bool
 }
 
 func (m *ChatMessage) TextContent() string {

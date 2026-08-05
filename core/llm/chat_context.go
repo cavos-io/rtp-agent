@@ -60,7 +60,9 @@ type ChatContextCopyOptions struct {
 	ExcludeEmptyMessage bool
 	ExcludeHandoff      bool
 	ExcludeConfigUpdate bool
-	Tools               []interface{}
+
+	ExcludeTranscriptOnly bool
+	Tools                 []interface{}
 }
 
 type ChatContextUpsertOptions struct {
@@ -94,6 +96,11 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 		}
 		if opts.ExcludeConfigUpdate && item.GetType() == "agent_config_update" {
 			continue
+		}
+		if opts.ExcludeTranscriptOnly {
+			if msg, ok := item.(*ChatMessage); ok && msg.TranscriptOnly {
+				continue
+			}
 		}
 		if filterByTools && isFunctionChatItem(item) {
 			if _, ok := validTools[functionChatItemName(item)]; !ok {
