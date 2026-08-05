@@ -15,7 +15,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-const testMultilingualRevision = "v0.4.3-intl"
+// Derive project-owned revision because release automation skips test files.
+const testMultilingualRevision = PluginVersion + "-intl"
 
 func TestTurnDetectorPluginMetadataMatchesReference(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.livekit" {
