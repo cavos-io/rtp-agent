@@ -347,6 +347,12 @@ func (s *STT) setOptionError(err error) {
 
 func (s *STT) Label() string { return "slng.STT" }
 func (s *STT) Model() string { return "slng" }
+func (s *STT) InputSampleRate() uint32 {
+	if s == nil || s.sampleRate <= 0 {
+		return uint32(defaultSLNGSTTSampleRate)
+	}
+	return uint32(s.sampleRate)
+}
 func (s *STT) Provider() string {
 	return "SLNG"
 }
