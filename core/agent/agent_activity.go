@@ -90,6 +90,8 @@ type EndOfTurnInfo struct {
 	StartedSpeakingAt      *float64
 	StoppedSpeakingAt      *float64
 	AudioFrames            []*model.AudioFrame
+
+	FromInterimFallback bool
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -124,6 +126,15 @@ type AgentActivity struct {
 	latestSmartTurnPresent     bool
 	latestSmartTurnComplete    bool
 	latestSmartTurnProbability float64
+	// interimCommittedTurn is true once the current user-speech epoch has been
+	// force-committed from an interim transcript (CommitOnInterimWhenNoFinal) with
+	// no STT final yet observed. Reset on the next onStartOfSpeech. Guards against
+	// a late-arriving final for the same, already-committed epoch re-triggering an
+	// interrupt/reply for an utterance the agent has already answered. Set/read
+	// across goroutines (runEOUDetection's timer goroutine vs the event-loop
+	// goroutine) — always access via setInterimCommittedTurn/isInterimCommittedTurn,
+	// guarded by userTurnMu.
+	interimCommittedTurn bool
 
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
@@ -133,6 +144,7 @@ type AgentActivity struct {
 	pendingInterimTranscript         string
 	pendingInterimLanguage           string
 	pendingInterimSpeakerID          string
+	pendingInterimConfidence         float64
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
 	userTurnCompletionMu             sync.Mutex
@@ -1673,6 +1685,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.manualTurnCommitted = false
 	a.interruptionDetected = false
 	a.overlapSpeechEnded = false
+	a.setInterimCommittedTurn(false)
 	if !wasSpeaking {
 		spoke := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
 		a.falseInterruptionMu.Lock()
@@ -1853,6 +1866,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
 	a.pendingInterimSpeakerID = speakerID
+	a.pendingInterimConfidence = confidence
 	a.pendingPreflightTranscript = preflightTranscript
 	a.pendingPreflightConfidence = preflightConfidence
 	a.userTurnMu.Unlock()
@@ -1916,6 +1930,15 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
 		return
 	}
+	if a.isInterimCommittedTurn() {
+		// This speech epoch was already force-committed from an interim transcript
+		// (CommitOnInterimWhenNoFinal); a final arriving after that is stale for
+		// turn-taking purposes. The transcript event above already surfaced it live
+		// — it must not re-trigger an interrupt or a second reply for an utterance
+		// the agent has already answered.
+		logger.Logger.Debugw("dropping late final transcript for already-committed interim turn", "transcript", transcript)
+		return
+	}
 
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
 
@@ -1939,6 +1962,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingInterimConfidence = 0
 	a.pendingPreflightTranscript = ""
 	a.pendingPreflightConfidence = 0
 	a.userTurnStartedAt = time.Time{}
@@ -2841,6 +2865,7 @@ collect:
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingInterimConfidence = 0
 	a.pendingPreflightTranscript = ""
 	a.pendingPreflightConfidence = 0
 	a.userTurnStartedAt = time.Time{}
@@ -3515,6 +3540,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
+	a.pendingInterimConfidence = 0
 	a.pendingPreflightTranscript = ""
 	a.pendingPreflightConfidence = 0
 	a.userTurnStartedAt = time.Time{}
@@ -3533,20 +3559,56 @@ func (a *AgentActivity) notifyUserTurnUpdated() {
 	}
 }
 
+func (a *AgentActivity) setInterimCommittedTurn(v bool) {
+	a.userTurnMu.Lock()
+	a.interimCommittedTurn = v
+	a.userTurnMu.Unlock()
+}
+
+func (a *AgentActivity) isInterimCommittedTurn() bool {
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	return a.interimCommittedTurn
+}
+
 func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 	a.userTurnMu.Lock()
 	defer a.userTurnMu.Unlock()
-	if !a.pendingUserTranscriptPresent {
+
+	var info EndOfTurnInfo
+	switch {
+	case a.pendingUserTranscriptPresent:
+		info = EndOfTurnInfo{
+			NewTranscript:        a.pendingUserTranscript,
+			Language:             a.pendingUserLanguage,
+			TranscriptConfidence: a.pendingTranscriptConfidence,
+			TranscriptionDelay:   a.pendingTranscriptionDelay,
+			StartedSpeakingAt:    a.pendingStartedSpeakingAt,
+			StoppedSpeakingAt:    a.pendingStoppedSpeakingAt,
+			AudioFrames:          a.userAudioSnapshot(),
+		}
+	case a.Session != nil && a.Session.Options.CommitOnInterimWhenNoFinal && a.pendingInterimTranscript != "":
+		// No STT final yet: fall back to the latest interim so VAD end-of-speech
+		// still bounds the wait to the endpointing delay instead of blocking on the
+		// STT provider's final latency (see CommitOnInterimWhenNoFinal). Default the
+		// confidence to 1 when the provider didn't report one for the interim, same
+		// as the manual-commit interim fallback above, so a zero/unset interim
+		// confidence never trips rejectsZeroConfidenceTranscript in completeUserTurn.
+		interimConfidence := a.pendingInterimConfidence
+		if interimConfidence <= 0 {
+			interimConfidence = 1
+		}
+		info = EndOfTurnInfo{
+			NewTranscript:        a.pendingInterimTranscript,
+			Language:             a.pendingInterimLanguage,
+			TranscriptConfidence: interimConfidence,
+			StartedSpeakingAt:    a.pendingStartedSpeakingAt,
+			StoppedSpeakingAt:    a.pendingStoppedSpeakingAt,
+			AudioFrames:          a.userAudioSnapshot(),
+			FromInterimFallback:  true,
+		}
+	default:
 		return EndOfTurnInfo{}
-	}
-	info := EndOfTurnInfo{
-		NewTranscript:        a.pendingUserTranscript,
-		Language:             a.pendingUserLanguage,
-		TranscriptConfidence: a.pendingTranscriptConfidence,
-		TranscriptionDelay:   a.pendingTranscriptionDelay,
-		StartedSpeakingAt:    a.pendingStartedSpeakingAt,
-		StoppedSpeakingAt:    a.pendingStoppedSpeakingAt,
-		AudioFrames:          a.userAudioSnapshot(),
 	}
 	if info.StartedSpeakingAt == nil && (!a.userTurnStartedAt.IsZero() || !a.userSpeechStartedAt.IsZero()) {
 		startedAt := a.userSpeechStartedAt
@@ -3815,6 +3877,14 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				info.StoppedSpeakingAt,
 				timeToUnixSeconds(time.Now()),
 			)
+			if info.FromInterimFallback {
+				// A final for this speech epoch may still arrive late (that's the
+				// whole reason we fell back). Mark the epoch so OnFinalTranscript
+				// treats it as informational only, instead of re-triggering an
+				// interrupt/second reply for an utterance already committed here.
+				// Reset on the next onStartOfSpeech (new epoch).
+				a.setInterimCommittedTurn(true)
+			}
 			a.clearPendingUserTurn()
 			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 				logger.Logger.Errorw("user turn completion failed", err)

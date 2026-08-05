@@ -120,6 +120,8 @@ type AgentSessionOptions struct {
 
 	RecordSuppressedBargeInTranscript bool
 
+	CommitOnInterimWhenNoFinal bool
+
 	RecordUncommittedTranscript bool
 }
 

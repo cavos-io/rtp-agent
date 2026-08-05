@@ -6412,6 +6412,113 @@ func TestAgentActivityVADEndOfSpeechWithoutFinalKeepsInterimTranscript(t *testin
 	}
 }
 
+func TestAgentActivityCommitOnInterimWhenNoFinalCommitsAfterEndpointingDelay(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay:        0.01,
+		CommitOnInterimWhenNoFinal: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo iya benar", Confidence: 0.8}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "halo iya benar" {
+			t.Fatalf("turn message text = %q, want interim transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("CommitOnInterimWhenNoFinal did not commit the turn from the interim transcript within the endpointing delay")
+	}
+}
+
+func TestAgentActivityCommitOnInterimWhenNoFinalDisabledByDefault(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo iya benar", Confidence: 0.8}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("CommitOnInterimWhenNoFinal defaults to off: turn committed from interim %q, want no commit before a final", msg.TextContent())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityCommitOnInterimWhenNoFinalIgnoresLateFinalForSameEpoch(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay:        0.01,
+		CommitOnInterimWhenNoFinal: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo iya benar", Confidence: 0.8}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "halo iya benar" {
+			t.Fatalf("turn message text = %q, want interim transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected commit from interim fallback before asserting the late-final guard")
+	}
+
+	// Deepgram's final for the SAME utterance finally arrives after the agent has
+	// already replied. It must not re-trigger a second commit/reply.
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo iya benar", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("late final for an already interim-committed epoch triggered a second turn: %q", msg.TextContent())
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// A genuinely NEW utterance (new onStartOfSpeech epoch) must commit normally —
+	// the late-final guard must not leak past the epoch boundary.
+	activity.OnStartOfSpeech(&vad.VADEvent{})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "paketnya sudah sampai", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "paketnya sudah sampai" {
+			t.Fatalf("turn message text = %q, want next-epoch transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("next speech epoch did not commit; interimCommittedTurn guard leaked past onStartOfSpeech reset")
+	}
+}
+
 func TestAgentActivityAutomaticTurnRejectsZeroConfidenceTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
