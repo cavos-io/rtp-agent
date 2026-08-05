@@ -117,6 +117,10 @@ type AgentSessionOptions struct {
 	STTResumeCooldownSet       bool
 
 	BargeInDecider BargeInDecider
+
+	RecordSuppressedBargeInTranscript bool
+
+	RecordUncommittedTranscript bool
 }
 
 type AgentSessionUpdateOptions struct {

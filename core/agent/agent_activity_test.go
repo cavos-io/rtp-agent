@@ -5353,6 +5353,68 @@ func TestAgentActivityCommitUserTurnSkipsWhenCurrentSpeechCannotBeInterrupted(t 
 	}
 }
 
+func TestAgentActivityRecordUncommittedTranscriptWhenCurrentSpeechCannotBeInterrupted(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{RecordUncommittedTranscript: true})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "do not interrupt", Confidence: 0.9}},
+	})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for non-interruptible current speech with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("ChatCtx.Items = %v, want exactly one transcript-only item", agent.ChatCtx.Items)
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || !msg.TranscriptOnly || msg.TextContent() != "do not interrupt" {
+		t.Fatalf("recorded item = %#v, want TranscriptOnly user message %q", agent.ChatCtx.Items[0], "do not interrupt")
+	}
+}
+
+func TestAgentActivityRecordUncommittedTranscriptWhenSchedulingPaused(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{RecordUncommittedTranscript: true})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	activity.schedulingPaused = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "paused turn", Confidence: 0.9}},
+	})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called while scheduling paused with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("ChatCtx.Items = %v, want exactly one transcript-only item", agent.ChatCtx.Items)
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || !msg.TranscriptOnly || msg.TextContent() != "paused turn" {
+		t.Fatalf("recorded item = %#v, want TranscriptOnly user message %q", agent.ChatCtx.Items[0], "paused turn")
+	}
+}
+
 func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -6529,6 +6591,79 @@ func TestAgentActivityPreemptiveGenerationSchedulesMatchingFinalTurn(t *testing.
 	case ev := <-speechEvents:
 		t.Fatalf("SpeechCreatedEvents received second generation %#v, want reused preemptive handle", ev)
 	default:
+	}
+}
+
+// fakeIgnoreBargeInDecider always suppresses the barge-in (BargeInIgnore), as a
+// worker's backchannel policy would for a short acknowledgement over the agent.
+type fakeIgnoreBargeInDecider struct{}
+
+func (fakeIgnoreBargeInDecider) DecideBargeIn(BargeInInput) (BargeInDecision, string) {
+	return BargeInIgnore, "test_suppressed"
+}
+
+func TestAgentActivityRecordSuppressedBargeInTranscriptDisabledByDefault(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.AudioTurnDetector = &recordingAudioTurnDetector{probability: 0.9}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		BargeInDecider: fakeIgnoreBargeInDecider{},
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.agentSpokeAtUserOnset = true
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "oke", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("suppressed barge-in must not commit a turn, got %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if agent.ChatCtx != nil && len(agent.ChatCtx.Items) != 0 {
+		t.Fatalf("RecordSuppressedBargeInTranscript defaults to off: ChatCtx.Items = %v, want empty", agent.ChatCtx.Items)
+	}
+}
+
+func TestAgentActivityRecordSuppressedBargeInTranscriptWhenEnabled(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.AudioTurnDetector = &recordingAudioTurnDetector{probability: 0.9}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		BargeInDecider:                    fakeIgnoreBargeInDecider{},
+		RecordSuppressedBargeInTranscript: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.agentSpokeAtUserOnset = true
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "oke", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("suppressed barge-in must not commit a turn to the LLM, got %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("ChatCtx.Items = %v, want exactly one transcript-only item", agent.ChatCtx.Items)
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || !msg.TranscriptOnly || msg.TextContent() != "oke" {
+		t.Fatalf("recorded item = %#v, want TranscriptOnly user message %q", agent.ChatCtx.Items[0], "oke")
+	}
+
+	// The LLM-bound filter (generation.go) must exclude it.
+	filtered := excludeTranscriptOnlyItems(agent.ChatCtx)
+	if len(filtered.Items) != 0 {
+		t.Fatalf("excludeTranscriptOnlyItems left %d items, want 0 (transcript-only item must never reach the LLM)", len(filtered.Items))
 	}
 }
 
