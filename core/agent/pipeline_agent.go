@@ -116,6 +116,16 @@ func (va *PipelineAgent) resetGenerationCtxLocked() {
 	va.ctx, va.cancel = context.WithCancel(parent)
 }
 
+func (va *PipelineAgent) resetGenerationCtxUnlessPaused() {
+	if va.session != nil && va.session.activity != nil &&
+		va.session.activity.hasActiveFalseInterruptionPause() {
+		return
+	}
+	va.mu.Lock()
+	va.resetGenerationCtxLocked()
+	va.mu.Unlock()
+}
+
 func (va *PipelineAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
 	va.mu.Lock()
 	defer va.mu.Unlock()
@@ -410,9 +420,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				va.session.UpdateUserState(UserStateSpeaking)
 			}
 
-			va.mu.Lock()
-			va.resetGenerationCtxLocked()
-			va.mu.Unlock()
+			va.resetGenerationCtxUnlessPaused()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
 			va.mu.Lock()
