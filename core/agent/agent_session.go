@@ -115,6 +115,8 @@ type AgentSessionOptions struct {
 	HalfDuplexSTTWhileSpeaking bool
 	STTResumeCooldown          float64
 	STTResumeCooldownSet       bool
+
+	BargeInDecider BargeInDecider
 }
 
 type AgentSessionUpdateOptions struct {
