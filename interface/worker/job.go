@@ -379,6 +379,13 @@ func (c *JobContext) PrimaryRoomIO() SessionRoomIO {
 	return c.primaryRoomIO
 }
 
+func (c *JobContext) StopRecorder() error {
+	if c == nil || c.primaryRoomIO == nil {
+		return nil
+	}
+	return c.primaryRoomIO.StopRecorder()
+}
+
 func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.SessionReport, error) {
 	var session *agent.AgentSession
 	if len(sessions) > 0 {
@@ -393,7 +400,14 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 
 	report := agent.NewSessionReport(session)
 	livekitPopulateJobContextSessionReport(report, c.Job)
-	
+
+	if c.primaryRoomIO != nil && c.primaryRoomIO.RecorderRecording() {
+		logger.Logger.Warnw("recorder still recording while preparing session report", nil, jobLogValues(c)...)
+		if err := c.primaryRoomIO.StopRecorder(); err != nil {
+			logger.Logger.Errorw("failed to stop recorder for session report", err, jobLogValues(c)...)
+		}
+	}
+
 	if c.primaryRoomIO != nil && c.Report != nil {
 		c.primaryRoomIO.PopulateSessionReport(c.Report)
 	}
@@ -448,6 +462,7 @@ type SessionRoomIO interface {
 	Start(context.Context) error
 	StartRecorder(outputPath string, sampleRate int) error
 	StopRecorder() error
+	RecorderRecording() bool
 	PopulateSessionReport(*agent.SessionReport)
 	Close() error
 }

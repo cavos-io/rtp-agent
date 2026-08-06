@@ -135,6 +135,8 @@ fail:
 }
 
 int rtp_mp4_write(rtp_mp4_writer *writer, const int16_t *samples, int samples_per_channel) {
+	writer->frame->nb_samples = writer->codec->frame_size;
+
 	int result = av_frame_make_writable(writer->frame);
 	if (result < 0) return result;
 
@@ -147,6 +149,7 @@ int rtp_mp4_write(rtp_mp4_writer *writer, const int16_t *samples, int samples_pe
 		samples_per_channel
 	);
 	if (result < 0) return result;
+	if (result == 0) return 0;
 
 	writer->frame->nb_samples = result;
 	writer->frame->pts = writer->next_pts;

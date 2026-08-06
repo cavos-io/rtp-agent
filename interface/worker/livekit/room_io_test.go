@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -4984,6 +4985,42 @@ func TestRoomIOCloseStopsRecorder(t *testing.T) {
 
 	if !recorder.closed {
 		t.Fatal("recorder.closed = false, want RoomIO.Close to stop recorder")
+	}
+}
+
+func TestRoomIOStartRecorderHandsTeardownToSession(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rio := NewRoomIO(nil, session, RoomOptions{})
+	path := filepath.Join(t.TempDir(), RecordingFileName)
+
+	if err := rio.StartRecorder(path, 48000); err != nil {
+		t.Fatalf("StartRecorder() error = %v", err)
+	}
+	if !rio.RecorderRecording() {
+		t.Fatal("RecorderRecording() = false, want recording after StartRecorder")
+	}
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("session.Stop() error = %v", err)
+	}
+	if rio.RecorderRecording() {
+		t.Fatal("RecorderRecording() = true, want session teardown to finalize the recording")
+	}
+
+	// The job shutdown path still closes RoomIO afterwards; stopping twice is safe.
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() after session stop error = %v", err)
+	}
+}
+
+func TestRoomIOStopRecorderWithoutRecorder(t *testing.T) {
+	rio := &RoomIO{}
+
+	if err := rio.StopRecorder(); err != nil {
+		t.Fatalf("StopRecorder() error = %v", err)
+	}
+	if rio.RecorderRecording() {
+		t.Fatal("RecorderRecording() = true, want false without a recorder")
 	}
 }
 

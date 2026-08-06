@@ -1511,7 +1511,20 @@ func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
 	if rio == nil || rio.Recorder == nil {
 		return nil
 	}
-	return rio.Recorder.Start(outputPath, sampleRate)
+	if err := rio.Recorder.Start(outputPath, sampleRate); err != nil {
+		return err
+	}
+	if rio.AgentSession != nil {
+		rio.AgentSession.SetRecorderStopper(rio.Recorder.Stop)
+	}
+	return nil
+}
+
+func (rio *RoomIO) RecorderRecording() bool {
+	if rio == nil || rio.Recorder == nil {
+		return false
+	}
+	return rio.Recorder.Recording()
 }
 
 func (rio *RoomIO) StopRecorder() error {

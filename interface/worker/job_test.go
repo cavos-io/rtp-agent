@@ -404,6 +404,90 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	}
 }
 
+type fakeSessionRoomIO struct {
+	recording  bool
+	stopCalls  int
+	stopErr    error
+	populated  bool
+	recordPath string
+}
+
+func (*fakeSessionRoomIO) GetCallback() *RoomCallback { return nil }
+
+func (*fakeSessionRoomIO) AttachRoom(*SDKRoom) {}
+
+func (*fakeSessionRoomIO) ReconcileParticipants() {}
+
+func (*fakeSessionRoomIO) Start(context.Context) error { return nil }
+
+func (f *fakeSessionRoomIO) StartRecorder(outputPath string, _ int) error {
+	f.recordPath = outputPath
+	f.recording = true
+	return nil
+}
+
+func (f *fakeSessionRoomIO) StopRecorder() error {
+	f.stopCalls++
+	f.recording = false
+	return f.stopErr
+}
+
+func (f *fakeSessionRoomIO) RecorderRecording() bool { return f.recording }
+
+func (f *fakeSessionRoomIO) PopulateSessionReport(*agent.SessionReport) { f.populated = true }
+
+func (*fakeSessionRoomIO) Close() error { return nil }
+
+func TestJobContextMakeSessionReportStopsRunningRecorder(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recorder_guard"}, "wss://livekit.example", "key", "secret")
+	ctx.SetPrimarySession(agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}))
+	roomIO := &fakeSessionRoomIO{recording: true}
+	ctx.primaryRoomIO = roomIO
+
+	if _, err := ctx.MakeSessionReport(); err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+
+	if roomIO.stopCalls != 1 {
+		t.Fatalf("StopRecorder calls = %d, want 1", roomIO.stopCalls)
+	}
+	if !roomIO.populated {
+		t.Fatal("session report was not populated from RoomIO")
+	}
+}
+
+func TestJobContextMakeSessionReportLeavesStoppedRecorderAlone(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recorder_stopped"}, "wss://livekit.example", "key", "secret")
+	ctx.SetPrimarySession(agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}))
+	roomIO := &fakeSessionRoomIO{}
+	ctx.primaryRoomIO = roomIO
+
+	if _, err := ctx.MakeSessionReport(); err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+
+	if roomIO.stopCalls != 0 {
+		t.Fatalf("StopRecorder calls = %d, want 0 when the session already finalized it", roomIO.stopCalls)
+	}
+}
+
+func TestJobContextStopRecorderDelegatesToRoomIO(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_stop_recorder"}, "wss://livekit.example", "key", "secret")
+
+	if err := ctx.StopRecorder(); err != nil {
+		t.Fatalf("StopRecorder() without RoomIO error = %v", err)
+	}
+
+	roomIO := &fakeSessionRoomIO{recording: true}
+	ctx.primaryRoomIO = roomIO
+	if err := ctx.StopRecorder(); err != nil {
+		t.Fatalf("StopRecorder() error = %v", err)
+	}
+	if roomIO.stopCalls != 1 {
+		t.Fatalf("StopRecorder calls = %d, want 1", roomIO.stopCalls)
+	}
+}
+
 func TestJobContextMakeSessionReportIncludesSessionStartedAt(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{

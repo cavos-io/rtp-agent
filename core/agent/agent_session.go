@@ -330,6 +330,7 @@ type AgentSession struct {
 	audioOutputController   AudioOutputController
 	audioPlaybackController AudioPlaybackController
 	toolExecutionRegistry   activeToolRegistry
+	recorderStopper         func() error
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
@@ -535,6 +536,34 @@ func (s *AgentSession) SetJobContext(value any) {
 
 	s.jobContext = value
 	s.jobContextSet = true
+}
+
+// SetRecorderStopper registers the audio recorder teardown for this session.
+//
+// The session owns when recording ends, the same way LiveKit Agents closes
+// AgentSession._recorder_io from aclose(). Transports that start a recorder
+// register it here so the file is finalized as part of session teardown,
+// instead of surviving until the job itself shuts down.
+func (s *AgentSession) SetRecorderStopper(stop func() error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.recorderStopper = stop
+}
+
+// stopRecorder runs the registered recorder teardown once and clears it, so
+// repeated stops (Stop called twice, or a transport closing afterwards) do not
+// re-enter it.
+func (s *AgentSession) stopRecorder() error {
+	s.mu.Lock()
+	stop := s.recorderStopper
+	s.recorderStopper = nil
+	s.mu.Unlock()
+
+	if stop == nil {
+		return nil
+	}
+	return stop()
 }
 
 func (s *AgentSession) History() *llm.ChatContext {
@@ -3268,7 +3297,10 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.signalTeardown()
 		s.clearEventListenersLocked()
 		s.mu.Unlock()
-		return nil
+		// A recorder may be running even though the session never started:
+		// transports start it before Start(). Finalize it here too, otherwise
+		// the failed-start path leaks an open recording until job shutdown.
+		return s.stopRecorder()
 	}
 	s.signalTeardown()
 
@@ -3366,6 +3398,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.flushOTelTurnMetrics()
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
+	}
+	// Last, so audio captured while the final user turn is committed above is
+	// still recorded before the file is closed.
+	if err := s.stopRecorder(); err != nil && stopErr == nil {
+		stopErr = err
 	}
 	return stopErr
 }
