@@ -50,6 +50,8 @@ type AgentSessionOptions struct {
 	MinInterruptionWords                     int
 	SmartTurnThreshold                       float64
 	SmartTurnThresholdSet                    bool
+	AudioTurnDetectionWhileListening         bool
+	AudioTurnDetectionWhileListeningSet      bool
 	MinEndpointingDelay                      float64
 	MinEndpointingDelaySet                   bool
 	MaxEndpointingDelay                      float64
