@@ -126,14 +126,8 @@ type AgentActivity struct {
 	latestSmartTurnPresent     bool
 	latestSmartTurnComplete    bool
 	latestSmartTurnProbability float64
-	// interimCommittedTurn is true once the current user-speech epoch has been
-	// force-committed from an interim transcript (CommitOnInterimWhenNoFinal) with
-	// no STT final yet observed. Reset on the next onStartOfSpeech. Guards against
-	// a late-arriving final for the same, already-committed epoch re-triggering an
-	// interrupt/reply for an utterance the agent has already answered. Set/read
-	// across goroutines (runEOUDetection's timer goroutine vs the event-loop
-	// goroutine) — always access via setInterimCommittedTurn/isInterimCommittedTurn,
-	// guarded by userTurnMu.
+	userTurnSeq                uint64
+
 	interimCommittedTurn bool
 
 	providerUnsubscribes []func()
@@ -1692,6 +1686,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		a.agentSpokeAtUserOnset = spoke
 		a.latestSmartTurnPresent = false
 		a.latestSmartTurnComplete = false
+		a.userTurnSeq++
 		a.falseInterruptionMu.Unlock()
 		var startedAt time.Time
 		if sttStartedAt != nil {
@@ -2333,7 +2328,11 @@ func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
 	a.userAudioMu.Lock()
 	a.userAudioFrames = append(a.userAudioFrames, copyFrame)
 	a.trimUserAudioFramesLocked()
+	size := audioFramesBytes(a.userAudioFrames)
 	a.userAudioMu.Unlock()
+	logger.Logger.Debugw("turn_audio_buffer.append",
+		"size_bytes", size,
+		"duration_ms", size*500/int(max(frame.SampleRate, 1)))
 }
 
 func (a *AgentActivity) clearUserAudioFrames() {
@@ -3777,6 +3776,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		return
 	}
 
+	a.falseInterruptionMu.Lock()
+	turnSeq := a.userTurnSeq
+	a.falseInterruptionMu.Unlock()
+
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
 		a.eouCancel()
@@ -3801,39 +3804,16 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			a.notifyUserTurnUpdated()
 		}()
 
-		endpointingDelay := a.minEndpointingDelay()
+		minDelay := a.minEndpointingDelay()
+		maxDelay := a.maxEndpointingDelay()
+		endpointingDelay := minDelay
 
 		a.falseInterruptionMu.Lock()
 		spokeAtOnset := a.agentSpokeAtUserOnset
 		a.falseInterruptionMu.Unlock()
 
-		if spokeAtOnset && a.Agent.AudioTurnDetector != nil && len(info.AudioFrames) > 0 {
-			logger.Logger.Infow("turn_audio_buffer.reset", "old_size_bytes", audioFramesBytes(info.AudioFrames))
-			predictCtx, predictCancel := context.WithTimeout(context.WithoutCancel(a.ctx), smartTurnPredictTimeout)
-			res, err := a.Agent.AudioTurnDetector.PredictEndOfTurnAudio(predictCtx, info.AudioFrames)
-			predictCancel()
-			if err == nil {
-				logger.Logger.Infow("smart_turn.result_observed",
-					"probability", res.Probability,
-					"inference_ms", res.InferenceMs,
-					"is_complete", res.IsComplete)
-				threshold := a.Session.Options.SmartTurnThreshold
-				if threshold <= 0 {
-					threshold = 0.55
-				}
-				a.falseInterruptionMu.Lock()
-				a.latestSmartTurnPresent = true
-				a.latestSmartTurnComplete = res.IsComplete || res.Probability >= threshold
-				a.latestSmartTurnProbability = res.Probability
-				a.falseInterruptionMu.Unlock()
-				if res.Probability < threshold && !res.IsComplete {
-					endpointingDelay = a.maxEndpointingDelay()
-				}
-			} else {
-				logger.Logger.Errorw("smart_turn.predict_failed", err)
-				endpointingDelay = a.maxEndpointingDelay()
-			}
-		} else if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
+		smartTurn := a.startSmartTurnPrediction(info, spokeAtOnset, turnSeq)
+		if smartTurn == nil && a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
 			chatCtx := a.RetrieveChatCtx().Copy()
 			chatCtx.Append(&llm.ChatMessage{
@@ -3856,44 +3836,119 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		if info.StoppedSpeakingAt != nil {
 			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
 		}
-		timer := time.NewTimer(time.Duration(endpointingDelay * float64(time.Second)))
-		defer timer.Stop()
-
-		select {
-		case <-ctx.Done():
+		if !waitEndpointing(ctx, endpointingDelay) {
 			return
-		case <-timer.C:
-			if strings.TrimSpace(info.NewTranscript) == "" {
-				a.clearPendingUserTurn()
-				return
-			}
-			a.queueMu.Lock()
-			currentSpeech := a.currentSpeech
-			a.queueMu.Unlock()
-			if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
-				a.cancelPreemptiveGeneration()
-				return
-			}
-			info.EndOfTurnDelay = computeEndOfTurnDelay(
-				info.StartedSpeakingAt,
-				info.StoppedSpeakingAt,
-				timeToUnixSeconds(time.Now()),
-			)
-			if info.FromInterimFallback {
-				// A final for this speech epoch may still arrive late (that's the
-				// whole reason we fell back). Mark the epoch so OnFinalTranscript
-				// treats it as informational only, instead of re-triggering an
-				// interrupt/second reply for an utterance already committed here.
-				// Reset on the next onStartOfSpeech (new epoch).
-				a.setInterimCommittedTurn(true)
-			}
-			a.clearPendingUserTurn()
-			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
-				logger.Logger.Errorw("user turn completion failed", err)
-				return
+		}
+		if smartTurn != nil {
+			select {
+			case outcome := <-smartTurn:
+				if outcome.stretch && maxDelay > minDelay {
+					if !waitEndpointing(ctx, maxDelay-minDelay) {
+						return
+					}
+				}
+			default:
 			}
 		}
+
+		if strings.TrimSpace(info.NewTranscript) == "" {
+			a.clearPendingUserTurn()
+			return
+		}
+		a.queueMu.Lock()
+		currentSpeech := a.currentSpeech
+		a.queueMu.Unlock()
+		if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+			a.cancelPreemptiveGeneration()
+			return
+		}
+		info.EndOfTurnDelay = computeEndOfTurnDelay(
+			info.StartedSpeakingAt,
+			info.StoppedSpeakingAt,
+			timeToUnixSeconds(time.Now()),
+		)
+		if info.FromInterimFallback {
+			// A final for this speech epoch may still arrive late (that's the
+			// whole reason we fell back). Mark the epoch so OnFinalTranscript
+			// treats it as informational only, instead of re-triggering an
+			// interrupt/second reply for an utterance already committed here.
+			// Reset on the next onStartOfSpeech (new epoch).
+			a.setInterimCommittedTurn(true)
+		}
+		a.clearPendingUserTurn()
+		if _, err := a.completeUserTurn(a.ctx, info); err != nil {
+			logger.Logger.Errorw("user turn completion failed", err)
+			return
+		}
 	}()
+}
+
+type smartTurnOutcome struct {
+	stretch bool
+}
+
+func waitEndpointing(ctx context.Context, seconds float64) bool {
+	timer := time.NewTimer(time.Duration(seconds * float64(time.Second)))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (a *AgentActivity) smartTurnThreshold() float64 {
+	if a != nil && a.Session != nil && a.Session.Options.SmartTurnThreshold > 0 {
+		return a.Session.Options.SmartTurnThreshold
+	}
+	return 0.55
+}
+
+func (a *AgentActivity) startSmartTurnPrediction(info EndOfTurnInfo, spokeAtOnset bool, seq uint64) <-chan smartTurnOutcome {
+	if a == nil || a.Agent == nil || a.Agent.AudioTurnDetector == nil || len(info.AudioFrames) == 0 {
+		return nil
+	}
+	if !spokeAtOnset && (a.Session == nil || !a.Session.Options.AudioTurnDetectionWhileListening) {
+		return nil
+	}
+
+	detector := a.Agent.AudioTurnDetector
+	frames := info.AudioFrames
+	threshold := a.smartTurnThreshold()
+	out := make(chan smartTurnOutcome, 1)
+
+	go func() {
+		logger.Logger.Infow("turn_audio_buffer.reset", "old_size_bytes", audioFramesBytes(frames))
+		predictCtx, predictCancel := context.WithTimeout(context.WithoutCancel(a.ctx), smartTurnPredictTimeout)
+		res, err := detector.PredictEndOfTurnAudio(predictCtx, frames)
+		predictCancel()
+		if err != nil {
+			logger.Logger.Errorw("smart_turn.predict_failed", err, "fallback", "max_delay")
+			out <- smartTurnOutcome{stretch: true}
+			return
+		}
+
+		complete := res.IsComplete || res.Probability >= threshold
+		a.falseInterruptionMu.Lock()
+		stale := a.userTurnSeq != seq
+		if !stale {
+			a.latestSmartTurnPresent = true
+			a.latestSmartTurnComplete = complete
+			a.latestSmartTurnProbability = res.Probability
+		}
+		a.falseInterruptionMu.Unlock()
+
+		logger.Logger.Infow("smart_turn.result_observed",
+			"probability", res.Probability,
+			"inference_ms", res.InferenceMs,
+			"is_complete", res.IsComplete,
+			"stale", stale)
+
+		out <- smartTurnOutcome{stretch: !complete}
+	}()
+
+	return out
 }
 
 func (a *AgentActivity) turnDetectorThreshold(language string) float64 {
