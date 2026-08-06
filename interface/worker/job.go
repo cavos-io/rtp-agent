@@ -393,7 +393,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 
 	report := agent.NewSessionReport(session)
 	livekitPopulateJobContextSessionReport(report, c.Job)
-	
+
 	if c.primaryRoomIO != nil && c.Report != nil {
 		c.primaryRoomIO.PopulateSessionReport(c.Report)
 	}
@@ -658,6 +658,11 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 				return err
 			}
 		}
+		session.AddPreCloseCallback(func() {
+			if err := roomIO.StopRecorder(); err != nil {
+				logger.Logger.Errorw("failed to finalize session recording", err)
+			}
+		})
 		if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
 			if err := roomIO.Start(ctx); err != nil {
 				return err

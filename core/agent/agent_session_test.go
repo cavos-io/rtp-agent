@@ -3214,6 +3214,40 @@ func TestAgentSessionCloseSoonCompletesActiveRunResultWithError(t *testing.T) {
 	}
 }
 
+func TestAgentSessionPreCloseCallbackRunsOnceBeforeCloseEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+	var events []string
+	session.AddPreCloseCallback(func() { events = append(events, "pre-close") })
+	session.On("close", func(Event) { events = append(events, "close") })
+
+	session.CloseSoon(CloseReasonUserInitiated)
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	want := []string{"pre-close", "close"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestAgentSessionPreCloseCallbackPanicDoesNotPreventCloseEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+	closed := make(chan struct{}, 1)
+	session.AddPreCloseCallback(func() { panic("recorder close failed") })
+	session.On("close", func(Event) { closed <- struct{}{} })
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close event was blocked by pre-close callback panic")
+	}
+}
+
 func TestAgentSessionCloseSoonEmitsCloseAfterCleanup(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

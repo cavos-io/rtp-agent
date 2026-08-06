@@ -325,6 +325,8 @@ type AgentSession struct {
 	recordedEvents          []Event
 	eventListeners          map[string][]agentEventListener
 	nextListenerID          uint64
+	preCloseCallbacks       []func()
+	preCloseCallbacksRan    bool
 	ivrActivity             *IVRActivity
 	videoSampler            *VoiceActivityVideoSampler
 	audioOutputController   AudioOutputController
@@ -700,6 +702,15 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	return func() {
 		s.removeEventListener(eventType, id)
 	}
+}
+
+func (s *AgentSession) AddPreCloseCallback(callback func()) {
+	if s == nil || callback == nil {
+		return
+	}
+	s.mu.Lock()
+	s.preCloseCallbacks = append(s.preCloseCallbacks, callback)
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) Off(eventType string, callback func(Event)) {
@@ -2506,6 +2517,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.activity = activity
 	s.started = true
 	s.closing = false
+	s.preCloseCallbacksRan = false
 	s.runCtx = runCtx
 	s.runCancel = runCancel
 	s.mu.Unlock()
@@ -3265,9 +3277,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 
 	s.mu.Lock()
 	if !s.started {
+		preCloseCallbacks := s.preCloseCallbacksForCycleLocked()
 		s.signalTeardown()
 		s.clearEventListenersLocked()
 		s.mu.Unlock()
+		runAgentSessionPreCloseCallbacks(preCloseCallbacks)
 		return nil
 	}
 	s.signalTeardown()
@@ -3308,6 +3322,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
 	sessionTools := copySessionTools(s.Tools)
+	preCloseCallbacks := s.preCloseCallbacksForCycleLocked()
 	s.mu.Unlock()
 
 	if ivrActivity != nil {
@@ -3367,7 +3382,29 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
+	runAgentSessionPreCloseCallbacks(preCloseCallbacks)
 	return stopErr
+}
+
+func (s *AgentSession) preCloseCallbacksForCycleLocked() []func() {
+	if s.preCloseCallbacksRan {
+		return nil
+	}
+	s.preCloseCallbacksRan = true
+	return append([]func(){}, s.preCloseCallbacks...)
+}
+
+func runAgentSessionPreCloseCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Logger.Errorw("agent session pre-close callback panicked", fmt.Errorf("%v", recovered))
+				}
+			}()
+			callback()
+		}()
+	}
 }
 
 func closeSessionToolsets(tools []llm.Tool) error {

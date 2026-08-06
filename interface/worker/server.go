@@ -1977,9 +1977,8 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
-	s.runSessionEnd(jobCtx)
-
 	jobCtx.Shutdown("")
+	s.runSessionEnd(jobCtx)
 	s.uploadJobSessionReport(jobCtx)
 	err := jobCtx.onCleanUp()
 	if err != nil {
