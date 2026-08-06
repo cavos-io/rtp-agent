@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3133,13 +3134,14 @@ func TestAgentActivityUsesAudioTurnDetectorMaxEndpointingDelay(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called after audio turn detector max endpointing delay")
 	}
-	if audioDetector.calls != 1 {
-		t.Fatalf("audio detector calls = %d, want 1", audioDetector.calls)
+	if got := audioDetector.callCount(); got != 1 {
+		t.Fatalf("audio detector calls = %d, want 1", got)
 	}
-	if len(audioDetector.frames) != 1 {
-		t.Fatalf("audio detector frames = %d, want 1", len(audioDetector.frames))
+	recorded := audioDetector.recordedFrames()
+	if len(recorded) != 1 {
+		t.Fatalf("audio detector frames = %d, want 1", len(recorded))
 	}
-	if &audioDetector.frames[0].Data[0] == &audioDetector.originalData[0] {
+	if &recorded[0].Data[0] == &audioDetector.originalData[0] {
 		t.Fatal("audio detector received original frame backing data, want copied snapshot")
 	}
 }
@@ -3200,8 +3202,143 @@ func TestRunEOUDetectionSkipsSmartTurnWhenAgentSilent(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("agent silent: turn should commit on min VAD delay, smart-turn must be skipped")
 	}
-	if audioDetector.calls != 0 {
-		t.Fatalf("audio detector calls = %d, want 0 when agent silent", audioDetector.calls)
+	if got := audioDetector.callCount(); got != 0 {
+		t.Fatalf("audio detector calls = %d, want 0 when agent silent", got)
+	}
+}
+
+func newListeningSmartTurnActivity(t *testing.T, detector AudioTurnDetector, minDelay, maxDelay float64) (*turnCompletedAgent, *AgentActivity) {
+	t.Helper()
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.AudioTurnDetector = detector
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay:                 minDelay,
+		MaxEndpointingDelay:                 maxDelay,
+		AudioTurnDetectionWhileListening:    true,
+		AudioTurnDetectionWhileListeningSet: true,
+	})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	return agent, activity
+}
+
+func smartTurnTestFrames() []*model.AudioFrame {
+	return []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00, 0x02, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}
+}
+
+func TestRunEOUDetectionPredictsWhileListeningWhenEnabled(t *testing.T) {
+	detector := &recordingAudioTurnDetector{probability: 0.9}
+	agent, activity := newListeningSmartTurnActivity(t, detector, 0.01, 0.05)
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          smartTurnTestFrames(),
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("turn not completed")
+	}
+	if got := detector.callCount(); got != 1 {
+		t.Fatalf("audio detector calls = %d, want 1 when listening detection is enabled", got)
+	}
+}
+
+func TestRunEOUDetectionStretchesToMaxDelayWhileListening(t *testing.T) {
+	detector := &recordingAudioTurnDetector{probability: 0.1}
+	agent, activity := newListeningSmartTurnActivity(t, detector, 0.05, 0.4)
+	defer activity.Stop()
+
+	started := time.Now()
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "saya sedang",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          smartTurnTestFrames(),
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn not completed")
+	}
+	if elapsed := time.Since(started); elapsed < 300*time.Millisecond {
+		t.Fatalf("committed after %s, want the max endpointing delay for an incomplete turn", elapsed)
+	}
+}
+
+func TestRunEOUDetectionCommitsAtMinDelayWhenPredictionIsLate(t *testing.T) {
+	detector := &recordingAudioTurnDetector{probability: 0.1, delay: 300 * time.Millisecond}
+	agent, activity := newListeningSmartTurnActivity(t, detector, 0.02, 2.0)
+	defer activity.Stop()
+
+	started := time.Now()
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          smartTurnTestFrames(),
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn not completed")
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("committed after %s, want the min endpointing delay when the prediction is late", elapsed)
+	}
+}
+
+func TestRunEOUDetectionStretchesOnPredictionError(t *testing.T) {
+	detector := &recordingAudioTurnDetector{err: errors.New("grpc down")}
+	agent, activity := newListeningSmartTurnActivity(t, detector, 0.05, 0.4)
+	defer activity.Stop()
+
+	started := time.Now()
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "done",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          smartTurnTestFrames(),
+	})
+
+	select {
+	case <-agent.turns:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn not completed")
+	}
+	if elapsed := time.Since(started); elapsed < 300*time.Millisecond {
+		t.Fatalf("committed after %s, want the max endpointing delay when the prediction fails", elapsed)
+	}
+}
+
+func TestRunEOUDetectionDiscardsPredictionFromPreviousTurn(t *testing.T) {
+	detector := &recordingAudioTurnDetector{probability: 0.1, delay: 100 * time.Millisecond}
+	_, activity := newListeningSmartTurnActivity(t, detector, 0.01, 0.02)
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "saya sedang",
+		TranscriptConfidence: 0.9,
+		AudioFrames:          smartTurnTestFrames(),
+	})
+	activity.onStartOfSpeech(nil, nil)
+
+	time.Sleep(300 * time.Millisecond)
+
+	activity.falseInterruptionMu.Lock()
+	present := activity.latestSmartTurnPresent
+	activity.falseInterruptionMu.Unlock()
+	if present {
+		t.Fatal("stale prediction from the previous turn was published, want it discarded")
 	}
 }
 
@@ -7627,19 +7764,42 @@ func (d thresholdTurnDetector) UnlikelyThreshold(language string) (float64, bool
 type recordingAudioTurnDetector struct {
 	probability   float64
 	forceComplete *bool // nil => probability >= 0.5 (legacy default)
+	err           error
+	delay         time.Duration
+	mu            sync.Mutex
 	calls         int
 	frames        []*model.AudioFrame
 	originalData  []byte
 }
 
 func (d *recordingAudioTurnDetector) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (AudioTurnResult, error) {
+	if d.delay > 0 {
+		time.Sleep(d.delay)
+	}
+	d.mu.Lock()
 	d.calls++
 	d.frames = frames
+	d.mu.Unlock()
+	if d.err != nil {
+		return AudioTurnResult{}, d.err
+	}
 	complete := d.probability >= 0.5
 	if d.forceComplete != nil {
 		complete = *d.forceComplete
 	}
 	return AudioTurnResult{Probability: d.probability, IsComplete: complete}, nil
+}
+
+func (d *recordingAudioTurnDetector) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
+}
+
+func (d *recordingAudioTurnDetector) recordedFrames() []*model.AudioFrame {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.frames
 }
 
 func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {
