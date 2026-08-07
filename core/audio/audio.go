@@ -191,6 +191,9 @@ func ResampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 	if outSamples == 0 && frame.SamplesPerChannel > 0 {
 		outSamples = 1
 	}
+	if filter := antiAliasFilter(inRate, outputRate); filter != nil {
+		return downsampleFrame(frame, filter, outputRate, outSamples), nil
+	}
 	out := make([]byte, int(outSamples*channels*2))
 
 	inputSamples := int(frame.SamplesPerChannel)
@@ -226,8 +229,9 @@ type StreamingResampler struct {
 	inputRate  uint32
 	outputRate uint32
 	channels   uint32
-	// ponytail: voice utterances are short; use a rolling window if this is reused for long-form audio.
-	samples    []int16
+	filter     *lowPassFilter
+	samples    []int16 // pending input, first frame at absolute index consumed
+	consumed   uint64
 	nextOutput uint64
 }
 
@@ -235,7 +239,12 @@ func NewStreamingResampler(inputRate, outputRate, channels uint32) (*StreamingRe
 	if inputRate == 0 || outputRate == 0 || channels == 0 {
 		return nil, fmt.Errorf("resampler rates and channels must be non-zero")
 	}
-	return &StreamingResampler{inputRate: inputRate, outputRate: outputRate, channels: channels}, nil
+	return &StreamingResampler{
+		inputRate:  inputRate,
+		outputRate: outputRate,
+		channels:   channels,
+		filter:     antiAliasFilter(inputRate, outputRate),
+	}, nil
 }
 
 func (r *StreamingResampler) Push(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -263,37 +272,50 @@ func (r *StreamingResampler) Flush() *model.AudioFrame {
 }
 
 func (r *StreamingResampler) output(flush bool, participantID string) *model.AudioFrame {
-	inputSamples := uint64(len(r.samples)) / uint64(r.channels)
+	channels := uint64(r.channels)
+	available := r.consumed + uint64(len(r.samples))/channels
+
 	start := r.nextOutput
-	for {
-		position := r.nextOutput * uint64(r.inputRate)
-		index := position / uint64(r.outputRate)
-		if index >= inputSamples || (!flush && index+1 >= inputSamples) {
-			break
-		}
+	for r.canOutput(r.nextOutput, available, flush) {
 		r.nextOutput++
 	}
 	count := r.nextOutput - start
 	if count == 0 {
 		return nil
 	}
-	data := make([]byte, int(count)*int(r.channels)*2)
+
+	data := make([]byte, int(count)*int(channels)*2)
+	var scratch []float64
+	if r.filter != nil {
+		scratch = make([]float64, 0, r.filter.width())
+	}
 	for outputIndex := uint64(0); outputIndex < count; outputIndex++ {
 		position := (start + outputIndex) * uint64(r.inputRate)
 		index := position / uint64(r.outputRate)
 		remainder := position % uint64(r.outputRate)
+		var taps []float64
+		if r.filter != nil {
+			taps = r.filter.taps(remainder, scratch)
+		}
 		next := index + 1
-		if next >= inputSamples {
+		if next >= available {
 			next = index
 		}
-		for channel := uint64(0); channel < uint64(r.channels); channel++ {
-			a := int64(r.samples[index*uint64(r.channels)+channel])
-			b := int64(r.samples[next*uint64(r.channels)+channel])
-			value := a + (b-a)*int64(remainder)/int64(r.outputRate)
-			offset := (outputIndex*uint64(r.channels) + channel) * 2
-			binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(int16(value)))
+		for channel := uint64(0); channel < channels; channel++ {
+			var value int16
+			if r.filter != nil {
+				value = r.filter.convolve(taps, r.samples, r.consumed, available-r.consumed, index, int(channels), int(channel))
+			} else {
+				a := int64(r.sampleAt(index, channel))
+				b := int64(r.sampleAt(next, channel))
+				value = int16(a + (b-a)*int64(remainder)/int64(r.outputRate))
+			}
+			offset := (outputIndex*channels + channel) * 2
+			binary.LittleEndian.PutUint16(data[offset:offset+2], uint16(value))
 		}
 	}
+	r.discardUnreachableInput()
+
 	return &model.AudioFrame{
 		Data:              data,
 		SampleRate:        r.outputRate,
@@ -301,6 +323,44 @@ func (r *StreamingResampler) output(flush bool, participantID string) *model.Aud
 		SamplesPerChannel: uint32(count),
 		ParticipantID:     participantID,
 	}
+}
+
+func (r *StreamingResampler) canOutput(output, available uint64, flush bool) bool {
+	index := output * uint64(r.inputRate) / uint64(r.outputRate)
+	if index >= available {
+		return false
+	}
+	if flush {
+		return true
+	}
+	if r.filter != nil {
+		return index+uint64(r.filter.halfTaps)+1 <= available
+	}
+	return index+1 < available
+}
+
+func (r *StreamingResampler) sampleAt(index, channel uint64) int16 {
+	return r.samples[(index-r.consumed)*uint64(r.channels)+channel]
+}
+
+func (r *StreamingResampler) discardUnreachableInput() {
+	keep := r.nextOutput * uint64(r.inputRate) / uint64(r.outputRate)
+	if r.filter != nil {
+		if keep > uint64(r.filter.halfTaps) {
+			keep -= uint64(r.filter.halfTaps)
+		} else {
+			keep = 0
+		}
+	}
+	if keep <= r.consumed {
+		return
+	}
+	drop := keep - r.consumed
+	if frames := uint64(len(r.samples)) / uint64(r.channels); drop > frames {
+		drop = frames
+	}
+	r.samples = append(r.samples[:0], r.samples[drop*uint64(r.channels):]...)
+	r.consumed += drop
 }
 
 func minUint32(a, b uint32) uint32 {

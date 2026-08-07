@@ -225,9 +225,10 @@ func TestRoomIOAudioInputDisabledDoesNotAttach(t *testing.T) {
 	}
 }
 
-func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
-	pcm := make([]byte, 960)
-	frame := roomIOInputFrameFromPCM(pcm, roomIOOpusClockRate, 1)
+func TestRoomIOInputConverterUsesReferenceSampleRate(t *testing.T) {
+	converter := newRoomIOInputConverter(roomIODefaultInputSampleRate)
+
+	frame := converter.Convert(roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1))
 
 	if frame.SampleRate != 24000 {
 		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
@@ -235,23 +236,55 @@ func TestRoomIOInputFrameUsesReferenceSampleRate(t *testing.T) {
 	if frame.NumChannels != 1 {
 		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
 	}
-	if frame.SamplesPerChannel != 240 {
-		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
+	if frame.SamplesPerChannel == 0 || frame.SamplesPerChannel > 240 {
+		t.Fatalf("SamplesPerChannel = %d, want at most 240 for 480 input samples at 48k->24k", frame.SamplesPerChannel)
 	}
 	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
 		t.Fatalf("frame data bytes = %d, want %d", got, want)
 	}
 }
 
-func TestRoomIOInputFrameDownmixesStereoToReferenceMono(t *testing.T) {
+func TestRoomIOInputConverterConservesSamplesAcrossChunks(t *testing.T) {
+	converter := newRoomIOInputConverter(roomIODefaultInputSampleRate)
+
+	var converted uint32
+	for i := 0; i < 20; i++ {
+		if frame := converter.Convert(roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1)); frame != nil {
+			converted += frame.SamplesPerChannel
+		}
+	}
+	if tail := converter.Flush(); tail != nil {
+		converted += tail.SamplesPerChannel
+	}
+
+	// 20 chunks of 480 samples at 48 kHz is 200 ms, which is 4800 samples at
+	// 24 kHz once the resampler has released everything it buffered.
+	if converted != 4800 {
+		t.Fatalf("converted samples = %d, want 4800 after flush", converted)
+	}
+}
+
+func TestRoomIOInputConverterHonorsConfiguredSampleRate(t *testing.T) {
+	converter := newRoomIOInputConverter(16000)
+
+	frame := converter.Convert(roomIOInputFrameFromPCM(make([]byte, 1920), roomIOOpusClockRate, 1))
+
+	if frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want configured input rate 16000", frame.SampleRate)
+	}
+}
+
+func TestRoomIOInputConverterDownmixesStereoToReferenceMono(t *testing.T) {
 	pcm := []byte{
 		0x00, 0x00, 0x02, 0x00,
 		0x04, 0x00, 0x06, 0x00,
 	}
-	frame := roomIOInputFrameFromPCM(pcm, roomIOInputSampleRate, 2)
+	converter := newRoomIOInputConverter(roomIODefaultInputSampleRate)
 
-	if frame.SampleRate != roomIOInputSampleRate {
-		t.Fatalf("SampleRate = %d, want reference RoomIO input rate %d", frame.SampleRate, roomIOInputSampleRate)
+	frame := converter.Convert(roomIOInputFrameFromPCM(pcm, roomIODefaultInputSampleRate, 2))
+
+	if frame.SampleRate != roomIODefaultInputSampleRate {
+		t.Fatalf("SampleRate = %d, want reference RoomIO input rate %d", frame.SampleRate, roomIODefaultInputSampleRate)
 	}
 	if frame.NumChannels != 1 {
 		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
@@ -271,11 +304,15 @@ func TestRoomIOInputFrameDownmixesStereoToReferenceMono(t *testing.T) {
 }
 
 func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
-	stream := newRoomIOInputAudioStream()
+	rio := &RoomIO{}
+	stream := rio.newInputAudioStream()
+	converter := newRoomIOInputConverter(rio.audioInputSampleRate())
+
 	var frames []*model.AudioFrame
-	for i := 0; i < 5; i++ {
-		frame := roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1)
-		frames = append(frames, stream.Push(frame.Data)...)
+	for i := 0; i < 6; i++ {
+		if frame := converter.Convert(roomIOInputFrameFromPCM(make([]byte, 960), roomIOOpusClockRate, 1)); frame != nil {
+			frames = append(frames, stream.Push(frame.Data)...)
+		}
 	}
 
 	if len(frames) != 1 {
@@ -295,15 +332,33 @@ func TestRoomIOInputStreamUsesReferenceFrameSize(t *testing.T) {
 	}
 }
 
-func TestRoomIOInputFrameNormalizesPreConnectAudio(t *testing.T) {
+func TestRoomIOInputStreamUsesConfiguredFrameSize(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{AudioInputSampleRate: 16000, AudioInputFrameSizeMS: 20}}
+
+	stream := rio.newInputAudioStream()
+	frames := stream.Push(make([]byte, 640))
+
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want one 20ms frame", len(frames))
+	}
+	if frames[0].SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want configured 16000", frames[0].SampleRate)
+	}
+	if frames[0].SamplesPerChannel != 320 {
+		t.Fatalf("SamplesPerChannel = %d, want 320 for 20ms at 16kHz", frames[0].SamplesPerChannel)
+	}
+}
+
+func TestRoomIOInputConverterNormalizesPreConnectAudio(t *testing.T) {
 	preConnect := &model.AudioFrame{
 		Data:              make([]byte, 960),
 		SampleRate:        roomIOOpusClockRate,
 		NumChannels:       1,
 		SamplesPerChannel: 480,
 	}
+	converter := newRoomIOInputConverter(roomIODefaultInputSampleRate)
 
-	frame := roomIOInputFrameFromFrame(preConnect)
+	frame := converter.Convert(preConnect)
 
 	if frame == preConnect {
 		t.Fatal("normalized frame reused pre-connect frame pointer")
@@ -314,16 +369,15 @@ func TestRoomIOInputFrameNormalizesPreConnectAudio(t *testing.T) {
 	if frame.NumChannels != 1 {
 		t.Fatalf("NumChannels = %d, want mono reference input", frame.NumChannels)
 	}
-	if frame.SamplesPerChannel != 240 {
-		t.Fatalf("SamplesPerChannel = %d, want 240 after 48k->24k resample", frame.SamplesPerChannel)
-	}
 	if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
 		t.Fatalf("frame data bytes = %d, want %d", got, want)
 	}
 }
 
 func TestRoomIOInputSilenceFlushUsesReferenceDuration(t *testing.T) {
-	frame := roomIOInputSilenceFlushFrame()
+	rio := &RoomIO{}
+
+	frame := rio.inputSilenceFlushFrame()
 
 	if frame.SampleRate != 24000 {
 		t.Fatalf("SampleRate = %d, want reference RoomIO input rate 24000", frame.SampleRate)
@@ -341,6 +395,117 @@ func TestRoomIOInputSilenceFlushUsesReferenceDuration(t *testing.T) {
 		if b != 0 {
 			t.Fatalf("frame data[%d] = %d, want silence", i, b)
 		}
+	}
+}
+
+func TestRoomIOInputSilenceFlushFollowsConfiguredSampleRate(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{AudioInputSampleRate: 16000}}
+
+	frame := rio.inputSilenceFlushFrame()
+
+	if frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want configured 16000", frame.SampleRate)
+	}
+	if frame.SamplesPerChannel != 8000 {
+		t.Fatalf("SamplesPerChannel = %d, want 0.5s of 16 kHz silence", frame.SamplesPerChannel)
+	}
+}
+
+type fakeRoomIOFrameProcessor struct {
+	frames   []*model.AudioFrame
+	err      error
+	calls    int
+	resets   int
+	closes   int
+	closeErr error
+}
+
+func (p *fakeRoomIOFrameProcessor) Process(_ context.Context, frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+	p.calls++
+	if p.err != nil {
+		return nil, p.err
+	}
+	if p.frames != nil {
+		return p.frames, nil
+	}
+	return []*model.AudioFrame{frame}, nil
+}
+
+func (p *fakeRoomIOFrameProcessor) Reset() { p.resets++ }
+
+func (p *fakeRoomIOFrameProcessor) Close() error {
+	p.closes++
+	return p.closeErr
+}
+
+func roomIOInputTestFrame(sample byte) *model.AudioFrame {
+	return &model.AudioFrame{
+		Data:              []byte{sample, 0x00},
+		SampleRate:        roomIODefaultInputSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+}
+
+func TestRoomIOForwardInputFrameRunsProcessorBeforeSession(t *testing.T) {
+	enhanced := roomIOInputTestFrame(0x11)
+	processor := &fakeRoomIOFrameProcessor{frames: []*model.AudioFrame{enhanced}}
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session, Options: RoomOptions{AudioInputProcessor: processor}}
+
+	rio.forwardRoomInputFrame(context.Background(), roomIOInputTestFrame(0x22))
+
+	if processor.calls != 1 {
+		t.Fatalf("processor calls = %d, want 1", processor.calls)
+	}
+}
+
+func TestRoomIOForwardInputFrameKeepsRecordingUnprocessed(t *testing.T) {
+	raw := roomIOInputTestFrame(0x22)
+	recorder := NewRecorderIO(nil)
+	processor := &fakeRoomIOFrameProcessor{frames: []*model.AudioFrame{roomIOInputTestFrame(0x11)}}
+	rio := &RoomIO{Recorder: recorder, Options: RoomOptions{AudioInputProcessor: processor}}
+
+	rio.forwardRoomInputFrame(context.Background(), raw)
+
+	if raw.Data[0] != 0x22 {
+		t.Fatalf("recorded frame data = %#x, want the untouched input frame", raw.Data[0])
+	}
+}
+
+func TestRoomIOProcessInputFrameFallsBackToOriginalOnError(t *testing.T) {
+	processor := &fakeRoomIOFrameProcessor{err: errors.New("enhancer unavailable")}
+	rio := &RoomIO{Options: RoomOptions{AudioInputProcessor: processor}}
+	frame := roomIOInputTestFrame(0x22)
+
+	frames := rio.processRoomInputFrame(context.Background(), frame)
+
+	if len(frames) != 1 || frames[0] != frame {
+		t.Fatalf("frames = %v, want the original frame forwarded on processor failure", frames)
+	}
+}
+
+func TestRoomIOCloseReleasesInputProcessorOnce(t *testing.T) {
+	processor := &fakeRoomIOFrameProcessor{}
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{
+		DisableTextInput:    true,
+		DisableAudioOutput:  true,
+		AudioInputProcessor: processor,
+	})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	rio.closeAudioInputProcessor()
+
+	if processor.closes != 1 {
+		t.Fatalf("processor closes = %d, want exactly one close", processor.closes)
+	}
+	if frames := rio.processRoomInputFrame(context.Background(), roomIOInputTestFrame(0x22)); len(frames) != 1 {
+		t.Fatalf("frames after close = %d, want the original frame passed through", len(frames))
+	}
+	if processor.calls != 0 {
+		t.Fatalf("processor calls after close = %d, want 0", processor.calls)
 	}
 }
 
