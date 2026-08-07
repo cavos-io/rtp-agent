@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -858,6 +859,61 @@ func TestJobContextPrimaryRoomIONilBeforeStartSession(t *testing.T) {
 	var nilCtx *JobContext
 	if got := nilCtx.PrimaryRoomIO(); got != nil {
 		t.Fatalf("PrimaryRoomIO() on nil context = %v, want nil", got)
+	}
+}
+
+func TestJobContextStartSessionFinalizesRecorderBeforeSessionClose(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_recorder_session_close", Room: &livekit.Room{Name: "room-recorder-close"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	var rio *workerlivekit.RoomIO
+	recordingDuringClose := make(chan bool, 1)
+	session.On("close", func(agent.Event) {
+		recordingDuringClose <- rio.Recorder.Recording()
+	})
+
+	oldConnector := jobContextRoomConnector
+	jobContextRoomConnector = workerlivekit.RoomConnector{
+		Join: func(context.Context, *lksdk.Room, string, lksdk.ConnectInfo, ...lksdk.ConnectOption) error {
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		jobContextRoomConnector = oldConnector
+		ctx.Shutdown("")
+	})
+
+	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		RoomOptions: workerlivekit.RoomOptions{
+			DisableAudioInput:  true,
+			DisableAudioOutput: true,
+			DisableTextInput:   true,
+		},
+	}); err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	var ok bool
+	rio, ok = ctx.PrimaryRoomIO().(*workerlivekit.RoomIO)
+	if !ok {
+		t.Fatalf("PrimaryRoomIO() = %T, want *livekit.RoomIO", ctx.PrimaryRoomIO())
+	}
+	if err := rio.StartRecorder(filepath.Join(t.TempDir(), "audio.ogg"), 48000); err != nil {
+		t.Fatalf("StartRecorder() error = %v", err)
+	}
+
+	session.CloseSoon(agent.CloseReasonUserInitiated)
+
+	select {
+	case recording := <-recordingDuringClose:
+		if recording {
+			t.Fatal("recorder was still recording during session close event")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session close listener did not run")
 	}
 }
 

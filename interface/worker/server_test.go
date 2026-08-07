@@ -6040,6 +6040,34 @@ func TestFinishJobTimesOutSessionEndCallback(t *testing.T) {
 	close(blockCh)
 }
 
+func TestFinishJobRunsShutdownBeforeSessionEnd(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_shutdown_before_session_end"}, "", "", "")
+	shutdownDone := make(chan struct{})
+	if err := jobCtx.AddShutdownCallback(func() { close(shutdownDone) }); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+	sessionEndCalled := make(chan error, 1)
+	server.sessionEndFnc = func(*JobContext) error {
+		select {
+		case <-shutdownDone:
+			sessionEndCalled <- nil
+			return nil
+		default:
+			err := errors.New("session end ran before shutdown")
+			sessionEndCalled <- err
+			return err
+		}
+	}
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+
+	server.finishJob(jobCtx)
+
+	if err := <-sessionEndCalled; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDrainWaitsForActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain"}, "", "", "")
