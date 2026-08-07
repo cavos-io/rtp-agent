@@ -1977,6 +1977,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
+	s.closePrimarySession(jobCtx, plan.JobID)
 	s.runSessionEnd(jobCtx)
 
 	jobCtx.Shutdown("")
@@ -2032,6 +2033,31 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessi
 		APISecret: opts.APISecret,
 		AgentName: opts.AgentName,
 	})
+}
+
+var sessionCloseTimeout = 60 * time.Second
+
+func (s *AgentServer) closePrimarySession(jobCtx *JobContext, jobID string) {
+	session, err := jobCtx.PrimarySession()
+	if err != nil || session == nil {
+		return
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- session.Stop(context.Background())
+	}()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			logger.Logger.Errorw("failed to close agent session before session end", err,
+				jobLogValues(jobCtx, "jobId", jobID)...)
+		}
+	case <-time.After(sessionCloseTimeout):
+		logger.Logger.Errorw("agent session close timed out, proceeding with shutdown", nil,
+			jobLogValues(jobCtx, "jobId", jobID, "timeout", sessionCloseTimeout)...)
+	}
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {

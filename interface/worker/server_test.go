@@ -6484,3 +6484,98 @@ func (e *localJobExecutorStub) Close(ctx context.Context) error {
 	}
 	return nil
 }
+
+func TestFinishJobClosesSessionBeforeSessionEnd(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_session_close_order"}, "", "", "")
+
+	var mu sync.Mutex
+	var order []string
+	record := func(step string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, step)
+	}
+
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.SetRecorderStopper(func() error {
+		record("recorder")
+		return nil
+	})
+	jobCtx.SetPrimarySession(session)
+
+	if err := jobCtx.AddShutdownCallback(func() { record("shutdown") }); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+	server.sessionEndFnc = func(*JobContext) error {
+		record("session_end")
+		return nil
+	}
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.finishJob(jobCtx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"recorder", "session_end", "shutdown"}
+	if len(order) != len(want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
+	}
+}
+
+// A close path that hangs must not swallow the session-end callback or the
+// shutdown callbacks behind it.
+func TestFinishJobProceedsWhenSessionCloseHangs(t *testing.T) {
+	previousTimeout := sessionCloseTimeout
+	sessionCloseTimeout = 20 * time.Millisecond
+	defer func() { sessionCloseTimeout = previousTimeout }()
+
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_session_close_hang"}, "", "", "")
+
+	release := make(chan struct{})
+	defer close(release)
+
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.SetRecorderStopper(func() error {
+		<-release
+		return nil
+	})
+	jobCtx.SetPrimarySession(session)
+
+	sessionEndCh := make(chan struct{}, 1)
+	server.sessionEndFnc = func(*JobContext) error {
+		sessionEndCh <- struct{}{}
+		return nil
+	}
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.finishJob(jobCtx)
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("finishJob() blocked on a hung agent session close")
+	}
+
+	select {
+	case <-sessionEndCh:
+	default:
+		t.Fatal("session end callback did not run after session close timed out")
+	}
+}
