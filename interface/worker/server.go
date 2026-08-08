@@ -1980,6 +1980,9 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	jobCtx.Shutdown("")
 	s.runSessionEnd(jobCtx)
 	s.uploadJobSessionReport(jobCtx)
+	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+	}
 	err := jobCtx.onCleanUp()
 	if err != nil {
 		logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
@@ -1990,6 +1993,17 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 	plan := jobSessionReportUploadPlan(jobCtx, s.Options)
 	if !plan.Upload {
+		return
+	}
+	if observability := jobCtx.Observability(); observability != nil {
+		ctx := observability.Context(context.Background())
+		err := errors.Join(
+			agent.EmitSessionReportTelemetry(ctx, observability, plan.AgentName, plan.Report),
+			uploadSessionRecordingOnly(plan.URL, plan.APIKey, plan.APISecret, plan.Report),
+		)
+		if err != nil {
+			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+		}
 		return
 	}
 	err := uploadSessionReport(

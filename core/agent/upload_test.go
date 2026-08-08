@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,12 +24,67 @@ import (
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	collectorlogsv1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+type uploadedSessionTelemetry struct {
+	authorization string
+	attributes    map[string]string
+	eventTypes    []string
+	scopeAttrs    map[string]string
+	recordAttrs   []map[string]string
+}
+
+func decodeUploadedSessionTelemetry(req *http.Request) (uploadedSessionTelemetry, error) {
+	body := io.Reader(req.Body)
+	if req.Header.Get("Content-Encoding") == "gzip" {
+		reader, err := gzip.NewReader(req.Body)
+		if err != nil {
+			return uploadedSessionTelemetry{}, err
+		}
+		defer reader.Close()
+		body = reader
+	}
+	payload, err := io.ReadAll(body)
+	if err != nil {
+		return uploadedSessionTelemetry{}, err
+	}
+	request := &collectorlogsv1.ExportLogsServiceRequest{}
+	if err := proto.Unmarshal(payload, request); err != nil {
+		return uploadedSessionTelemetry{}, err
+	}
+	upload := uploadedSessionTelemetry{
+		authorization: req.Header.Get("Authorization"),
+		attributes:    make(map[string]string),
+		scopeAttrs:    make(map[string]string),
+	}
+	for _, resourceLogs := range request.ResourceLogs {
+		for _, attr := range resourceLogs.GetResource().GetAttributes() {
+			upload.attributes[attr.Key] = attr.Value.GetStringValue()
+		}
+		for _, scopeLogs := range resourceLogs.ScopeLogs {
+			for _, attr := range scopeLogs.GetScope().GetAttributes() {
+				upload.scopeAttrs[attr.Key] = attr.Value.GetStringValue()
+			}
+			for _, record := range scopeLogs.LogRecords {
+				recordAttrs := make(map[string]string)
+				for _, attr := range record.Attributes {
+					recordAttrs[attr.Key] = attr.Value.GetStringValue()
+					if attr.Key == "event.type" {
+						upload.eventTypes = append(upload.eventTypes, attr.Value.GetStringValue())
+					}
+				}
+				upload.recordAttrs = append(upload.recordAttrs, recordAttrs)
+			}
+		}
+	}
+	return upload, nil
+}
 
 func multipartPartsFromRequest(t *testing.T, req *http.Request) map[string][]byte {
 	t.Helper()
@@ -96,6 +155,263 @@ func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportExportsConcurrentJobLocalTelemetry(t *testing.T) {
+	uploads := make(chan uploadedSessionTelemetry, 2)
+	errs := make(chan error, 4)
+	var arrivals sync.WaitGroup
+	arrivals.Add(2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/observability/logs/otlp/v0" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		arrivals.Done()
+		arrivals.Wait()
+		upload, err := decodeUploadedSessionTelemetry(req)
+		if err != nil {
+			errs <- err
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		uploads <- upload
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = server.Client()
+	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	cases := []struct {
+		roomID    string
+		room      string
+		jobID     string
+		agentName string
+	}{
+		{roomID: "RM_first", room: "room-first", jobID: "AJ_first", agentName: "agent-first"},
+		{roomID: "RM_second", room: "room-second", jobID: "AJ_second", agentName: "agent-second"},
+	}
+
+	var wg sync.WaitGroup
+	for _, tc := range cases {
+		tc := tc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			report := NewSessionReport()
+			report.RecordingOptions = RecordingOptions{Logs: true, Transcript: true}
+			report.RoomID = tc.roomID
+			report.Room = tc.room
+			report.JobID = tc.jobID
+			report.ChatHistory.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+			if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", tc.agentName, report); err != nil {
+				errs <- fmt.Errorf("upload %s: %w", tc.jobID, err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(uploads)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	got := make(map[string]uploadedSessionTelemetry)
+	for upload := range uploads {
+		got[upload.attributes["job_id"]] = upload
+	}
+	if len(got) != len(cases) {
+		t.Fatalf("OTLP uploads = %d, want %d", len(got), len(cases))
+	}
+	for _, tc := range cases {
+		upload := got[tc.jobID]
+		if !strings.HasPrefix(upload.authorization, "Bearer ") {
+			t.Fatalf("%s Authorization = %q, want bearer token", tc.jobID, upload.authorization)
+		}
+		if upload.attributes["room_id"] != tc.roomID || upload.attributes["lk.agent_name"] != tc.agentName {
+			t.Fatalf("%s resource attributes = %#v", tc.jobID, upload.attributes)
+		}
+		if upload.attributes["service.name"] != "livekit-agents" {
+			t.Fatalf("%s service.name = %q, want livekit-agents", tc.jobID, upload.attributes["service.name"])
+		}
+		if countValue(upload.eventTypes, "session_report") != 1 || countValue(upload.eventTypes, "chat_item") != 1 {
+			t.Fatalf("%s event types = %#v, want one session_report and one chat_item", tc.jobID, upload.eventTypes)
+		}
+		if upload.scopeAttrs["room_id"] != tc.roomID || upload.scopeAttrs["job_id"] != tc.jobID || upload.scopeAttrs["room"] != tc.room {
+			t.Fatalf("%s instrumentation scope attributes = %#v", tc.jobID, upload.scopeAttrs)
+		}
+		for _, attrs := range upload.recordAttrs {
+			if attrs["room_id"] != tc.roomID || attrs["job_id"] != tc.jobID || attrs["lk.agent_name"] != tc.agentName || attrs["logger.name"] != "chat_history" {
+				t.Fatalf("%s log record attributes = %#v", tc.jobID, attrs)
+			}
+		}
+	}
+}
+
+func TestEmitSessionReportTelemetryUsesExistingJobLogger(t *testing.T) {
+	uploads := make(chan uploadedSessionTelemetry, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/observability/logs/otlp/v0" {
+			upload, err := decodeUploadedSessionTelemetry(req)
+			if err != nil {
+				t.Errorf("decode telemetry: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			uploads <- upload
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	observability, err := telemetry.NewJobObservability(context.Background(), telemetry.JobObservabilityConfig{
+		EndpointURL: server.URL,
+		Headers:     map[string]string{"Authorization": "Bearer test"},
+		HTTPClient:  server.Client(),
+		JobID:       "AJ_existing",
+		RoomID:      "RM_existing",
+		AgentName:   "agent-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true, Transcript: true}
+	report.JobID = "AJ_existing"
+	report.RoomID = "RM_existing"
+	report.Room = "room-existing"
+	report.ChatHistory.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+
+	if err := EmitSessionReportTelemetry(observability.Context(context.Background()), observability, "agent-a", report); err != nil {
+		t.Fatal(err)
+	}
+	if err := observability.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := observability.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case upload := <-uploads:
+		if countValue(upload.eventTypes, "session_report") != 1 || countValue(upload.eventTypes, "chat_item") != 1 {
+			t.Fatalf("event types = %#v", upload.eventTypes)
+		}
+		if upload.attributes["job_id"] != "AJ_existing" || upload.attributes["room_id"] != "RM_existing" {
+			t.Fatalf("resource attributes = %#v", upload.attributes)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("job-local logger did not export final report")
+	}
+}
+
+func TestUploadSessionRecordingSkipsOTLPLogs(t *testing.T) {
+	var logRequests atomic.Int32
+	var recordingRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/observability/logs/otlp/v0":
+			logRequests.Add(1)
+		case "/observability/recordings/v0":
+			recordingRequests.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = server.Client()
+	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true, Transcript: true}
+	report.JobID = "AJ_recording_only"
+	report.RoomID = "RM_recording_only"
+	if err := UploadSessionRecording("wss://tenant.livekit.cloud", "key", "secret", report); err != nil {
+		t.Fatal(err)
+	}
+	if got := recordingRequests.Load(); got != 1 {
+		t.Fatalf("recording requests = %d, want 1", got)
+	}
+	if got := logRequests.Load(); got != 0 {
+		t.Fatalf("log requests = %d, want 0", got)
+	}
+}
+
+func TestUploadSessionReportReturnsOTLPExportError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = server.Client()
+	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Logs: true}
+	report.RoomID = "RM_rejected"
+	report.JobID = "AJ_rejected"
+	err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report)
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("UploadSessionReport() error = %v, want OTLP 401 error", err)
+	}
+}
+
+func TestUploadSessionReportOTLPFailureStillUploadsRecording(t *testing.T) {
+	telemetryErr := errors.New("telemetry unavailable")
+	oldTelemetryUpload := uploadSessionReportTelemetryFn
+	uploadSessionReportTelemetryFn = func(context.Context, string, string, string, *SessionReport) error {
+		return telemetryErr
+	}
+	t.Cleanup(func() { uploadSessionReportTelemetryFn = oldTelemetryUpload })
+
+	recordingUploaded := false
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+		recordingUploaded = req.URL.Path == "/observability/recordings/v0"
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report)
+	if !errors.Is(err, telemetryErr) {
+		t.Fatalf("UploadSessionReport() error = %v, want telemetry error", err)
+	}
+	if !recordingUploaded {
+		t.Fatal("recording upload was suppressed by OTLP failure")
+	}
+}
+
+func TestUploadSessionReportNoWorkSkipsCredentialsAndHTTP(t *testing.T) {
+	oldTelemetryUpload := uploadSessionReportTelemetryFn
+	uploadSessionReportTelemetryFn = func(context.Context, string, string, string, *SessionReport) error {
+		t.Fatal("empty report initialized OTLP telemetry")
+		return nil
+	}
+	t.Cleanup(func() { uploadSessionReportTelemetryFn = oldTelemetryUpload })
+
+	report := NewSessionReport()
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "", "", "", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v, want no-op", err)
+	}
+}
+
+func countValue(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
+}
+
 func TestUploadSessionReportTranscriptOnlySetsZeroHeaderStartTime(t *testing.T) {
 	headerCh := make(chan *livekit.MetricsRecordingHeader, 1)
 	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +459,40 @@ func TestUploadSessionReportTranscriptOnlySetsZeroHeaderStartTime(t *testing.T) 
 		}
 		if header.StartTime.Seconds != 0 || header.StartTime.Nanos != 0 {
 			t.Fatalf("header StartTime = %v, want zero timestamp", header.StartTime)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UploadSessionReport did not POST recording header")
+	}
+}
+
+func TestUploadSessionReportHeaderIncludesJobID(t *testing.T) {
+	headerCh := make(chan *livekit.MetricsRecordingHeader, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := multipartPartsFromRequest(t, r)
+		header := &livekit.MetricsRecordingHeader{}
+		if err := proto.Unmarshal(parts["header"], header); err != nil {
+			t.Errorf("Unmarshal(header) error = %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		headerCh <- header
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_job_header"
+	report.JobID = "AJ_job_header"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case header := <-headerCh:
+		if header.JobId != "AJ_job_header" {
+			t.Fatalf("header JobId = %q, want AJ_job_header", header.JobId)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UploadSessionReport did not POST recording header")
@@ -233,6 +583,7 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -277,6 +628,7 @@ func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -315,6 +667,7 @@ func TestUploadSessionReportRecordsSessionTagsSorted(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsEmptySessionTagsAsNil(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -349,6 +702,7 @@ func TestUploadSessionReportRecordsEmptySessionTagsAsNil(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -408,6 +762,7 @@ func TestUploadSessionReportRecordsModelUsage(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsEmptyUsageAsNil(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -441,6 +796,7 @@ func TestUploadSessionReportRecordsEmptyUsageAsNil(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
@@ -594,6 +950,7 @@ func TestUploadSessionReportOmitsEmptyAudioPartLikeReference(t *testing.T) {
 }
 
 func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldClient := recordingUploadHTTPClient
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
@@ -652,6 +1009,7 @@ func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
@@ -727,6 +1085,7 @@ func TestUploadSessionReportRecordsEvaluationAndOutcome(t *testing.T) {
 }
 
 func TestUploadSessionReportRecordsTagMetadata(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	var events []uploadTelemetryEvent
@@ -793,6 +1152,7 @@ type uploadTelemetryEvent struct {
 
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
 	t.Helper()
+	useNoopSessionReportTelemetry(t)
 	oldClient := recordingUploadHTTPClient
 	recordingUploadHTTPClient = &http.Client{
 		Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
@@ -807,6 +1167,17 @@ func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
 	}
 	t.Cleanup(func() {
 		recordingUploadHTTPClient = oldClient
+	})
+}
+
+func useNoopSessionReportTelemetry(t *testing.T) {
+	t.Helper()
+	oldUpload := uploadSessionReportTelemetryFn
+	uploadSessionReportTelemetryFn = func(context.Context, string, string, string, *SessionReport) error {
+		return nil
+	}
+	t.Cleanup(func() {
+		uploadSessionReportTelemetryFn = oldUpload
 	})
 }
 

@@ -90,7 +90,20 @@ func AddChatTraceEvents(span trace.Span, events []ChatTraceEvent) {
 }
 
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	return Tracer.Start(ctx, name, opts...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if observability := JobObservabilityFromContext(ctx); observability != nil && name == "agent_session" {
+		opts = append(opts, trace.WithAttributes(observability.sessionAttrs...))
+	}
+	return TracerFromContext(ctx).Start(ctx, name, opts...)
+}
+
+func TracerFromContext(ctx context.Context) trace.Tracer {
+	if observability := JobObservabilityFromContext(ctx); observability != nil {
+		return observability.Tracer()
+	}
+	return Tracer
 }
 
 type SpanContext struct {

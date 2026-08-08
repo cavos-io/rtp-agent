@@ -106,12 +106,14 @@ func performLLMInference(
 	toolCtx := llm.NewToolContext(toolItems)
 	chatOptions = append(chatOptions, llm.WithTools(toolCtx.Flatten()))
 	chatOptions = append(chatOptions, options...)
+	ctx, nodeSpan := telemetry.StartSpan(ctx, "llm_node")
 	ctx, span := telemetry.NewLLMSpan(ctx, llm.Model(l), llm.Provider(l))
 	span.SetAttributes(llmToolSpanAttributes(toolCtx)...)
 	telemetry.AddChatTraceEvents(span, llmChatTraceEvents(chatCtx))
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
 		span.End()
+		nodeSpan.End()
 		return nil, err
 	}
 
@@ -124,6 +126,7 @@ func performLLMInference(
 		defer close(data.Done)
 		defer stream.Close()
 		defer span.End()
+		defer nodeSpan.End()
 
 		startTime := time.Now()
 		for {

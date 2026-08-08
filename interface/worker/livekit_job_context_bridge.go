@@ -18,6 +18,8 @@ var livekitJobContextTokenClaims = workerlivekit.JobContextTokenClaims
 
 var livekitJobContextJobID = workerlivekit.JobContextJobID
 
+var livekitNewObservabilityToken = workerlivekit.NewObservabilityToken
+
 var livekitPopulateJobContextSessionReport = workerlivekit.PopulateJobContextSessionReport
 
 var livekitJobContextAvatarStartInfo = workerlivekit.JobContextAvatarStartInfo

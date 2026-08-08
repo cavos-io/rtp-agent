@@ -242,13 +242,25 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 	drainStrings(data.TextCh)
 
 	spans := recorder.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("ended spans = %d, want 1", len(spans))
+	if len(spans) != 2 {
+		t.Fatalf("ended spans = %d, want llm_inference and llm_node", len(spans))
 	}
-	if spans[0].Name() != "llm_inference" {
-		t.Fatalf("span name = %q, want llm_inference", spans[0].Name())
+	var inferenceSpan, nodeSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		switch span.Name() {
+		case "llm_inference":
+			inferenceSpan = span
+		case "llm_node":
+			nodeSpan = span
+		}
 	}
-	attrs := spanAttributes(spans[0].Attributes())
+	if inferenceSpan == nil || nodeSpan == nil {
+		t.Fatalf("spans = %#v, want llm_inference and llm_node", spans)
+	}
+	if got, want := inferenceSpan.Parent().SpanID(), nodeSpan.SpanContext().SpanID(); got != want {
+		t.Fatalf("llm_inference parent = %s, want llm_node %s", got, want)
+	}
+	attrs := spanAttributes(inferenceSpan.Attributes())
 	if attrs[telemetry.AttrGenAIRequestModel] != "test-model" {
 		t.Fatalf("span model attr = %q, want test-model", attrs[telemetry.AttrGenAIRequestModel])
 	}
@@ -256,7 +268,7 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
 
-	events := spans[0].Events()
+	events := inferenceSpan.Events()
 	if len(events) != 5 {
 		t.Fatalf("span events = %d, want 5 chat context events: %#v", len(events), events)
 	}

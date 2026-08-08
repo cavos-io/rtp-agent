@@ -18,6 +18,8 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -200,7 +202,14 @@ type AgentActivity struct {
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
-	ctx, cancel := context.WithCancel(context.Background())
+	return newAgentActivity(agentIntf, session, nil)
+}
+
+func newAgentActivity(agentIntf AgentInterface, session *AgentSession, parentCtx context.Context) *AgentActivity {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
 	activity := &AgentActivity{
 		AgentIntf:         agentIntf,
 		Agent:             agentIntf.GetAgent(),
@@ -246,6 +255,10 @@ type preemptiveGeneration struct {
 }
 
 func (a *AgentActivity) Start() {
+	startCtx, startSpan := telemetry.StartSpan(a.ctx, "start_agent_activity", trace.WithAttributes(
+		attribute.String(telemetry.AttrAgentLabel, a.Agent.Label()),
+	))
+	defer startSpan.End()
 	if err := a.recordInitialConfiguration(); err != nil {
 		logger.Logger.Errorw("failed to record initial agent configuration", err)
 	}
@@ -358,6 +371,10 @@ func (a *AgentActivity) Start() {
 		a.Session.mu.Unlock()
 	}
 	func() {
+		_, onEnterSpan := telemetry.StartSpan(startCtx, "on_enter", trace.WithAttributes(
+			attribute.String(telemetry.AttrAgentLabel, a.Agent.Label()),
+		))
+		defer onEnterSpan.End()
 		defer func() {
 			if a.Session != nil {
 				a.Session.mu.Lock()
@@ -377,7 +394,13 @@ func (a *AgentActivity) Start() {
 }
 
 func (a *AgentActivity) Stop() {
-	a.AgentIntf.OnExit()
+	func() {
+		_, span := telemetry.StartSpan(a.ctx, "on_exit", trace.WithAttributes(
+			attribute.String(telemetry.AttrAgentLabel, a.Agent.Label()),
+		))
+		defer span.End()
+		a.AgentIntf.OnExit()
+	}()
 	for _, unsubscribe := range a.providerUnsubscribes {
 		unsubscribe()
 	}
@@ -2705,6 +2728,8 @@ func (a *AgentActivity) setSpeaking(speaking bool) bool {
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
 	a.cancelPendingEOUDetection()
+	_, userTurnSpan := telemetry.StartSpan(a.ctx, "user_turn")
+	defer userTurnSpan.End()
 
 	if ctx == nil {
 		ctx = a.ctx

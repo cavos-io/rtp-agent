@@ -21,7 +21,7 @@ func CollectOTelUsageWithContext(ctx context.Context, metrics AgentMetrics) {
 		return
 	}
 
-	meter := otel.Meter(otelMetricsMeterName)
+	meter := MeterFromContext(ctx)
 	switch ev := metrics.(type) {
 	case *LLMMetrics:
 		attrs := otelModelAttrs(ev.Metadata)
@@ -63,7 +63,7 @@ func RecordOTelTurnMetricsWithContext(ctx context.Context, report map[string]any
 		return
 	}
 
-	meter := otel.Meter(otelMetricsMeterName)
+	meter := MeterFromContext(ctx)
 	llmAttrs := otelReportMetadataAttrs(report["llm_metadata"])
 	ttsAttrs := otelReportMetadataAttrs(report["tts_metadata"])
 	sttAttrs := otelReportMetadataAttrs(report["stt_metadata"])
@@ -74,6 +74,13 @@ func RecordOTelTurnMetricsWithContext(ctx context.Context, report map[string]any
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.transcription_delay", report, "transcription_delay", sttAttrs)
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.end_of_turn_delay", report, "end_of_turn_delay", sttAttrs)
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.on_user_turn_completed_delay", report, "on_user_turn_completed_delay", sttAttrs)
+}
+
+func MeterFromContext(ctx context.Context) metric.Meter {
+	if observability := JobObservabilityFromContext(ctx); observability != nil {
+		return observability.Meter()
+	}
+	return otel.Meter(otelMetricsMeterName)
 }
 
 func otelModelAttrs(metadata *Metadata) []attribute.KeyValue {

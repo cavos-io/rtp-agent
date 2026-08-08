@@ -19,6 +19,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestPipelineAgentStartRootsCtxUnderSessionCtx(t *testing.T) {
@@ -363,6 +365,39 @@ func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
 	}
 	if len(speech.ChatItems()) != 1 || speech.ChatItems()[0].GetID() != msg.GetID() {
 		t.Fatalf("speech.ChatItems = %#v, want committed precomputed assistant item", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentScheduledReplyCreatesAgentTurnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}}}}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	pipeline.OnSpeechScheduled(context.Background(), speech)
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	node := spans["llm_node"]
+	if turn == nil || node == nil {
+		t.Fatalf("spans = %#v, want agent_turn and llm_node", spans)
+	}
+	if got, want := node.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("llm_node parent = %s, want agent_turn %s", got, want)
 	}
 }
 

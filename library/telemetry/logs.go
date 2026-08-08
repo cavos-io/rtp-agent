@@ -74,7 +74,21 @@ func RecordChatEventAt(ctx context.Context, eventType string, body string, attri
 }
 
 func RecordChatEventWithOptions(ctx context.Context, eventType string, body string, attributes map[string]interface{}, options ChatEventOptions) {
-	if ChatLogger == nil {
+	RecordChatEventWithLogger(ctx, LoggerFromContext(ctx, "chat_history"), eventType, body, attributes, options)
+}
+
+func LoggerFromContext(ctx context.Context, name string) log.Logger {
+	if observability := JobObservabilityFromContext(ctx); observability != nil {
+		if name == "evaluations" {
+			return observability.EvaluationLogger()
+		}
+		return observability.ChatLogger()
+	}
+	return ChatLogger
+}
+
+func RecordChatEventWithLogger(ctx context.Context, eventLogger log.Logger, eventType string, body string, attributes map[string]interface{}, options ChatEventOptions) {
+	if eventLogger == nil {
 		return
 	}
 
@@ -104,7 +118,7 @@ func RecordChatEventWithOptions(ctx context.Context, eventType string, body stri
 	record.AddAttributes(log.String("event.type", eventType))
 	record.AddAttributes(otelAttrs...)
 
-	ChatLogger.Emit(ctx, record)
+	eventLogger.Emit(ctx, record)
 }
 
 func sortedAttributeKeys(attributes map[string]interface{}) []string {

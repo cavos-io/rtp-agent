@@ -17,6 +17,8 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
@@ -4297,6 +4299,33 @@ func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called for manual commit")
 	}
+}
+
+func TestAgentActivityCommitUserTurnCreatesUserTurnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.OnFinalTranscript(&stt.SpeechEvent{Alternatives: []stt.SpeechData{{Text: "hello", Confidence: 0.9}}})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_turn" {
+			return
+		}
+	}
+	t.Fatal("user_turn span missing")
 }
 
 func TestAgentActivityManualCommitIgnoresLateInterimTranscript(t *testing.T) {

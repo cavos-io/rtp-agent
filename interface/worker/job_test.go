@@ -3,11 +3,15 @@ package worker
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -475,6 +479,66 @@ func (workerTestSessionAssistant) Start(context.Context, *agent.AgentSession) er
 func (workerTestSessionAssistant) OnAudioFrame(context.Context, *audiomodel.AudioFrame) {
 }
 func (workerTestSessionAssistant) SetPublishAudio(func(context.Context, *audiomodel.AudioFrame) error) {
+}
+
+func TestJobContextStartSessionUsesIsolatedJobObservability(t *testing.T) {
+	var traceRequests atomic.Int32
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/observability/traces/otlp/v0" {
+			traceRequests.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", collector.URL)
+
+	contexts := []*JobContext{
+		NewJobContext(&livekit.Job{Id: "job-a", Room: &livekit.Room{Sid: "room-a"}}, "wss://test.livekit.cloud", "key-a", "secret-a"),
+		NewJobContext(&livekit.Job{Id: "job-b", Room: &livekit.Room{Sid: "room-b"}}, "wss://test.livekit.cloud", "key-b", "secret-b"),
+	}
+	sessions := make([]*agent.AgentSession, len(contexts))
+	for i, jobCtx := range contexts {
+		jobCtx.fakeJob = true
+		jobCtx.roomConnected.Store(true)
+		jobCtx.InitRecording(agent.RecordingOptions{Traces: true})
+		sessions[i] = agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+		sessions[i].Assistant = workerTestSessionAssistant{}
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(contexts))
+	for i := range contexts {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- contexts[i].StartSession(context.Background(), sessions[i])
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("StartSession error = %v", err)
+		}
+	}
+	if contexts[0].Observability() == nil || contexts[1].Observability() == nil {
+		t.Fatal("job observability was not initialized")
+	}
+	if contexts[0].Observability() == contexts[1].Observability() {
+		t.Fatal("concurrent jobs shared one observability provider")
+	}
+	for i := range contexts {
+		if err := sessions[i].Stop(context.Background()); err != nil {
+			t.Fatalf("Stop error = %v", err)
+		}
+		if err := contexts[i].FinalizeObservability(context.Background()); err != nil {
+			t.Fatalf("FinalizeObservability error = %v", err)
+		}
+	}
+	if got := traceRequests.Load(); got != 2 {
+		t.Fatalf("trace requests = %d, want one per job", got)
+	}
 }
 
 func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {

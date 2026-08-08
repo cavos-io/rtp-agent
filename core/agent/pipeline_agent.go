@@ -20,6 +20,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // AudioInputHook is called for each incoming audio frame before it is forwarded
@@ -780,6 +782,12 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	if speech == nil {
 		return
 	}
+	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.GenerationID())}
+	if parentID := speech.ParentGenerationID(); parentID != "" {
+		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, parentID))
+	}
+	ctx, turnSpan := telemetry.StartSpan(ctx, "agent_turn", trace.WithAttributes(attrs...))
+	defer turnSpan.End()
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 	if speech.IsInterrupted() {
@@ -832,17 +840,24 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		return
 	}
 
-	va.generateReplyWithOptions(va.speechOptions(speech))
+	va.generateReplyWithContext(ctx, va.speechOptions(speech))
 }
 
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
+	va.generateReplyWithContext(nil, opts)
+}
+
+func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipelineReplyOptions) {
 	va.mu.Lock()
 	session := va.session
-	ctx := va.ctx
+	defaultCtx := va.ctx
 	va.mu.Unlock()
 
 	if session == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = defaultCtx
 	}
 	if ctx == nil {
 		ctx = context.Background()

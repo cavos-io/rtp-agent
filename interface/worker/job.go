@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,9 +20,13 @@ import (
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils"
 )
 
 var currentJobContexts sync.Map
+
+var observabilityFinalizeTimeout = 10 * time.Second
 
 const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
@@ -219,6 +225,9 @@ type JobContext struct {
 	sessionDirectory       string
 	logContextFields       map[string]any
 	recordingInitialized   bool
+	observability          *telemetry.JobObservability
+	observabilityOnce      sync.Once
+	observabilityErr       error
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	shutdownDone           chan struct{}
@@ -299,6 +308,74 @@ func (c *JobContext) InitRecording(options agent.RecordingOptions) {
 		c.Report.Tagger = c.Tagger()
 	}
 	c.Report.RecordingOptions = options
+}
+
+func (c *JobContext) Observability() *telemetry.JobObservability {
+	if c == nil {
+		return nil
+	}
+	return c.observability
+}
+
+func (c *JobContext) ensureObservability(ctx context.Context) error {
+	if c == nil || c.Report == nil {
+		return nil
+	}
+	options := c.Report.RecordingOptions
+	if !options.Audio && !options.Traces && !options.Logs && !options.Transcript {
+		return nil
+	}
+	c.observabilityOnce.Do(func() {
+		endpoint, err := jobObservabilityURL(c.url)
+		if err != nil || endpoint == "" {
+			c.observabilityErr = err
+			return
+		}
+		token, err := livekitNewObservabilityToken(c.apiKey, c.apiSecret)
+		if err != nil {
+			c.observabilityErr = fmt.Errorf("create observability token: %w", err)
+			return
+		}
+		room := c.Job.GetRoom()
+		c.observability, c.observabilityErr = telemetry.NewJobObservability(ctx, telemetry.JobObservabilityConfig{
+			EndpointURL: endpoint,
+			Headers:     map[string]string{"Authorization": "Bearer " + token},
+			JobID:       c.JobID(),
+			RoomID:      room.GetSid(),
+			RoomName:    room.GetName(),
+			AgentName:   c.Job.GetAgentName(),
+		})
+	})
+	return c.observabilityErr
+}
+
+func (c *JobContext) FinalizeObservability(ctx context.Context) error {
+	if c == nil || c.observability == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, observabilityFinalizeTimeout)
+	defer cancel()
+	return errors.Join(
+		c.observability.ForceFlush(ctx),
+		c.observability.Shutdown(ctx),
+	)
+}
+
+func jobObservabilityURL(liveKitURL string) (string, error) {
+	if override := os.Getenv("LIVEKIT_OBSERVABILITY_URL"); override != "" {
+		return strings.TrimRight(override, "/"), nil
+	}
+	u, err := url.Parse(liveKitURL)
+	if err != nil {
+		return "", nil
+	}
+	if !utils.IsCloud(liveKitURL) || u.Hostname() == "" {
+		return "", nil
+	}
+	return "https://" + strings.ToLower(u.Hostname()), nil
 }
 
 func (c *JobContext) API() *JobAPI {
@@ -675,6 +752,12 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
 		sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
+	}
+	if err := c.ensureObservability(sessionCtx); err != nil {
+		return err
+	}
+	if c.observability != nil {
+		sessionCtx = c.observability.Context(sessionCtx)
 	}
 	if err := session.Start(sessionCtx); err != nil {
 		return err

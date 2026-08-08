@@ -20,6 +20,8 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/google/uuid"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type UserState string
@@ -302,6 +304,9 @@ type AgentSession struct {
 	closing                 bool
 	runCtx                  context.Context
 	runCancel               context.CancelFunc
+	sessionSpan             trace.Span
+	agentSpeakingSpan       trace.Span
+	userSpeakingSpan        trace.Span
 	runState                *RunResult
 	onEnterDepth            int
 	userTurnClaims          int
@@ -1879,7 +1884,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		return
 	}
 	telemetry.LogMetrics(metrics)
-	telemetry.CollectOTelUsage(metrics)
+	telemetry.CollectOTelUsageWithContext(s.telemetryContext(), metrics)
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
 	}
@@ -2461,6 +2466,16 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		return nil, err
 	}
 
+	ctx, sessionSpan := telemetry.StartSpan(ctx, "agent_session", trace.WithAttributes(
+		attribute.String(telemetry.AttrAgentLabel, agent.GetAgent().Label()),
+	))
+	sessionStarted := false
+	defer func() {
+		if !sessionStarted {
+			sessionSpan.End()
+		}
+	}()
+
 	s.UpdateAgentState(AgentStateInitializing)
 
 	if backgroundAudio != nil && room != nil {
@@ -2509,7 +2524,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		return nil, err
 	}
 
-	activity := NewAgentActivity(agent, s)
+	activity := newAgentActivity(agent, s, runCtx)
 	s.mu.Lock()
 	if s.runCancel != nil {
 		s.runCancel()
@@ -2520,7 +2535,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.preCloseCallbacksRan = false
 	s.runCtx = runCtx
 	s.runCancel = runCancel
+	s.sessionSpan = sessionSpan
 	s.mu.Unlock()
+	sessionStarted = true
 
 	activity.Start()
 	if s.Options.IVRDetection {
@@ -2579,6 +2596,7 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 
 func (s *AgentSession) UpdateAgentState(state AgentState) {
 	var flushHeldSTTActivity *AgentActivity
+	var endedSpeakingSpan trace.Span
 	s.mu.Lock()
 	oldState := s.agentState
 	if oldState == state {
@@ -2597,6 +2615,12 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		s.llmErrorCount = 0
 		s.ttsErrorCount = 0
 		s.startAECWarmupLocked()
+		if s.agentSpeakingSpan == nil {
+			_, s.agentSpeakingSpan = telemetry.StartSpan(s.runCtx, "agent_speaking")
+		}
+	} else if s.agentSpeakingSpan != nil {
+		endedSpeakingSpan = s.agentSpeakingSpan
+		s.agentSpeakingSpan = nil
 	}
 	nowTime := time.Now()
 	now := float64(nowTime.UnixNano()) / float64(time.Second)
@@ -2619,6 +2643,9 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		s.stopAgentSpeakingStallTimerLocked()
 	}
 	s.mu.Unlock()
+	if endedSpeakingSpan != nil {
+		endedSpeakingSpan.End()
+	}
 
 	if flushHeldSTTActivity != nil {
 		flushHeldSTTActivity.flushHeldSTTEvents()
@@ -2656,6 +2683,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 }
 
 func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
+	var endedSpeakingSpan trace.Span
 	s.mu.Lock()
 	if s.userTurnClaims > 0 && state != UserStateSpeaking {
 		s.mu.Unlock()
@@ -2667,8 +2695,19 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		return
 	}
 	s.userState = state
+	if state == UserStateSpeaking {
+		if s.userSpeakingSpan == nil {
+			_, s.userSpeakingSpan = telemetry.StartSpan(s.runCtx, "user_speaking")
+		}
+	} else if s.userSpeakingSpan != nil {
+		endedSpeakingSpan = s.userSpeakingSpan
+		s.userSpeakingSpan = nil
+	}
 	videoSampler := s.videoSampler
 	s.mu.Unlock()
+	if endedSpeakingSpan != nil {
+		endedSpeakingSpan.End()
+	}
 
 	if videoSampler != nil {
 		videoSampler.SetSpeaking(state == UserStateSpeaking)
@@ -3165,7 +3204,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	runState := s.runState
 
-	newActivity := NewAgentActivity(agent, s)
+	newActivity := newAgentActivity(agent, s, runCtx)
 	s.activity = newActivity
 	s.mu.Unlock()
 
@@ -3289,6 +3328,10 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	activity := s.activity
 	ivrActivity := s.ivrActivity
 	assistant := s.Assistant
+	sessionSpan := s.sessionSpan
+	telemetryCtx := s.runCtx
+	agentSpeakingSpan := s.agentSpeakingSpan
+	userSpeakingSpan := s.userSpeakingSpan
 	var avatar AvatarProvider
 	if s.Agent != nil && s.Agent.GetAgent() != nil {
 		avatar = s.Agent.GetAgent().Avatar
@@ -3302,6 +3345,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.runCancel = nil
 	}
 	s.runCtx = nil
+	s.sessionSpan = nil
+	s.agentSpeakingSpan = nil
+	s.userSpeakingSpan = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
 	if s.userTurnClaims > 0 && s.userTurnDone != nil {
@@ -3378,11 +3424,20 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		}
 	}
 	_ = closeSessionToolsets(sessionTools)
-	s.flushOTelTurnMetrics()
+	s.flushOTelTurnMetrics(telemetryCtx)
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
 	runAgentSessionPreCloseCallbacks(preCloseCallbacks)
+	if agentSpeakingSpan != nil {
+		agentSpeakingSpan.End()
+	}
+	if userSpeakingSpan != nil {
+		userSpeakingSpan.End()
+	}
+	if sessionSpan != nil {
+		sessionSpan.End()
+	}
 	return stopErr
 }
 
@@ -3437,7 +3492,20 @@ func closeSessionToolsetValue(tool llm.Tool) error {
 	return errors.Join(errs...)
 }
 
-func (s *AgentSession) flushOTelTurnMetrics() {
+func (s *AgentSession) telemetryContext() context.Context {
+	if s == nil {
+		return context.Background()
+	}
+	s.mu.Lock()
+	ctx := s.runCtx
+	s.mu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (s *AgentSession) flushOTelTurnMetrics(ctx context.Context) {
 	if s == nil || s.ChatCtx == nil {
 		return
 	}
@@ -3446,6 +3514,6 @@ func (s *AgentSession) flushOTelTurnMetrics() {
 		if !ok || len(msg.Metrics) == 0 {
 			continue
 		}
-		telemetry.RecordOTelTurnMetrics(msg.Metrics)
+		telemetry.RecordOTelTurnMetricsWithContext(ctx, msg.Metrics)
 	}
 }

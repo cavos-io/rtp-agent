@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -32,6 +33,7 @@ var (
 	recordUploadTelemetryEvent            = telemetry.RecordChatEvent
 	recordUploadTelemetryEventAt          = telemetry.RecordChatEventAt
 	recordUploadTelemetryEventWithOptions = telemetry.RecordChatEventWithOptions
+	uploadSessionReportTelemetryFn        = uploadSessionReportTelemetry
 	recordingUploadHTTPClient             = &http.Client{Timeout: 30 * time.Second}
 )
 
@@ -52,10 +54,10 @@ func UploadSessionReport(
 	}
 	report.ChatHistory = sanitizeSessionReportChatHistory(report.ChatHistory)
 
-	emitUploadTelemetryEvents(context.Background(), agentName, report)
-
 	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
-	if !report.RecordingOptions.Transcript && !hasAudio {
+	hasRecording := report.RecordingOptions.Transcript || hasAudio
+	hasTelemetry := hasUploadTelemetryEvents(report)
+	if !hasRecording && !hasTelemetry {
 		return nil
 	}
 
@@ -68,6 +70,50 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to create JWT: %w", err)
 	}
 
+	var telemetryErr error
+	if hasTelemetry {
+		emitUploadTelemetryEvents(context.Background(), agentName, report)
+		telemetryErr = uploadSessionReportTelemetryFn(context.Background(), observabilityURL, jwt, agentName, report)
+	}
+	var recordingErr error
+	if hasRecording {
+		recordingErr = uploadSessionRecording(observabilityURL, jwt, report, hasAudio)
+	}
+	return errors.Join(telemetryErr, recordingErr)
+}
+
+func UploadSessionRecording(
+	cloudURL string,
+	apiKey string,
+	apiSecret string,
+	report *SessionReport,
+) error {
+	if report == nil {
+		return nil
+	}
+	observabilityURL, err := observabilityURLFromLiveKitURL(cloudURL)
+	if err != nil {
+		return err
+	}
+	if observabilityURL == "" {
+		return nil
+	}
+	report.ChatHistory = sanitizeSessionReportChatHistory(report.ChatHistory)
+	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
+	if !report.RecordingOptions.Transcript && !hasAudio {
+		return nil
+	}
+	token, err := auth.NewAccessToken(apiKey, apiSecret).
+		SetObservabilityGrant(&auth.ObservabilityGrant{Write: true}).
+		SetValidFor(6 * time.Hour).
+		ToJWT()
+	if err != nil {
+		return fmt.Errorf("failed to create JWT: %w", err)
+	}
+	return uploadSessionRecording(observabilityURL, token, report, hasAudio)
+}
+
+func uploadSessionRecording(observabilityURL string, jwt string, report *SessionReport, hasAudio bool) error {
 	// Prepare multipart writer
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
@@ -75,6 +121,7 @@ func UploadSessionReport(
 	// 1. Header (protobuf)
 	headerMsg := &livekit.MetricsRecordingHeader{
 		RoomId: report.RoomID,
+		JobId:  report.JobID,
 	}
 	startedAtMillis := int64(0)
 	if report.AudioRecordingStartedAt != nil {
@@ -175,6 +222,25 @@ func UploadSessionReport(
 const maxRecordingUploadRetries = 3
 
 func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *SessionReport) {
+	emitUploadTelemetryEventsWithRecorder(ctx, agentName, report, functionUploadTelemetryRecorder{})
+}
+
+type uploadTelemetryRecorder interface {
+	recordAt(context.Context, string, string, map[string]interface{}, time.Time)
+	recordWithOptions(context.Context, string, string, map[string]interface{}, telemetry.ChatEventOptions)
+}
+
+type functionUploadTelemetryRecorder struct{}
+
+func (functionUploadTelemetryRecorder) recordAt(ctx context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
+	recordUploadTelemetryEventAt(ctx, eventType, body, attrs, timestamp)
+}
+
+func (functionUploadTelemetryRecorder) recordWithOptions(ctx context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+	recordUploadTelemetryEventWithOptions(ctx, eventType, body, attrs, options)
+}
+
+func emitUploadTelemetryEventsWithRecorder(ctx context.Context, agentName string, report *SessionReport, recorder uploadTelemetryRecorder) {
 	if report == nil {
 		return
 	}
@@ -199,7 +265,7 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 		} else {
 			attrs["usage"] = nil
 		}
-		recordUploadTelemetryEventAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
+		recorder.recordAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
 		history := report.ChatHistory.ToDict(llm.ChatContextDictOptions{
@@ -213,9 +279,9 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 				"chat.item": item,
 			}
 			if item["type"] == "function_call_output" && item["is_error"] == true {
-				recordUploadTelemetryEventWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(createdAt))
+				recorder.recordWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(createdAt))
 			} else {
-				recordUploadTelemetryEventAt(ctx, "chat_item", "chat item", attrs, createdAt)
+				recorder.recordAt(ctx, "chat_item", "chat item", attrs, createdAt)
 			}
 		}
 	}
@@ -229,13 +295,13 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 			"evaluation": evaluation,
 		}
 		if evaluation["verdict"] == "fail" {
-			recordUploadTelemetryEventWithOptions(ctx, "evaluation", "evaluation", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+			recorder.recordWithOptions(ctx, "evaluation", "evaluation", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
 		} else {
-			recordUploadTelemetryEventAt(ctx, "evaluation", "evaluation", attrs, reportTimestamp)
+			recorder.recordAt(ctx, "evaluation", "evaluation", attrs, reportTimestamp)
 		}
 	}
 	for _, tag := range report.Tagger.MetadataTags() {
-		recordUploadTelemetryEventAt(ctx, "tag", "tag", map[string]interface{}{
+		recorder.recordAt(ctx, "tag", "tag", map[string]interface{}{
 			"tag": map[string]any{
 				"name":     tag.Name,
 				"metadata": tag.Metadata,
@@ -251,9 +317,9 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 			"outcome": outcomeData,
 		}
 		if outcome == "fail" {
-			recordUploadTelemetryEventWithOptions(ctx, "outcome", "outcome", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
+			recorder.recordWithOptions(ctx, "outcome", "outcome", attrs, telemetry.ErrorChatEventOptions(reportTimestamp))
 		} else {
-			recordUploadTelemetryEventAt(ctx, "outcome", "outcome", attrs, reportTimestamp)
+			recorder.recordAt(ctx, "outcome", "outcome", attrs, reportTimestamp)
 		}
 	}
 }
@@ -271,6 +337,19 @@ func sessionReportTelemetryTimestamp(report *SessionReport) time.Time {
 
 func hasUploadRecordingOption(options RecordingOptions) bool {
 	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func hasUploadTelemetryEvents(report *SessionReport) bool {
+	if report == nil {
+		return false
+	}
+	if hasUploadRecordingOption(report.RecordingOptions) {
+		return true
+	}
+	if report.Tagger == nil {
+		return false
+	}
+	return len(report.Tagger.Evaluations()) > 0 || len(report.Tagger.MetadataTags()) > 0 || report.Tagger.Outcome() != ""
 }
 
 func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
