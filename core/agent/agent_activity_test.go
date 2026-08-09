@@ -4328,6 +4328,66 @@ func TestAgentActivityCommitUserTurnCreatesUserTurnSpan(t *testing.T) {
 	t.Fatal("user_turn span missing")
 }
 
+func TestAgentActivityCompleteUserTurnEndsSpanWithSTTMetrics(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.STT = &fakePipelineSTT{model: "deepgram/nova-3", provider: "livekit"}
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		SkipReply:            true,
+		NewTranscript:        "Hi there! How can I help you today?",
+		TranscriptConfidence: 1,
+		TranscriptionDelay:   0.35633111,
+		EndOfTurnDelay:       0.55691385,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var userTurn sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_turn" {
+			userTurn = span
+			break
+		}
+	}
+	if userTurn == nil {
+		t.Fatal("user_turn span still open after automatic turn completion")
+	}
+	attrs := spanAttributeValues(userTurn.Attributes())
+	checks := map[string]string{
+		telemetry.AttrGenAIRequestModel: "deepgram/nova-3",
+		telemetry.AttrGenAIProviderName: "livekit",
+		telemetry.AttrUserTranscript:    "Hi there! How can I help you today?",
+	}
+	for key, want := range checks {
+		if got := attrs[key].AsString(); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := attrs[telemetry.AttrTranscriptConfidence].AsFloat64(); got != 1 {
+		t.Fatalf("transcript confidence = %v, want 1", got)
+	}
+	if got := attrs[telemetry.AttrTranscriptionDelay].AsFloat64(); got != 0.35633111 {
+		t.Fatalf("transcription delay = %v, want 0.35633111", got)
+	}
+	if got := attrs[telemetry.AttrEndOfTurnDelay].AsFloat64(); got != 0.55691385 {
+		t.Fatalf("end of turn delay = %v, want 0.55691385", got)
+	}
+}
+
 func TestAgentActivityManualCommitIgnoresLateInterimTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
 	agent.TurnDetection = TurnDetectionModeManual

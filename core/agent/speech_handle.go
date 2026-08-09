@@ -85,6 +85,8 @@ type SpeechHandle struct {
 	precomputedTTS         *TTSGenerationData
 	precomputedTTSSegments <-chan precomputedTTSSegment
 	precomputeCancel       context.CancelFunc
+	agentTurnCtx           context.Context
+	agentTurnEnd           func()
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}

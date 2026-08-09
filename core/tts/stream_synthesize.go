@@ -14,34 +14,28 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"go.opentelemetry.io/otel/trace"
 )
 
 func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (ChunkedStream, error) {
-	ctx, span := telemetry.NewTTSStreamSpan(ctx, Model(provider), Provider(provider))
 	stream, err := provider.Stream(ctx)
 	if err != nil {
-		span.End()
 		emitTTSError(provider, err, false)
 		return nil, err
 	}
 	if isNilSynthesizeStream(stream) {
 		err := fmt.Errorf("TTS returned nil synthesize stream")
-		span.End()
 		emitTTSError(provider, err, false)
 		return nil, err
 	}
 	if text != "" {
 		if err := stream.PushText(text); err != nil {
 			_ = stream.Close()
-			span.End()
 			emitTTSError(provider, err, false)
 			return nil, err
 		}
 	}
 	if err := endSynthesizeStreamInput(stream); err != nil {
 		_ = stream.Close()
-		span.End()
 		emitTTSError(provider, err, false)
 		return nil, err
 	}
@@ -51,7 +45,6 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 		text:      text,
 		requestID: cavosmath.ShortUUID(""),
 		startedAt: time.Now(),
-		span:      span,
 	}, nil
 }
 
@@ -100,8 +93,6 @@ type chunkedStreamFromSynthesizeStream struct {
 	audioDur    float64
 	done        bool
 	exception   error
-	span        trace.Span
-	spanEnded   bool
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
@@ -239,7 +230,6 @@ func (s *chunkedStreamFromSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.markDone(nil)
-	s.endSpan()
 	return s.stream.Close()
 }
 
@@ -256,14 +246,6 @@ func (s *chunkedStreamFromSynthesizeStream) markDone(err error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		s.exception = err
 	}
-}
-
-func (s *chunkedStreamFromSynthesizeStream) endSpan() {
-	if s.spanEnded || s.span == nil {
-		return
-	}
-	s.spanEnded = true
-	s.span.End()
 }
 
 func audioFrameDurationSeconds(frame *model.AudioFrame) float64 {

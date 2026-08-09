@@ -329,6 +329,15 @@ func TestPipelineAgentPrecomputeReplyAppendsInstructionsLikeReference(t *testing
 }
 
 func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{
@@ -365,6 +374,18 @@ func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
 	}
 	if len(speech.ChatItems()) != 1 || speech.ChatItems()[0].GetID() != msg.GetID() {
 		t.Fatalf("speech.ChatItems = %#v, want committed precomputed assistant item", speech.ChatItems())
+	}
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	node := spans["llm_node"]
+	if turn == nil || node == nil {
+		t.Fatalf("spans = %#v, want preemptive llm_node under agent_turn", spans)
+	}
+	if got, want := node.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("preemptive llm_node parent = %s, want agent_turn %s", got, want)
 	}
 }
 
@@ -1461,6 +1482,49 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("playTTSGenerationWithTranscript did not finish")
+	}
+}
+
+func TestPipelineAgentSpeakingSpanUsesAgentTurnContext(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	ctx, turnSpan := telemetry.StartSpan(context.Background(), "agent_turn")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame, 1),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 1}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+
+	if _, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, closedChannel(), nil); err != nil {
+		t.Fatal(err)
+	}
+	session.UpdateAgentState(AgentStateListening)
+	turnSpan.End()
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	speaking := spans["agent_speaking"]
+	if turn == nil || speaking == nil {
+		t.Fatalf("spans = %#v, want agent_turn and agent_speaking", spans)
+	}
+	if got, want := speaking.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("agent_speaking parent = %s, want agent_turn %s", got, want)
 	}
 }
 

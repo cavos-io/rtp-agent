@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -738,6 +739,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	if speech == nil || speech.IsInterrupted() || speech.IsDone() {
 		return
 	}
+	ctx = ensureSpeechAgentTurn(ctx, speech)
 	va.mu.Lock()
 	session := va.session
 	va.mu.Unlock()
@@ -782,12 +784,8 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	if speech == nil {
 		return
 	}
-	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.GenerationID())}
-	if parentID := speech.ParentGenerationID(); parentID != "" {
-		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, parentID))
-	}
-	ctx, turnSpan := telemetry.StartSpan(ctx, "agent_turn", trace.WithAttributes(attrs...))
-	defer turnSpan.End()
+	ctx = ensureSpeechAgentTurn(ctx, speech)
+	defer finishSpeechAgentTurn(speech)
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 	if speech.IsInterrupted() {
@@ -841,6 +839,43 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	}
 
 	va.generateReplyWithContext(ctx, va.speechOptions(speech))
+}
+
+func ensureSpeechAgentTurn(ctx context.Context, speech *SpeechHandle) context.Context {
+	if speech == nil {
+		return ctx
+	}
+	speech.mu.Lock()
+	if speech.agentTurnCtx != nil {
+		turnCtx := speech.agentTurnCtx
+		speech.mu.Unlock()
+		return turnCtx
+	}
+	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps))}
+	if speech.numSteps > 1 {
+		parentID := speech.ID + "_" + strconv.Itoa(speech.numSteps-1)
+		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, parentID))
+	}
+	turnCtx, turnSpan := telemetry.StartSpan(ctx, "agent_turn", trace.WithAttributes(attrs...))
+	speech.agentTurnCtx = turnCtx
+	speech.agentTurnEnd = func() { turnSpan.End() }
+	speech.mu.Unlock()
+	speech.AddDoneCallback(func(*SpeechHandle) { finishSpeechAgentTurn(speech) })
+	return turnCtx
+}
+
+func finishSpeechAgentTurn(speech *SpeechHandle) {
+	if speech == nil {
+		return
+	}
+	speech.mu.Lock()
+	end := speech.agentTurnEnd
+	speech.agentTurnCtx = nil
+	speech.agentTurnEnd = nil
+	speech.mu.Unlock()
+	if end != nil {
+		end()
+	}
 }
 
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
@@ -1976,7 +2011,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		ttsGen.ForwardedAudio = true
 		if !startedSpeaking {
 			ttsGen.StartedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
-			session.UpdateAgentState(AgentStateSpeaking)
+			session.updateAgentState(AgentStateSpeaking, ctx)
 			startedSpeaking = true
 		}
 		session.notifyAgentSpeakingProgress()

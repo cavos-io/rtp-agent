@@ -2728,8 +2728,10 @@ func (a *AgentActivity) setSpeaking(speaking bool) bool {
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
 	a.cancelPendingEOUDetection()
-	_, userTurnSpan := telemetry.StartSpan(a.ctx, "user_turn")
-	defer userTurnSpan.End()
+	if a.Session != nil {
+		userTurnSpan := a.Session.ensureUserTurnSpan(a.ctx)
+		defer a.Session.finishUserTurnSpan(userTurnSpan)
+	}
 
 	if ctx == nil {
 		ctx = a.ctx
@@ -2974,6 +2976,24 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			info.StoppedSpeakingAt,
 			timeToUnixSeconds(time.Now()),
 		)
+	}
+	if a.Session != nil {
+		userTurnSpan := a.Session.ensureUserTurnSpan(ctx)
+		sttProvider := a.Session.STT
+		attrs := []attribute.KeyValue{
+			attribute.String(telemetry.AttrUserTranscript, info.NewTranscript),
+			attribute.Float64(telemetry.AttrTranscriptConfidence, info.TranscriptConfidence),
+			attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay),
+			attribute.Float64(telemetry.AttrEndOfTurnDelay, info.EndOfTurnDelay),
+		}
+		if sttProvider != nil {
+			attrs = append(attrs,
+				attribute.String(telemetry.AttrGenAIRequestModel, stt.Model(sttProvider)),
+				attribute.String(telemetry.AttrGenAIProviderName, stt.Provider(sttProvider)),
+			)
+		}
+		userTurnSpan.SetAttributes(attrs...)
+		defer a.Session.finishUserTurnSpan(userTurnSpan)
 	}
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {

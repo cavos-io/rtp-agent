@@ -1757,7 +1757,7 @@ func TestAgentActivityLifecycleSpansAreChildrenOfRoot(t *testing.T) {
 	}
 }
 
-func TestAgentSessionSpeakingSpansAreChildrenOfRoot(t *testing.T) {
+func TestAgentSessionUserSpeakingSpanIsChildOfUserTurn(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -1774,8 +1774,6 @@ func TestAgentSessionSpeakingSpansAreChildrenOfRoot(t *testing.T) {
 	}
 	session.UpdateUserState(UserStateSpeaking)
 	session.UpdateUserState(UserStateListening)
-	session.UpdateAgentState(AgentStateSpeaking)
-	session.UpdateAgentState(AgentStateListening)
 	if err := session.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -1785,17 +1783,22 @@ func TestAgentSessionSpeakingSpansAreChildrenOfRoot(t *testing.T) {
 		spans[span.Name()] = span
 	}
 	root := spans["agent_session"]
-	if root == nil {
-		t.Fatal("agent_session span missing")
+	userTurn := spans["user_turn"]
+	userSpeaking := spans["user_speaking"]
+	if root == nil || userTurn == nil || userSpeaking == nil {
+		t.Fatalf("spans = %#v, want agent_session, user_turn, and user_speaking", spans)
 	}
-	for _, name := range []string{"user_speaking", "agent_speaking"} {
-		span := spans[name]
-		if span == nil {
-			t.Fatalf("%s span missing", name)
-		}
-		if got, want := span.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
-			t.Fatalf("%s parent = %s, want root %s", name, got, want)
-		}
+	if got, want := userTurn.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Fatalf("user_turn parent = %s, want agent_session %s", got, want)
+	}
+	if got, want := userSpeaking.Parent().SpanID(), userTurn.SpanContext().SpanID(); got != want {
+		t.Fatalf("user_speaking parent = %s, want user_turn %s", got, want)
+	}
+	if userSpeaking.StartTime().Before(userTurn.StartTime()) {
+		t.Fatalf("user_speaking started at %v before user_turn %v", userSpeaking.StartTime(), userTurn.StartTime())
+	}
+	if userSpeaking.EndTime().After(userTurn.EndTime()) {
+		t.Fatalf("user_speaking ended at %v after user_turn %v", userSpeaking.EndTime(), userTurn.EndTime())
 	}
 }
 

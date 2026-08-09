@@ -306,6 +306,8 @@ type AgentSession struct {
 	runCancel               context.CancelFunc
 	sessionSpan             trace.Span
 	agentSpeakingSpan       trace.Span
+	userTurnCtx             context.Context
+	userTurnSpan            trace.Span
 	userSpeakingSpan        trace.Span
 	runState                *RunResult
 	onEnterDepth            int
@@ -2595,6 +2597,10 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 }
 
 func (s *AgentSession) UpdateAgentState(state AgentState) {
+	s.updateAgentState(state, nil)
+}
+
+func (s *AgentSession) updateAgentState(state AgentState, spanCtx context.Context) {
 	var flushHeldSTTActivity *AgentActivity
 	var endedSpeakingSpan trace.Span
 	s.mu.Lock()
@@ -2616,7 +2622,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		s.ttsErrorCount = 0
 		s.startAECWarmupLocked()
 		if s.agentSpeakingSpan == nil {
-			_, s.agentSpeakingSpan = telemetry.StartSpan(s.runCtx, "agent_speaking")
+			if spanCtx == nil {
+				spanCtx = s.runCtx
+			}
+			_, s.agentSpeakingSpan = telemetry.StartSpan(spanCtx, "agent_speaking")
 		}
 	} else if s.agentSpeakingSpan != nil {
 		endedSpeakingSpan = s.agentSpeakingSpan
@@ -2696,8 +2705,11 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	}
 	s.userState = state
 	if state == UserStateSpeaking {
+		if s.userTurnSpan == nil {
+			s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(s.runCtx, "user_turn")
+		}
 		if s.userSpeakingSpan == nil {
-			_, s.userSpeakingSpan = telemetry.StartSpan(s.runCtx, "user_speaking")
+			_, s.userSpeakingSpan = telemetry.StartSpan(s.userTurnCtx, "user_speaking")
 		}
 	} else if s.userSpeakingSpan != nil {
 		endedSpeakingSpan = s.userSpeakingSpan
@@ -2733,6 +2745,35 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		}
 	}
 	sendToSubscribers(subscribers, ev, done)
+}
+
+func (s *AgentSession) ensureUserTurnSpan(ctx context.Context) trace.Span {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.userTurnSpan == nil {
+		if ctx == nil {
+			ctx = s.runCtx
+		}
+		s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(ctx, "user_turn")
+	}
+	return s.userTurnSpan
+}
+
+func (s *AgentSession) finishUserTurnSpan(span trace.Span) {
+	if span == nil {
+		return
+	}
+	s.mu.Lock()
+	shouldEnd := false
+	if s.userTurnSpan != nil && s.userTurnSpan.SpanContext().SpanID() == span.SpanContext().SpanID() {
+		s.userTurnCtx = nil
+		s.userTurnSpan = nil
+		shouldEnd = true
+	}
+	s.mu.Unlock()
+	if shouldEnd {
+		span.End()
+	}
 }
 
 func (s *AgentSession) updateUserAwayTimer() {
@@ -3332,6 +3373,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	telemetryCtx := s.runCtx
 	agentSpeakingSpan := s.agentSpeakingSpan
 	userSpeakingSpan := s.userSpeakingSpan
+	userTurnSpan := s.userTurnSpan
 	var avatar AvatarProvider
 	if s.Agent != nil && s.Agent.GetAgent() != nil {
 		avatar = s.Agent.GetAgent().Avatar
@@ -3370,7 +3412,6 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	sessionTools := copySessionTools(s.Tools)
 	preCloseCallbacks := s.preCloseCallbacksForCycleLocked()
 	s.mu.Unlock()
-
 	if ivrActivity != nil {
 		ivrActivity.Stop()
 	}
@@ -3435,6 +3476,13 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	if userSpeakingSpan != nil {
 		userSpeakingSpan.End()
 	}
+	if userTurnSpan != nil {
+		userTurnSpan.End()
+	}
+	s.mu.Lock()
+	s.userTurnCtx = nil
+	s.userTurnSpan = nil
+	s.mu.Unlock()
 	if sessionSpan != nil {
 		sessionSpan.End()
 	}

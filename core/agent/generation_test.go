@@ -210,7 +210,7 @@ func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
 	}
 }
 
-func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
+func TestPerformLLMInferenceRecordsOnlyLLMNodeSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -242,33 +242,36 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 	drainStrings(data.TextCh)
 
 	spans := recorder.Ended()
-	if len(spans) != 2 {
-		t.Fatalf("ended spans = %d, want llm_inference and llm_node", len(spans))
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %#v, want only llm_node", spans)
 	}
-	var inferenceSpan, nodeSpan sdktrace.ReadOnlySpan
+	var nodeSpan sdktrace.ReadOnlySpan
 	for _, span := range spans {
-		switch span.Name() {
-		case "llm_inference":
-			inferenceSpan = span
-		case "llm_node":
+		if span.Name() == "llm_inference" {
+			t.Fatalf("unexpected llm_inference span: %#v", span)
+		}
+		if span.Name() == "llm_node" {
 			nodeSpan = span
 		}
 	}
-	if inferenceSpan == nil || nodeSpan == nil {
-		t.Fatalf("spans = %#v, want llm_inference and llm_node", spans)
+	if nodeSpan == nil {
+		t.Fatalf("spans = %#v, want llm_node", spans)
 	}
-	if got, want := inferenceSpan.Parent().SpanID(), nodeSpan.SpanContext().SpanID(); got != want {
-		t.Fatalf("llm_inference parent = %s, want llm_node %s", got, want)
+	nodeAttrs := spanAttributeValues(nodeSpan.Attributes())
+	if got := nodeAttrs[telemetry.AttrGenAIRequestModel].AsString(); got != "test-model" {
+		t.Fatalf("llm_node model = %q, want test-model", got)
 	}
-	attrs := spanAttributes(inferenceSpan.Attributes())
-	if attrs[telemetry.AttrGenAIRequestModel] != "test-model" {
-		t.Fatalf("span model attr = %q, want test-model", attrs[telemetry.AttrGenAIRequestModel])
+	if got := nodeAttrs[telemetry.AttrGenAIProviderName].AsString(); got != "test-provider" {
+		t.Fatalf("llm_node provider = %q, want test-provider", got)
 	}
-	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
-		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
+	if got := nodeAttrs[telemetry.AttrResponseText].AsString(); got != "hello" {
+		t.Fatalf("llm_node response text = %q, want hello", got)
+	}
+	if got := nodeAttrs["lk.response.ttft"].AsFloat64(); got <= 0 {
+		t.Fatalf("llm_node response ttft = %v, want positive first-token latency", got)
 	}
 
-	events := inferenceSpan.Events()
+	events := nodeSpan.Events()
 	if len(events) != 5 {
 		t.Fatalf("span events = %d, want 5 chat context events: %#v", len(events), events)
 	}

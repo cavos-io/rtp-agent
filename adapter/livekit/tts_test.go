@@ -12,9 +12,112 @@ import (
 	"time"
 
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/go-jose/go-jose/v3/jwt"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func TestInferenceTTSStreamDoesNotRecordInternalSpan(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		cancel bool
+	}{
+		{name: "done"},
+		{name: "cancellation", cancel: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			oldTracer := telemetry.Tracer
+			telemetry.Tracer = tracerProvider.Tracer("test")
+			t.Cleanup(func() {
+				telemetry.Tracer = oldTracer
+				_ = tracerProvider.Shutdown(context.Background())
+			})
+
+			conn := &recordingTTSConn{}
+			if !tt.cancel {
+				conn.readCh = make(chan []byte, 1)
+				conn.readCh <- []byte(`{"type":"done"}`)
+				close(conn.readCh)
+			}
+			provider := NewTTS("cartesia/sonic-3", "key", "secret")
+			provider.dialWebsocket = func(context.Context, string, http.Header) (inferenceTTSConn, error) {
+				return conn, nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			stream, err := provider.Stream(ctx)
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			if tt.cancel {
+				cancel()
+			} else {
+				if err := stream.EndInput(); err != nil {
+					t.Fatalf("EndInput() error = %v", err)
+				}
+				_, _ = stream.Next()
+			}
+
+			deadline := time.Now().Add(time.Second)
+			for !conn.closed.Load() && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if !conn.closed.Load() {
+				t.Fatal("TTS connection did not close")
+			}
+			spans := recorder.Ended()
+			if len(spans) != 0 {
+				t.Fatalf("ended spans = %#v, want no internal TTS span", spans)
+			}
+		})
+	}
+}
+
+func TestInferenceTTSStreamEmitsReferenceMetricsOnce(t *testing.T) {
+	readCh := make(chan []byte, 2)
+	readCh <- []byte(`{"type":"output_audio","session_id":"req-1","audio":"AQIDBA=="}`)
+	readCh <- []byte(`{"type":"done","session_id":"req-1"}`)
+	close(readCh)
+
+	provider := NewTTS("cartesia/sonic-3", "key", "secret", WithTTSSampleRate(16000))
+	provider.dialWebsocket = func(context.Context, string, http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{readCh: readCh}, nil
+	}
+	metricsCh := make(chan *telemetry.TTSMetrics, 2)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) { metricsCh <- metrics })
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	_, _ = stream.Next()
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.CharactersCount != 5 || metrics.AudioDuration <= 0 || metrics.TTFB < 0 {
+			t.Fatalf("metrics = %#v, want text and audio timing", metrics)
+		}
+		if !metrics.Streamed || metrics.Metadata == nil || metrics.Metadata.ModelName != "cartesia/sonic-3" || metrics.Metadata.ModelProvider != "livekit" {
+			t.Fatalf("metrics = %#v, want streamed LiveKit model metadata", metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for TTS metrics")
+	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("duplicate metrics = %#v", metrics)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
 
 func TestNewTTSUsesConfiguredSentenceTokenizer(t *testing.T) {
 	tokenizer := &recordingSentenceTokenizer{}

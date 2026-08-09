@@ -17,6 +17,7 @@ import (
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type LLMGenerationData struct {
@@ -106,13 +107,15 @@ func performLLMInference(
 	toolCtx := llm.NewToolContext(toolItems)
 	chatOptions = append(chatOptions, llm.WithTools(toolCtx.Flatten()))
 	chatOptions = append(chatOptions, options...)
-	ctx, nodeSpan := telemetry.StartSpan(ctx, "llm_node")
-	ctx, span := telemetry.NewLLMSpan(ctx, llm.Model(l), llm.Provider(l))
-	span.SetAttributes(llmToolSpanAttributes(toolCtx)...)
-	telemetry.AddChatTraceEvents(span, llmChatTraceEvents(chatCtx))
+	nodeAttrs := []attribute.KeyValue{
+		attribute.String(telemetry.AttrGenAIRequestModel, llm.Model(l)),
+		attribute.String(telemetry.AttrGenAIProviderName, llm.Provider(l)),
+	}
+	nodeAttrs = append(nodeAttrs, llmToolSpanAttributes(toolCtx)...)
+	ctx, nodeSpan := telemetry.StartSpan(ctx, "llm_node", trace.WithAttributes(nodeAttrs...))
+	telemetry.AddChatTraceEvents(nodeSpan, llmChatTraceEvents(chatCtx))
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
-		span.End()
 		nodeSpan.End()
 		return nil, err
 	}
@@ -125,8 +128,17 @@ func performLLMInference(
 		defer close(data.FunctionCh)
 		defer close(data.Done)
 		defer stream.Close()
-		defer span.End()
-		defer nodeSpan.End()
+		defer func() {
+			attrs := make([]attribute.KeyValue, 0, 2)
+			if data.GeneratedText != "" {
+				attrs = append(attrs, attribute.String(telemetry.AttrResponseText, data.GeneratedText))
+			}
+			if data.TTFT > 0 {
+				attrs = append(attrs, attribute.Float64(telemetry.AttrResponseTTFT, data.TTFT.Seconds()))
+			}
+			nodeSpan.SetAttributes(attrs...)
+			nodeSpan.End()
+		}()
 
 		startTime := time.Now()
 		for {
@@ -237,30 +249,24 @@ func llmChatTraceEvents(chatCtx *llm.ChatContext) []telemetry.ChatTraceEvent {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
 			eventName := llmChatMessageTraceEventName(it.Role)
-			if eventName == "" {
-				continue
+			if eventName != "" {
+				events = append(events, telemetry.ChatTraceEvent{Name: eventName, Attributes: []attribute.KeyValue{attribute.String("content", it.TextContent())}})
 			}
-			events = append(events, telemetry.ChatTraceEvent{
-				Name:       eventName,
-				Attributes: []attribute.KeyValue{attribute.String("content", it.TextContent())},
-			})
 		case *llm.FunctionCall:
-			toolCall := map[string]any{
+			toolCall, err := json.Marshal(map[string]any{
 				"function": map[string]any{"name": it.Name, "arguments": it.Arguments},
 				"id":       it.CallID,
 				"type":     "function",
-			}
-			encoded, err := json.Marshal(toolCall)
-			if err != nil {
-				continue
-			}
-			events = append(events, telemetry.ChatTraceEvent{
-				Name: telemetry.EventGenAIAssistantMessage,
-				Attributes: []attribute.KeyValue{
-					attribute.String("role", "assistant"),
-					attribute.StringSlice("tool_calls", []string{string(encoded)}),
-				},
 			})
+			if err == nil {
+				events = append(events, telemetry.ChatTraceEvent{
+					Name: telemetry.EventGenAIAssistantMessage,
+					Attributes: []attribute.KeyValue{
+						attribute.String("role", "assistant"),
+						attribute.StringSlice("tool_calls", []string{string(toolCall)}),
+					},
+				})
+			}
 		case *llm.FunctionCallOutput:
 			events = append(events, telemetry.ChatTraceEvent{
 				Name: telemetry.EventGenAIToolMessage,
