@@ -207,7 +207,12 @@ type jobLogMetadataProcessor struct {
 func (jobLogMetadataProcessor) Enabled(context.Context, sdklog.EnabledParameters) bool { return true }
 
 func (p jobLogMetadataProcessor) OnEmit(_ context.Context, record *sdklog.Record) error {
-	record.AddAttributes(p.attrs...)
+	for _, attr := range p.attrs {
+		if record.InstrumentationScope().Name == "chat_history" && attr.Key == AttrAgentName {
+			continue
+		}
+		record.AddAttributes(attr)
+	}
 	record.AddAttributes(otellog.String("logger.name", record.InstrumentationScope().Name))
 	return nil
 }

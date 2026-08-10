@@ -29,11 +29,7 @@ func EmitSessionReportTelemetry(
 	attrs := map[string]interface{}{
 		"room_id":     report.RoomID,
 		"job_id":      report.JobID,
-		"room":        report.Room,
 		"logger.name": "chat_history",
-	}
-	if agentName != "" {
-		attrs["lk.agent_name"] = agentName
 	}
 	emitUploadTelemetryEventsWithRecorder(ctx, agentName, report, loggerUploadTelemetryRecorder{
 		logger:     observability.ChatLogger(),
@@ -82,9 +78,6 @@ func uploadSessionReportTelemetry(
 		"job_id":      report.JobID,
 		"logger.name": "chat_history",
 	}
-	if agentName != "" {
-		recordAttrs["lk.agent_name"] = agentName
-	}
 	emitUploadTelemetryEventsWithRecorder(ctx, agentName, report, loggerUploadTelemetryRecorder{
 		logger:     eventLogger,
 		attributes: recordAttrs,
@@ -127,10 +120,14 @@ type loggerUploadTelemetryRecorder struct {
 }
 
 func (r loggerUploadTelemetryRecorder) recordAt(ctx context.Context, eventType string, body string, attrs map[string]interface{}, timestamp time.Time) {
-	telemetry.RecordChatEventWithLogger(ctx, r.logger, eventType, body, r.withMetadata(attrs), telemetry.ChatEventOptions{Timestamp: timestamp})
+	telemetry.RecordChatEventWithLogger(ctx, r.logger, eventType, body, r.withMetadata(attrs), telemetry.ChatEventOptions{
+		Timestamp:     timestamp,
+		OmitEventType: true,
+	})
 }
 
 func (r loggerUploadTelemetryRecorder) recordWithOptions(ctx context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
+	options.OmitEventType = true
 	telemetry.RecordChatEventWithLogger(ctx, r.logger, eventType, body, r.withMetadata(attrs), options)
 }
 

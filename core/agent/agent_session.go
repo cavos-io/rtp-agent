@@ -2541,6 +2541,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.mu.Unlock()
 	sessionStarted = true
 
+	s.EmitConversationItemAdded(newAgentHandoff(nil, agent.GetAgent()))
 	activity.Start()
 	if s.Options.IVRDetection {
 		ivrActivity := NewIVRActivity(s)

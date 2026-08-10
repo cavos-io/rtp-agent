@@ -37,6 +37,24 @@ func TestRecordChatEventDefaultsSeverityText(t *testing.T) {
 	if record.Body().AsString() != "session report" {
 		t.Fatalf("Body = %q, want session report", record.Body().AsString())
 	}
+	if got := recordAttributes(record)["event.type"].AsString(); got != "session_report" {
+		t.Fatalf("event.type = %q, want session_report", got)
+	}
+}
+
+func TestRecordChatEventCanOmitEventType(t *testing.T) {
+	logger := &recordingChatLogger{}
+
+	RecordChatEventWithLogger(context.Background(), logger, "chat_item", "chat item", nil, ChatEventOptions{
+		OmitEventType: true,
+	})
+
+	if len(logger.records) != 1 {
+		t.Fatalf("records = %d, want 1", len(logger.records))
+	}
+	if _, ok := recordAttributes(logger.records[0])["event.type"]; ok {
+		t.Fatalf("record attributes = %#v, want event.type omitted", recordAttributes(logger.records[0]))
+	}
 }
 
 func TestRecordChatEventPreservesReferenceAttributeTypes(t *testing.T) {

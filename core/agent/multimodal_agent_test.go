@@ -1085,6 +1085,7 @@ func TestMultimodalAgentRealtimeSayErrorSkipsAssistantChatCommit(t *testing.T) {
 	if err := session.Start(ctx); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
+	assertInitialAgentHandoffEvent(t, conversationEvents, "default_agent")
 	handle, err := session.Say(ctx, "failed realtime say")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
@@ -1146,6 +1147,7 @@ func TestMultimodalAgentRealtimeSayCancelSuppressesError(t *testing.T) {
 	if err := session.Start(ctx); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
+	assertInitialAgentHandoffEvent(t, conversationEvents, "default_agent")
 	handle, err := session.Say(ctx, "canceled realtime say")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)

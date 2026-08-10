@@ -35,6 +35,7 @@ import (
 type uploadedSessionTelemetry struct {
 	authorization string
 	attributes    map[string]string
+	bodies        []string
 	eventTypes    []string
 	scopeAttrs    map[string]string
 	recordAttrs   []map[string]string
@@ -72,6 +73,7 @@ func decodeUploadedSessionTelemetry(req *http.Request) (uploadedSessionTelemetry
 				upload.scopeAttrs[attr.Key] = attr.Value.GetStringValue()
 			}
 			for _, record := range scopeLogs.LogRecords {
+				upload.bodies = append(upload.bodies, record.GetBody().GetStringValue())
 				recordAttrs := make(map[string]string)
 				for _, attr := range record.Attributes {
 					recordAttrs[attr.Key] = attr.Value.GetStringValue()
@@ -235,15 +237,26 @@ func TestUploadSessionReportExportsConcurrentJobLocalTelemetry(t *testing.T) {
 		if upload.attributes["service.name"] != "livekit-agents" {
 			t.Fatalf("%s service.name = %q, want livekit-agents", tc.jobID, upload.attributes["service.name"])
 		}
-		if countValue(upload.eventTypes, "session_report") != 1 || countValue(upload.eventTypes, "chat_item") != 1 {
-			t.Fatalf("%s event types = %#v, want one session_report and one chat_item", tc.jobID, upload.eventTypes)
+		if countValue(upload.bodies, "session report") != 1 || countValue(upload.bodies, "chat item") != 1 {
+			t.Fatalf("%s record bodies = %#v, want one session report and one chat item", tc.jobID, upload.bodies)
+		}
+		if len(upload.eventTypes) != 0 {
+			t.Fatalf("%s event types = %#v, want none on session report logs", tc.jobID, upload.eventTypes)
 		}
 		if upload.scopeAttrs["room_id"] != tc.roomID || upload.scopeAttrs["job_id"] != tc.jobID || upload.scopeAttrs["room"] != tc.room {
 			t.Fatalf("%s instrumentation scope attributes = %#v", tc.jobID, upload.scopeAttrs)
 		}
-		for _, attrs := range upload.recordAttrs {
-			if attrs["room_id"] != tc.roomID || attrs["job_id"] != tc.jobID || attrs["lk.agent_name"] != tc.agentName || attrs["logger.name"] != "chat_history" {
+		for i, attrs := range upload.recordAttrs {
+			if attrs["room_id"] != tc.roomID || attrs["job_id"] != tc.jobID || attrs["logger.name"] != "chat_history" {
 				t.Fatalf("%s log record attributes = %#v", tc.jobID, attrs)
+			}
+			for _, key := range []string{"event.type", "lk.agent_name", "room"} {
+				if _, ok := attrs[key]; ok {
+					t.Fatalf("%s log record attributes = %#v, want %s omitted", tc.jobID, attrs, key)
+				}
+			}
+			if upload.bodies[i] == "session report" && attrs["agent_name"] != tc.agentName {
+				t.Fatalf("%s session report attributes = %#v, want agent_name", tc.jobID, attrs)
 			}
 		}
 	}
@@ -295,11 +308,24 @@ func TestEmitSessionReportTelemetryUsesExistingJobLogger(t *testing.T) {
 
 	select {
 	case upload := <-uploads:
-		if countValue(upload.eventTypes, "session_report") != 1 || countValue(upload.eventTypes, "chat_item") != 1 {
-			t.Fatalf("event types = %#v", upload.eventTypes)
+		if countValue(upload.bodies, "session report") != 1 || countValue(upload.bodies, "chat item") != 1 {
+			t.Fatalf("record bodies = %#v", upload.bodies)
 		}
-		if upload.attributes["job_id"] != "AJ_existing" || upload.attributes["room_id"] != "RM_existing" {
+		if len(upload.eventTypes) != 0 {
+			t.Fatalf("event types = %#v, want none on session report logs", upload.eventTypes)
+		}
+		if upload.attributes["job_id"] != "AJ_existing" || upload.attributes["room_id"] != "RM_existing" || upload.attributes["lk.agent_name"] != "agent-a" {
 			t.Fatalf("resource attributes = %#v", upload.attributes)
+		}
+		for i, attrs := range upload.recordAttrs {
+			for _, key := range []string{"event.type", "lk.agent_name", "room"} {
+				if _, ok := attrs[key]; ok {
+					t.Fatalf("log record attributes = %#v, want %s omitted", attrs, key)
+				}
+			}
+			if upload.bodies[i] == "session report" && attrs["agent_name"] != "agent-a" {
+				t.Fatalf("session report attributes = %#v, want agent_name", attrs)
+			}
 		}
 	case <-time.After(time.Second):
 		t.Fatal("job-local logger did not export final report")
@@ -822,12 +848,28 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 
 	chatCtx := llm.NewChatContext()
 	createdAt := time.Unix(1800, 125000000)
-	chatCtx.AddMessage(llm.ChatMessageArgs{
+	messageItem := chatCtx.AddMessage(llm.ChatMessageArgs{
 		Role:      llm.ChatRoleUser,
 		Text:      "hello there",
 		CreatedAt: createdAt,
 	})
-	outputCreatedAt := createdAt.Add(time.Millisecond)
+	confidence := 0.9
+	messageItem.TranscriptConfidence = &confidence
+	messageItem.Extra = map[string]any{"turn": 1}
+	messageItem.Metrics = map[string]any{
+		"started_speaking_at": 1800.0,
+		"transcription_delay": 0.25,
+		"end_of_turn_delay":   0.5,
+	}
+	callCreatedAt := createdAt.Add(time.Millisecond)
+	chatCtx.Items = append(chatCtx.Items, &llm.FunctionCall{
+		ID:        "call_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		CreatedAt: callCreatedAt,
+	})
+	outputCreatedAt := createdAt.Add(2 * time.Millisecond)
 	chatCtx.Items = append(chatCtx.Items, &llm.FunctionCallOutput{
 		ID:        "out_1",
 		CallID:    "call_lookup",
@@ -835,6 +877,20 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 		Output:    "tool failed",
 		IsError:   true,
 		CreatedAt: outputCreatedAt,
+	})
+	handoffCreatedAt := createdAt.Add(3 * time.Millisecond)
+	chatCtx.Items = append(chatCtx.Items, &llm.AgentHandoff{
+		ID:         "handoff_1",
+		NewAgentID: "assistant",
+		CreatedAt:  handoffCreatedAt,
+	})
+	configCreatedAt := createdAt.Add(4 * time.Millisecond)
+	instructions := "be helpful"
+	chatCtx.Items = append(chatCtx.Items, &llm.AgentConfigUpdate{
+		ID:           "config_1",
+		Instructions: &instructions,
+		ToolsAdded:   []string{"lookup"},
+		CreatedAt:    configCreatedAt,
 	})
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -844,7 +900,7 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
 	}
-	if len(events) != 3 {
+	if len(events) != 6 {
 		t.Fatalf("telemetry events = %#v, want session report and chat item events", events)
 	}
 	if events[1].eventType != "chat_item" || events[1].body != "chat item" {
@@ -857,21 +913,55 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	if !ok {
 		t.Fatalf("chat.item = %T, want map", events[1].attrs["chat.item"])
 	}
-	if item["type"] != "message" || item["role"] != "user" {
-		t.Fatalf("chat.item = %#v, want user message", item)
+	message, ok := item["message"].(map[string]any)
+	if !ok || message["role"] != "USER" {
+		t.Fatalf("chat.item = %#v, want wrapped user message", item)
 	}
-	content, ok := item["content"].([]any)
-	if !ok || len(content) != 1 || content[0] != "hello there" {
-		t.Fatalf("chat.item content = %#v, want hello there", item["content"])
+	content, ok := message["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("chat.item content = %#v, want protobuf text content", message["content"])
 	}
-	if events[2].eventType != "chat_item" || events[2].body != "chat item" {
-		t.Fatalf("third telemetry event = %#v, want errored function output chat item event", events[2])
+	text, textOK := content[0].(map[string]any)
+	if !textOK || text["text"] != "hello there" {
+		t.Fatalf("chat.item content = %#v, want protobuf text content", message["content"])
 	}
-	if !events[2].timestamp.Equal(outputCreatedAt) {
-		t.Fatalf("function output event timestamp = %v, want item created_at %v", events[2].timestamp, outputCreatedAt)
+	if message["created_at"] != "1970-01-01T00:30:00.125Z" {
+		t.Fatalf("message created_at = %#v, want protobuf timestamp", message["created_at"])
 	}
-	if events[2].severity != "error" {
-		t.Fatalf("function output event severity = %q, want error", events[2].severity)
+	if message["transcript_confidence"] != confidence || !reflect.DeepEqual(message["extra"], map[string]any{"turn": "1"}) {
+		t.Fatalf("message metadata = %#v, want confidence and stringified extra", message)
+	}
+	metrics := message["metrics"].(map[string]any)
+	if metrics["started_speaking_at"] != "1970-01-01T00:30:00Z" || metrics["transcription_delay"] != 0.25 || metrics["end_of_turn_delay"] != 0.5 {
+		t.Fatalf("message metrics = %#v, want reference metrics", metrics)
+	}
+	call := events[2].attrs["chat.item"].(map[string]any)["function_call"].(map[string]any)
+	if call["call_id"] != "call_lookup" || call["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function_call = %#v, want reference fields", call)
+	}
+	if events[3].eventType != "chat_item" || events[3].body != "chat item" {
+		t.Fatalf("fourth telemetry event = %#v, want errored function output chat item event", events[3])
+	}
+	if !events[3].timestamp.Equal(outputCreatedAt) {
+		t.Fatalf("function output event timestamp = %v, want item created_at %v", events[3].timestamp, outputCreatedAt)
+	}
+	if events[3].severity != "error" {
+		t.Fatalf("function output event severity = %q, want error", events[3].severity)
+	}
+	output := events[3].attrs["chat.item"].(map[string]any)["function_call_output"].(map[string]any)
+	if output["is_error"] != true || output["output"] != "tool failed" {
+		t.Fatalf("function_call_output = %#v, want errored output", output)
+	}
+	handoff := events[4].attrs["chat.item"].(map[string]any)["agent_handoff"].(map[string]any)
+	if handoff["new_agent_id"] != "assistant" {
+		t.Fatalf("agent_handoff = %#v, want initial assistant handoff", handoff)
+	}
+	if _, ok := handoff["old_agent_id"]; ok {
+		t.Fatalf("agent_handoff = %#v, want omitted old_agent_id", handoff)
+	}
+	config := events[5].attrs["chat.item"].(map[string]any)["agent_config_update"].(map[string]any)
+	if config["instructions"] != instructions || !reflect.DeepEqual(config["tools_added"], []any{"lookup"}) {
+		t.Fatalf("agent_config_update = %#v, want instructions and tools", config)
 	}
 }
 

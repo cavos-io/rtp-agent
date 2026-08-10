@@ -18,9 +18,10 @@ var loggerProvider *sdklog.LoggerProvider
 var ChatLogger log.Logger
 
 type ChatEventOptions struct {
-	Timestamp    time.Time
-	Severity     log.Severity
-	SeverityText string
+	Timestamp     time.Time
+	Severity      log.Severity
+	SeverityText  string
+	OmitEventType bool
 }
 
 func ErrorChatEventOptions(timestamp time.Time) ChatEventOptions {
@@ -115,7 +116,9 @@ func RecordChatEventWithLogger(ctx context.Context, eventLogger log.Logger, even
 		record.SetSeverityText(options.SeverityText)
 	}
 	record.SetBody(log.StringValue(body))
-	record.AddAttributes(log.String("event.type", eventType))
+	if !options.OmitEventType {
+		record.AddAttributes(log.String("event.type", eventType))
+	}
 	record.AddAttributes(otelAttrs...)
 
 	eventLogger.Emit(ctx, record)

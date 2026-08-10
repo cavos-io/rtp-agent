@@ -1433,6 +1433,20 @@ func assertConversationItemAddedEvent(t *testing.T, events <-chan ConversationIt
 	}
 }
 
+func assertInitialAgentHandoffEvent(t *testing.T, events <-chan ConversationItemAddedEvent, newAgentID string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		handoff, ok := ev.Item.(*llm.AgentHandoff)
+		if !ok || handoff.OldAgentID != nil || handoff.NewAgentID != newAgentID {
+			t.Fatalf("initial conversation item = %#v, want handoff to %q", ev.Item, newAgentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("conversation events did not receive initial handoff to %q", newAgentID)
+	}
+}
+
 func assertFunctionToolsExecutedEvent(t *testing.T, events <-chan FunctionToolsExecutedEvent, call *llm.FunctionCall, output *llm.FunctionCallOutput, name string) {
 	t.Helper()
 
@@ -1611,6 +1625,34 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	if got := pipeline.ttsStreamPacer.MaxTextLength; got != 42 {
 		t.Fatalf("MaxTextLength = %d, want 42", got)
 	}
+}
+
+func TestAgentSessionStartRecordsInitialAgentHandoffBeforeConfiguration(t *testing.T) {
+	agent := NewAgent("be helpful")
+	agent.ID = "assistant"
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+	conversationEvents := session.ConversationItemAddedEvents()
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	if len(session.ChatCtx.Items) < 2 {
+		t.Fatalf("chat items = %#v, want initial handoff then configuration", session.ChatCtx.Items)
+	}
+	handoff, ok := session.ChatCtx.Items[0].(*llm.AgentHandoff)
+	if !ok {
+		t.Fatalf("first chat item = %T, want *llm.AgentHandoff", session.ChatCtx.Items[0])
+	}
+	if handoff.OldAgentID != nil || handoff.NewAgentID != "assistant" {
+		t.Fatalf("initial handoff = %#v, want nil old agent and assistant new agent", handoff)
+	}
+	if _, ok := session.ChatCtx.Items[1].(*llm.AgentConfigUpdate); !ok {
+		t.Fatalf("second chat item = %T, want *llm.AgentConfigUpdate", session.ChatCtx.Items[1])
+	}
+	assertInitialAgentHandoffEvent(t, conversationEvents, "assistant")
 }
 
 func TestAgentSessionStartCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {

@@ -152,11 +152,17 @@ func TestJobObservabilityExportsAllSignalsWithoutCrossJobMetadata(t *testing.T) 
 	if got := collector.Metadata(); !equalJobSignalMetadata(got, want) {
 		t.Fatalf("unexpected exported metadata\ngot:  %#v\nwant: %#v", got, want)
 	}
-	for _, path := range []string{jobTraceOTLPPath, jobLogOTLPPath} {
-		for _, attrs := range collector.ItemAttributes(path) {
-			if attrs["job_id"] == "" || attrs["room_id"] == "" || attrs[AttrAgentName] == "" {
-				t.Errorf("%s item metadata = %#v", path, attrs)
-			}
+	for _, attrs := range collector.ItemAttributes(jobTraceOTLPPath) {
+		if attrs["job_id"] == "" || attrs["room_id"] == "" || attrs[AttrAgentName] == "" {
+			t.Errorf("%s item metadata = %#v", jobTraceOTLPPath, attrs)
+		}
+	}
+	for _, attrs := range collector.ItemAttributes(jobLogOTLPPath) {
+		if attrs["job_id"] == "" || attrs["room_id"] == "" {
+			t.Errorf("%s item metadata = %#v", jobLogOTLPPath, attrs)
+		}
+		if _, ok := attrs[AttrAgentName]; ok {
+			t.Errorf("%s item metadata = %#v, want %s omitted", jobLogOTLPPath, attrs, AttrAgentName)
 		}
 	}
 	for _, attrs := range collector.ItemAttributes(jobTraceOTLPPath) {

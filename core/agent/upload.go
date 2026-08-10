@@ -23,8 +23,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	livekitagent "github.com/livekit/protocol/livekit/agent"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -268,17 +270,20 @@ func emitUploadTelemetryEventsWithRecorder(ctx context.Context, agentName string
 		recorder.recordAt(ctx, "session_report", "session report", attrs, sessionReportTelemetryTimestamp(report))
 	}
 	if report.RecordingOptions.Transcript && report.ChatHistory != nil {
-		history := report.ChatHistory.ToDict(llm.ChatContextDictOptions{
-			IncludeTimestamp: true,
-		})
-
-		items, _ := history["items"].([]map[string]any)
-		for _, item := range items {
-			createdAt := unixSecondsToTime(item["created_at"].(float64))
-			attrs := map[string]interface{}{
-				"chat.item": item,
+		for _, item := range report.ChatHistory.Items {
+			itemLog, err := chatItemTelemetryDict(item)
+			if err != nil {
+				logger.Logger.Warnw("failed to encode chat item telemetry", err, "itemType", item.GetType())
+				continue
 			}
-			if item["type"] == "function_call_output" && item["is_error"] == true {
+			if itemLog == nil {
+				continue
+			}
+			createdAt := item.GetCreatedAt()
+			attrs := map[string]interface{}{
+				"chat.item": itemLog,
+			}
+			if output, ok := item.(*llm.FunctionCallOutput); ok && output.IsError {
 				recorder.recordWithOptions(ctx, "chat_item", "chat item", attrs, telemetry.ErrorChatEventOptions(createdAt))
 			} else {
 				recorder.recordAt(ctx, "chat_item", "chat item", attrs, createdAt)
@@ -321,6 +326,158 @@ func emitUploadTelemetryEventsWithRecorder(ctx context.Context, agentName string
 		} else {
 			recorder.recordAt(ctx, "outcome", "outcome", attrs, reportTimestamp)
 		}
+	}
+}
+
+func chatItemTelemetryDict(item llm.ChatItem) (map[string]any, error) {
+	var protoItem *livekitagent.ChatContext_ChatItem
+	switch item := item.(type) {
+	case *llm.ChatMessage:
+		content := make([]*livekitagent.ChatMessage_ChatContent, 0, len(item.Content))
+		for _, part := range item.Content {
+			text := part.Text
+			if text == "" && part.Instructions != nil {
+				text = part.Instructions.String()
+			} else if text == "" && (part.Image != nil || part.Audio != nil) {
+				continue
+			}
+			content = append(content, &livekitagent.ChatMessage_ChatContent{
+				Payload: &livekitagent.ChatMessage_ChatContent_Text{Text: text},
+			})
+		}
+		extra := make(map[string]string, len(item.Extra))
+		for key, value := range item.Extra {
+			extra[key] = fmt.Sprint(value)
+		}
+		message := &livekitagent.ChatMessage{
+			Id:                   item.ID,
+			Role:                 telemetryChatRole(item.Role),
+			Content:              content,
+			Interrupted:          item.Interrupted,
+			TranscriptConfidence: item.TranscriptConfidence,
+			Extra:                extra,
+			Metrics:              telemetryMetricsReport(item.Metrics),
+			CreatedAt:            telemetryTimestamp(item.CreatedAt),
+		}
+		protoItem = &livekitagent.ChatContext_ChatItem{Item: &livekitagent.ChatContext_ChatItem_Message{Message: message}}
+	case *llm.FunctionCall:
+		call := &livekitagent.FunctionCall{
+			Id:        item.ID,
+			CallId:    item.CallID,
+			Arguments: item.Arguments,
+			Name:      item.Name,
+			CreatedAt: telemetryTimestamp(item.CreatedAt),
+		}
+		protoItem = &livekitagent.ChatContext_ChatItem{Item: &livekitagent.ChatContext_ChatItem_FunctionCall{FunctionCall: call}}
+	case *llm.FunctionCallOutput:
+		output := &livekitagent.FunctionCallOutput{
+			Id:        item.ID,
+			Name:      item.Name,
+			CallId:    item.CallID,
+			Output:    item.Output,
+			IsError:   item.IsError,
+			CreatedAt: telemetryTimestamp(item.CreatedAt),
+		}
+		protoItem = &livekitagent.ChatContext_ChatItem{Item: &livekitagent.ChatContext_ChatItem_FunctionCallOutput{FunctionCallOutput: output}}
+	case *llm.AgentHandoff:
+		handoff := &livekitagent.AgentHandoff{
+			Id:         item.ID,
+			OldAgentId: item.OldAgentID,
+			NewAgentId: item.NewAgentID,
+			CreatedAt:  telemetryTimestamp(item.CreatedAt),
+		}
+		protoItem = &livekitagent.ChatContext_ChatItem{Item: &livekitagent.ChatContext_ChatItem_AgentHandoff{AgentHandoff: handoff}}
+	case *llm.AgentConfigUpdate:
+		instructions := item.Instructions
+		if item.InstructionVariants != nil {
+			text := item.InstructionVariants.String()
+			instructions = &text
+		}
+		update := &livekitagent.AgentConfigUpdate{
+			Id:           item.ID,
+			Instructions: instructions,
+			ToolsAdded:   item.ToolsAdded,
+			ToolsRemoved: item.ToolsRemoved,
+			CreatedAt:    telemetryTimestamp(item.CreatedAt),
+		}
+		protoItem = &livekitagent.ChatContext_ChatItem{Item: &livekitagent.ChatContext_ChatItem_AgentConfigUpdate{AgentConfigUpdate: update}}
+	default:
+		return nil, nil
+	}
+
+	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(protoItem)
+	if err != nil {
+		return nil, err
+	}
+	var itemLog map[string]any
+	if err := json.Unmarshal(data, &itemLog); err != nil {
+		return nil, err
+	}
+	return itemLog, nil
+}
+
+func telemetryChatRole(role llm.ChatRole) livekitagent.ChatRole {
+	switch role {
+	case llm.ChatRoleSystem:
+		return livekitagent.ChatRole_SYSTEM
+	case llm.ChatRoleUser:
+		return livekitagent.ChatRole_USER
+	case llm.ChatRoleAssistant:
+		return livekitagent.ChatRole_ASSISTANT
+	default:
+		return livekitagent.ChatRole_DEVELOPER
+	}
+}
+
+func telemetryTimestamp(value time.Time) *timestamppb.Timestamp {
+	return timestamppb.New(time.UnixMilli(value.UnixMilli()))
+}
+
+func telemetryMetricsReport(metrics map[string]any) *livekitagent.MetricsReport {
+	report := &livekitagent.MetricsReport{}
+	if value, ok := telemetryFloat(metrics["started_speaking_at"]); ok {
+		report.StartedSpeakingAt = timestamppb.New(time.UnixMilli(int64(value * 1000)))
+	}
+	if value, ok := telemetryFloat(metrics["stopped_speaking_at"]); ok {
+		report.StoppedSpeakingAt = timestamppb.New(time.UnixMilli(int64(value * 1000)))
+	}
+	report.TranscriptionDelay = telemetryFloatPtr(metrics["transcription_delay"])
+	report.EndOfTurnDelay = telemetryFloatPtr(metrics["end_of_turn_delay"])
+	report.OnUserTurnCompletedDelay = telemetryFloatPtr(metrics["on_user_turn_completed_delay"])
+	report.LlmNodeTtft = telemetryFloatPtr(metrics["llm_node_ttft"])
+	report.TtsNodeTtfb = telemetryFloatPtr(metrics["tts_node_ttfb"])
+	report.E2ELatency = telemetryFloatPtr(metrics["e2e_latency"])
+	if report.StartedSpeakingAt == nil && report.StoppedSpeakingAt == nil &&
+		report.TranscriptionDelay == nil && report.EndOfTurnDelay == nil &&
+		report.OnUserTurnCompletedDelay == nil && report.LlmNodeTtft == nil &&
+		report.TtsNodeTtfb == nil && report.E2ELatency == nil {
+		return nil
+	}
+	return report
+}
+
+func telemetryFloatPtr(value any) *float64 {
+	parsed, ok := telemetryFloat(value)
+	if !ok {
+		return nil
+	}
+	return &parsed
+}
+
+func telemetryFloat(value any) (float64, bool) {
+	switch value := value.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case time.Duration:
+		return value.Seconds(), true
+	default:
+		return 0, false
 	}
 }
 
