@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	collectlogsv1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectmetricsv1 "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collecttracev1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -21,6 +24,64 @@ import (
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestJobObservabilityUsesCustomTraceProviderExclusively(t *testing.T) {
+	collector := newJobOTLPCollector(t)
+	defer collector.Close()
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	observability, err := NewJobObservability(context.Background(), JobObservabilityConfig{
+		EndpointURL:    collector.URL(),
+		Headers:        map[string]string{"Authorization": "Bearer test-token"},
+		HTTPClient:     collector.Client(),
+		JobID:          "job-custom",
+		RoomID:         "room-custom",
+		RoomName:       "room-name-custom",
+		AgentName:      "agent-custom",
+		TracerProvider: provider,
+		TraceMetadata: []attribute.KeyValue{
+			attribute.String("langfuse.session.id", "session-custom"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := observability.Context(context.Background())
+	_, span := StartSpan(ctx, "custom_span")
+	span.End()
+	if err := observability.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := collector.ItemCount(jobTraceOTLPPath); got != 0 {
+		t.Fatalf("LiveKit trace item count = %d, want 0", got)
+	}
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("custom provider span count = %d, want 1", len(spans))
+	}
+	attrs := testSpanAttributes(spans[0])
+	for key, want := range map[string]string{
+		"job_id":              "job-custom",
+		"room_id":             "room-custom",
+		AttrAgentName:         "agent-custom",
+		"langfuse.session.id": "session-custom",
+	} {
+		if got := attrs[key]; got != want {
+			t.Errorf("span attribute %q = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func testSpanAttributes(span sdktrace.ReadOnlySpan) map[string]string {
+	attrs := make(map[string]string, len(span.Attributes()))
+	for _, attr := range span.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	return attrs
+}
 
 func TestJobObservabilityExportsAllSignalsWithoutCrossJobMetadata(t *testing.T) {
 	collector := newJobOTLPCollector(t)

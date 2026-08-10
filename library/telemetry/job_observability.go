@@ -14,7 +14,9 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	otellog "go.opentelemetry.io/otel/log"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -40,6 +42,10 @@ type JobObservabilityConfig struct {
 	RoomID      string
 	RoomName    string
 	AgentName   string
+	// TracerProvider replaces the LiveKit Cloud trace exporter when set. The
+	// JobObservability takes ownership of the provider after successful creation.
+	TracerProvider *sdktrace.TracerProvider
+	TraceMetadata  []attribute.KeyValue
 }
 
 type JobObservability struct {
@@ -60,7 +66,7 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 		ctx = context.Background()
 	}
 	endpoint := strings.TrimRight(config.EndpointURL, "/")
-	if endpoint == "" {
+	if endpoint == "" && config.TracerProvider == nil {
 		return nil, errors.New("job observability endpoint URL is required")
 	}
 
@@ -105,45 +111,76 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 		metricOptions = append(metricOptions, otlpmetrichttp.WithHTTPClient(config.HTTPClient))
 	}
 
-	traceExporter, err := otlptracehttp.New(ctx, traceOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("initialize job trace exporter: %w", err)
+	var traceExporter sdktrace.SpanExporter
+	if config.TracerProvider == nil {
+		exporter, err := otlptracehttp.New(ctx, traceOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("initialize job trace exporter: %w", err)
+		}
+		traceExporter = exporter
 	}
-	logExporter, err := otlploghttp.New(ctx, logOptions...)
-	if err != nil {
-		_ = traceExporter.Shutdown(ctx)
-		return nil, fmt.Errorf("initialize job log exporter: %w", err)
-	}
-	metricExporter, err := otlpmetrichttp.New(ctx, metricOptions...)
-	if err != nil {
-		_ = traceExporter.Shutdown(ctx)
-		_ = logExporter.Shutdown(ctx)
-		return nil, fmt.Errorf("initialize job metric exporter: %w", err)
+	var logExporter sdklog.Exporter
+	var metricExporter sdkmetric.Exporter
+	if endpoint != "" {
+		exporter, err := otlploghttp.New(ctx, logOptions...)
+		if err != nil {
+			if traceExporter != nil {
+				_ = traceExporter.Shutdown(ctx)
+			}
+			return nil, fmt.Errorf("initialize job log exporter: %w", err)
+		}
+		logExporter = exporter
+
+		metricExporter, err = otlpmetrichttp.New(ctx, metricOptions...)
+		if err != nil {
+			if traceExporter != nil {
+				_ = traceExporter.Shutdown(ctx)
+			}
+			_ = logExporter.Shutdown(ctx)
+			return nil, fmt.Errorf("initialize job metric exporter: %w", err)
+		}
 	}
 
-	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		sdktrace.WithSpanProcessor(jobSpanMetadataProcessor{attrs: metadata}),
-		sdktrace.WithBatcher(traceExporter),
-	)
-	loggerProvider := sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
-		sdklog.WithProcessor(jobLogMetadataProcessor{attrs: logAttributes(metadata)}),
-		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
-	)
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(jobMetricExportInterval))),
-	)
+	traceMetadata := append(append([]attribute.KeyValue(nil), metadata...), config.TraceMetadata...)
+	tracerProvider := config.TracerProvider
+	if tracerProvider == nil {
+		tracerProvider = sdktrace.NewTracerProvider(
+			sdktrace.WithResource(res),
+			sdktrace.WithSpanProcessor(jobSpanMetadataProcessor{attrs: traceMetadata}),
+			sdktrace.WithBatcher(traceExporter),
+		)
+	} else {
+		tracerProvider.RegisterSpanProcessor(jobSpanMetadataProcessor{attrs: traceMetadata})
+	}
+	noopLoggerProvider := lognoop.NewLoggerProvider()
+	chatLogger := noopLoggerProvider.Logger("chat_history")
+	evalLogger := noopLoggerProvider.Logger("evaluations")
+	meter := metricnoop.NewMeterProvider().Meter(jobObservabilityScope)
+	var loggerProvider *sdklog.LoggerProvider
+	var meterProvider *sdkmetric.MeterProvider
+	if endpoint != "" {
+		loggerProvider = sdklog.NewLoggerProvider(
+			sdklog.WithResource(res),
+			sdklog.WithProcessor(jobLogMetadataProcessor{attrs: logAttributes(metadata)}),
+			sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		)
+		meterProvider = sdkmetric.NewMeterProvider(
+			sdkmetric.WithResource(res),
+			sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(jobMetricExportInterval))),
+		)
+		chatLogger = loggerProvider.Logger("chat_history")
+		evalLogger = loggerProvider.Logger("evaluations")
+		meter = meterProvider.Meter(jobObservabilityScope)
+	}
 
 	return &JobObservability{
 		tracerProvider: tracerProvider,
 		loggerProvider: loggerProvider,
 		meterProvider:  meterProvider,
 		tracer:         tracerProvider.Tracer(jobObservabilityScope),
-		chatLogger:     loggerProvider.Logger("chat_history"),
-		evalLogger:     loggerProvider.Logger("evaluations"),
-		meter:          meterProvider.Meter(jobObservabilityScope),
+		chatLogger:     chatLogger,
+		evalLogger:     evalLogger,
+		meter:          meter,
 		sessionAttrs: []attribute.KeyValue{
 			attribute.String(AttrJobID, config.JobID),
 			attribute.String(AttrRoomName, config.RoomName),
@@ -238,11 +275,14 @@ func (o *JobObservability) ForceFlush(ctx context.Context) error {
 	if o == nil {
 		return nil
 	}
-	return runTelemetryOperations(
-		func() error { return o.tracerProvider.ForceFlush(ctx) },
-		func() error { return o.loggerProvider.ForceFlush(ctx) },
-		func() error { return o.meterProvider.ForceFlush(ctx) },
-	)
+	operations := []func() error{func() error { return o.tracerProvider.ForceFlush(ctx) }}
+	if o.loggerProvider != nil {
+		operations = append(operations, func() error { return o.loggerProvider.ForceFlush(ctx) })
+	}
+	if o.meterProvider != nil {
+		operations = append(operations, func() error { return o.meterProvider.ForceFlush(ctx) })
+	}
+	return runTelemetryOperations(operations...)
 }
 
 func (o *JobObservability) Shutdown(ctx context.Context) error {
@@ -250,11 +290,14 @@ func (o *JobObservability) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	o.shutdownOnce.Do(func() {
-		o.shutdownErr = runTelemetryOperations(
-			func() error { return o.tracerProvider.Shutdown(ctx) },
-			func() error { return o.loggerProvider.Shutdown(ctx) },
-			func() error { return o.meterProvider.Shutdown(ctx) },
-		)
+		operations := []func() error{func() error { return o.tracerProvider.Shutdown(ctx) }}
+		if o.loggerProvider != nil {
+			operations = append(operations, func() error { return o.loggerProvider.Shutdown(ctx) })
+		}
+		if o.meterProvider != nil {
+			operations = append(operations, func() error { return o.meterProvider.Shutdown(ctx) })
+		}
+		o.shutdownErr = runTelemetryOperations(operations...)
 	})
 	return o.shutdownErr
 }
