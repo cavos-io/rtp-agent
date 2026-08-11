@@ -2,6 +2,6 @@ package runway
 
 const (
 	PluginTitle   = "rtp-agent.plugins.runway"
-	PluginVersion = "v0.4.6"
+	PluginVersion = "v0.4.7"
 	PluginPackage = "rtp-agent.plugins.runway"
 )
