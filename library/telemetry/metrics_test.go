@@ -229,6 +229,7 @@ func TestRecordOTelTurnMetricsRecordsReferenceLatencyHistograms(t *testing.T) {
 	RecordOTelTurnMetrics(map[string]any{
 		"llm_node_ttft": 0.25,
 		"tts_node_ttfb": 0.40,
+		"e2e_latency":   0.75,
 		"llm_metadata": map[string]any{
 			"model_provider": "openai",
 			"model_name":     "gpt-4o",
@@ -252,6 +253,10 @@ func TestRecordOTelTurnMetricsRecordsReferenceLatencyHistograms(t *testing.T) {
 		attribute.String("model_provider", "cartesia"),
 		attribute.String("model_name", "sonic"),
 	), 0.40)
+	assertFloatHistogramPoint(t, rm, "lk.agents.turn.e2e_latency", attribute.NewSet(
+		attribute.String("model_provider", "openai"),
+		attribute.String("model_name", "gpt-4o"),
+	), 0.75)
 }
 
 func TestCollectOTelUsageRecordsReferenceSTTConnectionAcquireTime(t *testing.T) {

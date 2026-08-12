@@ -89,6 +89,7 @@ type EndOfTurnInfo struct {
 	TranscriptConfidence   float64
 	EndOfTurnDelay         float64
 	TranscriptionDelay     float64
+	TranscriptionDelaySet  bool
 	StartedSpeakingAt      *float64
 	StoppedSpeakingAt      *float64
 	AudioFrames            []*model.AudioFrame
@@ -161,6 +162,7 @@ type AgentActivity struct {
 	pendingStartedSpeakingAt         *float64
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
+	pendingTranscriptionDelaySet     bool
 	userTurnLimitStartedAt           time.Time
 	userTurnLimitTranscript          string
 	userTurnLimitWordCount           int
@@ -1957,7 +1959,8 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		return
 	}
 
-	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay := a.finalTranscriptTiming(ev)
+	finalTranscriptAt := time.Now()
+	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
 
 	a.userTurnMu.Lock()
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
@@ -1972,10 +1975,11 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingTranscriptConfidenceCount = confidenceCount
 	a.pendingTranscriptConfidence = confidenceSum / float64(confidenceCount)
 	a.pendingUserTranscriptPresent = true
-	a.lastFinalTranscriptTime = time.Now()
+	a.lastFinalTranscriptTime = finalTranscriptAt
 	a.pendingStartedSpeakingAt = startedSpeakingAt
 	a.pendingStoppedSpeakingAt = stoppedSpeakingAt
 	a.pendingTranscriptionDelay = transcriptionDelay
+	a.pendingTranscriptionDelaySet = transcriptionDelaySet
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -2023,13 +2027,14 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 	if a.vadBasedTurnDetection() && !a.isUserSpeaking() {
 		a.runEOUDetection(EndOfTurnInfo{
-			NewTranscript:        transcript,
-			Language:             language,
-			TranscriptConfidence: confidence,
-			TranscriptionDelay:   transcriptionDelay,
-			StartedSpeakingAt:    startedSpeakingAt,
-			StoppedSpeakingAt:    stoppedSpeakingAt,
-			AudioFrames:          a.userAudioSnapshot(),
+			NewTranscript:         transcript,
+			Language:              language,
+			TranscriptConfidence:  confidence,
+			TranscriptionDelay:    transcriptionDelay,
+			TranscriptionDelaySet: transcriptionDelaySet,
+			StartedSpeakingAt:     startedSpeakingAt,
+			StoppedSpeakingAt:     stoppedSpeakingAt,
+			AudioFrames:           a.userAudioSnapshot(),
 		})
 	}
 }
@@ -2312,24 +2317,21 @@ func (a *AgentActivity) shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev *stt.
 	return false
 }
 
-func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *float64, float64) {
-	if a == nil || ev == nil || a.userSpeechStartedAt.IsZero() || len(ev.Alternatives) == 0 {
-		return nil, nil, 0
+func (a *AgentActivity) finalTranscriptTiming(finalTranscriptAt time.Time) (*float64, *float64, float64, bool) {
+	if a == nil || a.userSpeechStartedAt.IsZero() || finalTranscriptAt.IsZero() {
+		return nil, nil, 0, false
 	}
 	startedAt := a.userSpeechStartedAt
 	if !a.userTurnStartedAt.IsZero() {
 		startedAt = a.userTurnStartedAt
 	}
 	started := timeToUnixSeconds(startedAt)
-	if ev.Alternatives[0].EndTime <= 0 {
-		return &started, nil, 0
+	if a.userSpeechStoppedAt.IsZero() || a.userSpeechStoppedAt.Before(startedAt) {
+		return &started, nil, 0, false
 	}
-	stopped := started + ev.Alternatives[0].EndTime
-	transcriptionDelay := timeToUnixSeconds(time.Now()) - stopped
-	if transcriptionDelay < 0 {
-		transcriptionDelay = 0
-	}
-	return &started, &stopped, transcriptionDelay
+	stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
+	transcriptionDelay := max(finalTranscriptAt.Sub(a.userSpeechStoppedAt).Seconds(), 0)
+	return &started, &stopped, transcriptionDelay, true
 }
 
 func computeEndOfTurnDelay(startedSpeakingAt, stoppedSpeakingAt *float64, now float64) float64 {
@@ -2840,6 +2842,15 @@ collect:
 	startedSpeakingAt := a.pendingStartedSpeakingAt
 	stoppedSpeakingAt := a.pendingStoppedSpeakingAt
 	transcriptionDelay := a.pendingTranscriptionDelay
+	transcriptionDelaySet := a.pendingTranscriptionDelaySet
+	if started, stopped, delay, ok := a.finalTranscriptTiming(a.lastFinalTranscriptTime); ok {
+		if startedSpeakingAt == nil {
+			startedSpeakingAt = started
+		}
+		stoppedSpeakingAt = stopped
+		transcriptionDelay = delay
+		transcriptionDelaySet = true
+	}
 	preflightTranscript := a.pendingPreflightTranscript
 	preflightConfidence := a.pendingPreflightConfidence
 	interimTranscript := a.pendingInterimTranscript
@@ -2887,6 +2898,7 @@ collect:
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
+	a.pendingTranscriptionDelaySet = false
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -2922,6 +2934,7 @@ collect:
 		Language:               firstNonEmpty(language, fallbackLanguage),
 		TranscriptConfidence:   confidence,
 		TranscriptionDelay:     transcriptionDelay,
+		TranscriptionDelaySet:  transcriptionDelaySet,
 		StartedSpeakingAt:      startedSpeakingAt,
 		StoppedSpeakingAt:      stoppedSpeakingAt,
 		AudioFrames:            a.userAudioSnapshot(),
@@ -2983,8 +2996,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		attrs := []attribute.KeyValue{
 			attribute.String(telemetry.AttrUserTranscript, info.NewTranscript),
 			attribute.Float64(telemetry.AttrTranscriptConfidence, info.TranscriptConfidence),
-			attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay),
 			attribute.Float64(telemetry.AttrEndOfTurnDelay, info.EndOfTurnDelay),
+		}
+		if info.TranscriptionDelaySet || info.TranscriptionDelay != 0 {
+			attrs = append(attrs, attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay))
 		}
 		if sttProvider != nil {
 			attrs = append(attrs,
@@ -3527,7 +3542,9 @@ func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay flo
 	if info.StoppedSpeakingAt != nil {
 		metrics["stopped_speaking_at"] = *info.StoppedSpeakingAt
 	}
-	metrics["transcription_delay"] = info.TranscriptionDelay
+	if info.TranscriptionDelaySet || info.TranscriptionDelay != 0 {
+		metrics["transcription_delay"] = info.TranscriptionDelay
+	}
 	metrics["end_of_turn_delay"] = info.EndOfTurnDelay
 	metrics["on_user_turn_completed_delay"] = onUserTurnCompletedDelay
 	return metrics
@@ -3581,6 +3598,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingStartedSpeakingAt = nil
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
+	a.pendingTranscriptionDelaySet = false
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -3623,13 +3641,14 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 	switch {
 	case a.pendingUserTranscriptPresent:
 		info = EndOfTurnInfo{
-			NewTranscript:        a.pendingUserTranscript,
-			Language:             a.pendingUserLanguage,
-			TranscriptConfidence: a.pendingTranscriptConfidence,
-			TranscriptionDelay:   a.pendingTranscriptionDelay,
-			StartedSpeakingAt:    a.pendingStartedSpeakingAt,
-			StoppedSpeakingAt:    a.pendingStoppedSpeakingAt,
-			AudioFrames:          a.userAudioSnapshot(),
+			NewTranscript:         a.pendingUserTranscript,
+			Language:              a.pendingUserLanguage,
+			TranscriptConfidence:  a.pendingTranscriptConfidence,
+			TranscriptionDelay:    a.pendingTranscriptionDelay,
+			TranscriptionDelaySet: a.pendingTranscriptionDelaySet,
+			StartedSpeakingAt:     a.pendingStartedSpeakingAt,
+			StoppedSpeakingAt:     a.pendingStoppedSpeakingAt,
+			AudioFrames:           a.userAudioSnapshot(),
 		}
 	case a.Session != nil && a.Session.Options.CommitOnInterimWhenNoFinal && a.pendingInterimTranscript != "":
 		// No STT final yet: fall back to the latest interim so VAD end-of-speech
@@ -3665,6 +3684,14 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 	if info.StoppedSpeakingAt == nil && !a.userSpeechStoppedAt.IsZero() {
 		stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
 		info.StoppedSpeakingAt = &stopped
+	}
+	if started, stopped, delay, ok := a.finalTranscriptTiming(a.lastFinalTranscriptTime); ok {
+		if info.StartedSpeakingAt == nil {
+			info.StartedSpeakingAt = started
+		}
+		info.StoppedSpeakingAt = stopped
+		info.TranscriptionDelay = delay
+		info.TranscriptionDelaySet = true
 	}
 	return info
 }

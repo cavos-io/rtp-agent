@@ -59,6 +59,7 @@ const (
 	AttrTranscriptConfidence = "lk.transcript_confidence"
 	AttrTranscriptionDelay   = "lk.transcription_delay"
 	AttrEndOfTurnDelay       = "lk.end_of_turn_delay"
+	AttrE2ELatency           = "lk.e2e_latency"
 
 	AttrGenAIOperationName     = "gen_ai.operation.name"
 	AttrGenAIProviderName      = "gen_ai.provider.name"

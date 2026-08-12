@@ -827,7 +827,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
 				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
-				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(speech.Generation.AssistantMessage.Metrics, ttsGen)
+				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
 				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
@@ -1159,7 +1159,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			if ttsGen != nil && ttsGen.TTFB > 0 {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
 			}
-			metrics = addAssistantSpeechMetrics(metrics, ttsGen)
+			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
@@ -2030,7 +2030,7 @@ func markTTSGenerationStoppedSpeaking(ttsGen *TTSGenerationData) {
 	ttsGen.StoppedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
 }
 
-func addAssistantSpeechMetrics(metrics map[string]any, ttsGen *TTSGenerationData) map[string]any {
+func addAssistantSpeechMetrics(ctx context.Context, metrics map[string]any, ttsGen *TTSGenerationData, userMessage *llm.ChatMessage) map[string]any {
 	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt == 0 {
 		return metrics
 	}
@@ -2039,6 +2039,13 @@ func addAssistantSpeechMetrics(metrics map[string]any, ttsGen *TTSGenerationData
 	}
 	metrics["started_speaking_at"] = ttsGen.StartedSpeakingAt
 	metrics["stopped_speaking_at"] = ttsGen.StoppedSpeakingAt
+	if userMessage != nil {
+		if stopped, ok := userMessage.Metrics["stopped_speaking_at"].(float64); ok && ttsGen.StartedSpeakingAt >= stopped {
+			e2eLatency := ttsGen.StartedSpeakingAt - stopped
+			metrics["e2e_latency"] = e2eLatency
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, e2eLatency))
+		}
+	}
 	return metrics
 }
 

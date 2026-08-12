@@ -2766,7 +2766,43 @@ func TestAgentActivityPendingFinalUsesVADAdjustedSpeechEndTime(t *testing.T) {
 	}
 }
 
-func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
+func TestAgentActivityFinalTranscriptTranscriptionDelayUsesVADStop(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.userSpeechStartedAt = time.Now().Add(-2 * time.Second)
+	wantStopped := time.Now().Add(-250 * time.Millisecond)
+	activity.userSpeechStoppedAt = wantStopped
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "use vad timing",
+			Confidence: 0.9,
+			EndTime:    60,
+		}},
+	})
+
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want VAD stop anchor")
+	}
+	if got := unixSecondsToTime(*info.StoppedSpeakingAt); got.Sub(wantStopped).Abs() > 10*time.Millisecond {
+		t.Fatalf("StoppedSpeakingAt = %v, want VAD stop %v", got, wantStopped)
+	}
+	if info.TranscriptionDelay < 0.15 || info.TranscriptionDelay > 0.5 {
+		t.Fatalf("TranscriptionDelay = %v, want delay from VAD stop to final transcript", info.TranscriptionDelay)
+	}
+}
+
+func TestMetricsReportFromEndOfTurnOmitsUnknownTranscriptionDelay(t *testing.T) {
+	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0)
+	if _, ok := metrics["transcription_delay"]; ok {
+		t.Fatalf("transcription_delay = %#v, want omitted without valid timing anchors", metrics["transcription_delay"])
+	}
+}
+
+func TestAgentActivityFinalTranscriptEOUDelayUsesVADStopTime(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.STT = &fakePipelineSTT{}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -2786,11 +2822,16 @@ func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
 
 	select {
 	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted returned before VAD-based endpointing delay: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case msg := <-agent.turns:
 		if msg.TextContent() != "timestamped final" {
 			t.Fatalf("turn message text = %q, want timestamped final", msg.TextContent())
 		}
-	case <-time.After(30 * time.Millisecond):
-		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using STT end time")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted did not return after VAD-based endpointing delay")
 	}
 }
 
@@ -2968,7 +3009,7 @@ func TestAgentActivityFinalTranscriptDoesNotMarkSTTEOSReceived(t *testing.T) {
 	}
 }
 
-func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *testing.T) {
+func TestAgentActivityPendingSTTFinalUsesVADStopTimeAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
 	agent.STT = &fakePipelineSTT{}
@@ -2989,11 +3030,16 @@ func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *te
 
 	select {
 	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted returned before VAD-based endpointing delay: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case msg := <-agent.turns:
 		if msg.TextContent() != "timestamped pending final" {
 			t.Fatalf("turn message text = %q, want timestamped pending final", msg.TextContent())
 		}
-	case <-time.After(30 * time.Millisecond):
-		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using pending STT end time")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted did not return after VAD-based endpointing delay")
 	}
 }
 

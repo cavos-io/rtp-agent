@@ -48,6 +48,27 @@ func TestPipelineAgentStartRootsCtxUnderSessionCtx(t *testing.T) {
 	}
 }
 
+func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("test").Start(context.Background(), "agent_turn")
+
+	metrics := addAssistantSpeechMetrics(ctx, nil, &TTSGenerationData{
+		StartedSpeakingAt: 12,
+		StoppedSpeakingAt: 13,
+	}, &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": 10.0}})
+	span.End()
+
+	if got := metrics["e2e_latency"]; got != 2.0 {
+		t.Fatalf("e2e_latency = %#v, want 2", got)
+	}
+	attrs := spanAttributeValues(recorder.Ended()[0].Attributes())
+	if got := attrs[telemetry.AttrE2ELatency].AsFloat64(); got != 2.0 {
+		t.Fatalf("%s = %v, want 2", telemetry.AttrE2ELatency, got)
+	}
+}
+
 func TestPipelineAgentBargeInResetStaysRootedUnderSessionCtx(t *testing.T) {
 	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
