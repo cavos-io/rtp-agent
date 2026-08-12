@@ -3098,6 +3098,73 @@ func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEOUDetectionSpanIsChildOfUserTurn(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.TurnDetector = thresholdTurnDetector{
+		probability: 0.4,
+		thresholds:  map[string]float64{"en-US": 0.55},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.02,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	activity.runEOUDetection(EndOfTurnInfo{
+		SkipReply:            true,
+		NewTranscript:        "still talking",
+		TranscriptConfidence: 0.9,
+		Language:             "en-US",
+	})
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := activity.WaitForInactive(waitCtx); err != nil {
+		t.Fatalf("WaitForInactive error = %v", err)
+	}
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	userTurn := spans["user_turn"]
+	eou := spans["eou_detection"]
+	if userTurn == nil || eou == nil {
+		t.Fatalf("spans = %#v, want user_turn and eou_detection", spans)
+	}
+	if got, want := eou.Parent().SpanID(), userTurn.SpanContext().SpanID(); got != want {
+		t.Fatalf("eou_detection parent = %s, want user_turn %s", got, want)
+	}
+	attrs := spanAttributeValues(eou.Attributes())
+	if got := attrs[telemetry.AttrEOUProbability].AsFloat64(); got != 0.4 {
+		t.Fatalf("EOU probability = %v, want 0.4", got)
+	}
+	if got := attrs[telemetry.AttrEOUUnlikelyThreshold].AsFloat64(); got != 0.55 {
+		t.Fatalf("EOU threshold = %v, want 0.55", got)
+	}
+	if got := attrs[telemetry.AttrEOUDelay].AsFloat64(); got != 0.02 {
+		t.Fatalf("EOU delay = %v, want 0.02", got)
+	}
+	if got := attrs[telemetry.AttrEOULanguage].AsString(); got != "en-US" {
+		t.Fatalf("EOU language = %q, want en-US", got)
+	}
+	if _, ok := attrs[telemetry.AttrChatCtx]; ok {
+		t.Fatal("eou_detection unexpectedly includes lk.chat_ctx")
+	}
+}
+
 func TestAgentActivityKeepsReferenceLanguageForShortFinalTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

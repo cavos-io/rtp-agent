@@ -3891,16 +3891,27 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				Content: []llm.ChatContent{{Text: info.NewTranscript}},
 			})
 
-			prob, err := a.Agent.TurnDetector.PredictEndOfTurn(ctx, chatCtx)
+			threshold := a.turnDetectorThreshold(info.Language)
+			userTurnSpan := a.Session.ensureUserTurnSpan(ctx)
+			eouCtx := trace.ContextWithSpan(ctx, userTurnSpan)
+			_, eouSpan := telemetry.StartSpan(eouCtx, "eou_detection")
+			prob, err := a.Agent.TurnDetector.PredictEndOfTurn(eouCtx, chatCtx)
+			attrs := []attribute.KeyValue{
+				attribute.Float64(telemetry.AttrEOUUnlikelyThreshold, threshold),
+				attribute.String(telemetry.AttrEOULanguage, info.Language),
+			}
 			if err == nil {
 				logger.Logger.Infow("EOU prediction", "probability", prob)
-				// Apply probability threshold logic
-				if prob < a.turnDetectorThreshold(info.Language) {
-					endpointingDelay = a.maxEndpointingDelay()
+				attrs = append(attrs, attribute.Float64(telemetry.AttrEOUProbability, prob))
+				if prob < threshold {
+					endpointingDelay = maxDelay
 				}
 			} else {
 				logger.Logger.Errorw("EOU prediction failed", err)
 			}
+			attrs = append(attrs, attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay))
+			eouSpan.SetAttributes(attrs...)
+			eouSpan.End()
 		}
 
 		if info.StoppedSpeakingAt != nil {
