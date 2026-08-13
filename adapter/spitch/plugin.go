@@ -2,6 +2,6 @@ package spitch
 
 const (
 	PluginTitle   = "rtp-agent.plugins.spitch"
-	PluginVersion = "v0.4.7"
+	PluginVersion = "v0.4.8"
 	PluginPackage = "rtp-agent.plugins.spitch"
 )

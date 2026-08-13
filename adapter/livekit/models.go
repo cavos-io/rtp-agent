@@ -38,7 +38,7 @@ const (
 
 var modelRevisions = map[ModelType]string{
 	ModelEnglish:      "v1.2.2-en",
-	ModelMultilingual: "v0.4.7-intl",
+	ModelMultilingual: "v0.4.8-intl",
 }
 
 type Model struct {
