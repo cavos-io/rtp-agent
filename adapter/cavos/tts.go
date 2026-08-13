@@ -170,6 +170,8 @@ func buildTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, e
 		"input":           text,
 		"lang":            t.language,
 		"response_format": t.responseFormat,
+		"speed":           t.speed,
+		"total_steps":     t.totalSteps,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
