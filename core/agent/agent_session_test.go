@@ -23,6 +23,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestAgentSessionHistoryReturnsLiveContext(t *testing.T) {
@@ -1431,6 +1433,20 @@ func assertConversationItemAddedEvent(t *testing.T, events <-chan ConversationIt
 	}
 }
 
+func assertInitialAgentHandoffEvent(t *testing.T, events <-chan ConversationItemAddedEvent, newAgentID string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		handoff, ok := ev.Item.(*llm.AgentHandoff)
+		if !ok || handoff.OldAgentID != nil || handoff.NewAgentID != newAgentID {
+			t.Fatalf("initial conversation item = %#v, want handoff to %q", ev.Item, newAgentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("conversation events did not receive initial handoff to %q", newAgentID)
+	}
+}
+
 func assertFunctionToolsExecutedEvent(t *testing.T, events <-chan FunctionToolsExecutedEvent, call *llm.FunctionCall, output *llm.FunctionCallOutput, name string) {
 	t.Helper()
 
@@ -1611,6 +1627,34 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartRecordsInitialAgentHandoffBeforeConfiguration(t *testing.T) {
+	agent := NewAgent("be helpful")
+	agent.ID = "assistant"
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+	conversationEvents := session.ConversationItemAddedEvents()
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	if len(session.ChatCtx.Items) < 2 {
+		t.Fatalf("chat items = %#v, want initial handoff then configuration", session.ChatCtx.Items)
+	}
+	handoff, ok := session.ChatCtx.Items[0].(*llm.AgentHandoff)
+	if !ok {
+		t.Fatalf("first chat item = %T, want *llm.AgentHandoff", session.ChatCtx.Items[0])
+	}
+	if handoff.OldAgentID != nil || handoff.NewAgentID != "assistant" {
+		t.Fatalf("initial handoff = %#v, want nil old agent and assistant new agent", handoff)
+	}
+	if _, ok := session.ChatCtx.Items[1].(*llm.AgentConfigUpdate); !ok {
+		t.Fatalf("second chat item = %T, want *llm.AgentConfigUpdate", session.ChatCtx.Items[1])
+	}
+	assertInitialAgentHandoffEvent(t, conversationEvents, "assistant")
+}
+
 func TestAgentSessionStartCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1677,6 +1721,126 @@ func TestAgentSessionStopCancelsRunContextWithoutParentCancel(t *testing.T) {
 
 	if runCtx.Err() == nil {
 		t.Fatal("Stop() did not cancel the session run ctx; background tasks tied to it leak until the caller cancels the start ctx")
+	}
+}
+
+func TestAgentSessionCreatesAndEndsRootSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v", err)
+	}
+
+	spans := recorder.Ended()
+	var root sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		if span.Name() == "agent_session" {
+			root = span
+			break
+		}
+	}
+	if root == nil {
+		t.Fatal("agent_session span missing")
+	}
+	attrs := spanAttributes(root.Attributes())
+	if got := attrs[telemetry.AttrAgentLabel]; got != "default_agent" {
+		t.Fatalf("agent label = %q, want default_agent", got)
+	}
+}
+
+func TestAgentActivityLifecycleSpansAreChildrenOfRoot(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	root := spans["agent_session"]
+	start := spans["start_agent_activity"]
+	if root == nil || start == nil || spans["on_enter"] == nil || spans["on_exit"] == nil {
+		t.Fatalf("lifecycle spans = %#v", spans)
+	}
+	if got, want := start.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Fatalf("start_agent_activity parent = %s, want %s", got, want)
+	}
+	if got, want := spans["on_enter"].Parent().SpanID(), start.SpanContext().SpanID(); got != want {
+		t.Fatalf("on_enter parent = %s, want %s", got, want)
+	}
+	if got, want := spans["on_exit"].Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Fatalf("on_exit parent = %s, want %s", got, want)
+	}
+}
+
+func TestAgentSessionUserSpeakingSpanIsChildOfUserTurn(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	root := spans["agent_session"]
+	userTurn := spans["user_turn"]
+	userSpeaking := spans["user_speaking"]
+	if root == nil || userTurn == nil || userSpeaking == nil {
+		t.Fatalf("spans = %#v, want agent_session, user_turn, and user_speaking", spans)
+	}
+	if got, want := userTurn.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
+		t.Fatalf("user_turn parent = %s, want agent_session %s", got, want)
+	}
+	if got, want := userSpeaking.Parent().SpanID(), userTurn.SpanContext().SpanID(); got != want {
+		t.Fatalf("user_speaking parent = %s, want user_turn %s", got, want)
+	}
+	if userSpeaking.StartTime().Before(userTurn.StartTime()) {
+		t.Fatalf("user_speaking started at %v before user_turn %v", userSpeaking.StartTime(), userTurn.StartTime())
+	}
+	if userSpeaking.EndTime().After(userTurn.EndTime()) {
+		t.Fatalf("user_speaking ended at %v after user_turn %v", userSpeaking.EndTime(), userTurn.EndTime())
 	}
 }
 
@@ -7233,6 +7397,16 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 	}
 	if got := recorder.infoValue("LLM metrics", "type"); got != "llm_metrics" {
 		t.Fatalf("logged LLM metrics type = %#v, want llm_metrics", got)
+	}
+}
+
+func TestAgentSessionTelemetryContextUsesActiveRunContext(t *testing.T) {
+	type contextKey struct{}
+	want := context.WithValue(context.Background(), contextKey{}, "job-a")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.runCtx = want
+	if got := session.telemetryContext(); got.Value(contextKey{}) != "job-a" {
+		t.Fatalf("telemetry context value = %#v, want job-a", got.Value(contextKey{}))
 	}
 }
 

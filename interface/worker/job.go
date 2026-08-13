@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,9 +20,15 @@ import (
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 var currentJobContexts sync.Map
+
+var observabilityFinalizeTimeout = 10 * time.Second
 
 const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
@@ -219,6 +227,11 @@ type JobContext struct {
 	sessionDirectory       string
 	logContextFields       map[string]any
 	recordingInitialized   bool
+	observability          *telemetry.JobObservability
+	observabilityOnce      sync.Once
+	observabilityErr       error
+	customTracerProvider   *sdktrace.TracerProvider
+	customTraceMetadata    []attribute.KeyValue
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	shutdownDone           chan struct{}
@@ -299,6 +312,118 @@ func (c *JobContext) InitRecording(options agent.RecordingOptions) {
 		c.Report.Tagger = c.Tagger()
 	}
 	c.Report.RecordingOptions = options
+}
+
+func (c *JobContext) Observability() *telemetry.JobObservability {
+	if c == nil {
+		return nil
+	}
+	return c.observability
+}
+
+// SetTracerProvider routes this job's spans exclusively to provider. It must be
+// called before StartSession. The JobContext owns and shuts down the provider;
+// do not share it with another job.
+func (c *JobContext) SetTracerProvider(provider *sdktrace.TracerProvider, metadata ...attribute.KeyValue) error {
+	if c == nil {
+		return fmt.Errorf("job context is nil")
+	}
+	if provider == nil {
+		return fmt.Errorf("tracer provider is nil")
+	}
+	if c.primarySession != nil || c.observability != nil {
+		return fmt.Errorf("tracer provider must be set before session start")
+	}
+	if c.customTracerProvider != nil {
+		return fmt.Errorf("tracer provider is already set")
+	}
+	c.customTracerProvider = provider
+	c.customTraceMetadata = append([]attribute.KeyValue(nil), metadata...)
+	return nil
+}
+
+func (c *JobContext) ensureObservability(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	var options agent.RecordingOptions
+	if c.Report != nil {
+		options = c.Report.RecordingOptions
+	}
+	cloudReporting := options.Audio || options.Traces || options.Logs || options.Transcript
+	if !cloudReporting && c.customTracerProvider == nil {
+		return nil
+	}
+	c.observabilityOnce.Do(func() {
+		var endpoint string
+		if cloudReporting {
+			var err error
+			endpoint, err = jobObservabilityURL(c.url)
+			if err != nil {
+				c.observabilityErr = err
+				return
+			}
+		}
+		if endpoint == "" && c.customTracerProvider == nil {
+			return
+		}
+		headers := map[string]string(nil)
+		if endpoint != "" {
+			token, err := livekitNewObservabilityToken(c.apiKey, c.apiSecret)
+			if err != nil {
+				c.observabilityErr = fmt.Errorf("create observability token: %w", err)
+				return
+			}
+			headers = map[string]string{"Authorization": "Bearer " + token}
+		}
+		room := c.Job.GetRoom()
+		c.observability, c.observabilityErr = telemetry.NewJobObservability(ctx, telemetry.JobObservabilityConfig{
+			EndpointURL:    endpoint,
+			Headers:        headers,
+			JobID:          c.JobID(),
+			RoomID:         room.GetSid(),
+			RoomName:       room.GetName(),
+			AgentName:      c.Job.GetAgentName(),
+			TracerProvider: c.customTracerProvider,
+			TraceMetadata:  c.customTraceMetadata,
+		})
+	})
+	return c.observabilityErr
+}
+
+func (c *JobContext) FinalizeObservability(ctx context.Context) error {
+	if c == nil || (c.observability == nil && c.customTracerProvider == nil) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, observabilityFinalizeTimeout)
+	defer cancel()
+	if c.observability == nil {
+		return errors.Join(
+			c.customTracerProvider.ForceFlush(ctx),
+			c.customTracerProvider.Shutdown(ctx),
+		)
+	}
+	return errors.Join(
+		c.observability.ForceFlush(ctx),
+		c.observability.Shutdown(ctx),
+	)
+}
+
+func jobObservabilityURL(liveKitURL string) (string, error) {
+	if override := os.Getenv("LIVEKIT_OBSERVABILITY_URL"); override != "" {
+		return strings.TrimRight(override, "/"), nil
+	}
+	u, err := url.Parse(liveKitURL)
+	if err != nil {
+		return "", nil
+	}
+	if !utils.IsCloud(liveKitURL) || u.Hostname() == "" {
+		return "", nil
+	}
+	return "https://" + strings.ToLower(u.Hostname()), nil
 }
 
 func (c *JobContext) API() *JobAPI {
@@ -675,6 +800,12 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
 		sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
+	}
+	if err := c.ensureObservability(sessionCtx); err != nil {
+		return err
+	}
+	if c.observability != nil {
+		sessionCtx = c.observability.Context(sessionCtx)
 	}
 	if err := session.Start(sessionCtx); err != nil {
 		return err

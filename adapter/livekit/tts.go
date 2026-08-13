@@ -13,16 +13,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
 )
 
 type TTS struct {
+	tts.MetricsEmitter
 	mu                sync.Mutex
 	model             string
 	voice             string
@@ -338,6 +342,10 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, io.ErrClosedPipe
 	}
 	go stream.run()
+	go func() {
+		<-ctx.Done()
+		_ = stream.Close()
+	}()
 
 	return stream, nil
 }
@@ -573,6 +581,13 @@ type inferenceTTSStream struct {
 	inputEnded  bool
 	done        bool
 	streamErr   error
+	metricsOnce sync.Once
+	startedAt   time.Time
+	firstAudio  time.Time
+	inputText   strings.Builder
+	audioDur    float64
+	requestID   string
+	segmentID   string
 }
 
 func (s *inferenceTTSStream) PushText(text string) error {
@@ -584,7 +599,14 @@ func (s *inferenceTTSStream) PushText(text string) error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
-	return s.tokenizer.PushText(text)
+	if err := s.tokenizer.PushText(text); err != nil {
+		return err
+	}
+	if s.startedAt.IsZero() {
+		s.startedAt = time.Now()
+	}
+	s.inputText.WriteString(text)
+	return nil
 }
 
 func (s *inferenceTTSStream) Flush() error {
@@ -614,22 +636,73 @@ func (s *inferenceTTSStream) EndInput() error {
 
 func (s *inferenceTTSStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	s.tokenizer.AClose()
-	if s.connPool != nil {
-		s.connPool.Remove(s.conn)
+	cancel := s.cancel
+	tokenizer := s.tokenizer
+	connPool := s.connPool
+	conn := s.conn
+	parent := s.tts
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
-	s.conn.Close()
-	if s.tts != nil {
-		s.tts.unregisterStream(s)
+	if tokenizer != nil {
+		tokenizer.AClose()
+	}
+	if connPool != nil {
+		connPool.Remove(conn)
+	}
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if parent != nil {
+		parent.unregisterStream(s)
 	}
 	s.closeEventCh()
+	s.finalizeTelemetry()
 	return nil
+}
+
+func (s *inferenceTTSStream) finalizeTelemetry() {
+	s.metricsOnce.Do(func() {
+		s.mu.Lock()
+		startedAt := s.startedAt
+		firstAudio := s.firstAudio
+		text := s.inputText.String()
+		audioDuration := s.audioDur
+		requestID := s.requestID
+		segmentID := s.segmentID
+		cancelled := !s.done
+		parent := s.tts
+		s.mu.Unlock()
+		if parent != nil && !startedAt.IsZero() {
+			ttfb := -1.0
+			if !firstAudio.IsZero() {
+				ttfb = firstAudio.Sub(startedAt).Seconds()
+			}
+			parent.EmitMetricsCollected(&telemetry.TTSMetrics{
+				Label:           parent.Label(),
+				RequestID:       requestID,
+				Timestamp:       time.Now(),
+				TTFB:            ttfb,
+				Duration:        time.Since(startedAt).Seconds(),
+				AudioDuration:   audioDuration,
+				Cancelled:       cancelled,
+				CharactersCount: utf8.RuneCountInString(text),
+				Streamed:        true,
+				SegmentID:       segmentID,
+				Metadata: &telemetry.Metadata{
+					ModelName:     parent.Model(),
+					ModelProvider: parent.Provider(),
+				},
+			})
+		}
+	})
 }
 
 func (s *inferenceTTSStream) closeEventCh() {
@@ -689,6 +762,24 @@ func (s *inferenceTTSStream) emitAudio(audio *tts.SynthesizedAudio) bool {
 	case <-s.ctx.Done():
 		return false
 	case s.eventCh <- audio:
+		s.mu.Lock()
+		if audio != nil && audio.Frame != nil {
+			if s.firstAudio.IsZero() {
+				s.firstAudio = time.Now()
+			}
+			s.audioDur += coreaudio.CalculateFrameDuration(audio.Frame)
+		}
+		if audio != nil {
+			if audio.RequestID != "" {
+				s.requestID = audio.RequestID
+			} else if s.requestID == "" {
+				s.requestID = audio.SegmentID
+			}
+			if audio.SegmentID != "" {
+				s.segmentID = audio.SegmentID
+			}
+		}
+		s.mu.Unlock()
 		return true
 	}
 }

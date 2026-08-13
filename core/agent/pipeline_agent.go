@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // AudioInputHook is called for each incoming audio frame before it is forwarded
@@ -736,6 +739,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	if speech == nil || speech.IsInterrupted() || speech.IsDone() {
 		return
 	}
+	ctx = ensureSpeechAgentTurn(ctx, speech)
 	va.mu.Lock()
 	session := va.session
 	va.mu.Unlock()
@@ -780,6 +784,8 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	if speech == nil {
 		return
 	}
+	ctx = ensureSpeechAgentTurn(ctx, speech)
+	defer finishSpeechAgentTurn(speech)
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 	if speech.IsInterrupted() {
@@ -821,7 +827,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
 				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
-				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(speech.Generation.AssistantMessage.Metrics, ttsGen)
+				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
 				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
@@ -832,17 +838,61 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		return
 	}
 
-	va.generateReplyWithOptions(va.speechOptions(speech))
+	va.generateReplyWithContext(ctx, va.speechOptions(speech))
+}
+
+func ensureSpeechAgentTurn(ctx context.Context, speech *SpeechHandle) context.Context {
+	if speech == nil {
+		return ctx
+	}
+	speech.mu.Lock()
+	if speech.agentTurnCtx != nil {
+		turnCtx := speech.agentTurnCtx
+		speech.mu.Unlock()
+		return turnCtx
+	}
+	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps))}
+	if speech.numSteps > 1 {
+		parentID := speech.ID + "_" + strconv.Itoa(speech.numSteps-1)
+		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, parentID))
+	}
+	turnCtx, turnSpan := telemetry.StartSpan(ctx, "agent_turn", trace.WithAttributes(attrs...))
+	speech.agentTurnCtx = turnCtx
+	speech.agentTurnEnd = func() { turnSpan.End() }
+	speech.mu.Unlock()
+	speech.AddDoneCallback(func(*SpeechHandle) { finishSpeechAgentTurn(speech) })
+	return turnCtx
+}
+
+func finishSpeechAgentTurn(speech *SpeechHandle) {
+	if speech == nil {
+		return
+	}
+	speech.mu.Lock()
+	end := speech.agentTurnEnd
+	speech.agentTurnCtx = nil
+	speech.agentTurnEnd = nil
+	speech.mu.Unlock()
+	if end != nil {
+		end()
+	}
 }
 
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
+	va.generateReplyWithContext(nil, opts)
+}
+
+func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipelineReplyOptions) {
 	va.mu.Lock()
 	session := va.session
-	ctx := va.ctx
+	defaultCtx := va.ctx
 	va.mu.Unlock()
 
 	if session == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = defaultCtx
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -1109,7 +1159,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if ttsGen != nil && ttsGen.TTFB > 0 {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
 			}
-			metrics = addAssistantSpeechMetrics(metrics, ttsGen)
+			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
@@ -1961,7 +2011,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		ttsGen.ForwardedAudio = true
 		if !startedSpeaking {
 			ttsGen.StartedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
-			session.UpdateAgentState(AgentStateSpeaking)
+			session.updateAgentState(AgentStateSpeaking, ctx)
 			startedSpeaking = true
 		}
 		session.notifyAgentSpeakingProgress()
@@ -1980,7 +2030,7 @@ func markTTSGenerationStoppedSpeaking(ttsGen *TTSGenerationData) {
 	ttsGen.StoppedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
 }
 
-func addAssistantSpeechMetrics(metrics map[string]any, ttsGen *TTSGenerationData) map[string]any {
+func addAssistantSpeechMetrics(ctx context.Context, metrics map[string]any, ttsGen *TTSGenerationData, userMessage *llm.ChatMessage) map[string]any {
 	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt == 0 {
 		return metrics
 	}
@@ -1989,6 +2039,13 @@ func addAssistantSpeechMetrics(metrics map[string]any, ttsGen *TTSGenerationData
 	}
 	metrics["started_speaking_at"] = ttsGen.StartedSpeakingAt
 	metrics["stopped_speaking_at"] = ttsGen.StoppedSpeakingAt
+	if userMessage != nil {
+		if stopped, ok := userMessage.Metrics["stopped_speaking_at"].(float64); ok && ttsGen.StartedSpeakingAt >= stopped {
+			e2eLatency := ttsGen.StartedSpeakingAt - stopped
+			metrics["e2e_latency"] = e2eLatency
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, e2eLatency))
+		}
+	}
 	return metrics
 }
 

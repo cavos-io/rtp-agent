@@ -661,6 +661,9 @@ func TestSimplismartSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("server did not close websocket")
 	}
+	if err := simplismartStream.conn.UnderlyingConn().Close(); err != nil {
+		t.Fatalf("close client transport: %v", err)
+	}
 
 	frame := &model.AudioFrame{Data: bytes.Repeat([]byte{0x11}, 1600)}
 	for i := 0; i < 3; i++ {

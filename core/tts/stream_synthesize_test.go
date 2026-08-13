@@ -97,7 +97,7 @@ func TestSynthesizeWithStreamSkipsEmptyTextBeforeEndingInput(t *testing.T) {
 	}
 }
 
-func TestSynthesizeWithStreamRecordsTTSStreamSpan(t *testing.T) {
+func TestSynthesizeWithStreamDoesNotRecordInternalSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -112,6 +112,10 @@ func TestSynthesizeWithStreamRecordsTTSStreamSpan(t *testing.T) {
 		provider: "voice-provider",
 		stream:   &fakeSynthesizeStream{emptyErr: io.EOF},
 	}
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	ttsProvider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
 
 	chunked, err := SynthesizeWithStream(context.Background(), ttsProvider, "")
 	if err != nil {
@@ -123,18 +127,19 @@ func TestSynthesizeWithStreamRecordsTTSStreamSpan(t *testing.T) {
 	}
 
 	spans := recorder.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("ended spans = %d, want 1", len(spans))
+	if len(spans) != 0 {
+		t.Fatalf("ended spans = %#v, want no internal TTS span", spans)
 	}
-	if spans[0].Name() != "tts_stream" {
-		t.Fatalf("span name = %q, want tts_stream", spans[0].Name())
-	}
-	attrs := spanAttributes(spans[0].Attributes())
-	if attrs[telemetry.AttrGenAIRequestModel] != "voice-model" {
-		t.Fatalf("span model attr = %q, want voice-model", attrs[telemetry.AttrGenAIRequestModel])
-	}
-	if attrs[telemetry.AttrGenAIProviderName] != "voice-provider" {
-		t.Fatalf("span provider attr = %q, want voice-provider", attrs[telemetry.AttrGenAIProviderName])
+	select {
+	case metrics := <-metricsCh:
+		if metrics.Streamed {
+			t.Fatalf("metrics.Streamed = true, want false for synthesized wrapper")
+		}
+		if metrics.Metadata == nil || metrics.Metadata.ModelName != "voice-model" || metrics.Metadata.ModelProvider != "voice-provider" {
+			t.Fatalf("metrics.Metadata = %#v, want voice model/provider", metrics.Metadata)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TTS metrics missing after internal span removal")
 	}
 }
 

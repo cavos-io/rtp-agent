@@ -151,8 +151,11 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 }
 
 func (w *streamAdapterWrapper) run() {
-	defer close(w.eventCh)
-	defer w.span.End()
+	defer func() {
+		w.span.End()
+		w.markClosedFromRun()
+		close(w.eventCh)
+	}()
 
 	vadStream, err := w.adapter.vad.Stream(w.ctx)
 	if err != nil {
@@ -169,7 +172,6 @@ func (w *streamAdapterWrapper) run() {
 	w.mu.Lock()
 	w.vadStream = vadStream
 	w.mu.Unlock()
-	defer w.markClosedFromRun()
 	defer w.closeVADStream()
 
 	// Goroutine to push frames to VAD and buffer them
@@ -219,7 +221,9 @@ func (w *streamAdapterWrapper) run() {
 			if err != io.EOF && err != context.Canceled {
 				logger.Logger.Errorw("VAD stream error in StreamAdapter", err)
 			}
-			w.sendErr(err)
+			if err != io.EOF {
+				w.sendErr(err)
+			}
 			return
 		}
 

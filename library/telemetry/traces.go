@@ -38,6 +38,7 @@ const (
 	AttrToolSets              = "lk.tool_sets"
 	AttrResponseText          = "lk.response.text"
 	AttrResponseFunctionCalls = "lk.response.function_calls"
+	AttrResponseTTFT          = "lk.response.ttft"
 	AttrResponseTTFB          = "lk.response.ttfb"
 
 	AttrFunctionToolID      = "lk.function_tool.id"
@@ -58,6 +59,7 @@ const (
 	AttrTranscriptConfidence = "lk.transcript_confidence"
 	AttrTranscriptionDelay   = "lk.transcription_delay"
 	AttrEndOfTurnDelay       = "lk.end_of_turn_delay"
+	AttrE2ELatency           = "lk.e2e_latency"
 
 	AttrGenAIOperationName     = "gen_ai.operation.name"
 	AttrGenAIProviderName      = "gen_ai.provider.name"
@@ -90,7 +92,20 @@ func AddChatTraceEvents(span trace.Span, events []ChatTraceEvent) {
 }
 
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	return Tracer.Start(ctx, name, opts...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if observability := JobObservabilityFromContext(ctx); observability != nil && name == "agent_session" {
+		opts = append(opts, trace.WithAttributes(observability.sessionAttrs...))
+	}
+	return TracerFromContext(ctx).Start(ctx, name, opts...)
+}
+
+func TracerFromContext(ctx context.Context) trace.Tracer {
+	if observability := JobObservabilityFromContext(ctx); observability != nil {
+		return observability.Tracer()
+	}
+	return Tracer
 }
 
 type SpanContext struct {

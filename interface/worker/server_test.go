@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
@@ -3538,6 +3540,39 @@ func TestUploadJobSessionReportWaitsForUploadCompletion(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("uploadJobSessionReport did not return after upload completed")
+	}
+}
+
+func TestUploadJobSessionReportUsesJobLoggerAndRecordingOnlyUpload(t *testing.T) {
+	oldFullUpload := uploadSessionReport
+	oldRecordingUpload := uploadSessionRecordingOnly
+	var fullUploads atomic.Int32
+	var recordingUploads atomic.Int32
+	uploadSessionReport = func(string, string, string, string, *agent.SessionReport) error {
+		fullUploads.Add(1)
+		return nil
+	}
+	uploadSessionRecordingOnly = func(string, string, string, *agent.SessionReport) error {
+		recordingUploads.Add(1)
+		return nil
+	}
+	t.Cleanup(func() {
+		uploadSessionReport = oldFullUpload
+		uploadSessionRecordingOnly = oldRecordingUpload
+	})
+
+	server := NewAgentServer(WorkerOptions{APIKey: "key", APISecret: "secret", AgentName: "agent-a"})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-local-logs"}, "wss://tenant.livekit.cloud", "key", "secret")
+	jobCtx.Report = agent.NewSessionReport()
+	jobCtx.Report.RecordingOptions = agent.RecordingOptions{Logs: true, Transcript: true}
+	jobCtx.observability = &telemetry.JobObservability{}
+
+	server.uploadJobSessionReport(jobCtx)
+	if got := fullUploads.Load(); got != 0 {
+		t.Fatalf("full uploads = %d, want 0", got)
+	}
+	if got := recordingUploads.Load(); got != 1 {
+		t.Fatalf("recording-only uploads = %d, want 1", got)
 	}
 }
 

@@ -17,6 +17,8 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
@@ -2764,7 +2766,43 @@ func TestAgentActivityPendingFinalUsesVADAdjustedSpeechEndTime(t *testing.T) {
 	}
 }
 
-func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
+func TestAgentActivityFinalTranscriptTranscriptionDelayUsesVADStop(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.userSpeechStartedAt = time.Now().Add(-2 * time.Second)
+	wantStopped := time.Now().Add(-250 * time.Millisecond)
+	activity.userSpeechStoppedAt = wantStopped
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Text:       "use vad timing",
+			Confidence: 0.9,
+			EndTime:    60,
+		}},
+	})
+
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want VAD stop anchor")
+	}
+	if got := unixSecondsToTime(*info.StoppedSpeakingAt); got.Sub(wantStopped).Abs() > 10*time.Millisecond {
+		t.Fatalf("StoppedSpeakingAt = %v, want VAD stop %v", got, wantStopped)
+	}
+	if info.TranscriptionDelay < 0.15 || info.TranscriptionDelay > 0.5 {
+		t.Fatalf("TranscriptionDelay = %v, want delay from VAD stop to final transcript", info.TranscriptionDelay)
+	}
+}
+
+func TestMetricsReportFromEndOfTurnOmitsUnknownTranscriptionDelay(t *testing.T) {
+	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0)
+	if _, ok := metrics["transcription_delay"]; ok {
+		t.Fatalf("transcription_delay = %#v, want omitted without valid timing anchors", metrics["transcription_delay"])
+	}
+}
+
+func TestAgentActivityFinalTranscriptEOUDelayUsesVADStopTime(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.STT = &fakePipelineSTT{}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -2784,11 +2822,16 @@ func TestAgentActivityFinalTranscriptEOUDelayUsesSTTEndTime(t *testing.T) {
 
 	select {
 	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted returned before VAD-based endpointing delay: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case msg := <-agent.turns:
 		if msg.TextContent() != "timestamped final" {
 			t.Fatalf("turn message text = %q, want timestamped final", msg.TextContent())
 		}
-	case <-time.After(30 * time.Millisecond):
-		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using STT end time")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted did not return after VAD-based endpointing delay")
 	}
 }
 
@@ -2966,7 +3009,7 @@ func TestAgentActivityFinalTranscriptDoesNotMarkSTTEOSReceived(t *testing.T) {
 	}
 }
 
-func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *testing.T) {
+func TestAgentActivityPendingSTTFinalUsesVADStopTimeAfterEndOfSpeech(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
 	agent.STT = &fakePipelineSTT{}
@@ -2987,11 +3030,16 @@ func TestAgentActivityPendingSTTFinalUsesTranscriptEndTimeAfterEndOfSpeech(t *te
 
 	select {
 	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted returned before VAD-based endpointing delay: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+	select {
+	case msg := <-agent.turns:
 		if msg.TextContent() != "timestamped pending final" {
 			t.Fatalf("turn message text = %q, want timestamped pending final", msg.TextContent())
 		}
-	case <-time.After(30 * time.Millisecond):
-		t.Fatal("OnUserTurnCompleted waited a full endpointing delay instead of using pending STT end time")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted did not return after VAD-based endpointing delay")
 	}
 }
 
@@ -3047,6 +3095,73 @@ func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
 		}
 	case <-time.After(80 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called after min delay; threshold was not applied")
+	}
+}
+
+func TestAgentActivityEOUDetectionSpanIsChildOfUserTurn(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.TurnDetector = thresholdTurnDetector{
+		probability: 0.4,
+		thresholds:  map[string]float64{"en-US": 0.55},
+	}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.02,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	activity.runEOUDetection(EndOfTurnInfo{
+		SkipReply:            true,
+		NewTranscript:        "still talking",
+		TranscriptConfidence: 0.9,
+		Language:             "en-US",
+	})
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := activity.WaitForInactive(waitCtx); err != nil {
+		t.Fatalf("WaitForInactive error = %v", err)
+	}
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	userTurn := spans["user_turn"]
+	eou := spans["eou_detection"]
+	if userTurn == nil || eou == nil {
+		t.Fatalf("spans = %#v, want user_turn and eou_detection", spans)
+	}
+	if got, want := eou.Parent().SpanID(), userTurn.SpanContext().SpanID(); got != want {
+		t.Fatalf("eou_detection parent = %s, want user_turn %s", got, want)
+	}
+	attrs := spanAttributeValues(eou.Attributes())
+	if got := attrs[telemetry.AttrEOUProbability].AsFloat64(); got != 0.4 {
+		t.Fatalf("EOU probability = %v, want 0.4", got)
+	}
+	if got := attrs[telemetry.AttrEOUUnlikelyThreshold].AsFloat64(); got != 0.55 {
+		t.Fatalf("EOU threshold = %v, want 0.55", got)
+	}
+	if got := attrs[telemetry.AttrEOUDelay].AsFloat64(); got != 0.02 {
+		t.Fatalf("EOU delay = %v, want 0.02", got)
+	}
+	if got := attrs[telemetry.AttrEOULanguage].AsString(); got != "en-US" {
+		t.Fatalf("EOU language = %q, want en-US", got)
+	}
+	if _, ok := attrs[telemetry.AttrChatCtx]; ok {
+		t.Fatal("eou_detection unexpectedly includes lk.chat_ctx")
 	}
 }
 
@@ -4296,6 +4411,93 @@ func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called for manual commit")
+	}
+}
+
+func TestAgentActivityCommitUserTurnCreatesUserTurnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.OnFinalTranscript(&stt.SpeechEvent{Alternatives: []stt.SpeechData{{Text: "hello", Confidence: 0.9}}})
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_turn" {
+			return
+		}
+	}
+	t.Fatal("user_turn span missing")
+}
+
+func TestAgentActivityCompleteUserTurnEndsSpanWithSTTMetrics(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.STT = &fakePipelineSTT{model: "deepgram/nova-3", provider: "livekit"}
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateUserState(UserStateListening)
+	if _, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		SkipReply:            true,
+		NewTranscript:        "Hi there! How can I help you today?",
+		TranscriptConfidence: 1,
+		TranscriptionDelay:   0.35633111,
+		EndOfTurnDelay:       0.55691385,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var userTurn sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_turn" {
+			userTurn = span
+			break
+		}
+	}
+	if userTurn == nil {
+		t.Fatal("user_turn span still open after automatic turn completion")
+	}
+	attrs := spanAttributeValues(userTurn.Attributes())
+	checks := map[string]string{
+		telemetry.AttrGenAIRequestModel: "deepgram/nova-3",
+		telemetry.AttrGenAIProviderName: "livekit",
+		telemetry.AttrUserTranscript:    "Hi there! How can I help you today?",
+	}
+	for key, want := range checks {
+		if got := attrs[key].AsString(); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := attrs[telemetry.AttrTranscriptConfidence].AsFloat64(); got != 1 {
+		t.Fatalf("transcript confidence = %v, want 1", got)
+	}
+	if got := attrs[telemetry.AttrTranscriptionDelay].AsFloat64(); got != 0.35633111 {
+		t.Fatalf("transcription delay = %v, want 0.35633111", got)
+	}
+	if got := attrs[telemetry.AttrEndOfTurnDelay].AsFloat64(); got != 0.55691385 {
+		t.Fatalf("end of turn delay = %v, want 0.55691385", got)
 	}
 }
 

@@ -19,6 +19,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestPipelineAgentStartRootsCtxUnderSessionCtx(t *testing.T) {
@@ -43,6 +45,27 @@ func TestPipelineAgentStartRootsCtxUnderSessionCtx(t *testing.T) {
 	case <-vaCtx.Done():
 	case <-time.After(2 * time.Second):
 		t.Fatal("agent.ctx not cancelled when session ctx cancelled — va.ctx is not rooted under the session ctx (leak on teardown)")
+	}
+}
+
+func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("test").Start(context.Background(), "agent_turn")
+
+	metrics := addAssistantSpeechMetrics(ctx, nil, &TTSGenerationData{
+		StartedSpeakingAt: 12,
+		StoppedSpeakingAt: 13,
+	}, &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": 10.0}})
+	span.End()
+
+	if got := metrics["e2e_latency"]; got != 2.0 {
+		t.Fatalf("e2e_latency = %#v, want 2", got)
+	}
+	attrs := spanAttributeValues(recorder.Ended()[0].Attributes())
+	if got := attrs[telemetry.AttrE2ELatency].AsFloat64(); got != 2.0 {
+		t.Fatalf("%s = %v, want 2", telemetry.AttrE2ELatency, got)
 	}
 }
 
@@ -327,6 +350,15 @@ func TestPipelineAgentPrecomputeReplyAppendsInstructionsLikeReference(t *testing
 }
 
 func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{
@@ -363,6 +395,51 @@ func TestPipelineAgentScheduledReplyConsumesPrecomputedLLMOnce(t *testing.T) {
 	}
 	if len(speech.ChatItems()) != 1 || speech.ChatItems()[0].GetID() != msg.GetID() {
 		t.Fatalf("speech.ChatItems = %#v, want committed precomputed assistant item", speech.ChatItems())
+	}
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	node := spans["llm_node"]
+	if turn == nil || node == nil {
+		t.Fatalf("spans = %#v, want preemptive llm_node under agent_turn", spans)
+	}
+	if got, want := node.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("preemptive llm_node parent = %s, want agent_turn %s", got, want)
+	}
+}
+
+func TestPipelineAgentScheduledReplyCreatesAgentTurnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}}}}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(nil, nil, l, nil, chatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	pipeline.OnSpeechScheduled(context.Background(), speech)
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	node := spans["llm_node"]
+	if turn == nil || node == nil {
+		t.Fatalf("spans = %#v, want agent_turn and llm_node", spans)
+	}
+	if got, want := node.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("llm_node parent = %s, want agent_turn %s", got, want)
 	}
 }
 
@@ -1426,6 +1503,49 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("playTTSGenerationWithTranscript did not finish")
+	}
+}
+
+func TestPipelineAgentSpeakingSpanUsesAgentTurnContext(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	ctx, turnSpan := telemetry.StartSpan(context.Background(), "agent_turn")
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame, 1),
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	ttsGen.AudioCh <- &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 1000, NumChannels: 1, SamplesPerChannel: 1}
+	close(ttsGen.AudioCh)
+	close(ttsGen.TimedTextCh)
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+
+	if _, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, closedChannel(), nil); err != nil {
+		t.Fatal(err)
+	}
+	session.UpdateAgentState(AgentStateListening)
+	turnSpan.End()
+
+	spans := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		spans[span.Name()] = span
+	}
+	turn := spans["agent_turn"]
+	speaking := spans["agent_speaking"]
+	if turn == nil || speaking == nil {
+		t.Fatalf("spans = %#v, want agent_turn and agent_speaking", spans)
+	}
+	if got, want := speaking.Parent().SpanID(), turn.SpanContext().SpanID(); got != want {
+		t.Fatalf("agent_speaking parent = %s, want agent_turn %s", got, want)
 	}
 }
 
