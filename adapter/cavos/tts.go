@@ -31,6 +31,8 @@ type TTS struct {
 	language       string
 	responseFormat string
 	sampleRate     int
+	speed          float64
+	totalSteps     int
 }
 
 type TTSOption func(*TTS)
@@ -95,6 +97,26 @@ func WithTTSSampleRate(sampleRate int) TTSOption {
 	return func(t *TTS) {
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithTTSSpeed(speed float64) TTSOption {
+	return func(t *TTS) {
+		if speed > 0 {
+			t.speed = speed
+		} else {
+			t.speed = 1.0
+		}
+	}
+}
+
+func WithTTSTotalSteps(totalSteps int) TTSOption {
+	return func(t *TTS) {
+		if totalSteps > 0 {
+			t.totalSteps = totalSteps
+		} else {
+			t.totalSteps = 8
 		}
 	}
 }
