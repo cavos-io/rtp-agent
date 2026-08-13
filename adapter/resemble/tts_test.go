@@ -662,7 +662,7 @@ func TestResembleTTSStreamIgnoresEarlyAudioEndUntilLastRequest(t *testing.T) {
 }
 
 func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
-	conn, closed := newResembleClosingWebsocketConn(t)
+	conn, ready := newResembleClosingWebsocketConn(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	provider := NewResembleTTS("test-key", "")
 	stream := &resembleTTSSynthesizeStream{
@@ -676,7 +676,7 @@ func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	provider.registerStream(stream)
 
 	select {
-	case <-closed:
+	case <-ready:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for test websocket close")
 	}
@@ -1015,7 +1015,7 @@ func newResembleProviderMessagesWebsocketConn(t *testing.T, messages ...map[stri
 func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
-	closed := make(chan struct{})
+	ready := make(chan struct{})
 	listener := newResembleSingleConnListener(serverConn)
 	upgrader := websocket.Upgrader{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1025,7 +1025,12 @@ func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan stru
 			return
 		}
 		defer conn.Close()
-		close(closed)
+		close(ready)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
 	})}
 	serverErr := make(chan error, 1)
 	go func() {
@@ -1056,7 +1061,7 @@ func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan stru
 		default:
 		}
 	})
-	return conn, closed
+	return conn, ready
 }
 
 func newResembleRecordingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan map[string]any) {

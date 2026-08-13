@@ -4470,7 +4470,11 @@ func TestGoogleSTTStreamTreatsReference409AsRetryable(t *testing.T) {
 }
 
 func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
-	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	firstRecv := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: firstRecv,
+		recvErr:   status.Error(codes.AlreadyExists, "stream conflict"),
+	}
 	restartedRecv := make(chan struct{})
 	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv, sentCh: make(chan int, 2)}
 	client := &fakeGoogleSpeechClient{
@@ -4488,6 +4492,7 @@ func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
 		t.Fatalf("first PushFrame returned error: %v", err)
 	}
+	close(firstRecv)
 
 	select {
 	case calls := <-client.streamCallCh:

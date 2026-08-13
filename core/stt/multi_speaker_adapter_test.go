@@ -648,10 +648,12 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 
 func TestMultiSpeakerAdapterSuppressesReferenceEndInputRuntimeError(t *testing.T) {
 	endInputErr := errors.New("stream input ended")
+	nextBlock := make(chan struct{})
 	inner := &fakeMultiSpeakerStream{
 		endInputErr: endInputErr,
-		waitCalls:   2,
 		callCh:      make(chan struct{}, 2),
+		nextBlock:   nextBlock,
+		nextErr:     io.EOF,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	wrapper := &multiSpeakerAdapterWrapper{
@@ -665,6 +667,7 @@ func TestMultiSpeakerAdapterSuppressesReferenceEndInputRuntimeError(t *testing.T
 	}
 	go wrapper.run()
 	defer wrapper.Close()
+	defer close(nextBlock)
 
 	if err := wrapper.EndInput(); err != nil {
 		t.Fatalf("EndInput returned error: %v", err)
@@ -699,6 +702,7 @@ type fakeMultiSpeakerStream struct {
 	calls           []string
 	waitCalls       int
 	callCh          chan struct{}
+	nextBlock       <-chan struct{}
 	startTimeOffset float64
 	startTime       float64
 }
@@ -741,6 +745,9 @@ func (f *fakeMultiSpeakerStream) Close() error {
 }
 
 func (f *fakeMultiSpeakerStream) Next() (*SpeechEvent, error) {
+	if f.nextBlock != nil {
+		<-f.nextBlock
+	}
 	for range f.waitCalls {
 		<-f.callCh
 	}

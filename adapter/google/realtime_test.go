@@ -4364,6 +4364,7 @@ func TestGoogleRealtimeSessionToolCallsCommitReferenceTranscripts(t *testing.T) 
 			break
 		}
 	}
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
 
 	messages := session.chatCtx.Messages()
 	if len(messages) != 2 {
