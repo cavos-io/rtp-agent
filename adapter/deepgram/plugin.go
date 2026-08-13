@@ -2,6 +2,6 @@ package deepgram
 
 const (
 	PluginTitle   = "rtp-agent.plugins.deepgram"
-	PluginVersion = "v0.4.7"
+	PluginVersion = "v0.4.8"
 	PluginPackage = "rtp-agent.plugins.deepgram"
 )
