@@ -237,6 +237,50 @@ func TestStreamAdapterEmitsStreamedMetricsForFinalSegment(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterMetricsTTFBMeasuresRequestToFirstFrame(t *testing.T) {
+	provider := &fakeSilentStreamAdapterTTS{
+		events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{
+				Data:              []byte{1, 0, 2, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			},
+		}},
+		synthesizeDelay: 30 * time.Millisecond,
+	}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.Streamed {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello world."); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	nextStreamAdapterAudio(t, stream)
+
+	select {
+	case got := <-metricsCh:
+		if got.TTFB < 0.03 {
+			t.Fatalf("metrics TTFB = %f, want >= 0.03 (provider latency, not self-timed 0)", got.TTFB)
+		}
+	default:
+		t.Fatal("stream adapter did not emit streamed metrics")
+	}
+}
+
 func TestStreamAdapterSkipsOwnMetricsWhenProviderSelfReports(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{{
@@ -1419,7 +1463,8 @@ func (f *fakeStreamAdapterChunkedStream) Close() error {
 }
 
 type fakeSilentStreamAdapterTTS struct {
-	events []*SynthesizedAudio
+	events          []*SynthesizedAudio
+	synthesizeDelay time.Duration
 }
 
 func (f *fakeSilentStreamAdapterTTS) Label() string                 { return "fake-silent" }
@@ -1428,6 +1473,9 @@ func (f *fakeSilentStreamAdapterTTS) SampleRate() int               { return 240
 func (f *fakeSilentStreamAdapterTTS) NumChannels() int              { return 1 }
 
 func (f *fakeSilentStreamAdapterTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
+	if f.synthesizeDelay > 0 {
+		time.Sleep(f.synthesizeDelay)
+	}
 	return &fakeStreamAdapterChunkedStream{events: f.events}, nil
 }
 
