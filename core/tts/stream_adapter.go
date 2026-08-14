@@ -251,6 +251,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	}
 
 	w.flushSegmentPending(false)
+	w.markSegmentStart(segmentID)
 
 	stream, err := w.adapter.tts.Synthesize(w.ctx, synthText)
 	if err != nil {
@@ -398,6 +399,12 @@ func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, tex
 		w.emitSegmentMetrics(audio)
 	}
 	w.emitAudio(audio)
+}
+
+func (w *streamAdapterWrapper) markSegmentStart(segmentID string) {
+	if _, ok := w.metrics[segmentID]; !ok {
+		w.metrics[segmentID] = &streamAdapterSegmentMetrics{startedAt: time.Now()}
+	}
 }
 
 func (w *streamAdapterWrapper) observeSegmentAudio(audio *SynthesizedAudio, text string) {
