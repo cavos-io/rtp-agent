@@ -10,7 +10,7 @@ import (
 
 const (
 	PluginTitle   = "rtp-agent.plugins.ten"
-	PluginVersion = "v0.4.8"
+	PluginVersion = "v0.4.9"
 	PluginPackage = "rtp-agent.plugins.ten"
 
 	modelFileName = "ten-vad.onnx"

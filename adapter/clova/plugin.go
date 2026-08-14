@@ -2,7 +2,7 @@ package clova
 
 const (
 	PluginTitle   = "rtp-agent.plugins.clova"
-	PluginVersion = "v0.4.8"
+	PluginVersion = "v0.4.9"
 	PluginPackage = "rtp-agent.plugins.clova"
 )
 
