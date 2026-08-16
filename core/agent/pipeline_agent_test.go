@@ -2578,14 +2578,19 @@ func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
 
 func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
 	sttStream := &fakePipelineRecognizeStream{}
+	vadStream := &fakePipelineVADStream{}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	pipeline := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
 	pipeline.session = session
+	pipeline.vadStream = vadStream
 	pipeline.sttStream = sttStream
 	pipeline.vadSpeechStarted = true
 
 	pipeline.onVADStall()
 
+	if vadStream.flushCount != 1 {
+		t.Fatalf("VAD stream Flush calls = %d, want 1 after synthetic end-of-speech", vadStream.flushCount)
+	}
 	if sttStream.flushCount != 1 {
 		t.Fatalf("STT stream Flush calls = %d, want 1 after synthetic VAD end-of-speech", sttStream.flushCount)
 	}

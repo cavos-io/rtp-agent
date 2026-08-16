@@ -514,11 +514,18 @@ func (va *PipelineAgent) onVADStall() {
 		va.vadStallTimer = nil
 	}
 	timeout := va.vadStallTimeout
+	stream := va.vadStream
 	session := va.session
 	va.mu.Unlock()
 
 	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
+	if stream != nil {
+		if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+			logger.Logger.Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
+			va.emitError(err, va.vad)
+		}
+	}
 	va.finalizeActiveSTTStream()
 	if session != nil && session.activity != nil {
 		session.activity.OnEndOfSpeech(nil)

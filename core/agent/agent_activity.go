@@ -2718,6 +2718,9 @@ func (a *AgentActivity) setSpeaking(speaking bool) bool {
 
 func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
 	a.cancelPendingEOUDetection()
+	a.falseInterruptionMu.Lock()
+	speechSeq := a.userTurnSeq
+	a.falseInterruptionMu.Unlock()
 	if a.Session != nil {
 		userTurnSpan := a.Session.ensureUserTurnSpan(a.ctx)
 		defer a.Session.finishUserTurnSpan(userTurnSpan)
@@ -2929,7 +2932,21 @@ collect:
 	}); err != nil {
 		return transcript, err
 	}
+	a.clearCommittedSpeechTiming(speechSeq)
 	return transcript, nil
+}
+
+func (a *AgentActivity) clearCommittedSpeechTiming(speechSeq uint64) {
+	if a == nil || a.isUserSpeaking() {
+		return
+	}
+	a.falseInterruptionMu.Lock()
+	defer a.falseInterruptionMu.Unlock()
+	if a.userTurnSeq != speechSeq {
+		return
+	}
+	a.userSpeechStartedAt = time.Time{}
+	a.userSpeechStoppedAt = time.Time{}
 }
 
 func (a *AgentActivity) shouldIgnoreManualCommittedSTT(evType stt.SpeechEventType) bool {
@@ -3949,6 +3966,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			logger.Logger.Errorw("user turn completion failed", err)
 			return
 		}
+		a.clearCommittedSpeechTiming(turnSeq)
 	}()
 }
 
