@@ -1748,7 +1748,11 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	wasSpeaking := a.setSpeaking(false)
-	a.userSpeechStoppedAt = vadSpeechStoppedAt(ev)
+	stoppedAt := vadSpeechStoppedAt(ev)
+	if ev == nil && !a.userSpeechStoppedAt.IsZero() {
+		stoppedAt = a.userSpeechStoppedAt
+	}
+	a.userSpeechStoppedAt = stoppedAt
 	if ev == nil {
 		a.sttEOSReceived = true
 	}
@@ -1758,7 +1762,11 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
-		endpointing.OnEndOfSpeech(vadSpeechEndTimestamp(ev), shouldIgnore)
+		endedAt := vadSpeechEndTimestamp(ev)
+		if ev == nil {
+			endedAt = timeToUnixSeconds(stoppedAt)
+		}
+		endpointing.OnEndOfSpeech(endedAt, shouldIgnore)
 	}
 	a.overlapSpeechEnded = false
 	logger.Logger.Infow("End of speech detected")
@@ -2014,16 +2022,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
 	if a.vadBasedTurnDetection() && !a.isUserSpeaking() {
-		a.runEOUDetection(EndOfTurnInfo{
-			NewTranscript:         transcript,
-			Language:              language,
-			TranscriptConfidence:  confidence,
-			TranscriptionDelay:    transcriptionDelay,
-			TranscriptionDelaySet: transcriptionDelaySet,
-			StartedSpeakingAt:     startedSpeakingAt,
-			StoppedSpeakingAt:     stoppedSpeakingAt,
-			AudioFrames:           a.userAudioSnapshot(),
-		})
+		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
 }
 

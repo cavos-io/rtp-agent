@@ -2795,6 +2795,36 @@ func TestAgentActivityFinalTranscriptTranscriptionDelayUsesVADStop(t *testing.T)
 	}
 }
 
+func TestAgentActivitySyntheticEndPreservesLastVADInferenceTime(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.speaking = true
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                 vad.VADEventInferenceDone,
+		RawAccumulatedSpeech: 0.5,
+	})
+	wantStopped := activity.userSpeechStoppedAt
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "synthetic end", Confidence: 0.9}},
+	})
+	time.Sleep(10 * time.Millisecond)
+	activity.OnEndOfSpeech(nil)
+
+	if got := activity.userSpeechStoppedAt; !got.Equal(wantStopped) {
+		t.Fatalf("userSpeechStoppedAt = %v, want last VAD inference time %v", got, wantStopped)
+	}
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want last VAD inference time")
+	}
+	if got := unixSecondsToTime(*info.StoppedSpeakingAt); got.Sub(wantStopped).Abs() > time.Microsecond {
+		t.Fatalf("StoppedSpeakingAt = %v, want last VAD inference time %v", got, wantStopped)
+	}
+}
+
 func TestMetricsReportFromEndOfTurnOmitsUnknownTranscriptionDelay(t *testing.T) {
 	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0)
 	if _, ok := metrics["transcription_delay"]; ok {
@@ -6814,6 +6844,34 @@ func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testin
 	case msg := <-agent.turns:
 		t.Fatalf("CommitUserTurn duplicated completed turn with %q", msg.TextContent())
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityLateFinalAfterVADEndPreservesAccumulatedTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first segment", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "late tail", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "first segment late tail" {
+			t.Fatalf("turn message text = %q, want accumulated transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after late final transcript")
 	}
 }
 

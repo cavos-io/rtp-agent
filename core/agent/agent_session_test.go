@@ -1844,6 +1844,41 @@ func TestAgentSessionUserSpeakingSpanIsChildOfUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUserSpeakingSpanUsesStateTimestamps(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.runCtx = context.Background()
+	startedAt := time.Now().Add(-2 * time.Second).Truncate(time.Microsecond)
+	stoppedAt := startedAt.Add(750 * time.Millisecond)
+
+	session.updateUserStateAt(UserStateSpeaking, startedAt)
+	session.updateUserStateAt(UserStateListening, stoppedAt)
+
+	var userSpeaking sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_speaking" {
+			userSpeaking = span
+		}
+	}
+	if userSpeaking == nil {
+		t.Fatal("user_speaking span was not ended")
+	}
+	if got := userSpeaking.StartTime(); !got.Equal(startedAt) {
+		t.Fatalf("user_speaking start = %v, want %v", got, startedAt)
+	}
+	if got := userSpeaking.EndTime(); !got.Equal(stoppedAt) {
+		t.Fatalf("user_speaking end = %v, want %v", got, stoppedAt)
+	}
+}
+
 func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
