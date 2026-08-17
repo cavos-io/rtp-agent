@@ -218,27 +218,25 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 		cancelDial()
 		return nil, io.ErrClosedPipe
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, streamURL, header)
+	conn, resp, err := websocket.DefaultDialer.DialContext(dialCtx, streamURL, header)
 	cancelDial()
 	s.unregisterPendingStreamDial(pendingDial)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
+		return nil, deepgramSTTv2DialError(err, resp)
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramV2Stream{
-		provider:   s,
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		streamURL:  streamURL,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
-		language:   s.language,
-		sampleRate: s.sampleRate,
+		provider:          s,
+		conn:              conn,
+		ctx:               streamCtx,
+		cancel:            cancel,
+		streamURL:         streamURL,
+		events:            make(chan *stt.SpeechEvent, 100),
+		errCh:             make(chan error, 1),
+		language:          s.language,
+		sampleRate:        s.sampleRate,
+		heartbeatInterval: deepgramSTTv2HeartbeatInterval,
 	}
 	if !s.registerStream(stream) {
 		_ = conn.Close()
@@ -248,6 +246,31 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 	go stream.readLoop(conn)
 	go stream.heartbeatLoop()
 	return stream, nil
+}
+
+func deepgramSTTv2DialError(err error, resp *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("Deepgram STT websocket connect timed out")
+	}
+	if resp != nil && resp.StatusCode > 0 {
+		var body string
+		if resp.Body != nil {
+			data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			body = string(data)
+			_ = resp.Body.Close()
+			resp.Body = nil
+		}
+		return llm.NewAPIStatusError(
+			"Deepgram STT websocket handshake failed",
+			resp.StatusCode,
+			resp.Header.Get("dg-request-id"),
+			body,
+		)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to deepgram: %v", err))
 }
 
 func (s *DeepgramSTTv2) Close() error {
@@ -375,28 +398,30 @@ func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
 }
 
 type deepgramV2Stream struct {
-	provider       *DeepgramSTTv2
-	conn           *websocket.Conn
-	events         chan *stt.SpeechEvent
-	errCh          chan error
-	mu             sync.Mutex
-	closed         bool
-	inputEnded     bool
-	speaking       bool
-	requestID      string
-	language       string
-	start          float64
-	offset         float64
-	sampleRate     int
-	rateGuard      stt.SampleRateGuard
-	inputAudio     deepgramSTTInputAudioNormalizer
-	audioBStream   *audio.AudioByteStream
-	streamURL      string
-	reconnectNext  bool
-	usageTotal     float64
-	usageLastFlush time.Time
-	ctx            context.Context
-	cancel         context.CancelFunc
+	provider          *DeepgramSTTv2
+	conn              *websocket.Conn
+	events            chan *stt.SpeechEvent
+	errCh             chan error
+	mu                sync.Mutex
+	eventMu           sync.Mutex
+	closed            bool
+	inputEnded        bool
+	speaking          bool
+	requestID         string
+	language          string
+	start             float64
+	offset            float64
+	sampleRate        int
+	rateGuard         stt.SampleRateGuard
+	inputAudio        deepgramSTTInputAudioNormalizer
+	audioBStream      *audio.AudioByteStream
+	streamURL         string
+	reconnectNext     bool
+	usageTotal        float64
+	usageLastFlush    time.Time
+	ctx               context.Context
+	cancel            context.CancelFunc
+	heartbeatInterval time.Duration
 }
 
 type deepgramV2Response struct {
@@ -491,7 +516,11 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 }
 
 func (s *deepgramV2Stream) heartbeatLoop() {
-	ticker := time.NewTicker(deepgramSTTv2HeartbeatInterval)
+	interval := s.heartbeatInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -517,69 +546,82 @@ func (s *deepgramV2Stream) sendHeartbeat() error {
 }
 
 func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
+	s.eventMu.Lock()
 	if resp.RequestID != "" {
 		s.requestID = resp.RequestID
 	}
 
+	var events []*stt.SpeechEvent
+	var err error
 	switch resp.Type {
 	case "TurnInfo":
-		return s.processTurnInfo(resp)
+		events = s.processTurnInfoLocked(resp)
 	case "Error":
 		description := resp.Description
 		if description == "" {
 			description = "unknown error from deepgram"
 		}
-		return llm.NewAPIStatusError(description, -1, "", "")
-	default:
-		return nil
+		err = llm.NewAPIStatusError(description, -1, "", "")
 	}
+	s.eventMu.Unlock()
+
+	for _, event := range events {
+		s.sendEvent(event)
+	}
+	return err
 }
 
-func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
+func (s *deepgramV2Stream) processTurnInfoLocked(resp deepgramV2Response) []*stt.SpeechEvent {
+	var events []*stt.SpeechEvent
+	transcriptEvent := func(eventType stt.SpeechEventType) *stt.SpeechEvent {
+		alts := deepgramV2SpeechData(s.language, resp, s.offset)
+		if len(alts) == 0 {
+			return nil
+		}
+		return &stt.SpeechEvent{
+			Type:         eventType,
+			RequestID:    s.requestID,
+			Alternatives: alts,
+		}
+	}
+	appendTranscript := func(eventType stt.SpeechEventType) {
+		if event := transcriptEvent(eventType); event != nil {
+			events = append(events, event)
+		}
+	}
+
 	switch resp.Event {
 	case "StartOfTurn":
 		if s.speaking {
-			return nil
+			return events
 		}
 		s.speaking = true
-		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
-		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		appendTranscript(stt.SpeechEventInterimTranscript)
 	case "Update":
 		if !s.speaking {
-			return nil
+			return events
 		}
-		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
+		appendTranscript(stt.SpeechEventInterimTranscript)
 	case "EagerEndOfTurn":
 		if !s.speaking {
-			return nil
+			return events
 		}
-		s.sendTranscriptEvent(stt.SpeechEventPreflightTranscript, resp)
+		appendTranscript(stt.SpeechEventPreflightTranscript)
 	case "TurnResumed":
-		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
+		appendTranscript(stt.SpeechEventInterimTranscript)
 	case "EndOfTurn":
 		if !s.speaking {
-			return nil
+			return events
 		}
 		s.speaking = false
 		if deepgramV2MalformedTranscript(resp) {
-			return nil
+			return events
 		}
-		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
-		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+		appendTranscript(stt.SpeechEventFinalTranscript)
+		events = append(events, &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
-	return nil
-}
-
-func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, resp deepgramV2Response) {
-	alts := deepgramV2SpeechData(s.language, resp, s.offset)
-	if len(alts) == 0 {
-		return
-	}
-	s.sendEvent(&stt.SpeechEvent{
-		Type:         eventType,
-		RequestID:    s.requestID,
-		Alternatives: alts,
-	})
+	return events
 }
 
 func deepgramV2HasTranscript(resp deepgramV2Response) bool {
@@ -768,6 +810,8 @@ func (s *deepgramV2Stream) reconnectAfterUnexpectedClose(conn *websocket.Conn) e
 }
 
 func (s *deepgramV2Stream) advanceTimingForReconnectLocked(now time.Time) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
 	nowSeconds := float64(now.UnixNano()) / 1e9
 	if s.start > 0 && nowSeconds > s.start {
 		s.offset += nowSeconds - s.start
@@ -876,9 +920,12 @@ func (s *deepgramV2Stream) flushRecognitionUsageLocked() {
 	duration := s.usageTotal
 	s.usageTotal = 0
 	s.usageLastFlush = time.Now()
+	s.eventMu.Lock()
+	requestID := s.requestID
+	s.eventMu.Unlock()
 	s.sendEvent(&stt.SpeechEvent{
 		Type:      stt.SpeechEventRecognitionUsage,
-		RequestID: s.requestID,
+		RequestID: requestID,
 		RecognitionUsage: &stt.RecognitionUsage{
 			AudioDuration: duration,
 		},
@@ -980,8 +1027,8 @@ func (s *deepgramV2Stream) done() <-chan struct{} {
 }
 
 func (s *deepgramV2Stream) StartTimeOffset() float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
 	return s.offset
 }
 
@@ -989,14 +1036,14 @@ func (s *deepgramV2Stream) SetStartTimeOffset(offset float64) {
 	if offset < 0 {
 		panic("start_time_offset must be non-negative")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
 	s.offset = offset
 }
 
 func (s *deepgramV2Stream) StartTime() float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
 	return s.start
 }
 
@@ -1004,8 +1051,8 @@ func (s *deepgramV2Stream) SetStartTime(startTime float64) {
 	if startTime < 0 {
 		panic("start_time must be non-negative")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
 	s.start = startTime
 }
 
