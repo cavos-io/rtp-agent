@@ -32,7 +32,8 @@ import (
 const (
 	defaultElevenLabsBaseURL           = "https://api.elevenlabs.io/v1"
 	defaultElevenLabsInactivityTimeout = 180
-	defaultElevenLabsStreamTimeout     = 10 * time.Second
+	defaultElevenLabsStreamTimeout     = 0
+	defaultElevenLabsSynthesizeTimeout = 30 * time.Second
 )
 
 type TTS struct {
@@ -60,6 +61,7 @@ type TTS struct {
 	streamResponseTimeout          time.Duration
 	streamConnectionRefresh        bool
 	streams                        map[*elevenLabsStream]struct{}
+	chunkedStreams                 map[*elevenLabsChunkedStream]struct{}
 	currentStreamConn              *elevenLabsTTSConnection
 	streamConnCtx                  context.Context
 	streamConnCancel               context.CancelFunc
@@ -238,6 +240,7 @@ func NewTTS(apiKey string, voiceID string, modelID string, opts ...TTSOption) (*
 		applyTextNormalization: "auto",
 		streamConnCtx:          streamConnCtx,
 		streamConnCancel:       streamConnCancel,
+		chunkedStreams:         make(map[*elevenLabsChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -275,7 +278,12 @@ func (t *TTS) Close() error {
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
+	chunkedStreams := make([]*elevenLabsChunkedStream, 0, len(t.chunkedStreams))
+	for stream := range t.chunkedStreams {
+		chunkedStreams = append(chunkedStreams, stream)
+	}
 	t.streams = nil
+	t.chunkedStreams = nil
 	currentConn := t.currentStreamConn
 	t.currentStreamConn = nil
 	streamConnCancel := t.streamConnCancel
@@ -288,6 +296,11 @@ func (t *TTS) Close() error {
 	}
 	var closeErr error
 	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	for _, stream := range chunkedStreams {
 		if err := stream.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
@@ -334,6 +347,31 @@ func (t *TTS) unregisterStream(stream *elevenLabsStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
+}
+
+func (t *TTS) registerChunkedStream(stream *elevenLabsChunkedStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	if t.chunkedStreams == nil {
+		t.chunkedStreams = make(map[*elevenLabsChunkedStream]struct{})
+	}
+	t.chunkedStreams[stream] = struct{}{}
+	return true
+}
+
+func (t *TTS) unregisterChunkedStream(stream *elevenLabsChunkedStream) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.chunkedStreams, stream)
 }
 
 func (t *TTS) UpdateOptions(opts ...TTSOption) {
@@ -455,63 +493,93 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-
 	apiURL, jsonBody := buildElevenLabsSynthesizeRequest(t, text)
-
-	return &elevenLabsChunkedStream{
-		ctx:        ctx,
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &elevenLabsChunkedStream{
+		ctx:        streamCtx,
+		cancel:     cancel,
 		apiURL:     apiURL,
 		jsonBody:   append([]byte(nil), jsonBody...),
 		apiKey:     t.apiKey,
 		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
-	}, nil
+		provider:   t,
+		text:       text,
+	}
+	if !t.registerChunkedStream(stream) {
+		cancel()
+		return nil, io.ErrClosedPipe
+	}
+	return stream, nil
 }
 
 func buildElevenLabsSynthesizeRequest(t *TTS, text string) (string, []byte) {
-	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?model_id=%s&output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.modelID), url.QueryEscape(t.encoding))
+	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?output_format=%s&enable_logging=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.encoding), strconv.FormatBool(t.enableLogging))
 	if t.streamingLatency != nil {
 		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
 	}
 	body := map[string]interface{}{
-		"text":           text,
-		"model_id":       t.modelID,
-		"voice_settings": nil,
+		"text":                     text,
+		"model_id":                 t.modelID,
+		"voice_settings":           nil,
+		"apply_text_normalization": t.applyTextNormalization,
 	}
 	if t.voiceSettings != nil {
 		body["voice_settings"] = elevenLabsVoiceSettingsPayload(t.voiceSettings)
+	}
+	if t.language != "" {
+		body["language_code"] = t.language
+	}
+	if t.applyLanguageTextNormalization != nil {
+		body["apply_language_text_normalization"] = *t.applyLanguageTextNormalization
 	}
 	jsonBody, _ := json.Marshal(body)
 	return apiURL, jsonBody
 }
 
 type elevenLabsChunkedStream struct {
-	ctx        context.Context
-	apiURL     string
-	jsonBody   []byte
-	apiKey     string
-	resp       *http.Response
-	encoding   string
-	sampleRate int
-	decoder    codecs.AudioStreamDecoder
-	started    bool
-	emitted    bool
-	finalSent  bool
-	mp3ReadErr error
-	mp3ReadLen int
-	mu         sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	requestCancel context.CancelFunc
+	apiURL        string
+	jsonBody      []byte
+	apiKey        string
+	resp          *http.Response
+	encoding      string
+	sampleRate    int
+	provider      *TTS
+	text          string
+	decoder       codecs.AudioStreamDecoder
+	requested     bool
+	started       bool
+	emitted       bool
+	finalSent     bool
+	mp3ReadErr    error
+	mp3ReadLen    int
+	pcmCarry      []byte
+	pcmPendingErr error
+	pcmPendingEOF bool
+	closed        bool
+	nextMu        sync.Mutex
+	mu            sync.Mutex
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+
 	s.mu.Lock()
-	if s.finalSent {
+	if s.closed || s.finalSent {
 		s.mu.Unlock()
 		return nil, io.EOF
 	}
-	if err := s.ensureResponseLocked(); err != nil {
-		s.mu.Unlock()
+	s.mu.Unlock()
+
+	if err := s.ensureResponse(); err != nil {
 		return nil, err
 	}
+
+	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
 		s.mu.Unlock()
 		return nil, io.EOF
@@ -520,57 +588,91 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		return s.nextDecodedCompressed()
 	}
-	defer s.mu.Unlock()
 	if !strings.HasPrefix(s.encoding, "pcm") {
+		s.mu.Unlock()
+		s.finish()
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding))
 	}
+	body := s.resp.Body
+	pendingErr := s.pcmPendingErr
+	pendingEOF := s.pcmPendingEOF
+	s.pcmPendingErr = nil
+	s.pcmPendingEOF = false
+	s.mu.Unlock()
+	if pendingEOF {
+		return s.finishPCM()
+	}
+	if pendingErr != nil {
+		return nil, s.finishReadError(pendingErr, "pcm")
+	}
 
-	// Read PCM audio in chunks from the HTTP response
-	buf := make([]byte, 8192)
-	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF && n > 0 {
+	for {
+		buf := make([]byte, 8192)
+		n, err := body.Read(buf)
+
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		data := append(s.pcmCarry, buf[:n]...)
+		s.pcmCarry = nil
+		if len(data)%2 != 0 {
+			s.pcmCarry = append(s.pcmCarry, data[len(data)-1])
+			data = data[:len(data)-1]
+		}
+		if len(data) > 0 {
 			s.emitted = true
+			if err == io.EOF {
+				s.pcmPendingEOF = true
+			} else if err != nil {
+				s.pcmPendingErr = err
+			}
+		}
+		s.mu.Unlock()
+
+		if len(data) > 0 {
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
-					Data:              buf[:n],
+					Data:              bytes.Clone(data),
 					SampleRate:        uint32(s.sampleRate),
 					NumChannels:       1,
-					SamplesPerChannel: uint32(n / 2),
+					SamplesPerChannel: uint32(len(data) / 2),
 				},
 			}, nil
 		}
+		if err == nil {
+			continue
+		}
 		if err == io.EOF {
-			if s.emitted && !s.finalSent {
-				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
-			}
-			return nil, io.EOF
+			return s.finishPCM()
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked pcm response read %s: %v", s.audioByteState(), err))
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked pcm response read %s: %v", s.audioByteState(), err))
+		return nil, s.finishReadError(err, "pcm")
 	}
-
-	s.emitted = true
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
 }
 
-func (s *elevenLabsChunkedStream) ensureResponseLocked() error {
+func (s *elevenLabsChunkedStream) ensureResponse() error {
+	s.mu.Lock()
 	if s.resp != nil {
+		s.mu.Unlock()
 		return nil
 	}
-	req, err := http.NewRequestWithContext(s.ctx, "POST", s.apiURL, bytes.NewBuffer(s.jsonBody))
+	if s.closed || s.finalSent {
+		s.mu.Unlock()
+		return io.EOF
+	}
+	if s.requested {
+		s.mu.Unlock()
+		return io.EOF
+	}
+	s.requested = true
+	requestCtx, requestCancel := context.WithTimeout(s.ctx, defaultElevenLabsSynthesizeTimeout)
+	s.requestCancel = requestCancel
+	s.mu.Unlock()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, s.apiURL, bytes.NewReader(s.jsonBody))
 	if err != nil {
-		s.finalSent = true
+		s.finish()
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -578,7 +680,16 @@ func (s *elevenLabsChunkedStream) ensureResponseLocked() error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		s.finalSent = true
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		s.finish()
+		if closed {
+			return io.EOF
+		}
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
@@ -586,21 +697,63 @@ func (s *elevenLabsChunkedStream) ensureResponseLocked() error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		s.finalSent = true
+		s.finish()
 		message := http.StatusText(resp.StatusCode)
 		if message == "" {
 			message = resp.Status
 		}
 		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
+	if contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		s.finalSent = true
+		s.finish()
 		return llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
 	}
+	s.mu.Lock()
+	if s.closed || s.finalSent {
+		s.mu.Unlock()
+		resp.Body.Close()
+		requestCancel()
+		return io.EOF
+	}
 	s.resp = resp
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *elevenLabsChunkedStream) finishPCM() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	emitted := s.emitted
+	s.pcmCarry = nil
+	s.pcmPendingErr = nil
+	s.pcmPendingEOF = false
+	s.mu.Unlock()
+	if emitted {
+		s.finish()
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	s.finish()
+	if strings.TrimSpace(s.text) == "" {
+		return nil, io.EOF
+	}
+	return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+}
+
+func (s *elevenLabsChunkedStream) finishReadError(err error, encoding string) error {
+	state := s.audioByteState()
+	s.finish()
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
 }
 
 func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio, error) {
@@ -631,31 +784,31 @@ func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio
 		}
 		s.mu.Unlock()
 		if readErr != nil {
-			if errors.Is(readErr, context.DeadlineExceeded) {
-				return nil, llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", elevenLabsEncodingKind(s.encoding), s.audioByteState(), readErr))
-			}
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", elevenLabsEncodingKind(s.encoding), s.audioByteState(), readErr))
+			return nil, s.finishReadError(readErr, elevenLabsEncodingKind(s.encoding))
 		}
 		if readLen == 0 && !finalSent {
+			s.finish()
+			if strings.TrimSpace(s.text) != "" {
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			}
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if strings.Contains(err.Error(), "decoder closed") {
-			s.mu.Lock()
 			if emitted && !finalSent {
-				s.finalSent = true
-			}
-			s.mu.Unlock()
-			if emitted && !finalSent {
+				s.finish()
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, io.EOF
 		}
+		s.finish()
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s decode %s: %v", elevenLabsEncodingKind(s.encoding), s.audioByteState(), err))
 	}
 	if strings.HasPrefix(s.encoding, "mp3") {
 		frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 resample %s: %v", s.audioByteState(), err))
+			state := s.audioByteState()
+			s.finish()
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 resample %s: %v", state, err))
 		}
 	}
 	s.mu.Lock()
@@ -684,7 +837,9 @@ func (s *elevenLabsChunkedStream) streamCompressedResponse(decoder codecs.AudioS
 			return
 		}
 		s.mu.Lock()
-		s.mp3ReadErr = err
+		if !s.closed {
+			s.mp3ReadErr = err
+		}
 		s.mu.Unlock()
 		_ = decoder.Close()
 		return
@@ -699,6 +854,8 @@ func elevenLabsEncodingKind(encoding string) string {
 }
 
 func (s *elevenLabsChunkedStream) audioByteState() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.emitted {
 		return "after audio bytes"
 	}
@@ -706,22 +863,59 @@ func (s *elevenLabsChunkedStream) audioByteState() string {
 }
 
 func (s *elevenLabsChunkedStream) Close() error {
+	return s.closeResources()
+}
+
+func (s *elevenLabsChunkedStream) finish() {
+	_ = s.closeResources()
+}
+
+func (s *elevenLabsChunkedStream) closeResources() error {
 	s.mu.Lock()
-	s.finalSent = true
-	if s.resp == nil || s.resp.Body == nil {
+	if s.closed {
+		provider := s.provider
 		s.mu.Unlock()
+		if provider != nil {
+			provider.unregisterChunkedStream(s)
+		}
 		return nil
 	}
-	body := s.resp.Body
+	s.closed = true
+	s.finalSent = true
+	var body io.ReadCloser
+	if s.resp != nil {
+		body = s.resp.Body
+	}
 	decoder := s.decoder
+	cancel := s.cancel
+	requestCancel := s.requestCancel
+	provider := s.provider
 	s.resp = nil
 	s.decoder = nil
+	s.cancel = nil
+	s.requestCancel = nil
+	s.pcmCarry = nil
+	s.pcmPendingErr = nil
+	s.pcmPendingEOF = false
 	s.mu.Unlock()
 
+	if requestCancel != nil {
+		requestCancel()
+	}
+	if cancel != nil {
+		cancel()
+	}
 	if decoder != nil {
 		_ = decoder.Close()
 	}
-	return body.Close()
+	var closeErr error
+	if body != nil {
+		closeErr = body.Close()
+	}
+	if provider != nil {
+		provider.unregisterChunkedStream(s)
+	}
+	return closeErr
 }
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
@@ -878,6 +1072,7 @@ type elevenLabsStream struct {
 	pcmTimed        []tts.TimedString
 	responseTimeout time.Duration
 	responseTimer   *time.Timer
+	responseTimerID uint64
 }
 
 type elevenLabsAlignment struct {
@@ -916,6 +1111,20 @@ type elWSResponse struct {
 	NormalizedAlignment *elevenLabsAlignment `json:"normalizedAlignment"`
 	Alignment           *elevenLabsAlignment `json:"alignment"`
 	Error               string               `json:"error,omitempty"`
+}
+
+func (r *elWSResponse) UnmarshalJSON(data []byte) error {
+	type response elWSResponse
+	var payload struct {
+		response
+		IsFinalSnake bool `json:"is_final"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*r = elWSResponse(payload.response)
+	r.IsFinal = r.IsFinal || payload.IsFinalSnake
+	return nil
 }
 
 func (r elWSResponse) contextID() string {
@@ -1188,6 +1397,7 @@ func (s *elevenLabsStream) failConnection(err error) {
 }
 
 func (s *elevenLabsStream) finishFromConnection() {
+	s.cancelResponseTimeout()
 	s.closeMP3Decoder(false)
 	s.closeAudio()
 	s.provider.unregisterStream(s)
@@ -1205,7 +1415,6 @@ func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
 		s.sendError(llm.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
 		return true
 	}
-
 	deltaText := s.deltaText(resp)
 	timedTranscript := s.timedTranscriptFromAlignment(resp)
 
@@ -1269,6 +1478,7 @@ func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
 		s.closeMP3Decoder(true)
 		return true
 	}
+	s.resetResponseTimeout()
 	return false
 }
 
@@ -1803,10 +2013,27 @@ func (s *elevenLabsStream) armResponseTimeoutLocked() {
 		return
 	}
 	timeout := s.responseTimeout
+	s.responseTimerID++
+	timerID := s.responseTimerID
 	s.responseTimer = time.AfterFunc(timeout, func() {
+		s.mu.Lock()
+		if s.responseTimer == nil || s.responseTimerID != timerID || s.closed || s.finished {
+			s.mu.Unlock()
+			return
+		}
+		s.responseTimer = nil
+		s.responseTimerID++
+		s.mu.Unlock()
 		s.sendError(llm.NewAPITimeoutError(fmt.Sprintf("11labs tts timed out after %s", elevenLabsTimeoutString(timeout))))
 		_ = s.Close()
 	})
+}
+
+func (s *elevenLabsStream) resetResponseTimeout() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelResponseTimeoutLocked()
+	s.armResponseTimeoutLocked()
 }
 
 func (s *elevenLabsStream) cancelResponseTimeout() {
@@ -1818,7 +2045,9 @@ func (s *elevenLabsStream) cancelResponseTimeout() {
 func (s *elevenLabsStream) cancelResponseTimeoutLocked() {
 	if s.responseTimer != nil {
 		s.responseTimer.Stop()
+		s.responseTimer = nil
 	}
+	s.responseTimerID++
 }
 
 func elevenLabsTimeoutString(timeout time.Duration) string {
@@ -1858,15 +2087,20 @@ func (s *elevenLabsStream) PushText(text string) error {
 
 func (s *elevenLabsStream) sendCompleteSentencesLocked() error {
 	for {
+		s.pendingText = strings.TrimLeftFunc(s.pendingText, unicode.IsSpace)
 		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
-		if len(tokens) <= 1 {
-			return nil
+		if len(tokens) > 1 {
+			sentence := tokens[0]
+			if err := s.sendTextLocked(sentence, true); err != nil {
+				return err
+			}
+			if !strings.HasPrefix(s.pendingText, sentence) {
+				return fmt.Errorf("elevenlabs TTS sentence tokenizer returned a non-prefix token")
+			}
+			s.pendingText = s.pendingText[len(sentence):]
+			continue
 		}
-		sentence := tokens[0]
-		if err := s.sendTextLocked(sentence, true); err != nil {
-			return err
-		}
-		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
+		return nil
 	}
 }
 
@@ -1986,11 +2220,11 @@ func (s *elevenLabsStream) EndInput() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
-	s.armResponseTimeoutLocked()
 	if err := s.writeJSONLocked(elevenLabsCloseContextPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.armResponseTimeoutLocked()
 	s.inputEnd = true
 	return nil
 }
