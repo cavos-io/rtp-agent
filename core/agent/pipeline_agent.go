@@ -430,7 +430,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			va.finalizeActiveSTTStream()
+			va.finalizeActiveSTTStream(0)
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnEndOfSpeech(ev)
 			} else if va.session != nil {
@@ -451,18 +451,25 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	}
 }
 
-func (va *PipelineAgent) finalizeActiveSTTStream() {
+func (va *PipelineAgent) finalizeActiveSTTStream(silenceDuration time.Duration) {
 	if va == nil {
 		return
 	}
 	va.mu.Lock()
 	stream := va.sttStream
 	sttObj := va.stt
+	ctx := va.ctx
 	va.mu.Unlock()
 	if stream == nil {
 		return
 	}
-	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+	var err error
+	if silenceDuration > 0 {
+		err = va.FlushInputTranscription(ctx, silenceDuration)
+	} else {
+		err = stream.Flush()
+	}
+	if err != nil && !isSpeechStreamShutdownError(err) {
 		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
 		label := "stt"
 		if sttObj != nil {
@@ -526,9 +533,9 @@ func (va *PipelineAgent) onVADStall() {
 			va.emitError(err, va.vad)
 		}
 	}
-	va.finalizeActiveSTTStream()
+	va.finalizeActiveSTTStream(2 * time.Second)
 	if session != nil && session.activity != nil {
-		session.activity.OnEndOfSpeech(nil)
+		session.activity.onSyntheticEndOfSpeech()
 		return
 	}
 	if session != nil {

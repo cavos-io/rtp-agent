@@ -95,6 +95,8 @@ type EndOfTurnInfo struct {
 	AudioFrames            []*model.AudioFrame
 
 	FromInterimFallback bool
+
+	endpointingNotBefore time.Time
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -163,6 +165,8 @@ type AgentActivity struct {
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
 	pendingTranscriptionDelaySet     bool
+	syntheticEOU                     bool
+	syntheticEOUNotBefore            time.Time
 	userTurnLimitStartedAt           time.Time
 	userTurnLimitTranscript          string
 	userTurnLimitWordCount           int
@@ -1715,6 +1719,10 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		a.clearUserAudioFrames()
 	}
 	a.userSpeechStoppedAt = time.Time{}
+	a.userTurnMu.Lock()
+	a.syntheticEOU = false
+	a.syntheticEOUNotBefore = time.Time{}
+	a.userTurnMu.Unlock()
 	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
@@ -1747,12 +1755,28 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
+	a.onEndOfSpeech(ev, false)
+}
+
+func (a *AgentActivity) onSyntheticEndOfSpeech() {
+	a.onEndOfSpeech(nil, true)
+}
+
+func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 	wasSpeaking := a.setSpeaking(false)
 	stoppedAt := vadSpeechStoppedAt(ev)
 	if ev == nil && !a.userSpeechStoppedAt.IsZero() {
 		stoppedAt = a.userSpeechStoppedAt
 	}
 	a.userSpeechStoppedAt = stoppedAt
+	a.userTurnMu.Lock()
+	a.syntheticEOU = synthetic
+	if synthetic {
+		a.syntheticEOUNotBefore = time.Now().Add(time.Duration(a.maxEndpointingDelay() * float64(time.Second)))
+	} else {
+		a.syntheticEOUNotBefore = time.Time{}
+	}
+	a.userTurnMu.Unlock()
 	if ev == nil {
 		a.sttEOSReceived = true
 	}
@@ -1976,6 +2000,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingStoppedSpeakingAt = stoppedSpeakingAt
 	a.pendingTranscriptionDelay = transcriptionDelay
 	a.pendingTranscriptionDelaySet = transcriptionDelaySet
+	if a.syntheticEOU {
+		a.syntheticEOUNotBefore = finalTranscriptAt.Add(time.Duration(a.minEndpointingDelay() * float64(time.Second)))
+	}
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -2484,22 +2511,27 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 	a.queueMu.Unlock()
 
 	a.falseInterruptionMu.Lock()
-	if skipIfPaused && a.pausedSpeech != nil && a.pausedSpeech.handle == current {
+	if a.pausedSpeech != nil && a.pausedSpeech.handle == current {
+		if skipIfPaused {
+			a.falseInterruptionMu.Unlock()
+			return false
+		}
+		if a.falseInterruptionTimer != nil {
+			a.falseInterruptionTimer.Stop()
+			a.falseInterruptionTimer = nil
+		}
+		a.pausedSpeech.timeout = timeout
 		a.falseInterruptionMu.Unlock()
-		return false
+		return true
 	}
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
 	}
-	if a.pausedSpeech != nil && a.pausedSpeech.handle == current {
-		a.pausedSpeech.timeout = timeout
-	} else {
-		a.pausedSpeech = &pausedSpeechInfo{
-			handle:     current,
-			agentState: a.Session.AgentState(),
-			timeout:    timeout,
-		}
+	a.pausedSpeech = &pausedSpeechInfo{
+		handle:     current,
+		agentState: a.Session.AgentState(),
+		timeout:    timeout,
 	}
 	a.falseInterruptionMu.Unlock()
 
@@ -2889,6 +2921,8 @@ collect:
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
 	a.pendingTranscriptionDelaySet = false
+	a.syntheticEOU = false
+	a.syntheticEOUNotBefore = time.Time{}
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -3603,6 +3637,8 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
 	a.pendingTranscriptionDelaySet = false
+	a.syntheticEOU = false
+	a.syntheticEOUNotBefore = time.Time{}
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""
 	a.pendingInterimSpeakerID = ""
@@ -3677,6 +3713,7 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 	default:
 		return EndOfTurnInfo{}
 	}
+	info.endpointingNotBefore = a.syntheticEOUNotBefore
 	if info.StartedSpeakingAt == nil && (!a.userTurnStartedAt.IsZero() || !a.userSpeechStartedAt.IsZero()) {
 		startedAt := a.userSpeechStartedAt
 		if !a.userTurnStartedAt.IsZero() {
@@ -3920,6 +3957,9 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 		if info.StoppedSpeakingAt != nil {
 			endpointingDelay += *info.StoppedSpeakingAt - timeToUnixSeconds(time.Now())
+		}
+		if !info.endpointingNotBefore.IsZero() {
+			endpointingDelay = max(endpointingDelay, time.Until(info.endpointingNotBefore).Seconds())
 		}
 		if !waitEndpointing(ctx, endpointingDelay) {
 			return

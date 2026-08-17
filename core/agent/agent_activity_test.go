@@ -8470,3 +8470,35 @@ func TestAgentActivityOnStartOfSpeechPausesWhileSpeaking(t *testing.T) {
 	}
 	current.MarkDone()
 }
+
+func TestAgentActivityInterimTranscriptsDoNotPauseAlreadyPausedSpeechAgain(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		FalseInterruptionTimeout:    0.5,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello there"}},
+	})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello there again"}},
+	})
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1 for one paused speech", audioOutput.pauseCount)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted instead of remaining paused")
+	}
+	current.MarkDone()
+}

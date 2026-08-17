@@ -2621,6 +2621,11 @@ func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
 	pipeline.vadStream = vadStream
 	pipeline.sttStream = sttStream
 	pipeline.vadSpeechStarted = true
+	pipeline.lastSTTFrame = &model.AudioFrame{
+		SampleRate:        1000,
+		NumChannels:       1,
+		SamplesPerChannel: 20,
+	}
 
 	pipeline.onVADStall()
 
@@ -2629,6 +2634,119 @@ func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
 	}
 	if sttStream.flushCount != 1 {
 		t.Fatalf("STT stream Flush calls = %d, want 1 after synthetic VAD end-of-speech", sttStream.flushCount)
+	}
+	if len(sttStream.frames) != 10 {
+		t.Fatalf("STT silence frames = %d, want 10 to flush a detached audio tail", len(sttStream.frames))
+	}
+	for i, frame := range sttStream.frames {
+		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 200 {
+			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/200",
+				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
+		}
+		for _, sample := range frame.Data {
+			if sample != 0 {
+				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
+			}
+		}
+	}
+}
+
+func TestPipelineAgentVADStallWaitsForLateFinalTranscript(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	conversationEvents := session.ConversationItemAddedEvents()
+	defer activity.Stop()
+	activity.speaking = true
+	activity.userSpeechStartedAt = time.Now().Add(-4 * time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-3 * time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first segment", Confidence: 0.9}},
+	})
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.vadStream = &fakePipelineVADStream{}
+	pipeline.sttStream = &fakePipelineRecognizeStream{}
+	pipeline.vadSpeechStarted = true
+	pipeline.onVADStall()
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("stalled turn committed before flushed STT final arrived: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "late tail", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "first segment late tail" {
+			t.Fatalf("turn message text = %q, want accumulated stalled transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("stalled turn was not committed after late final transcript")
+	}
+	select {
+	case ev := <-conversationEvents:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if _, ok := msg.Metrics["stopped_speaking_at"].(float64); !ok {
+			t.Fatalf("turn metrics = %#v, want stopped_speaking_at for e2e latency", msg.Metrics)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("ConversationItemAddedEvents did not receive stalled user turn")
+	}
+}
+
+func TestPipelineAgentVADStallEventuallyCommitsWithoutLateFinal(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.04,
+	})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+	activity.speaking = true
+	activity.userSpeechStartedAt = time.Now().Add(-4 * time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-3 * time.Second)
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "only segment", Confidence: 0.9}},
+	})
+
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.vadStream = &fakePipelineVADStream{}
+	pipeline.sttStream = &fakePipelineRecognizeStream{}
+	pipeline.vadSpeechStarted = true
+	pipeline.onVADStall()
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("stalled turn committed without finalization grace: %q", msg.TextContent())
+	case <-time.After(15 * time.Millisecond):
+	}
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "only segment" {
+			t.Fatalf("turn message text = %q, want only segment", msg.TextContent())
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("stalled turn did not commit after bounded finalization grace")
 	}
 }
 
