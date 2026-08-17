@@ -1147,6 +1147,7 @@ type sttStream struct {
 	pendingNonEmptyTranscript  bool
 	sentAudioSinceFinalize     bool
 	finalizeRequested          bool
+	finalizeAudioBoundaries    []int
 	lastClientSendAt           time.Time
 	reconnectRequested         bool
 	legacyEndpoint             bool
@@ -1346,15 +1347,17 @@ func (s *sttStream) sendFinalizeIfNeededLocked() error {
 	if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"finalize"}`)); err != nil {
 		recovered, recoveryErr := s.recoverRuntimeLocked(err)
 		if recovered {
+			s.finalizeAudioBoundaries = []int{len(s.utteranceAudio)}
 			s.sentAudioSinceFinalize = false
 			return nil
 		}
 		if recoveryErr != nil {
 			err = recoveryErr
 		}
-		s.finalizeRequested = false
+		s.finalizeRequested = len(s.finalizeAudioBoundaries) > 0
 		return s.failWriteLocked(err)
 	}
+	s.finalizeAudioBoundaries = append(s.finalizeAudioBoundaries, len(s.utteranceAudio))
 	s.sentAudioSinceFinalize = false
 	return nil
 }
@@ -1395,12 +1398,18 @@ func (s *sttStream) retainUtteranceAudioLocked(chunk []byte) {
 	}
 	if len(chunk) >= maxBytes {
 		s.utteranceAudio = append(s.utteranceAudio[:0], chunk[len(chunk)-maxBytes:]...)
+		for i := range s.finalizeAudioBoundaries {
+			s.finalizeAudioBoundaries[i] = 0
+		}
 		return
 	}
 	s.utteranceAudio = append(s.utteranceAudio, chunk...)
 	if excess := len(s.utteranceAudio) - maxBytes; excess > 0 {
 		copy(s.utteranceAudio, s.utteranceAudio[excess:])
 		s.utteranceAudio = s.utteranceAudio[:maxBytes]
+		for i := range s.finalizeAudioBoundaries {
+			s.finalizeAudioBoundaries[i] = max(0, s.finalizeAudioBoundaries[i]-excess)
+		}
 	}
 }
 
@@ -1467,6 +1476,8 @@ func (s *sttStream) recoverRuntimeLocked(cause error) (bool, error) {
 				_ = conn.Close()
 				continue
 			}
+			s.finalizeAudioBoundaries = []int{len(s.utteranceAudio)}
+			s.sentAudioSinceFinalize = false
 		}
 		if s.inputEnded {
 			if err := s.writeMessageLocked(websocket.TextMessage, []byte(`{"type":"close"}`)); err != nil {
@@ -1622,6 +1633,7 @@ func (s *sttStream) reconnectLocked() error {
 	s.utteranceAudio = nil
 	s.sentAudioSinceFinalize = false
 	s.finalizeRequested = false
+	s.finalizeAudioBoundaries = nil
 	s.sameEndpointReplayAttempts = 0
 	s.lastClientSendAt = time.Now()
 	if oldConn != nil && oldConn != conn {
@@ -1759,9 +1771,21 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		s.pendingNonEmptyTranscript = pendingTranscript
 		if acceptedFinal {
 			s.stopFinalTimerLocked()
-			s.finalizeRequested = false
-			s.sentAudioSinceFinalize = false
-			s.utteranceAudio = nil
+			covered := len(s.utteranceAudio)
+			if len(s.finalizeAudioBoundaries) > 0 {
+				covered = min(s.finalizeAudioBoundaries[0], covered)
+				s.finalizeAudioBoundaries = s.finalizeAudioBoundaries[1:]
+				for i := range s.finalizeAudioBoundaries {
+					s.finalizeAudioBoundaries[i] = max(0, s.finalizeAudioBoundaries[i]-covered)
+				}
+			} else {
+				s.sentAudioSinceFinalize = false
+			}
+			s.finalizeRequested = len(s.finalizeAudioBoundaries) > 0
+			s.utteranceAudio = append(s.utteranceAudio[:0], s.utteranceAudio[covered:]...)
+			if s.inputEnded && s.finalizeRequested {
+				s.startFinalTimerLocked()
+			}
 			s.sameEndpointReplayAttempts = 0
 		}
 		if len(events) > 0 {
