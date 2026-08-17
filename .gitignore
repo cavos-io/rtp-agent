@@ -8,6 +8,7 @@ refs/
 
 # cache
 __pycache__
+vendor/
 
 # Git worktrees
 worktrees/

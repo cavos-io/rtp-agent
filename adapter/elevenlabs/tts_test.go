@@ -153,6 +153,7 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 		WithElevenLabsLanguage("en"),
 		WithElevenLabsEnableSSMLParsing(true),
 		WithElevenLabsStreamingLatency(3),
+		WithElevenLabsApplyLanguageTextNormalization(false),
 	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
@@ -167,11 +168,14 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us/stream" {
 		t.Fatalf("path = %q, want default voice stream path", parsed.Path)
 	}
-	if parsed.Query().Get("model_id") != "eleven_turbo_v2_5" {
-		t.Fatalf("model_id = %q, want eleven_turbo_v2_5", parsed.Query().Get("model_id"))
+	if parsed.Query().Has("model_id") {
+		t.Fatalf("model_id = %q, want omitted from chunked request query", parsed.Query().Get("model_id"))
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
+	}
+	if parsed.Query().Get("enable_logging") != "true" {
+		t.Fatalf("enable_logging = %q, want true", parsed.Query().Get("enable_logging"))
 	}
 	if parsed.Query().Get("optimize_streaming_latency") != "3" {
 		t.Fatalf("optimize_streaming_latency = %q, want 3", parsed.Query().Get("optimize_streaming_latency"))
@@ -190,8 +194,14 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	if _, ok := payload["voice_settings"]; !ok {
 		t.Fatalf("voice_settings missing from payload %#v, want explicit null/object field", payload)
 	}
-	if _, ok := payload["language_code"]; ok {
-		t.Fatalf("language_code = %#v, want omitted for reference chunked synthesize request", payload["language_code"])
+	if payload["apply_text_normalization"] != "auto" {
+		t.Fatalf("apply_text_normalization = %#v, want auto", payload["apply_text_normalization"])
+	}
+	if payload["language_code"] != "en" {
+		t.Fatalf("language_code = %#v, want en", payload["language_code"])
+	}
+	if payload["apply_language_text_normalization"] != false {
+		t.Fatalf("apply_language_text_normalization = %#v, want false", payload["apply_language_text_normalization"])
 	}
 	if _, ok := payload["enable_ssml_parsing"]; ok {
 		t.Fatalf("enable_ssml_parsing = %#v, want omitted for reference chunked synthesize request", payload["enable_ssml_parsing"])
@@ -478,6 +488,251 @@ func TestElevenLabsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after caller cancellation")
+	}
+}
+
+func TestElevenLabsTTSSynthesizeAppliesRequestTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTeapot,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"stop"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, _ = stream.Next()
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request deadline remaining = %v, want bounded by 30s", remaining)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeProviderCloseCancelsInFlightRequest(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after provider Close error = %T %v, want io.EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not cancel in-flight synthesis")
+	}
+}
+
+func TestElevenLabsTTSSynthesizeOddPCMChunksPreserveSamples(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body: &elevenLabsChunkBody{chunks: [][]byte{
+				{0x01},
+				{0x02, 0x03},
+				{0x04},
+			}},
+			Request: r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if got := first.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("first PCM frame = %v, want [1 2]", got)
+	}
+	if got := second.Frame.Data; !bytes.Equal(got, []byte{0x03, 0x04}) {
+		t.Fatalf("second PCM frame = %v, want [3 4]", got)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeRejectsEmptyAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next() error = %T %v, want APIError", err, err)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeAcceptsNormalizedAudioContentType(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{" Audio/PCM ; charset=binary "}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("Next() audio = %#v, want PCM frame", audio)
+	}
+}
+
 func TestElevenLabsTTSStreamNextReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -586,6 +841,65 @@ func TestElevenLabsTTSStreamTimesOutSilentContextLikeReference(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server error = %v", err)
+	}
+}
+
+func TestElevenLabsTTSStreamRearmsTimeoutAfterPartialAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &TTS{streams: make(map[*elevenLabsStream]struct{})}
+	stream := &elevenLabsStream{
+		provider:        provider,
+		audio:           make(chan *tts.SynthesizedAudio, 1),
+		errCh:           make(chan error, 1),
+		ctx:             ctx,
+		cancel:          cancel,
+		encoding:        "pcm_16000",
+		sampleRate:      16000,
+		responseTimeout: 20 * time.Millisecond,
+	}
+	provider.streams[stream] = struct{}{}
+	stream.mu.Lock()
+	stream.armResponseTimeoutLocked()
+	stream.mu.Unlock()
+	t.Cleanup(func() { _ = stream.Close() })
+
+	finished := stream.handleResponse(elWSResponse{
+		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+	})
+	if finished {
+		t.Fatal("partial audio finished stream")
+	}
+	audio, err := stream.Next()
+	if err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("partial audio Next() = (%#v, %v), want PCM frame", audio, err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("partial-audio stream did not rearm response timeout")
+	}
+}
+
+func TestElevenLabsWebSocketResponseAcceptsSnakeCaseFinal(t *testing.T) {
+	var resp elWSResponse
+	if err := json.Unmarshal([]byte(`{"context_id":"ctx_test","audio":"AQI=","is_final":true,"alignment":{"characters":["a"],"character_start_times_seconds":[0],"character_end_times_seconds":[0.1]}}`), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if resp.contextID() != "ctx_test" || resp.Audio != "AQI=" {
+		t.Fatalf("decoded response = %#v, want context and audio preserved", resp)
+	}
+	if !resp.IsFinal {
+		t.Fatal("IsFinal = false, want true for ElevenLabs is_final response")
 	}
 }
 
@@ -1006,6 +1320,35 @@ func TestElevenLabsTTSChunkedMP3DecodeErrorReturnsAPIConnectionError(t *testing.
 	}
 }
 
+func TestElevenLabsTTSChunkedMP3NormalizeErrorClosesResources(t *testing.T) {
+	body := &elevenLabsCloseCountBody{Reader: strings.NewReader("audio")}
+	provider := &TTS{chunkedStreams: make(map[*elevenLabsChunkedStream]struct{})}
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: body},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+		decoder:    &elevenLabsInvalidFrameDecoder{},
+		started:    true,
+		provider:   provider,
+	}
+	provider.chunkedStreams[stream] = struct{}{}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("response body close count = %d, want 1", body.closeCount)
+	}
+	if len(provider.chunkedStreams) != 0 {
+		t.Fatalf("provider chunked streams = %d, want 0", len(provider.chunkedStreams))
+	}
+}
+
 func TestElevenLabsTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &elevenLabsCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &elevenLabsChunkedStream{
@@ -1274,8 +1617,8 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if parsedRequest.Path != "/v1/text-to-speech/voice-updated/stream" {
 		t.Fatalf("synthesize path = %q, want updated voice", parsedRequest.Path)
 	}
-	if parsedRequest.Query().Get("model_id") != "eleven_multilingual_v2" {
-		t.Fatalf("synthesize model_id = %q, want eleven_multilingual_v2", parsedRequest.Query().Get("model_id"))
+	if parsedRequest.Query().Has("model_id") {
+		t.Fatalf("synthesize model_id = %q, want omitted from chunked request query", parsedRequest.Query().Get("model_id"))
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -1284,8 +1627,8 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if payload["model_id"] != "eleven_multilingual_v2" {
 		t.Fatalf("payload = %#v, want updated model", payload)
 	}
-	if _, hasLang := payload["language_code"]; hasLang {
-		t.Fatalf("payload = %#v, eleven_multilingual_v2 must not include language_code", payload)
+	if payload["language_code"] != "id" {
+		t.Fatalf("payload = %#v, want updated language_code", payload)
 	}
 
 	streamURL := buildElevenLabsStreamURL(provider)
@@ -2114,7 +2457,7 @@ func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t 
 	}
 	defer stream.Close()
 
-	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+	if err := stream.PushText(" This first sentence is definitely long enough. Tail"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 
@@ -2138,11 +2481,57 @@ func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t 
 	if tail["text"] != "Tail " || tail["context_id"] != contextID || tail["flush"] != true {
 		t.Fatalf("tail text packet = %#v, want flushed tail with flush=true", tail)
 	}
-
 	select {
 	case extra := <-messages:
 		t.Fatalf("unexpected provider end packet after Flush: %#v", extra)
 	default:
+	}
+}
+
+func TestElevenLabsTTSStreamAutoModeBuffersLongSentenceUntilFlush(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) { return clientConn, nil },
+		Proxy:          nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(strings.Repeat("longword ", 40) + "tail"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	select {
+	case message := <-messages:
+		t.Fatalf("incomplete sentence sent before Flush: %#v", message)
+	default:
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	chunk := readElevenLabsTTSStreamMessage(t, messages)
+	if chunk["context_id"] != init["context_id"] {
+		t.Fatalf("long sentence packet = %#v, want flushed text for active context", chunk)
+	}
+	if chunk["flush"] != true {
+		t.Fatalf("long sentence packet flush = %#v, want true after Flush", chunk["flush"])
+	}
+	if text, _ := chunk["text"].(string); strings.TrimSpace(text) == "" {
+		t.Fatalf("long sentence packet text = %q, want non-empty chunk", text)
 	}
 }
 
@@ -2448,7 +2837,7 @@ func TestElevenLabsTTSStreamAutoModeSSMLHoldsIncompleteReferenceTag(t *testing.T
 	}
 }
 
-func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
+func TestElevenLabsTTSStreamEndInputClosesContextBeforeProviderFinalLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
@@ -2491,6 +2880,10 @@ func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
 	closeContext := readElevenLabsTTSStreamMessage(t, messages)
 	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
 		t.Fatalf("close_context packet = %#v, want close for context %q", closeContext, contextID)
+	}
+	concrete := stream.(*elevenLabsStream)
+	if !concrete.handleResponse(elWSResponse{ContextID: contextID, IsFinal: true}) {
+		t.Fatal("provider final did not finish stream")
 	}
 	if err := stream.PushText("late"); err != nil {
 		t.Fatalf("PushText after EndInput() error = %v, want nil", err)
@@ -3175,7 +3568,13 @@ func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
 		websocket.DefaultDialer = oldDialer
 	}()
 
-	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	provider, err := NewElevenLabsTTS(
+		"test-key",
+		"voice-1",
+		"eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsStreamResponseTimeout(20*time.Millisecond),
+	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
@@ -3195,6 +3594,10 @@ func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
 	}
 	if !strings.Contains(statusErr.Error(), "quota exceeded") {
 		t.Fatalf("Next error = %v, want provider error detail", statusErr)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider error = (%#v, %v), want nil EOF without duplicate timeout", audio, err)
 	}
 	select {
 	case err := <-serverErr:
@@ -4135,7 +4538,8 @@ func runElevenLabsTTSSharedContextWebsocketServer(conn net.Conn, errCh chan<- er
 
 	contexts := make([]string, 0, 2)
 	seenText := make(map[string]struct{})
-	for len(contexts) < 2 || len(seenText) < 2 {
+	seenFlush := make(map[string]struct{})
+	for len(contexts) < 2 || len(seenText) < 2 || len(seenFlush) < 2 {
 		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
 		if err != nil {
 			errCh <- err
@@ -4148,6 +4552,9 @@ func runElevenLabsTTSSharedContextWebsocketServer(conn net.Conn, errCh chan<- er
 		}
 		if contextID != "" && msg["text"] != "" {
 			seenText[contextID] = struct{}{}
+		}
+		if contextID != "" && msg["flush"] == true {
+			seenFlush[contextID] = struct{}{}
 		}
 	}
 	firstContext, secondContext := contexts[0], contexts[1]
@@ -5347,6 +5754,22 @@ type elevenLabsOneFrameDecoder struct {
 	once      sync.Once
 }
 
+type elevenLabsInvalidFrameDecoder struct{}
+
+func (d *elevenLabsInvalidFrameDecoder) Push([]byte) {}
+func (d *elevenLabsInvalidFrameDecoder) EndInput()   {}
+func (d *elevenLabsInvalidFrameDecoder) Close() error {
+	return nil
+}
+func (d *elevenLabsInvalidFrameDecoder) Next() (*model.AudioFrame, error) {
+	return &model.AudioFrame{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        0,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}, nil
+}
+
 func newElevenLabsOneFrameDecoder() *elevenLabsOneFrameDecoder {
 	return &elevenLabsOneFrameDecoder{ended: make(chan struct{})}
 }
@@ -5397,6 +5820,23 @@ func (r elevenLabsErrReader) Close() error {
 type elevenLabsReadOnceEOFBody struct {
 	data []byte
 	read bool
+}
+
+type elevenLabsChunkBody struct {
+	chunks [][]byte
+}
+
+func (b *elevenLabsChunkBody) Read(p []byte) (int, error) {
+	if len(b.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := b.chunks[0]
+	b.chunks = b.chunks[1:]
+	return copy(p, chunk), nil
+}
+
+func (b *elevenLabsChunkBody) Close() error {
+	return nil
 }
 
 func (b *elevenLabsReadOnceEOFBody) Read(p []byte) (int, error) {
