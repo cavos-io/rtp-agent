@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,6 +47,37 @@ func TestDeepgramSTTv2DefaultsMatchReference(t *testing.T) {
 
 	if _, err := provider.Recognize(context.Background(), nil, "en"); err == nil {
 		t.Fatal("Recognize() error = nil, want reference unsupported recognize error")
+	}
+}
+
+func TestDeepgramSTTv2DialErrorPreservesHandshakeResponse(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusForbidden,
+		Header: http.Header{
+			"Dg-Request-Id": []string{"request-123"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"err_code":"INSUFFICIENT_PERMISSIONS","err_msg":"Flux access is not enabled"}`)),
+	}
+
+	err := deepgramSTTv2DialError(errors.New("websocket: bad handshake"), resp)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("dial error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusForbidden)
+	}
+	if statusErr.RequestID != "request-123" {
+		t.Fatalf("request ID = %q, want request-123", statusErr.RequestID)
+	}
+	if statusErr.Body != `{"err_code":"INSUFFICIENT_PERMISSIONS","err_msg":"Flux access is not enabled"}` {
+		t.Fatalf("body = %q, want Deepgram handshake response", statusErr.Body)
+	}
+	if !strings.Contains(err.Error(), `403`) || !strings.Contains(err.Error(), `INSUFFICIENT_PERMISSIONS`) {
+		t.Fatalf("error message = %q, want status and Deepgram rejection reason", err.Error())
+	}
+	if resp.Body != nil {
+		t.Fatal("response body was not closed and cleared")
 	}
 }
 
@@ -1026,6 +1058,120 @@ func TestDeepgramSTTv2StreamSendsReferenceHeartbeatPing(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2StreamCapturesHeartbeatInterval(t *testing.T) {
+	oldInterval := deepgramSTTv2HeartbeatInterval
+	deepgramSTTv2HeartbeatInterval = 10 * time.Millisecond
+	defer func() {
+		deepgramSTTv2HeartbeatInterval = oldInterval
+	}()
+
+	pingSeen := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2HeartbeatWebsocketServer(serverConn, pingSeen, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	deepgramSTTv2HeartbeatInterval = oldInterval
+
+	select {
+	case <-pingSeen:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("stream did not retain heartbeat interval captured at construction")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2ConcurrentEventAndUsageState(t *testing.T) {
+	stream := &deepgramV2Stream{
+		events:     make(chan *stt.SpeechEvent, 256),
+		ctx:        context.Background(),
+		language:   "en",
+		speaking:   true,
+		usageTotal: 0.05,
+	}
+	response := deepgramV2Turn("Update", "req-concurrent", "hello", []deepgramV2Word{{
+		Word:       "hello",
+		Start:      0.1,
+		End:        0.4,
+		Confidence: 0.9,
+	}})
+
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		for range 100 {
+			if err := stream.processEvent(response); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		for range 100 {
+			stream.mu.Lock()
+			stream.usageTotal = 0.05
+			stream.flushRecognitionUsageLocked()
+			stream.mu.Unlock()
+		}
+	}()
+	workers.Wait()
+
+	if got := len(stream.events); got != 200 {
+		t.Fatalf("event count = %d, want 200 transcript and usage events", got)
+	}
+}
+
+func TestDeepgramSTTv2BlockedAudioStateDoesNotDelayTranscript(t *testing.T) {
+	stream := &deepgramV2Stream{
+		events:   make(chan *stt.SpeechEvent, 2),
+		ctx:      context.Background(),
+		language: "en",
+	}
+	response := deepgramV2Turn("StartOfTurn", "req-responsive", "hello", []deepgramV2Word{{
+		Word:       "hello",
+		Start:      0.1,
+		End:        0.4,
+		Confidence: 0.9,
+	}})
+
+	stream.mu.Lock()
+	processed := make(chan struct{})
+	go func() {
+		_ = stream.processEvent(response)
+		close(processed)
+	}()
+	select {
+	case <-processed:
+	case <-time.After(100 * time.Millisecond):
+		stream.mu.Unlock()
+		t.Fatal("transcript processing blocked behind audio and websocket state lock")
+	}
+	stream.mu.Unlock()
+
+	if event := nextDeepgramV2TestEvent(t, stream); event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start_of_speech", event.Type)
 	}
 }
 
