@@ -69,6 +69,42 @@ func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentTurnSpanRecordsInterruption(t *testing.T) {
+	for _, interrupted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("interrupted=%t", interrupted), func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			oldTracer := telemetry.Tracer
+			telemetry.Tracer = provider.Tracer("test")
+			t.Cleanup(func() {
+				telemetry.Tracer = oldTracer
+				_ = provider.Shutdown(context.Background())
+			})
+
+			speech := NewSpeechHandle(true, DefaultInputDetails())
+			if interrupted {
+				if err := speech.Interrupt(false); err != nil {
+					t.Fatalf("Interrupt: %v", err)
+				}
+			}
+			NewPipelineAgent(nil, nil, nil, nil, nil).OnSpeechScheduled(context.Background(), speech)
+
+			spans := recorder.Ended()
+			if len(spans) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(spans))
+			}
+			attrs := spanAttributeValues(spans[0].Attributes())
+			got, ok := attrs[telemetry.AttrSpeechInterrupted]
+			if !ok {
+				t.Fatalf("%s missing", telemetry.AttrSpeechInterrupted)
+			}
+			if got.AsBool() != interrupted {
+				t.Fatalf("%s = %t, want %t", telemetry.AttrSpeechInterrupted, got.AsBool(), interrupted)
+			}
+		})
+	}
+}
+
 func TestPipelineAgentBargeInResetStaysRootedUnderSessionCtx(t *testing.T) {
 	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -5673,6 +5709,97 @@ func TestPipelineAgentInterruptedReplySkipsUnplayedAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInterruptedReplySkipsStalePriorPlayout(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unheard current answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "heard prior answer",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message when current generation forwarded no audio", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentAssistantMessageUsesSpeechStartForOrdering(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "assistant started first"}},
+			},
+		},
+	}
+	waitStarted := make(chan struct{})
+	playback := &fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: make(chan struct{}),
+		result:      AudioPlaybackResult{PlaybackPosition: 200 * time.Millisecond},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{0, 1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error { return nil }
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	done := make(chan struct{})
+	go func() {
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+		close(done)
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not start")
+	}
+	userMessage := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "overlapping user"})
+	close(playback.releaseWait)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reply generation did not finish")
+	}
+
+	if len(chatCtx.Items) != 2 {
+		t.Fatalf("chatCtx.Items = %#v, want assistant and overlapping user", chatCtx.Items)
+	}
+	assistant, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || assistant.Role != llm.ChatRoleAssistant {
+		t.Fatalf("first chat item = %#v, want assistant ordered by speech start", chatCtx.Items[0])
+	}
+	if !assistant.CreatedAt.Before(userMessage.CreatedAt) {
+		t.Fatalf("assistant CreatedAt = %v, want before overlapping user at %v", assistant.CreatedAt, userMessage.CreatedAt)
+	}
+}
+
 func TestPipelineAgentInterruptedReplySkipsGeneratedTextWhenPlayoutWaitCanceled(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -5723,12 +5850,14 @@ func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.SetAudioPlaybackController(playback)
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{0, 1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
 	speech := NewSpeechHandle(true, DefaultInputDetails())
-	if err := speech.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v, want nil", err)
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		return speech.Interrupt(false)
 	}
 
 	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})

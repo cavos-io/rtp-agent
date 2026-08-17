@@ -876,11 +876,13 @@ func finishSpeechAgentTurn(speech *SpeechHandle) {
 		return
 	}
 	speech.mu.Lock()
+	turnCtx := speech.agentTurnCtx
 	end := speech.agentTurnEnd
 	speech.agentTurnCtx = nil
 	speech.agentTurnEnd = nil
 	speech.mu.Unlock()
 	if end != nil {
+		trace.SpanFromContext(turnCtx).SetAttributes(attribute.Bool(telemetry.AttrSpeechInterrupted, speech.IsInterrupted()))
 		end()
 	}
 }
@@ -1137,6 +1139,8 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
 				forwardedText = textOnlyForwarded
+			} else if ttsGen == nil || !ttsGen.ForwardedAudio {
+				forwardedText = ""
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
@@ -1149,6 +1153,9 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				Role:        llm.ChatRoleAssistant,
 				Text:        forwardedText,
 				Interrupted: opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted(),
+			}
+			if ttsGen != nil && ttsGen.StartedSpeakingAt > 0 {
+				args.CreatedAt = unixSecondsToTime(ttsGen.StartedSpeakingAt)
 			}
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
