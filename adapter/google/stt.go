@@ -36,6 +36,8 @@ const (
 	googleSTTMaxRestartBufferedFrames     = 2000
 	googleSTTMaxTransientRestartBackoff   = 2 * time.Second
 	googleSTTMaxLifetimeTransientRestarts = 50
+	googleSTTFlushSilenceDuration         = 2 * time.Second
+	googleSTTFlushSilenceChunk            = 200 * time.Millisecond
 )
 
 type STT struct {
@@ -263,23 +265,20 @@ func NewSTT(credentialsFile string, providerOpts ...STTOption) (*STT, error) {
 		return speechv2.NewClient(ctx, clientOpts...)
 	}
 
-	client, err := provider.newClient(ctx)
-	if err != nil {
+	if err := provider.initializeClient(ctx); err != nil {
 		return nil, err
-	}
-	provider.client = client
-	if googleSTTUsesV2(provider.model) {
-		clientV2, err := provider.ensureClientV2(ctx)
-		if err != nil {
-			if closer, ok := client.(interface{ Close() error }); ok {
-				_ = closer.Close()
-			}
-			return nil, err
-		}
-		provider.clientV2 = clientV2
 	}
 
 	return provider, nil
+}
+
+func (s *STT) initializeClient(ctx context.Context) error {
+	if googleSTTUsesV2(s.model) {
+		_, err := s.ensureClientV2(ctx)
+		return err
+	}
+	_, err := s.ensureClient(ctx)
+	return err
 }
 
 func googleSTTClientOptions(credentialsFile string, provider *STT) ([]option.ClientOption, error) {
@@ -2548,16 +2547,32 @@ func (s *googleSTTStream) Flush() error {
 		}
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
+	tail := s.inputAudio.flush()
+	sampleRate := s.owner.sampleRate
+	s.mu.Unlock()
+	if tail != nil {
 		mono, err := googleSTTMonoAudioFrame(tail)
 		if err != nil {
-			s.mu.Unlock()
 			return err
 		}
-		s.mu.Unlock()
-		return s.sendAudioFrame(mono)
+		if err := s.sendAudioFrame(mono); err != nil {
+			return err
+		}
 	}
-	s.mu.Unlock()
+	if sampleRate <= 0 {
+		return nil
+	}
+	samplesPerChunk := uint32(time.Duration(sampleRate) * googleSTTFlushSilenceChunk / time.Second)
+	for remaining := googleSTTFlushSilenceDuration; remaining > 0; remaining -= googleSTTFlushSilenceChunk {
+		if err := s.sendAudioFrame(&model.AudioFrame{
+			Data:              make([]byte, int(samplesPerChunk)*2),
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: samplesPerChunk,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

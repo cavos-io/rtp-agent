@@ -157,6 +157,27 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTInitializeClientSkipsV1ForV2Model(t *testing.T) {
+	v2Client := &fakeGoogleV2SpeechClient{}
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+	provider.newClient = func(context.Context) (googleSpeechClient, error) {
+		return nil, errors.New("v2 initialization must not create a v1 client")
+	}
+	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+		return v2Client, nil
+	}
+
+	if err := provider.initializeClient(context.Background()); err != nil {
+		t.Fatalf("initializeClient returned error: %v", err)
+	}
+	if provider.client != nil {
+		t.Fatal("v1 client initialized for v2 model")
+	}
+	if provider.clientV2 != v2Client {
+		t.Fatal("v2 client was not initialized")
+	}
+}
+
 func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	provider := newGoogleSTTWithClient(
 		nil,
@@ -1171,7 +1192,9 @@ func TestGoogleSTTRecognizeV2PreservesReferenceEmptyProviderLanguage(t *testing.
 }
 
 func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
+	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: recvBlock,
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{{
 				IsFinal: true,
@@ -1187,6 +1210,8 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer close(recvBlock)
+	defer stream.Close()
 	if len(streamClient.sent) != 1 {
 		t.Fatalf("initial sends = %d, want 1", len(streamClient.sent))
 	}
@@ -1300,6 +1325,18 @@ func googleSTTCollectEventTypes(stream stt.RecognizeStream, want int, timeout ti
 		case <-deadline:
 			return seen
 		}
+	}
+}
+
+func waitForGoogleV1Stream(t *testing.T, stream stt.RecognizeStream, want speechpb.Speech_StreamingRecognizeClient) {
+	t.Helper()
+	googleStream := stream.(*googleSTTStream)
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for googleStream.currentStream() != want {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for replacement stream installation")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -1928,11 +1965,45 @@ func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
 	}
-	if len(streamClient.sent) != 2 {
-		t.Fatalf("sent after Flush = %d, want config plus flushed resampler tail", len(streamClient.sent))
+	if len(streamClient.sent) != 12 {
+		t.Fatalf("sent after Flush = %d, want config, resampler tail, and endpointing silence", len(streamClient.sent))
 	}
 	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
 		t.Fatalf("flushed audio content = %#v, want reference resampler tail %#v", got, want)
+	}
+}
+
+func TestGoogleSTTStreamFlushSendsEndpointingSilence(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer close(recvBlock)
+	defer stream.Close()
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if len(streamClient.sent) != 11 {
+		t.Fatalf("sent requests = %d, want config plus ten endpointing-silence chunks", len(streamClient.sent))
+	}
+	var silence []byte
+	for _, req := range streamClient.sent[1:] {
+		chunk := req.GetAudioContent()
+		if len(chunk) != 6400 {
+			t.Fatalf("endpointing silence chunk bytes = %d, want 200ms of mono 16 kHz PCM", len(chunk))
+		}
+		silence = append(silence, chunk...)
+	}
+	if len(silence) != 64000 {
+		t.Fatalf("endpointing silence bytes = %d, want two seconds of mono 16 kHz PCM", len(silence))
+	}
+	if !bytes.Equal(silence, make([]byte, 64000)) {
+		t.Fatal("endpointing audio contains non-silent samples")
 	}
 }
 
@@ -1976,8 +2047,8 @@ func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testin
 	if !streamClient.closed {
 		t.Fatal("EndInput did not close provider send side")
 	}
-	if len(streamClient.sent) != 2 {
-		t.Fatalf("sent after EndInput = %d, want config plus flushed resampler tail", len(streamClient.sent))
+	if len(streamClient.sent) != 12 {
+		t.Fatalf("sent after EndInput = %d, want config, resampler tail, and endpointing silence", len(streamClient.sent))
 	}
 	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
 		t.Fatalf("EndInput audio content = %#v, want flushed tail %#v", got, want)
@@ -2555,6 +2626,7 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after min confidence update")
 	}
@@ -2784,6 +2856,7 @@ func TestGoogleSTTUpdateOptionsReconnectsActiveStreamButOmitsV1SpeechTimeouts(t 
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after speech timeout update")
 	}
@@ -2839,6 +2912,7 @@ func TestGoogleSTTUpdateOptionsKeepsV1SpeechTimeoutsOmittedAfterClear(t *testing
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after timeout reset")
 	}
@@ -2883,6 +2957,7 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamLanguage(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after language update")
 	}
@@ -2930,6 +3005,7 @@ func TestGoogleSTTUpdateOptionsClearsReferenceAlternativeLanguages(t *testing.T)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after language update")
 	}
@@ -2979,6 +3055,7 @@ func TestGoogleSTTUpdateOptionsDetectLanguageKeepsReferenceActiveAlternatives(t 
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after detect language update")
 	}
@@ -3024,6 +3101,7 @@ func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamLanguage(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after language update")
 	}
@@ -3068,6 +3146,7 @@ func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamModel(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after model update")
 	}

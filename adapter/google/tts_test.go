@@ -944,7 +944,7 @@ func TestGoogleTTSUpdateOptionsKeepsReferenceAudioFormat(t *testing.T) {
 }
 
 func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
-	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	opusData, err := os.ReadFile(filepath.Join("testdata", "change-sophie.opus"))
 	if err != nil {
 		t.Fatalf("read opus fixture: %v", err)
 	}
@@ -998,7 +998,7 @@ func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
 }
 
 func TestGoogleTTSStreamDecodesSplitReferenceOggOpusAudio(t *testing.T) {
-	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	opusData, err := os.ReadFile(filepath.Join("testdata", "change-sophie.opus"))
 	if err != nil {
 		t.Fatalf("read opus fixture: %v", err)
 	}
