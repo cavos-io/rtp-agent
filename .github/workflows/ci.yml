@@ -1,0 +1,44 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: github.com/cavos-io/*
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v7
+        with:
+          repository: livekit/agents
+          path: refs/agents
+          lfs: true
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Go Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+
+      - name: Configure git for private modules
+        run: |
+          git config --global url."https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+
+      - name: Lefthook
+        run: nix develop -c go tool lefthook run ci
