@@ -63,7 +63,7 @@ type STT struct {
 const (
 	speechmaticsAPIKeyEnv       = "SPEECHMATICS_API_KEY"
 	speechmaticsRTURLEnv        = "SPEECHMATICS_RT_URL"
-	speechmaticsSTTAppParam     = "livekit/v0.4.8"
+	speechmaticsSTTAppParam     = "livekit/v0.5.1"
 	speechmaticsVoiceSDKVersion = "0.2.8"
 )
 

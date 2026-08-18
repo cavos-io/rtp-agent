@@ -2,6 +2,6 @@ package phonic
 
 const (
 	PluginTitle   = "rtp-agent.plugins.phonic"
-	PluginVersion = "v0.4.9"
+	PluginVersion = "v0.5.1"
 	PluginPackage = "rtp-agent.plugins.phonic"
 )
