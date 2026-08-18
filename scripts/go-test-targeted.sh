@@ -7,14 +7,16 @@ source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
 declare -A dirs=()
 
-while IFS= read -r file; do
+files=("$@")
+
+for file in "${files[@]}"; do
   [[ -z "$file" ]] && continue
   dir=$(dirname "$file")
   dirs["$dir"]=1
-done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+done
 
 if (( ${#dirs[@]} == 0 )); then
-  echo "No staged Go files; skipping targeted Go tests."
+  echo "No Go files to check; skipping targeted Go tests."
   exit 0
 fi
 
@@ -26,7 +28,7 @@ for dir in "${!dirs[@]}"; do
 done
 
 if (( ${#packages[@]} == 0 )); then
-  echo "No Go packages found for staged Go files; skipping targeted Go tests."
+  echo "No Go packages found for targeted Go files; skipping targeted Go tests."
   exit 0
 fi
 

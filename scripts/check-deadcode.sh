@@ -6,10 +6,10 @@ cd "$REPO_ROOT"
 REPO_TEMP_ENV_FORCE=1
 source "$REPO_ROOT/scripts/repo-temp-env.sh"
 
-mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+staged_go_files=("$@")
 
 if (( ${#staged_go_files[@]} == 0 )); then
-  echo "No staged Go files; skipping Go dead-code checks."
+  echo "No Go files to check; skipping Go dead-code checks."
   exit 0
 fi
 
@@ -66,9 +66,9 @@ classify_output "staticcheck" "$staticcheck_out" "$staticcheck_status"
 classify_output "deadcode" "$deadcode_out" "$deadcode_status"
 
 if (( ${#related_findings[@]} > 0 )); then
-  echo "Blocking Go analyzer findings in staged Go files:"
+  echo "Blocking Go analyzer findings in targeted Go files:"
   printf '  %s\n' "${related_findings[@]}"
   exit 1
 fi
 
-echo "No Go analyzer findings reference staged Go files."
+echo "No Go analyzer findings reference targeted Go files."

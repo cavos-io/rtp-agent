@@ -2,10 +2,11 @@ pre-commit:
   parallel: true
   jobs:
     - name: test integrity
-      run: scripts/check-test-integrity.sh
+      files: git diff --cached --name-only --diff-filter=ACMRD -- '*_test.go'
+      run: scripts/check-test-integrity.sh --cached {files}
 
     - name: targeted tests
-      run: scripts/go-test-targeted.sh
+      run: scripts/go-test-targeted.sh {staged_files}
 
     - name: architecture
       glob: "**/*.go"
@@ -24,4 +25,31 @@ pre-push:
       run: scripts/go-test-ffmpeg.sh
 
     - name: staticcheck and deadcode
-      run: scripts/check-deadcode.sh
+      run: scripts/check-deadcode.sh {push_files}
+
+ci:
+  parallel: true
+  jobs:
+    - name: test integrity
+      files: git diff origin/main --name-only --diff-filter=ACMRD -- '*_test.go'
+      run: scripts/check-test-integrity.sh origin/main {files}
+
+    - name: architecture
+      run: go tool go-file-arch -config .architecture.yaml ./...
+
+    - name: targeted tests
+      files: git diff origin/main --name-only --diff-filter=ACMR -- '*.go'
+      run: scripts/go-test-targeted.sh {files}
+
+    - name: staticcheck and deadcode
+      files: git diff origin/main --name-only --diff-filter=ACMR -- '*.go'
+      run: scripts/check-deadcode.sh {files}
+
+    - name: full build
+      run: scripts/go-build-all.sh
+
+    - name: full tests
+      run: scripts/go-test-all.sh
+
+    - name: ffmpeg tests
+      run: scripts/go-test-ffmpeg.sh
