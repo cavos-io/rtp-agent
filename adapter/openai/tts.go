@@ -914,7 +914,8 @@ func openAITTSDecodeEOF(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "decoder closed") ||
 		strings.Contains(msg, "failed to initialize mp3 decoder: EOF") ||
-		strings.Contains(msg, "failed to initialize opus decoder: EOF")
+		strings.Contains(msg, "failed to initialize opus decoder: EOF") ||
+		strings.Contains(msg, "file already closed")
 }
 
 func openAITTSEmptyDecodeEOF(err error) bool {
@@ -923,7 +924,8 @@ func openAITTSEmptyDecodeEOF(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "End of file") ||
-		strings.Contains(msg, "does not contain any stream")
+		strings.Contains(msg, "does not contain any stream") ||
+		strings.Contains(msg, "file already closed")
 }
 
 func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.SynthesizedAudio, error) {

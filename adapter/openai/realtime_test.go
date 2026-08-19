@@ -7059,12 +7059,16 @@ func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testi
 }
 
 func TestRealtimeSessionFinalInputTranscriptionDoesNotDuplicateAudioTranscript(t *testing.T) {
+	var handlerDoneOnce sync.Once
 	handlerDone := make(chan struct{})
+	closeHandlerDone := func() {
+		handlerDoneOnce.Do(func() { close(handlerDone) })
+	}
 	handlerErr := make(chan error, 1)
 	readyForSync := make(chan struct{})
 	unexpectedSync := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
-		defer close(handlerDone)
+		defer closeHandlerDone()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			handlerErr <- fmt.Errorf("read initial session update: %w", err)
 			return
@@ -7152,12 +7156,16 @@ func TestRealtimeSessionFinalInputTranscriptionDoesNotDuplicateAudioTranscript(t
 }
 
 func TestRealtimeSessionNilPreviousItemIDAppendsToRemoteTail(t *testing.T) {
+	var handlerDoneOnce sync.Once
 	handlerDone := make(chan struct{})
+	closeHandlerDone := func() {
+		handlerDoneOnce.Do(func() { close(handlerDone) })
+	}
 	handlerErr := make(chan error, 1)
 	readyForSync := make(chan struct{})
 	unexpectedSync := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
-		defer close(handlerDone)
+		defer closeHandlerDone()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			handlerErr <- fmt.Errorf("read initial session update: %w", err)
 			return
