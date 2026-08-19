@@ -326,11 +326,12 @@ type FFmpegAudioStreamDecoder struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 
-	mu      sync.Mutex
-	closed  bool
-	ended   bool
-	inOnce  sync.Once
-	outOnce sync.Once
+	mu        sync.Mutex
+	closed    bool
+	ended     bool
+	inOnce    sync.Once
+	outOnce   sync.Once
+	stdinOnce sync.Once
 }
 
 func NewAACAudioStreamDecoder() AudioStreamDecoder {
@@ -395,9 +396,7 @@ func (d *FFmpegAudioStreamDecoder) Close() error {
 	}
 	d.closed = true
 	d.inOnce.Do(func() { close(d.inputCh) })
-	if d.stdin != nil {
-		_ = d.stdin.Close()
-	}
+	d.closeStdin()
 	if d.stdout != nil {
 		_ = d.stdout.Close()
 	}
@@ -406,6 +405,14 @@ func (d *FFmpegAudioStreamDecoder) Close() error {
 	}
 	d.mu.Unlock()
 	return nil
+}
+
+func (d *FFmpegAudioStreamDecoder) closeStdin() {
+	d.stdinOnce.Do(func() {
+		if d.stdin != nil {
+			_ = d.stdin.Close()
+		}
+	})
 }
 
 func (d *FFmpegAudioStreamDecoder) processLoop() {
@@ -507,7 +514,7 @@ func (d *FFmpegAudioStreamDecoder) writeFFmpegInput(stdin io.WriteCloser) {
 			break
 		}
 	}
-	_ = stdin.Close()
+	d.closeStdin()
 }
 
 func (d *FFmpegAudioStreamDecoder) closeOutput() {
