@@ -23,6 +23,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 )
 
@@ -5890,4 +5891,173 @@ func (b *elevenLabsCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+func TestElevenLabsTTSStreamEmitsMetricsOnFinalMarker(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSFinalPCMWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_8000"),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+
+	var mu sync.Mutex
+	var collected []*telemetry.TTSMetrics
+	unsubscribe := provider.OnMetricsCollected(func(m *telemetry.TTSMetrics) {
+		mu.Lock()
+		defer mu.Unlock()
+		collected = append(collected, m)
+	})
+	defer unsubscribe()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	const pushed = "hello there. Tail"
+	if err := stream.PushText(pushed); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			break
+		}
+		if audio != nil && audio.IsFinal {
+			break
+		}
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(collected) != 1 {
+		t.Fatalf("collected %d TTSMetrics, want exactly 1", len(collected))
+	}
+	got := collected[0]
+	if got.TTFB <= 0 {
+		t.Fatalf("TTFB = %v, want > 0 (measured from first PushText)", got.TTFB)
+	}
+	if got.AudioDuration <= 0 {
+		t.Fatalf("AudioDuration = %v, want > 0", got.AudioDuration)
+	}
+	if got.Cancelled {
+		t.Fatal("Cancelled = true, want false after the final marker")
+	}
+	if !got.Streamed {
+		t.Fatal("Streamed = false, want true")
+	}
+	if got.CharactersCount != len(pushed) {
+		t.Fatalf("CharactersCount = %d, want %d", got.CharactersCount, len(pushed))
+	}
+	if got.Metadata == nil || got.Metadata.ModelProvider != "ElevenLabs" {
+		t.Fatalf("Metadata = %#v, want ModelProvider ElevenLabs", got.Metadata)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestElevenLabsTTSStreamEmitsCancelledMetricsOnEarlyClose(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSSilentWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_8000"),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+
+	var mu sync.Mutex
+	var collected []*telemetry.TTSMetrics
+	unsubscribe := provider.OnMetricsCollected(func(m *telemetry.TTSMetrics) {
+		mu.Lock()
+		defer mu.Unlock()
+		collected = append(collected, m)
+	})
+	defer unsubscribe()
+
+	// A stream that never receives text must not report at all.
+	idle, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := idle.Close(); err != nil {
+		t.Fatalf("idle Close() error = %v", err)
+	}
+	mu.Lock()
+	idleCount := len(collected)
+	mu.Unlock()
+	if idleCount != 0 {
+		t.Fatalf("collected %d TTSMetrics for an idle stream, want 0", idleCount)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("interrupted mid sentence"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	// Barge-in: the agent closes before ElevenLabs ever sends isFinal.
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(collected) != 1 {
+		t.Fatalf("collected %d TTSMetrics, want exactly 1", len(collected))
+	}
+	got := collected[0]
+	if !got.Cancelled {
+		t.Fatal("Cancelled = false, want true after an early close")
+	}
+	if got.TTFB != -1 {
+		t.Fatalf("TTFB = %v, want -1 when no audio arrived", got.TTFB)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
 }
