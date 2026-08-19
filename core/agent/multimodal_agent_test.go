@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -693,14 +694,35 @@ func TestMultimodalAgentGenerateReplyUsesSessionToolChoiceWhenPerResponseUnsuppo
 	if opts.ToolChoice != nil {
 		t.Fatalf("GenerateReply ToolChoice = %#v, want nil when per-response tool_choice is unsupported", opts.ToolChoice)
 	}
-	if len(rtSession.optionUpdates) != 2 {
-		t.Fatalf("UpdateOptions calls = %d, want temporary tool_choice and reset", len(rtSession.optionUpdates))
+	// The reset UpdateOptions runs in a deferred call after GenerateReply returns,
+	// so wait for it instead of reading the slice the moment GenerateReply fires.
+	updates := waitForOptionUpdates(t, rtSession, 2)
+	if len(updates) != 2 {
+		t.Fatalf("UpdateOptions calls = %d, want temporary tool_choice and reset", len(updates))
 	}
-	if rtSession.optionUpdates[0].ToolChoice != "none" || !rtSession.optionUpdates[0].ToolChoiceSet {
-		t.Fatalf("first UpdateOptions = %#v, want explicit none", rtSession.optionUpdates[0])
+	if updates[0].ToolChoice != "none" || !updates[0].ToolChoiceSet {
+		t.Fatalf("first UpdateOptions = %#v, want explicit none", updates[0])
 	}
-	if rtSession.optionUpdates[1].ToolChoice != "auto" || !rtSession.optionUpdates[1].ToolChoiceSet {
-		t.Fatalf("second UpdateOptions = %#v, want reset to stored auto", rtSession.optionUpdates[1])
+	if updates[1].ToolChoice != "auto" || !updates[1].ToolChoiceSet {
+		t.Fatalf("second UpdateOptions = %#v, want reset to stored auto", updates[1])
+	}
+}
+
+// waitForOptionUpdates returns a snapshot of the recorded UpdateOptions calls once
+// at least count of them have landed.
+func waitForOptionUpdates(t *testing.T, session *fakeRealtimeSession, count int) []llm.RealtimeSessionOptions {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		updates := session.optionUpdateSnapshot()
+		if len(updates) >= count {
+			return updates
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("UpdateOptions calls = %d, want %d", len(updates), count)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -4027,6 +4049,9 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
+	// mu guards options and optionUpdates, which the agent writes from its
+	// speech-scheduling goroutine while a test reads them.
+	mu                    sync.Mutex
 	updated               *llm.ChatContext
 	generatedWithChatCtx  *llm.ChatContext
 	tools                 []llm.Tool
@@ -4086,12 +4111,20 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 }
 
 func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	f.mu.Lock()
 	f.options = options
 	f.optionUpdates = append(f.optionUpdates, options)
+	f.mu.Unlock()
 	if f.updateOptionsErr != nil {
 		return f.updateOptionsErr
 	}
 	return nil
+}
+
+func (f *fakeRealtimeSession) optionUpdateSnapshot() []llm.RealtimeSessionOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]llm.RealtimeSessionOptions(nil), f.optionUpdates...)
 }
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
