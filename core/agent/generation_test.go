@@ -341,6 +341,70 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceEmitsBaselineMetrics(t *testing.T) {
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+	provider := &fakeGenerationTTS{
+		model:    "voice",
+		provider: "provider",
+		stream: &fakeGenerationTTSStream{audio: []*tts.SynthesizedAudio{{
+			RequestID: "req-1",
+			Frame: &model.AudioFrame{
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 240,
+				Data:              make([]byte, 480),
+			},
+		}}},
+	}
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, withTTSMetricsHandler(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	}))
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	drainAudioFrames(data.AudioCh)
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.RequestID != "req-1" || metrics.CharactersCount != 5 || metrics.AudioDuration != 0.01 {
+			t.Fatalf("metrics = %#v, want request=req-1 characters=5 audio=0.01", metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("metrics handler was not called")
+	}
+}
+
+func TestMergeProviderTTSMetricsIgnoresOtherConcurrentRequests(t *testing.T) {
+	metrics := &telemetry.TTSMetrics{RequestID: "request-1"}
+	mergeProviderTTSMetrics(metrics, []*telemetry.TTSMetrics{
+		{RequestID: "request-1", InputTokens: 7, OutputTokens: 3},
+		{RequestID: "request-2", InputTokens: 99, OutputTokens: 88},
+	})
+
+	if metrics.InputTokens != 7 || metrics.OutputTokens != 3 {
+		t.Fatalf("token enrichment = %d/%d, want 7/3", metrics.InputTokens, metrics.OutputTokens)
+	}
+	if metrics.RequestID != "request-1" {
+		t.Fatalf("RequestID = %q, want request-1", metrics.RequestID)
+	}
+}
+
+func TestMergeProviderTTSMetricsIgnoresAmbiguousRequestIdentity(t *testing.T) {
+	metrics := &telemetry.TTSMetrics{}
+	mergeProviderTTSMetrics(metrics, []*telemetry.TTSMetrics{
+		{RequestID: "request-1", InputTokens: 7},
+		{RequestID: "request-2", InputTokens: 99},
+	})
+
+	if metrics.RequestID != "" || metrics.InputTokens != 0 {
+		t.Fatalf("metrics = %#v, want ambiguous provider data ignored", metrics)
+	}
+}
+
 func TestPerformTTSInferenceTTFBStartsAtFirstInputText(t *testing.T) {
 	stream := newEndInputGenerationTTSStream()
 	stream.emitAfterPush = true
@@ -940,8 +1004,11 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	textCh <- "Say **he"
 	textCh <- "llo** 😊"
 	close(textCh)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 
-	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	data, err := PerformTTSInference(context.Background(), provider, textCh, withTTSMetricsHandler(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
@@ -961,6 +1028,38 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 	if _, ok := <-data.AudioCh; ok {
 		t.Fatal("AudioCh produced extra frame")
+	}
+	select {
+	case metrics := <-metricsCh:
+		if metrics.Streamed || metrics.CharactersCount != len("Say hello ") || metrics.AudioDuration <= 0 {
+			t.Fatalf("metrics = %#v, want non-streamed transformed-text baseline", metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("metrics handler was not called for non-streaming TTS")
+	}
+}
+
+func TestPerformTTSInferenceDoesNotEmitMetricsWhenSynthesizeFailsToStart(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{synthesizeErr: errors.New("start failed")}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSPreserveTimedTranscript(), withTTSMetricsHandler(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	}))
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v, want async stream error", err)
+	}
+	drainAudioFrames(data.AudioCh)
+	if !errors.Is(data.StreamErr, provider.synthesizeErr) {
+		t.Fatalf("StreamErr = %v, want %v", data.StreamErr, provider.synthesizeErr)
+	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics handler received %#v before synthesis started", metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -1107,8 +1206,11 @@ func TestPerformTTSInferenceErrorsWhenStreamingTTSProducesNoAudio(t *testing.T) 
 	textCh := make(chan string, 1)
 	textCh <- "hello"
 	close(textCh)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 
-	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSRequireAudio())
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSRequireAudio(), withTTSMetricsHandler(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
@@ -1124,6 +1226,14 @@ func TestPerformTTSInferenceErrorsWhenStreamingTTSProducesNoAudio(t *testing.T) 
 	}
 	if !providerStream.closed {
 		t.Fatal("stream was not closed")
+	}
+	select {
+	case metrics := <-metricsCh:
+		if metrics.TTFB != -1 || metrics.AudioDuration != 0 || metrics.CharactersCount != 5 {
+			t.Fatalf("metrics = %#v, want no-audio baseline", metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("metrics handler was not called for no-audio completion")
 	}
 }
 
@@ -2564,6 +2674,7 @@ func (f *fakeGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 
 type fakeGenerationChunkedTTS struct {
 	stream          *fakeGenerationChunkedStream
+	synthesizeErr   error
 	synthesizeText  string
 	synthesizeTexts []string
 }
@@ -2579,6 +2690,9 @@ func (f *fakeGenerationChunkedTTS) SampleRate() int { return 24000 }
 func (f *fakeGenerationChunkedTTS) NumChannels() int { return 1 }
 
 func (f *fakeGenerationChunkedTTS) Synthesize(_ context.Context, text string) (tts.ChunkedStream, error) {
+	if f.synthesizeErr != nil {
+		return nil, f.synthesizeErr
+	}
 	f.synthesizeText = text
 	f.synthesizeTexts = append(f.synthesizeTexts, text)
 	return f.stream, nil

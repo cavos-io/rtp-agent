@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -317,7 +316,6 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
 		provider:       t,
 		inputText:      text,
-		metricsStarted: time.Now(),
 	}
 	if !t.registerStream(stream) {
 		stream.Close()
@@ -500,9 +498,6 @@ type openaiTTSChunkedStream struct {
 	sseDone         bool
 	sseSawAudio     bool
 	sseFinalSent    bool
-	metricsStarted  time.Time
-	metricsFirst    time.Time
-	metricsAudio    float64
 	metricsEmitted  bool
 	sseInputTokens  int
 	sseOutputTokens int
@@ -833,15 +828,6 @@ func (s *openaiTTSChunkedStream) noAudioError() error {
 }
 
 func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
-	if frame != nil {
-		if s.metricsStarted.IsZero() {
-			s.metricsStarted = time.Now()
-		}
-		if s.metricsFirst.IsZero() {
-			s.metricsFirst = time.Now()
-		}
-		s.metricsAudio += coreaudio.CalculateAudioDuration([]*model.AudioFrame{frame})
-	}
 	return &tts.SynthesizedAudio{Frame: frame, RequestID: s.requestID}
 }
 
@@ -1262,32 +1248,13 @@ func (s *openaiTTSChunkedStream) emitTTSMetrics() {
 		return
 	}
 	s.metricsEmitted = true
-	duration := 0.0
-	if !s.metricsStarted.IsZero() {
-		duration = time.Since(s.metricsStarted).Seconds()
-	}
-	ttfb := 0.0
-	if !s.sseSawAudio {
-		ttfb = -1
-	}
-	if !s.metricsStarted.IsZero() && !s.metricsFirst.IsZero() {
-		ttfb = s.metricsFirst.Sub(s.metricsStarted).Seconds()
+	if s.sseInputTokens == 0 && s.sseOutputTokens == 0 {
+		return
 	}
 	s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
-		Label:           s.provider.Label(),
-		Timestamp:       time.Now(),
-		RequestID:       s.requestID,
-		TTFB:            ttfb,
-		Duration:        duration,
-		CharactersCount: utf8.RuneCountInString(s.inputText),
-		InputTokens:     s.sseInputTokens,
-		OutputTokens:    s.sseOutputTokens,
-		AudioDuration:   s.metricsAudio,
-		Streamed:        false,
-		Metadata: &telemetry.Metadata{
-			ModelName:     s.provider.Model(),
-			ModelProvider: s.provider.Provider(),
-		},
+		RequestID:    s.requestID,
+		InputTokens:  s.sseInputTokens,
+		OutputTokens: s.sseOutputTokens,
 	})
 }
 

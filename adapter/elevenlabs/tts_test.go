@@ -5893,7 +5893,7 @@ func (b *elevenLabsCloseCountBody) Close() error {
 	return nil
 }
 
-func TestElevenLabsTTSStreamEmitsMetricsOnFinalMarker(t *testing.T) {
+func TestElevenLabsTTSStreamDoesNotEmitProviderBaselineMetricsOnFinalMarker(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
 	go runElevenLabsTTSFinalPCMWebsocketServer(serverConn, serverErr)
@@ -5936,14 +5936,38 @@ func TestElevenLabsTTSStreamEmitsMetricsOnFinalMarker(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
+	audioFrames := 0
+	sawFinal := false
 	for {
 		audio, err := stream.Next()
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next() error = %v", err)
+			}
 			break
 		}
-		if audio != nil && audio.IsFinal {
+		if audio == nil {
+			continue
+		}
+		if audio.Frame != nil {
+			audioFrames++
+			if audio.Frame.SampleRate != 8000 || audio.Frame.NumChannels != 1 {
+				t.Fatalf("audio format = %d Hz/%d channels, want 8000 Hz/1 channel", audio.Frame.SampleRate, audio.Frame.NumChannels)
+			}
+			if len(audio.Frame.Data) == 0 {
+				t.Fatal("audio frame data is empty")
+			}
+		}
+		if audio.IsFinal {
+			sawFinal = true
 			break
 		}
+	}
+	if audioFrames == 0 {
+		t.Fatal("stream produced no audio frames")
+	}
+	if !sawFinal {
+		t.Fatal("stream produced no final marker")
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -5951,27 +5975,8 @@ func TestElevenLabsTTSStreamEmitsMetricsOnFinalMarker(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(collected) != 1 {
-		t.Fatalf("collected %d TTSMetrics, want exactly 1", len(collected))
-	}
-	got := collected[0]
-	if got.TTFB <= 0 {
-		t.Fatalf("TTFB = %v, want > 0 (measured from first PushText)", got.TTFB)
-	}
-	if got.AudioDuration <= 0 {
-		t.Fatalf("AudioDuration = %v, want > 0", got.AudioDuration)
-	}
-	if got.Cancelled {
-		t.Fatal("Cancelled = true, want false after the final marker")
-	}
-	if !got.Streamed {
-		t.Fatal("Streamed = false, want true")
-	}
-	if got.CharactersCount != len(pushed) {
-		t.Fatalf("CharactersCount = %d, want %d", got.CharactersCount, len(pushed))
-	}
-	if got.Metadata == nil || got.Metadata.ModelProvider != "ElevenLabs" {
-		t.Fatalf("Metadata = %#v, want ModelProvider ElevenLabs", got.Metadata)
+	if len(collected) != 0 {
+		t.Fatalf("provider emitted baseline TTS metrics %#v", collected)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -5981,7 +5986,7 @@ func TestElevenLabsTTSStreamEmitsMetricsOnFinalMarker(t *testing.T) {
 	}
 }
 
-func TestElevenLabsTTSStreamEmitsCancelledMetricsOnEarlyClose(t *testing.T) {
+func TestElevenLabsTTSStreamDoesNotEmitProviderBaselineMetricsOnEarlyClose(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
 	go runElevenLabsTTSSilentWebsocketServer(serverConn, serverErr)
@@ -6041,18 +6046,15 @@ func TestElevenLabsTTSStreamEmitsCancelledMetricsOnEarlyClose(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after early close = (%#v, %v), want nil io.EOF", audio, err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(collected) != 1 {
-		t.Fatalf("collected %d TTSMetrics, want exactly 1", len(collected))
-	}
-	got := collected[0]
-	if !got.Cancelled {
-		t.Fatal("Cancelled = false, want true after an early close")
-	}
-	if got.TTFB != -1 {
-		t.Fatalf("TTFB = %v, want -1 when no audio arrived", got.TTFB)
+	if len(collected) != 0 {
+		t.Fatalf("provider emitted baseline TTS metrics %#v", collected)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)

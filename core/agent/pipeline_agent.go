@@ -879,7 +879,13 @@ func finishSpeechAgentTurn(speech *SpeechHandle) {
 }
 
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
-	va.generateReplyWithContext(nil, opts)
+	va.mu.Lock()
+	ctx := va.ctx
+	va.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	va.generateReplyWithContext(ctx, opts)
 }
 
 func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipelineReplyOptions) {
@@ -2075,6 +2081,15 @@ func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
 
 func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
 	var opts []TTSInferenceOption
+	if session != nil {
+		opts = append(opts, withTTSMetricsHandler(func(metrics *telemetry.TTSMetrics) {
+			if session.activity != nil {
+				session.activity.OnMetricsCollected(metrics)
+				return
+			}
+			session.EmitMetricsCollected(metrics)
+		}))
+	}
 	if va.ttsStreamPacer != nil {
 		opts = append(opts, WithTTSStreamPacer(*va.ttsStreamPacer))
 	}

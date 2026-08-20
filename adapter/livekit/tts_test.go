@@ -76,7 +76,7 @@ func TestInferenceTTSStreamDoesNotRecordInternalSpan(t *testing.T) {
 	}
 }
 
-func TestInferenceTTSStreamEmitsReferenceMetricsOnce(t *testing.T) {
+func TestInferenceTTSStreamDoesNotEmitProviderBaselineMetrics(t *testing.T) {
 	readCh := make(chan []byte, 2)
 	readCh <- []byte(`{"type":"output_audio","session_id":"req-1","audio":"AQIDBA=="}`)
 	readCh <- []byte(`{"type":"done","session_id":"req-1"}`)
@@ -99,23 +99,27 @@ func TestInferenceTTSStreamEmitsReferenceMetricsOnce(t *testing.T) {
 	if err := stream.EndInput(); err != nil {
 		t.Fatalf("EndInput() error = %v", err)
 	}
-	_, _ = stream.Next()
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want synthesized frame", audio)
+	}
+	if audio.Frame.SampleRate != 16000 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("audio format = %d Hz/%d channels, want 16000 Hz/1 channel", audio.Frame.SampleRate, audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("audio frame data is empty")
+	}
+	if audio.RequestID != "" || audio.SegmentID != "req-1" {
+		t.Fatalf("audio ids = %q/%q, want empty/req-1", audio.RequestID, audio.SegmentID)
+	}
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.CharactersCount != 5 || metrics.AudioDuration <= 0 || metrics.TTFB < 0 {
-			t.Fatalf("metrics = %#v, want text and audio timing", metrics)
-		}
-		if !metrics.Streamed || metrics.Metadata == nil || metrics.Metadata.ModelName != "cartesia/sonic-3" || metrics.Metadata.ModelProvider != "livekit" {
-			t.Fatalf("metrics = %#v, want streamed LiveKit model metadata", metrics)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for TTS metrics")
-	}
-	select {
-	case metrics := <-metricsCh:
-		t.Fatalf("duplicate metrics = %#v", metrics)
-	case <-time.After(20 * time.Millisecond):
+		t.Fatalf("provider emitted baseline metrics %#v", metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

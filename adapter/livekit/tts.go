@@ -13,13 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
-	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
@@ -581,11 +578,6 @@ type inferenceTTSStream struct {
 	inputEnded  bool
 	done        bool
 	streamErr   error
-	metricsOnce sync.Once
-	startedAt   time.Time
-	firstAudio  time.Time
-	inputText   strings.Builder
-	audioDur    float64
 	requestID   string
 	segmentID   string
 }
@@ -602,10 +594,6 @@ func (s *inferenceTTSStream) PushText(text string) error {
 	if err := s.tokenizer.PushText(text); err != nil {
 		return err
 	}
-	if s.startedAt.IsZero() {
-		s.startedAt = time.Now()
-	}
-	s.inputText.WriteString(text)
 	return nil
 }
 
@@ -664,45 +652,7 @@ func (s *inferenceTTSStream) Close() error {
 		parent.unregisterStream(s)
 	}
 	s.closeEventCh()
-	s.finalizeTelemetry()
 	return nil
-}
-
-func (s *inferenceTTSStream) finalizeTelemetry() {
-	s.metricsOnce.Do(func() {
-		s.mu.Lock()
-		startedAt := s.startedAt
-		firstAudio := s.firstAudio
-		text := s.inputText.String()
-		audioDuration := s.audioDur
-		requestID := s.requestID
-		segmentID := s.segmentID
-		cancelled := !s.done
-		parent := s.tts
-		s.mu.Unlock()
-		if parent != nil && !startedAt.IsZero() {
-			ttfb := -1.0
-			if !firstAudio.IsZero() {
-				ttfb = firstAudio.Sub(startedAt).Seconds()
-			}
-			parent.EmitMetricsCollected(&telemetry.TTSMetrics{
-				Label:           parent.Label(),
-				RequestID:       requestID,
-				Timestamp:       time.Now(),
-				TTFB:            ttfb,
-				Duration:        time.Since(startedAt).Seconds(),
-				AudioDuration:   audioDuration,
-				Cancelled:       cancelled,
-				CharactersCount: utf8.RuneCountInString(text),
-				Streamed:        true,
-				SegmentID:       segmentID,
-				Metadata: &telemetry.Metadata{
-					ModelName:     parent.Model(),
-					ModelProvider: parent.Provider(),
-				},
-			})
-		}
-	})
 }
 
 func (s *inferenceTTSStream) closeEventCh() {
@@ -763,12 +713,6 @@ func (s *inferenceTTSStream) emitAudio(audio *tts.SynthesizedAudio) bool {
 		return false
 	case s.eventCh <- audio:
 		s.mu.Lock()
-		if audio != nil && audio.Frame != nil {
-			if s.firstAudio.IsZero() {
-				s.firstAudio = time.Now()
-			}
-			s.audioDur += coreaudio.CalculateFrameDuration(audio.Frame)
-		}
 		if audio != nil {
 			if audio.RequestID != "" {
 				s.requestID = audio.RequestID
