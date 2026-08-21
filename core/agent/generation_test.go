@@ -307,13 +307,14 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 	textCh := make(chan string, 1)
 	textCh <- "hello"
 	close(textCh)
-	ttsProvider := &fakeGenerationTTS{
+	innerTTSProvider := &fakeGenerationTTS{
 		model:    "test-voice",
 		provider: "test-provider",
 		stream: &fakeGenerationTTSStream{
 			audio: []*tts.SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1, 2}}}},
 		},
 	}
+	ttsProvider := &fakeGenerationTTSWrapper{TTS: innerTTSProvider}
 
 	data, err := PerformTTSInference(context.Background(), ttsProvider, textCh)
 	if err != nil {
@@ -2624,6 +2625,12 @@ type fakeGenerationTTS struct {
 	provider string
 	stream   tts.SynthesizeStream
 }
+
+type fakeGenerationTTSWrapper struct {
+	tts.TTS
+}
+
+func (f *fakeGenerationTTSWrapper) Unwrap() tts.TTS { return f.TTS }
 
 func (f *fakeGenerationTTS) Label() string { return "fake-generation-tts" }
 
