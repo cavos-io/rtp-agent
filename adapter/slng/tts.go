@@ -16,9 +16,11 @@ import (
 	"time"
 	"unicode"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
@@ -56,6 +58,7 @@ const (
 )
 
 type TTS struct {
+	tts.MetricsEmitter
 	mu                    sync.Mutex
 	optionError           error
 	modelConfigured       bool
@@ -578,6 +581,8 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 		firstAudioTimeout: attempt.firstAudioTimeout,
 		textChunking:      attempt.textChunking,
 		phraseMaxChars:    attempt.phraseMaxChars,
+		streamed:          appendTextSpace,
+		startedAt:         slngTTSNow(),
 	}
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
@@ -1200,6 +1205,13 @@ type ttsStream struct {
 	phraseMaxChars      int
 	replay              []ttsInputAction
 	closed              bool
+	streamed            bool
+	finished            bool
+	startedAt           time.Time
+	firstAudio          time.Time
+	audioDur            float64
+	charCount           int
+	metricsOnce         sync.Once
 }
 
 type ttsInputAction struct {
@@ -1226,6 +1238,7 @@ func (s *ttsStream) PushText(text string) error {
 }
 
 func (s *ttsStream) pushTextLocked(text string) error {
+	s.charCount += len(text)
 	s.pendingText += text
 	if !s.appendTextSpace {
 		return nil
@@ -1389,6 +1402,7 @@ func (s *ttsStream) sendTextLocked(text string) error {
 func (s *ttsStream) EndInput() error { return s.Flush() }
 
 func (s *ttsStream) Close() error {
+	defer s.finalizeTelemetry()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -1462,6 +1476,11 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, fallbackErr
 			}
+			if errors.Is(candidateErr, io.EOF) {
+				s.mu.Lock()
+				s.finished = true
+				s.mu.Unlock()
+			}
 			if _, ok := candidateErr.(*llm.APITimeoutError); ok {
 				_ = s.Close()
 			}
@@ -1482,6 +1501,7 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			s.lastMessageType = "binary"
 			s.firstAudioDeadline = time.Time{}
 			s.replay = nil
+			s.observeAudioLocked(audio)
 			s.mu.Unlock()
 			_ = conn.SetReadDeadline(time.Time{})
 			if audio == nil {
@@ -1535,13 +1555,68 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 			}
 			audio.IsFinal = true
+			s.mu.Lock()
+			s.finished = true
+			s.observeAudioLocked(audio)
+			s.mu.Unlock()
 			_ = s.Close()
 			return audio, nil
 		}
 		if audio != nil {
+			s.mu.Lock()
+			s.observeAudioLocked(audio)
+			s.mu.Unlock()
 			return audio, nil
 		}
 	}
+}
+
+func (s *ttsStream) observeAudioLocked(audio *tts.SynthesizedAudio) {
+	if audio == nil || audio.Frame == nil {
+		return
+	}
+	if s.firstAudio.IsZero() {
+		s.firstAudio = slngTTSNow()
+	}
+	s.audioDur += coreaudio.CalculateFrameDuration(audio.Frame)
+}
+
+func (s *ttsStream) finalizeTelemetry() {
+	s.metricsOnce.Do(func() {
+		s.mu.Lock()
+		provider := s.provider
+		startedAt := s.startedAt
+		firstAudio := s.firstAudio
+		audioDur := s.audioDur
+		charCount := s.charCount
+		model := s.model
+		streamed := s.streamed
+		cancelled := !s.finished
+		s.mu.Unlock()
+
+		if provider == nil || startedAt.IsZero() {
+			return
+		}
+		ttfb := -1.0
+		if !firstAudio.IsZero() {
+			ttfb = firstAudio.Sub(startedAt).Seconds()
+		}
+		now := slngTTSNow()
+		provider.EmitMetricsCollected(&telemetry.TTSMetrics{
+			Label:           provider.Label(),
+			Timestamp:       now,
+			TTFB:            ttfb,
+			Duration:        now.Sub(startedAt).Seconds(),
+			AudioDuration:   audioDur,
+			Cancelled:       cancelled,
+			CharactersCount: charCount,
+			Streamed:        streamed,
+			Metadata: &telemetry.Metadata{
+				ModelName:     model,
+				ModelProvider: provider.Provider(),
+			},
+		})
+	})
 }
 
 func (s *ttsStream) alignPCMAudio(audio *tts.SynthesizedAudio, done bool) *tts.SynthesizedAudio {
@@ -1619,6 +1694,7 @@ func (s *ttsStream) fallbackBeforeFirstAudio(failure error) (error, bool) {
 	s.wordBufferHasLetter = false
 	s.pendingPCM = nil
 	s.textMessages = 0
+	s.charCount = 0
 	s.lastMessageType = ""
 	s.firstAudioTimeout = attempt.firstAudioTimeout
 	s.firstAudioDeadline = time.Time{}
