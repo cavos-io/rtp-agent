@@ -2,6 +2,6 @@ package simli
 
 const (
 	PluginTitle   = "rtp-agent.plugins.simli"
-	PluginVersion = "v0.5.2"
+	PluginVersion = "v0.6.0"
 	PluginPackage = "rtp-agent.plugins.simli"
 )
