@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -24,7 +23,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/google/uuid"
@@ -1064,12 +1062,6 @@ type elevenLabsStream struct {
 	alignStartsMs []int
 	alignDurMs    []int
 
-	startedAt   time.Time
-	firstAudio  time.Time
-	audioDur    float64
-	charCount   int
-	metricsOnce sync.Once
-
 	mp3Decoder      codecs.AudioStreamDecoder
 	mp3Input        chan []byte
 	mp3DecodeDone   chan struct{}
@@ -1688,59 +1680,7 @@ func (s *elevenLabsStream) markFinished() {
 }
 
 func (s *elevenLabsStream) deliver(audio *tts.SynthesizedAudio) *tts.SynthesizedAudio {
-	s.observeAudio(audio)
-	if audio != nil && audio.IsFinal {
-		s.finalizeTelemetry()
-	}
 	return audio
-}
-
-func (s *elevenLabsStream) observeAudio(audio *tts.SynthesizedAudio) {
-	if audio == nil || audio.Frame == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.firstAudio.IsZero() {
-		s.firstAudio = time.Now()
-	}
-	s.audioDur += coreaudio.CalculateFrameDuration(audio.Frame)
-}
-
-func (s *elevenLabsStream) finalizeTelemetry() {
-	s.metricsOnce.Do(func() {
-		s.mu.Lock()
-		startedAt := s.startedAt
-		firstAudio := s.firstAudio
-		audioDur := s.audioDur
-		charCount := s.charCount
-		requestID := s.contextID
-		cancelled := !s.finished
-		s.mu.Unlock()
-
-		if startedAt.IsZero() {
-			return
-		}
-		ttfb := -1.0
-		if !firstAudio.IsZero() {
-			ttfb = firstAudio.Sub(startedAt).Seconds()
-		}
-		s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
-			Label:           s.provider.Label(),
-			RequestID:       requestID,
-			Timestamp:       time.Now(),
-			TTFB:            ttfb,
-			Duration:        time.Since(startedAt).Seconds(),
-			AudioDuration:   audioDur,
-			Cancelled:       cancelled,
-			CharactersCount: charCount,
-			Streamed:        true,
-			Metadata: &telemetry.Metadata{
-				ModelName:     s.provider.Model(),
-				ModelProvider: s.provider.Provider(),
-			},
-		})
-	})
 }
 
 func elevenLabsTTSUnexpectedCloseError(err error) error {
@@ -2134,10 +2074,6 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	if s.startedAt.IsZero() {
-		s.startedAt = time.Now()
-	}
-	s.charCount += utf8.RuneCountInString(text)
 	if s.autoMode {
 		s.pendingText += text
 		if err := s.sendCompleteSentencesLocked(); err != nil {
@@ -2525,8 +2461,6 @@ func (s *elevenLabsStream) closedInputErrorLocked() error {
 }
 
 func (s *elevenLabsStream) Close() error {
-	// Registered first so it runs after mu.Unlock — finalizeTelemetry takes the lock.
-	defer s.finalizeTelemetry()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

@@ -279,12 +279,6 @@ func (a *AgentActivity) Start() {
 		}
 	}
 	if a.Session != nil && a.Session.TTS != nil {
-		if collector, ok := a.Session.TTS.(ttsMetricsCollector); ok {
-			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
-				a.OnMetricsCollected(metrics)
-			})
-			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
-		}
 		if collector, ok := a.Session.TTS.(ttsErrorCollector); ok {
 			unsubscribe := collector.OnError(func(err tts.TTSError) {
 				a.OnError(err, a.Session.TTS)
@@ -330,12 +324,6 @@ func (a *AgentActivity) Start() {
 				}
 			}
 			if pipeline.tts != nil && !sameProviderInstance(pipeline.tts, a.Session.TTS) {
-				if collector, ok := pipeline.tts.(ttsMetricsCollector); ok {
-					unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
-						a.OnMetricsCollected(metrics)
-					})
-					a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
-				}
 				if collector, ok := pipeline.tts.(ttsErrorCollector); ok {
 					ttsSource := pipeline.tts
 					unsubscribe := collector.OnError(func(err tts.TTSError) {

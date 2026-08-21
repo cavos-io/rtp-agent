@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -10,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -355,6 +358,7 @@ type TTSInferenceOptions struct {
 	DisableTextTransforms   bool
 	PreserveTimedTranscript bool
 	RequireAudio            bool
+	metricsHandler          func(*telemetry.TTSMetrics)
 }
 
 type TTSInferenceOption func(*TTSInferenceOptions)
@@ -402,6 +406,193 @@ func WithTTSRequireAudio() TTSInferenceOption {
 	}
 }
 
+func withTTSMetricsHandler(handler func(*telemetry.TTSMetrics)) TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.metricsHandler = handler
+	}
+}
+
+type ttsInferenceMetrics struct {
+	mu            sync.Mutex
+	provider      tts.TTS
+	handler       func(*telemetry.TTSMetrics)
+	streamed      bool
+	requestID     string
+	segmentID     string
+	startedAt     time.Time
+	firstAudioAt  time.Time
+	text          strings.Builder
+	audioDuration float64
+	providerData  []*telemetry.TTSMetrics
+	unsubscribe   func()
+}
+
+func newTTSInferenceMetrics(provider tts.TTS, streamed bool, handler func(*telemetry.TTSMetrics)) *ttsInferenceMetrics {
+	metrics := &ttsInferenceMetrics{
+		provider: provider,
+		handler:  handler,
+		streamed: streamed,
+	}
+	if collector, ok := provider.(ttsMetricsCollector); ok {
+		metrics.unsubscribe = collector.OnMetricsCollected(func(providerMetrics *telemetry.TTSMetrics) {
+			if providerMetrics == nil {
+				return
+			}
+			metrics.mu.Lock()
+			copy := *providerMetrics
+			metrics.providerData = append(metrics.providerData, &copy)
+			metrics.mu.Unlock()
+		})
+	}
+	return metrics
+}
+
+func (m *ttsInferenceMetrics) start() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.startedAt.IsZero() {
+		m.startedAt = time.Now()
+	}
+}
+
+func (m *ttsInferenceMetrics) addText(text string) {
+	if text == "" {
+		return
+	}
+	m.mu.Lock()
+	_, _ = m.text.WriteString(text)
+	m.mu.Unlock()
+}
+
+func (m *ttsInferenceMetrics) observeAudio(synthesized *tts.SynthesizedAudio) {
+	if synthesized == nil || synthesized.Frame == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.firstAudioAt.IsZero() {
+		m.firstAudioAt = time.Now()
+	}
+	if synthesized.RequestID != "" {
+		m.requestID = synthesized.RequestID
+	}
+	if synthesized.SegmentID != "" {
+		m.segmentID = synthesized.SegmentID
+	}
+	m.audioDuration += audio.CalculateFrameDuration(synthesized.Frame)
+	m.mu.Unlock()
+}
+
+func (m *ttsInferenceMetrics) emit(cancelled bool) {
+	if m == nil {
+		return
+	}
+	defer m.close()
+	if m.handler == nil {
+		return
+	}
+	m.mu.Lock()
+	startedAt := m.startedAt
+	firstAudioAt := m.firstAudioAt
+	text := m.text.String()
+	metrics := &telemetry.TTSMetrics{
+		Label:           m.provider.Label(),
+		RequestID:       m.requestID,
+		SegmentID:       m.segmentID,
+		Timestamp:       time.Now(),
+		TTFB:            -1,
+		AudioDuration:   m.audioDuration,
+		Cancelled:       cancelled,
+		CharactersCount: utf8.RuneCountInString(text),
+		Streamed:        m.streamed,
+		Metadata: &telemetry.Metadata{
+			ModelName:     tts.Model(m.provider),
+			ModelProvider: tts.Provider(m.provider),
+		},
+	}
+	providerData := append([]*telemetry.TTSMetrics(nil), m.providerData...)
+	m.mu.Unlock()
+	if startedAt.IsZero() || strings.TrimSpace(text) == "" {
+		return
+	}
+	metrics.Duration = time.Since(startedAt).Seconds()
+	if !firstAudioAt.IsZero() {
+		metrics.TTFB = firstAudioAt.Sub(startedAt).Seconds()
+		if metrics.TTFB < 0 {
+			metrics.TTFB = 0
+		}
+	}
+	mergeProviderTTSMetrics(metrics, providerData)
+	if metrics.RequestID == "" {
+		metrics.RequestID = cavosmath.ShortUUID("")
+	}
+	m.handler(metrics)
+}
+
+func (m *ttsInferenceMetrics) close() {
+	if m != nil && m.unsubscribe != nil {
+		m.unsubscribe()
+	}
+}
+
+func mergeProviderTTSMetrics(metrics *telemetry.TTSMetrics, providerData []*telemetry.TTSMetrics) {
+	if metrics == nil {
+		return
+	}
+	ambiguousRequestID := false
+	if metrics.RequestID == "" {
+		requestIDs := make(map[string]struct{})
+		for _, providerMetrics := range providerData {
+			if providerMetrics != nil && providerMetrics.RequestID != "" {
+				requestIDs[providerMetrics.RequestID] = struct{}{}
+			}
+		}
+		if len(requestIDs) == 1 {
+			for requestID := range requestIDs {
+				metrics.RequestID = requestID
+			}
+		} else if len(requestIDs) > 1 {
+			ambiguousRequestID = true
+		}
+	}
+
+	for _, providerMetrics := range providerData {
+		if providerMetrics == nil {
+			continue
+		}
+		if ambiguousRequestID && providerMetrics.RequestID != "" {
+			continue
+		}
+		if providerMetrics.RequestID != "" && metrics.RequestID != "" && providerMetrics.RequestID != metrics.RequestID {
+			continue
+		}
+		if providerMetrics.RequestID != "" {
+			metrics.RequestID = providerMetrics.RequestID
+		}
+		if providerMetrics.SegmentID != "" {
+			metrics.SegmentID = providerMetrics.SegmentID
+		}
+		mergeProviderTTSEnrichment(metrics, providerMetrics)
+	}
+}
+
+func mergeProviderTTSEnrichment(metrics, providerMetrics *telemetry.TTSMetrics) {
+	if metrics == nil || providerMetrics == nil {
+		return
+	}
+	if providerMetrics.InputTokens != 0 {
+		metrics.InputTokens = providerMetrics.InputTokens
+	}
+	if providerMetrics.OutputTokens != 0 {
+		metrics.OutputTokens = providerMetrics.OutputTokens
+	}
+	if providerMetrics.AcquireTime != 0 {
+		metrics.AcquireTime = providerMetrics.AcquireTime
+	}
+	if providerMetrics.ConnectionReused {
+		metrics.ConnectionReused = true
+	}
+}
+
 func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, opts ...TTSInferenceOption) (*TTSGenerationData, error) {
 	data := &TTSGenerationData{
 		AudioCh:     make(chan *model.AudioFrame, 100),
@@ -412,10 +603,12 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	for _, opt := range opts {
 		opt(&options)
 	}
+	streamed := t.Capabilities().Streaming
 	transformBuffer, err := newTTSTextTransformBuffer(options)
 	if err != nil {
 		return nil, err
 	}
+	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler)
 	ctx, span := telemetry.NewTTSNodeSpan(ctx, tts.Model(t), tts.Provider(t))
 
 	if !t.Capabilities().Streaming && !options.PreserveTimedTranscript {
@@ -435,6 +628,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				if !startTimeSet {
 					startTime = time.Now()
 					startTimeSet = true
+					metrics.start()
 				}
 				text.WriteString(chunk)
 			}
@@ -444,13 +638,16 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				ttsText, transformErr = applyTTSTextTransforms(ttsText, options)
 				if transformErr != nil {
 					data.StreamErr = transformErr
+					metrics.close()
 					return
 				}
 			}
 			transformedText := applyTTSTextReplacements(ttsText, options)
 			if strings.TrimSpace(transformedText) == "" {
+				metrics.close()
 				return
 			}
+			metrics.addText(transformedText)
 
 			if !startTimeSet {
 				startTime = time.Now()
@@ -458,8 +655,12 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			stream, err := t.Synthesize(ctx, transformedText)
 			if err != nil {
 				data.StreamErr = err
+				metrics.close()
 				return
 			}
+			defer func() {
+				metrics.emit(errors.Is(data.StreamErr, context.Canceled) || ctx.Err() != nil)
+			}()
 			var frame *model.AudioFrame
 			if options.PreserveTimedTranscript {
 				var timedTranscript []tts.TimedString
@@ -487,6 +688,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 			}
 			data.TTFB = time.Since(startTime)
+			metrics.observeAudio(&tts.SynthesizedAudio{Frame: frame})
 			span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			data.AudioCh <- frame
 		}()
@@ -496,6 +698,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	stream, err := t.Stream(streamCtx)
 	if err != nil {
+		metrics.close()
 		span.End()
 		cancelStream()
 		return nil, err
@@ -534,6 +737,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		var startTimeMu sync.Mutex
 		markStartTime := func() {
 			startTimeMu.Lock()
+			metrics.start()
 			if !startTimeSet && !ttfbObserved {
 				startTime = time.Now()
 				startTimeSet = true
@@ -572,6 +776,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			pushedTextMu.Lock()
 			pushedText.WriteString(text)
 			pushedTextMu.Unlock()
+			metrics.addText(text)
 		}
 		pushedTextString := func() string {
 			pushedTextMu.Lock()
@@ -662,6 +867,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				if audio == nil || audio.Frame == nil {
 					continue
 				}
+				metrics.observeAudio(audio)
 				if data.TTFB == 0 {
 					if ttfb, ok := timeSinceStart(); ok {
 						data.TTFB = ttfb
@@ -684,12 +890,17 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 		}()
 		wg.Wait()
+		closeStream()
 		streamErrMu.Lock()
 		hasStreamErr := data.StreamErr != nil
 		streamErrMu.Unlock()
 		if options.RequireAudio && !hasStreamErr && strings.TrimSpace(pushedTextString()) != "" && audioFrameCount() == 0 {
 			setStreamErr(fmt.Errorf("no audio frames were pushed for text: %s", pushedTextString()))
 		}
+		streamErrMu.Lock()
+		cancelled := errors.Is(data.StreamErr, context.Canceled) || ctx.Err() != nil
+		streamErrMu.Unlock()
+		metrics.emit(cancelled)
 	}()
 
 	return data, nil

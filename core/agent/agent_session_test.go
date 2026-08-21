@@ -5520,8 +5520,14 @@ func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
 	}
 }
 
-func TestAgentSessionStartForwardsTTSMetricsThroughActivity(t *testing.T) {
+func TestAgentSessionStartDoesNotForwardProviderTTSMetricsDirectly(t *testing.T) {
 	ttsSource := &fakePipelineTTS{}
+	directMetrics := make(chan *telemetry.TTSMetrics, 1)
+	unsubscribe := ttsSource.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		directMetrics <- metrics
+	})
+	defer unsubscribe()
+
 	agent := NewAgent("test")
 	agent.TTS = ttsSource
 	agent.LLM = &fakeGenerationLLM{}
@@ -5538,16 +5544,22 @@ func TestAgentSessionStartForwardsTTSMetricsThroughActivity(t *testing.T) {
 	ttsSource.EmitMetricsCollected(metrics)
 
 	select {
-	case ev := <-session.MetricsCollectedEvents():
-		if ev.Metrics != metrics {
-			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original TTS metrics", ev.Metrics)
+	case got := <-directMetrics:
+		if got != metrics {
+			t.Fatalf("direct metrics = %#v, want original provider metrics", got)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("MetricsCollectedEvents did not receive TTS metrics")
+		t.Fatal("direct subscriber did not receive provider metrics")
+	}
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		t.Fatalf("MetricsCollectedEvents received direct provider metrics %#v", ev.Metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
-func TestAgentSessionStartForwardsPipelineTTSMetricsThroughActivity(t *testing.T) {
+func TestAgentSessionStartDoesNotForwardPipelineTTSMetricsDirectly(t *testing.T) {
 	ttsSource := &fakePipelineTTS{}
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -5557,16 +5569,12 @@ func TestAgentSessionStartForwardsPipelineTTSMetricsThroughActivity(t *testing.T
 		t.Fatalf("Start error = %v, want nil", err)
 	}
 
-	metrics := &telemetry.TTSMetrics{RequestID: "pipeline_tts_req", InputTokens: 2}
-	ttsSource.EmitMetricsCollected(metrics)
+	ttsSource.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "pipeline_tts_req", InputTokens: 2})
 
 	select {
 	case ev := <-session.MetricsCollectedEvents():
-		if ev.Metrics != metrics {
-			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original pipeline TTS metrics", ev.Metrics)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("MetricsCollectedEvents did not receive pipeline TTS metrics")
+		t.Fatalf("MetricsCollectedEvents received direct pipeline provider metrics %#v", ev.Metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

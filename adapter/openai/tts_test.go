@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1590,7 +1589,7 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSRawAudioEmitsReferenceMetrics(t *testing.T) {
+func TestOpenAITTSRawAudioDoesNotEmitProviderMetricsWithoutUsage(t *testing.T) {
 	const requestID = "req_raw_metrics"
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -1636,14 +1635,8 @@ func TestOpenAITTSRawAudioEmitsReferenceMetrics(t *testing.T) {
 	}
 	select {
 	case metrics := <-metricsCh:
-		if metrics.RequestID != requestID || metrics.InputTokens != 0 || metrics.OutputTokens != 0 {
-			t.Fatalf("metrics = %#v, want request id and zero token usage", metrics)
-		}
-		if metrics.AudioDuration <= 0 || metrics.TTFB < 0 {
-			t.Fatalf("metrics audio/ttfb = %f/%f, want synthesized audio timing", metrics.AudioDuration, metrics.TTFB)
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for raw audio reference metrics")
+		t.Fatalf("provider emitted metrics without provider usage: %#v", metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -1801,15 +1794,7 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.CharactersCount != utf8.RuneCountInString(inputText) {
-			t.Fatalf("CharactersCount = %d, want reference character count", metrics.CharactersCount)
-		}
-		if metrics.AudioDuration <= 0 {
-			t.Fatalf("AudioDuration = %f, want synthesized audio duration", metrics.AudioDuration)
-		}
-		if metrics.TTFB < 0 {
-			t.Fatalf("TTFB = %f, want non-negative time to first byte", metrics.TTFB)
-		}
+		assertOpenAITTSProviderUsageOnly(t, metrics, requestID, 7, 11)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SSE done usage metrics")
 	}
@@ -1941,14 +1926,40 @@ func TestOpenAITTSSSEBlankInputNoAudioEmitsReferenceMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.RequestID != "req_blank_no_audio" || metrics.InputTokens != 3 || metrics.OutputTokens != 5 {
-			t.Fatalf("metrics = %#v, want reference usage metrics for blank no-audio success", metrics)
-		}
-		if metrics.AudioDuration != 0 || metrics.TTFB != -1 {
-			t.Fatalf("metrics audio/ttfb = %f/%f, want no-audio timing", metrics.AudioDuration, metrics.TTFB)
-		}
+		assertOpenAITTSProviderUsageOnly(t, metrics, "req_blank_no_audio", 3, 5)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for blank no-audio reference metrics")
+	}
+}
+
+func assertOpenAITTSProviderUsageOnly(t *testing.T, metrics *telemetry.TTSMetrics, requestID string, inputTokens, outputTokens int) {
+	t.Helper()
+	if metrics.RequestID != requestID {
+		t.Fatalf("RequestID = %q, want %q", metrics.RequestID, requestID)
+	}
+	if metrics.InputTokens != inputTokens || metrics.OutputTokens != outputTokens {
+		t.Fatalf("token usage = %d/%d, want %d/%d", metrics.InputTokens, metrics.OutputTokens, inputTokens, outputTokens)
+	}
+	if metrics.Label != "" {
+		t.Fatalf("Label = %q, want empty provider enrichment", metrics.Label)
+	}
+	if !metrics.Timestamp.IsZero() {
+		t.Fatalf("Timestamp = %v, want zero provider enrichment", metrics.Timestamp)
+	}
+	if metrics.TTFB != 0 || metrics.Duration != 0 || metrics.AudioDuration != 0 {
+		t.Fatalf("baseline timing = %f/%f/%f, want zero provider enrichment", metrics.TTFB, metrics.Duration, metrics.AudioDuration)
+	}
+	if metrics.Cancelled || metrics.CharactersCount != 0 || metrics.Streamed {
+		t.Fatalf("baseline state = cancelled:%v characters:%d streamed:%v, want zero provider enrichment", metrics.Cancelled, metrics.CharactersCount, metrics.Streamed)
+	}
+	if metrics.SegmentID != "" || metrics.SpeechID != "" {
+		t.Fatalf("baseline ids = %q/%q, want empty provider enrichment", metrics.SegmentID, metrics.SpeechID)
+	}
+	if metrics.AcquireTime != 0 || metrics.ConnectionReused {
+		t.Fatalf("connection enrichment = %f/%v, want zero", metrics.AcquireTime, metrics.ConnectionReused)
+	}
+	if metrics.Metadata != nil {
+		t.Fatalf("Metadata = %#v, want nil provider enrichment", metrics.Metadata)
 	}
 }
 

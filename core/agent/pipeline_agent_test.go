@@ -4177,7 +4177,7 @@ func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 			},
 		},
 	}
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, l, nil, llm.NewChatContext())
 	agent.session = session
 	agent.ctx = context.Background()
 
@@ -4209,6 +4209,118 @@ func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsBaselineTTSMetricsForSilentProvider(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "héllo"}}},
+		},
+	}
+	ttsProvider := &fakePipelineTTS{
+		model:    "test-voice",
+		provider: "silent-provider",
+		stream: &fakePipelineTTSStream{frames: []*model.AudioFrame{{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 240,
+			Data:              make([]byte, 480),
+		}}},
+	}
+	agent := NewPipelineAgent(nil, nil, l, ttsProvider, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	var got *telemetry.TTSMetrics
+	deadline := time.After(time.Second)
+	for got == nil {
+		select {
+		case ev := <-session.MetricsCollectedEvents():
+			got, _ = ev.Metrics.(*telemetry.TTSMetrics)
+		case <-deadline:
+			t.Fatal("MetricsCollectedEvents did not receive TTS metrics")
+		}
+	}
+	if got.Label != "fake" || got.RequestID == "" {
+		t.Fatalf("identity = label %q request %q, want fake and generated request ID", got.Label, got.RequestID)
+	}
+	if got.CharactersCount != 5 || !got.Streamed {
+		t.Fatalf("text metrics = %#v, want 5 runes and streamed=true", got)
+	}
+	if got.AudioDuration != 0.01 || got.TTFB < 0 || got.Duration < got.TTFB {
+		t.Fatalf("timing metrics = %#v, want audio=0.01 and valid TTFB/duration", got)
+	}
+	if got.Metadata == nil || got.Metadata.ModelName != "test-voice" || got.Metadata.ModelProvider != "silent-provider" {
+		t.Fatalf("Metadata = %#v, want silent-provider/test-voice", got.Metadata)
+	}
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if _, duplicate := ev.Metrics.(*telemetry.TTSMetrics); duplicate {
+			t.Fatal("received duplicate TTS metrics")
+		}
+	default:
+	}
+}
+
+func TestPipelineAgentMergesProviderTTSMetricsWithoutDuplicateEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}},
+		},
+	}
+	ttsProvider := &fakePipelineTTS{model: "voice", provider: "provider"}
+	ttsProvider.stream = &fakePipelineTTSStream{
+		requestID: "req-provider",
+		frames: []*model.AudioFrame{{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 240,
+			Data:              make([]byte, 480),
+		}},
+		onEOF: func() {
+			ttsProvider.EmitMetricsCollected(&telemetry.TTSMetrics{
+				RequestID:   "req-provider",
+				InputTokens: 7,
+			})
+		},
+	}
+	session.TTS = ttsProvider
+	activity := NewAgentActivity(session.Agent, session)
+	session.activity = activity
+	activity.Start()
+	t.Cleanup(activity.Stop)
+
+	agent := NewPipelineAgent(nil, nil, l, ttsProvider, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	agent.generateReply()
+
+	var ttsMetrics []*telemetry.TTSMetrics
+	deadline := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case ev := <-session.MetricsCollectedEvents():
+			if metrics, ok := ev.Metrics.(*telemetry.TTSMetrics); ok {
+				ttsMetrics = append(ttsMetrics, metrics)
+			}
+		case <-deadline:
+			if len(ttsMetrics) != 1 {
+				t.Fatalf("received %d TTS metrics, want exactly 1: %#v", len(ttsMetrics), ttsMetrics)
+			}
+			if ttsMetrics[0].InputTokens != 7 {
+				t.Fatalf("InputTokens = %d, want provider enrichment 7", ttsMetrics[0].InputTokens)
+			}
+			if ttsMetrics[0].CharactersCount != 5 || ttsMetrics[0].AudioDuration != 0.01 {
+				t.Fatalf("baseline fields = %#v, want characters=5 and audio=0.01", ttsMetrics[0])
+			}
+			return
+		}
+	}
+}
+
 func TestPipelineAgentEmitsLLMMetricsWithoutUsageChunk(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	l := &fakeGenerationLLM{
@@ -4225,7 +4337,7 @@ func TestPipelineAgentEmitsLLMMetricsWithoutUsageChunk(t *testing.T) {
 			},
 		},
 	}
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, l, nil, llm.NewChatContext())
 	agent.session = session
 	agent.ctx = context.Background()
 
@@ -6469,6 +6581,9 @@ type fakePipelineTTSStream struct {
 	text             strings.Builder
 	frames           []*model.AudioFrame
 	timedTranscripts [][]tts.TimedString
+	requestID        string
+	onEOF            func()
+	eofOnce          sync.Once
 	next             int
 	err              error
 	pushed           chan struct{}
@@ -6682,13 +6797,18 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 			timedTranscript = f.timedTranscripts[f.next]
 		}
 		f.next++
-		return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
+		return &tts.SynthesizedAudio{Frame: frame, RequestID: f.requestID, TimedTranscript: timedTranscript}, nil
 	}
 	if f.err != nil {
 		err := f.err
 		f.err = nil
 		return nil, err
 	}
+	f.eofOnce.Do(func() {
+		if f.onEOF != nil {
+			f.onEOF()
+		}
+	})
 	return nil, io.EOF
 }
 
