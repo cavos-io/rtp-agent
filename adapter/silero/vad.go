@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -194,6 +195,7 @@ func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*VAD
 			if requireONNX {
 				return nil, err
 			}
+			logger.Logger.Warnw("failed to initialize Silero VAD with ONNX runtime, falling back to legacy implementation", err)
 			return newSileroVADFallback(options), nil
 		}
 		simpleOptions := simpleOptionsFromSileroONNX(options)

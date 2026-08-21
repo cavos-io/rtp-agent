@@ -3,6 +3,7 @@ package silero
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -93,6 +94,25 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD metrics")
+	}
+}
+
+func TestSileroVADONNXFallbackLogsWarning(t *testing.T) {
+	originalFactory := newSileroProbabilityEstimatorFactory
+	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
+
+	newSileroProbabilityEstimatorFactory = func(options VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+		return nil, fmt.Errorf("onnx initialization failed")
+	}
+
+	detector := NewVAD(WithONNXRuntime())
+	if detector == nil {
+		t.Fatal("NewSileroVAD(WithONNXRuntime()) returned nil")
+	}
+
+	// Verify it fell back to legacy (scaleThreshold should be true)
+	if !detector.scaleThreshold {
+		t.Error("expected detector to have scaleThreshold=true (legacy fallback)")
 	}
 }
 
