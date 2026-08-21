@@ -2,6 +2,6 @@ package azure
 
 const (
 	PluginTitle   = "rtp-agent.plugins.azure"
-	PluginVersion = "v0.5.2"
+	PluginVersion = "v0.6.0"
 	PluginPackage = "rtp-agent.plugins.azure"
 )
