@@ -2693,6 +2693,9 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 }
 
 func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
 	var endedSpeakingSpan trace.Span
 	s.mu.Lock()
 	if s.userTurnClaims > 0 && state != UserStateSpeaking {
@@ -2707,10 +2710,10 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	s.userState = state
 	if state == UserStateSpeaking {
 		if s.userTurnSpan == nil {
-			s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(s.runCtx, "user_turn")
+			s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(s.runCtx, "user_turn", trace.WithTimestamp(createdAt))
 		}
 		if s.userSpeakingSpan == nil {
-			_, s.userSpeakingSpan = telemetry.StartSpan(s.userTurnCtx, "user_speaking")
+			_, s.userSpeakingSpan = telemetry.StartSpan(s.userTurnCtx, "user_speaking", trace.WithTimestamp(createdAt))
 		}
 	} else if s.userSpeakingSpan != nil {
 		endedSpeakingSpan = s.userSpeakingSpan
@@ -2719,7 +2722,7 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	videoSampler := s.videoSampler
 	s.mu.Unlock()
 	if endedSpeakingSpan != nil {
-		endedSpeakingSpan.End()
+		endedSpeakingSpan.End(trace.WithTimestamp(createdAt))
 	}
 
 	if videoSampler != nil {
@@ -2728,9 +2731,6 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 
 	s.updateUserAwayTimer()
 
-	if createdAt.IsZero() {
-		createdAt = time.Now()
-	}
 	logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 	ev := UserStateChangedEvent{
 		OldState:  oldState,

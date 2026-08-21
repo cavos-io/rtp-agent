@@ -3707,6 +3707,102 @@ func TestSLNGSTTFlushFinalizesOnlyNewAudio(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTFinalResponsePreservesAudioSentAfterFinalize(t *testing.T) {
+	firstFinalize := make(chan struct{})
+	secondAudio := make(chan struct{})
+	secondFinalize := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+
+		binaryFrames := 0
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				binaryFrames++
+				if binaryFrames == 2 {
+					close(secondAudio)
+					if err := conn.WriteMessage(websocket.TextMessage, []byte(
+						`{"type":"final_transcript","transcript":"first","confidence":0.9,"language":"en"}`,
+					)); err != nil {
+						return
+					}
+				}
+				continue
+			}
+			if messageType != websocket.TextMessage || string(payload) != `{"type":"finalize"}` {
+				continue
+			}
+			if binaryFrames == 1 {
+				close(firstFinalize)
+				continue
+			}
+			close(secondFinalize)
+			return
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0] + "/v1/bridges/unmute/stt/deepgram/nova:3"
+	stream, err := NewSTT(
+		"test-key",
+		WithSTTEndpoint(endpoint),
+		WithSTTBufferSizeSeconds(0.001),
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 32)}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("first Flush() error = %v", err)
+	}
+	select {
+	case <-firstFinalize:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first finalize")
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{2}, 32)}); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	select {
+	case <-secondAudio:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second audio")
+	}
+	for _, want := range []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventRecognitionUsage,
+	} {
+		if got := nextSLNGTestSpeechEvent(t, stream); got.Type != want {
+			t.Fatalf("event = %s, want %s", got.Type, want)
+		}
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+	select {
+	case <-secondFinalize:
+	case <-time.After(time.Second):
+		t.Fatal("audio sent after the first finalize was not finalized")
+	}
+}
+
 func TestSLNGSTTEndInputSendsReferenceFinalize(t *testing.T) {
 	textFrames := make(chan string, 2)
 	upgrader := websocket.Upgrader{}

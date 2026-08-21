@@ -430,7 +430,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			va.finalizeActiveSTTStream()
+			va.finalizeActiveSTTStream(0)
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnEndOfSpeech(ev)
 			} else if va.session != nil {
@@ -451,18 +451,25 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	}
 }
 
-func (va *PipelineAgent) finalizeActiveSTTStream() {
+func (va *PipelineAgent) finalizeActiveSTTStream(silenceDuration time.Duration) {
 	if va == nil {
 		return
 	}
 	va.mu.Lock()
 	stream := va.sttStream
 	sttObj := va.stt
+	ctx := va.ctx
 	va.mu.Unlock()
 	if stream == nil {
 		return
 	}
-	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+	var err error
+	if silenceDuration > 0 {
+		err = va.FlushInputTranscription(ctx, silenceDuration)
+	} else {
+		err = stream.Flush()
+	}
+	if err != nil && !isSpeechStreamShutdownError(err) {
 		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
 		label := "stt"
 		if sttObj != nil {
@@ -514,14 +521,21 @@ func (va *PipelineAgent) onVADStall() {
 		va.vadStallTimer = nil
 	}
 	timeout := va.vadStallTimeout
+	stream := va.vadStream
 	session := va.session
 	va.mu.Unlock()
 
 	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
-	va.finalizeActiveSTTStream()
+	if stream != nil {
+		if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+			logger.Logger.Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
+			va.emitError(err, va.vad)
+		}
+	}
+	va.finalizeActiveSTTStream(2 * time.Second)
 	if session != nil && session.activity != nil {
-		session.activity.OnEndOfSpeech(nil)
+		session.activity.onSyntheticEndOfSpeech()
 		return
 	}
 	if session != nil {
@@ -869,11 +883,13 @@ func finishSpeechAgentTurn(speech *SpeechHandle) {
 		return
 	}
 	speech.mu.Lock()
+	turnCtx := speech.agentTurnCtx
 	end := speech.agentTurnEnd
 	speech.agentTurnCtx = nil
 	speech.agentTurnEnd = nil
 	speech.mu.Unlock()
 	if end != nil {
+		trace.SpanFromContext(turnCtx).SetAttributes(attribute.Bool(telemetry.AttrSpeechInterrupted, speech.IsInterrupted()))
 		end()
 	}
 }
@@ -1130,6 +1146,8 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
 			if ttsGen == nil && session.AudioPlaybackController() == nil {
 				forwardedText = textOnlyForwarded
+			} else if ttsGen == nil || !ttsGen.ForwardedAudio {
+				forwardedText = ""
 			} else {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
@@ -1142,6 +1160,9 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				Role:        llm.ChatRoleAssistant,
 				Text:        forwardedText,
 				Interrupted: opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted(),
+			}
+			if ttsGen != nil && ttsGen.StartedSpeakingAt > 0 {
+				args.CreatedAt = unixSecondsToTime(ttsGen.StartedSpeakingAt)
 			}
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
