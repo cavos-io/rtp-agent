@@ -134,6 +134,10 @@ type providerProviderTTS interface {
 	Provider() string
 }
 
+type unwrapProviderTTS interface {
+	Unwrap() TTS
+}
+
 type prewarmProviderTTS interface {
 	Prewarm()
 }
@@ -143,19 +147,37 @@ type closeProviderTTS interface {
 }
 
 func Model(t TTS) string {
-	if provider, ok := t.(modelProviderTTS); ok {
-		if model := provider.Model(); model != "" {
-			return model
+	for t != nil {
+		if provider, ok := t.(modelProviderTTS); ok {
+			if model := provider.Model(); model != "" {
+				return model
+			}
 		}
+
+		wrapper, ok := t.(unwrapProviderTTS)
+		if !ok {
+			break
+		}
+
+		t = wrapper.Unwrap()
 	}
 	return "unknown"
 }
 
 func Provider(t TTS) string {
-	if provider, ok := t.(providerProviderTTS); ok {
-		if name := provider.Provider(); name != "" {
-			return name
+	for t != nil {
+		if provider, ok := t.(providerProviderTTS); ok {
+			if name := provider.Provider(); name != "" {
+				return name
+			}
 		}
+
+		wrapper, ok := t.(unwrapProviderTTS)
+		if !ok {
+			break
+		}
+
+		t = wrapper.Unwrap()
 	}
 	return "unknown"
 }

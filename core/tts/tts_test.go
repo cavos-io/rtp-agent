@@ -26,6 +26,56 @@ func TestTTSMetadataDefaultsUnknown(t *testing.T) {
 	}
 }
 
+func TestTTSMetadataFollowsWrappers(t *testing.T) {
+	provider := &namedMetadataTTS{
+		model:    "eleven_multilingual_v2",
+		provider: "ElevenLabs",
+	}
+
+	tests := []struct {
+		name         string
+		tts          TTS
+		wantModel    string
+		wantProvider string
+	}{
+		{
+			name:         "single wrapper",
+			tts:          &metadataWrapperTTS{TTS: provider},
+			wantModel:    "eleven_multilingual_v2",
+			wantProvider: "ElevenLabs",
+		},
+		{
+			name:         "nested wrappers",
+			tts:          &metadataWrapperTTS{TTS: &metadataWrapperTTS{TTS: provider}},
+			wantModel:    "eleven_multilingual_v2",
+			wantProvider: "ElevenLabs",
+		},
+		{
+			name:         "outer metadata wins",
+			tts:          &metadataOverrideWrapperTTS{TTS: provider, model: "outer-model", provider: "outer-provider"},
+			wantModel:    "outer-model",
+			wantProvider: "outer-provider",
+		},
+		{
+			name:         "nil unwrap defaults unknown",
+			tts:          &metadataWrapperTTS{},
+			wantModel:    "unknown",
+			wantProvider: "unknown",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Model(test.tts); got != test.wantModel {
+				t.Fatalf("Model = %q, want %q", got, test.wantModel)
+			}
+			if got := Provider(test.tts); got != test.wantProvider {
+				t.Fatalf("Provider = %q, want %q", got, test.wantProvider)
+			}
+		})
+	}
+}
+
 func TestTTSPrewarmDefaultNoop(t *testing.T) {
 	provider := &metadataDefaultsTTS{}
 
@@ -732,6 +782,34 @@ func (m *metadataDefaultsTTS) Synthesize(context.Context, string) (ChunkedStream
 func (m *metadataDefaultsTTS) Stream(context.Context) (SynthesizeStream, error) {
 	return nil, nil
 }
+
+type namedMetadataTTS struct {
+	metadataDefaultsTTS
+	model    string
+	provider string
+}
+
+func (m *namedMetadataTTS) Model() string { return m.model }
+
+func (m *namedMetadataTTS) Provider() string { return m.provider }
+
+type metadataWrapperTTS struct {
+	TTS
+}
+
+func (m *metadataWrapperTTS) Unwrap() TTS { return m.TTS }
+
+type metadataOverrideWrapperTTS struct {
+	TTS
+	model    string
+	provider string
+}
+
+func (m *metadataOverrideWrapperTTS) Model() string { return m.model }
+
+func (m *metadataOverrideWrapperTTS) Provider() string { return m.provider }
+
+func (m *metadataOverrideWrapperTTS) Unwrap() TTS { return m.TTS }
 
 type closableMetadataTTS struct {
 	metadataDefaultsTTS
