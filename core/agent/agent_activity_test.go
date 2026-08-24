@@ -2795,6 +2795,36 @@ func TestAgentActivityFinalTranscriptTranscriptionDelayUsesVADStop(t *testing.T)
 	}
 }
 
+func TestAgentActivitySyntheticEndPreservesLastVADInferenceTime(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.speaking = true
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                 vad.VADEventInferenceDone,
+		RawAccumulatedSpeech: 0.5,
+	})
+	wantStopped := activity.userSpeechStoppedAt
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "synthetic end", Confidence: 0.9}},
+	})
+	time.Sleep(10 * time.Millisecond)
+	activity.OnEndOfSpeech(nil)
+
+	if got := activity.userSpeechStoppedAt; !got.Equal(wantStopped) {
+		t.Fatalf("userSpeechStoppedAt = %v, want last VAD inference time %v", got, wantStopped)
+	}
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StoppedSpeakingAt == nil {
+		t.Fatal("StoppedSpeakingAt = nil, want last VAD inference time")
+	}
+	if got := unixSecondsToTime(*info.StoppedSpeakingAt); got.Sub(wantStopped).Abs() > time.Microsecond {
+		t.Fatalf("StoppedSpeakingAt = %v, want last VAD inference time %v", got, wantStopped)
+	}
+}
+
 func TestMetricsReportFromEndOfTurnOmitsUnknownTranscriptionDelay(t *testing.T) {
 	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0)
 	if _, ok := metrics["transcription_delay"]; ok {
@@ -4671,6 +4701,105 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 	}
 	if flusher.flushDuration != 20*time.Millisecond {
 		t.Fatalf("FlushInputTranscription duration = %v, want 20ms", flusher.flushDuration)
+	}
+}
+
+func TestAgentActivityCommitUserTurnClearsCompletedSpeechTiming(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "completed turn", Confidence: 0.9}},
+	})
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if !activity.userSpeechStartedAt.IsZero() {
+		t.Fatalf("userSpeechStartedAt = %v, want cleared after committed turn", activity.userSpeechStartedAt)
+	}
+	if !activity.userSpeechStoppedAt.IsZero() {
+		t.Fatalf("userSpeechStoppedAt = %v, want cleared after committed turn", activity.userSpeechStoppedAt)
+	}
+}
+
+func TestAgentActivityAutomaticTurnClearsCompletedSpeechTiming(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "automatic turn", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	select {
+	case <-agent.turns:
+	case <-testTimeout():
+		t.Fatal("automatic turn did not reach OnUserTurnCompleted")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		activity.falseInterruptionMu.Lock()
+		startedAt := activity.userSpeechStartedAt
+		stoppedAt := activity.userSpeechStoppedAt
+		activity.falseInterruptionMu.Unlock()
+		if startedAt.IsZero() && stoppedAt.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("speech timing retained after automatic turn: started=%v stopped=%v", startedAt, stoppedAt)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestAgentActivityCommitUserTurnPreservesNewSpeechTiming(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 1),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first turn", Confidence: 0.9}},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+	select {
+	case <-agent.started:
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not reach OnUserTurnCompleted")
+	}
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	newSpeechStartedAt := activity.userSpeechStartedAt
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	close(agent.release)
+	if err := <-done; err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if activity.userSpeechStartedAt != newSpeechStartedAt {
+		t.Fatalf("userSpeechStartedAt = %v, want concurrent speech start %v", activity.userSpeechStartedAt, newSpeechStartedAt)
 	}
 }
 
@@ -6718,6 +6847,34 @@ func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testin
 	}
 }
 
+func TestAgentActivityLateFinalAfterVADEndPreservesAccumulatedTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.05})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+	activity.speaking = true
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first segment", Confidence: 0.9}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "late tail", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "first segment late tail" {
+			t.Fatalf("turn message text = %q, want accumulated transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after late final transcript")
+	}
+}
+
 func TestAgentActivityVADEndOfSpeechWithoutFinalKeepsInterimTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeVAD
@@ -8310,6 +8467,38 @@ func TestAgentActivityOnStartOfSpeechPausesWhileSpeaking(t *testing.T) {
 	}
 	if activity.pausedSpeech == nil || activity.pausedSpeech.handle != current {
 		t.Fatal("pausedSpeech not set to current speech")
+	}
+	current.MarkDone()
+}
+
+func TestAgentActivityInterimTranscriptsDoNotPauseAlreadyPausedSpeechAgain(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		FalseInterruptionTimeout:    0.5,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello there"}},
+	})
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hello there again"}},
+	})
+
+	if audioOutput.pauseCount != 1 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 1 for one paused speech", audioOutput.pauseCount)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted instead of remaining paused")
 	}
 	current.MarkDone()
 }

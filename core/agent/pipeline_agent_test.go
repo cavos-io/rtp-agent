@@ -69,6 +69,42 @@ func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentTurnSpanRecordsInterruption(t *testing.T) {
+	for _, interrupted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("interrupted=%t", interrupted), func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			oldTracer := telemetry.Tracer
+			telemetry.Tracer = provider.Tracer("test")
+			t.Cleanup(func() {
+				telemetry.Tracer = oldTracer
+				_ = provider.Shutdown(context.Background())
+			})
+
+			speech := NewSpeechHandle(true, DefaultInputDetails())
+			if interrupted {
+				if err := speech.Interrupt(false); err != nil {
+					t.Fatalf("Interrupt: %v", err)
+				}
+			}
+			NewPipelineAgent(nil, nil, nil, nil, nil).OnSpeechScheduled(context.Background(), speech)
+
+			spans := recorder.Ended()
+			if len(spans) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(spans))
+			}
+			attrs := spanAttributeValues(spans[0].Attributes())
+			got, ok := attrs[telemetry.AttrSpeechInterrupted]
+			if !ok {
+				t.Fatalf("%s missing", telemetry.AttrSpeechInterrupted)
+			}
+			if got.AsBool() != interrupted {
+				t.Fatalf("%s = %t, want %t", telemetry.AttrSpeechInterrupted, got.AsBool(), interrupted)
+			}
+		})
+	}
+}
+
 func TestPipelineAgentBargeInResetStaysRootedUnderSessionCtx(t *testing.T) {
 	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -2578,16 +2614,139 @@ func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
 
 func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
 	sttStream := &fakePipelineRecognizeStream{}
+	vadStream := &fakePipelineVADStream{}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	pipeline := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
 	pipeline.session = session
+	pipeline.vadStream = vadStream
 	pipeline.sttStream = sttStream
 	pipeline.vadSpeechStarted = true
+	pipeline.lastSTTFrame = &model.AudioFrame{
+		SampleRate:        1000,
+		NumChannels:       1,
+		SamplesPerChannel: 20,
+	}
 
 	pipeline.onVADStall()
 
+	if vadStream.flushCount != 1 {
+		t.Fatalf("VAD stream Flush calls = %d, want 1 after synthetic end-of-speech", vadStream.flushCount)
+	}
 	if sttStream.flushCount != 1 {
 		t.Fatalf("STT stream Flush calls = %d, want 1 after synthetic VAD end-of-speech", sttStream.flushCount)
+	}
+	if len(sttStream.frames) != 10 {
+		t.Fatalf("STT silence frames = %d, want 10 to flush a detached audio tail", len(sttStream.frames))
+	}
+	for i, frame := range sttStream.frames {
+		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 200 {
+			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/200",
+				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
+		}
+		for _, sample := range frame.Data {
+			if sample != 0 {
+				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
+			}
+		}
+	}
+}
+
+func TestPipelineAgentVADStallWaitsForLateFinalTranscript(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	conversationEvents := session.ConversationItemAddedEvents()
+	defer activity.Stop()
+	activity.speaking = true
+	activity.userSpeechStartedAt = time.Now().Add(-4 * time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-3 * time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "first segment", Confidence: 0.9}},
+	})
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.vadStream = &fakePipelineVADStream{}
+	pipeline.sttStream = &fakePipelineRecognizeStream{}
+	pipeline.vadSpeechStarted = true
+	pipeline.onVADStall()
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("stalled turn committed before flushed STT final arrived: %q", msg.TextContent())
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "late tail", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "first segment late tail" {
+			t.Fatalf("turn message text = %q, want accumulated stalled transcript", msg.TextContent())
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("stalled turn was not committed after late final transcript")
+	}
+	select {
+	case ev := <-conversationEvents:
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if _, ok := msg.Metrics["stopped_speaking_at"].(float64); !ok {
+			t.Fatalf("turn metrics = %#v, want stopped_speaking_at for e2e latency", msg.Metrics)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("ConversationItemAddedEvents did not receive stalled user turn")
+	}
+}
+
+func TestPipelineAgentVADStallEventuallyCommitsWithoutLateFinal(t *testing.T) {
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.04,
+	})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+	activity.speaking = true
+	activity.userSpeechStartedAt = time.Now().Add(-4 * time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-3 * time.Second)
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "only segment", Confidence: 0.9}},
+	})
+
+	pipeline := NewPipelineAgent(baseAgent.VAD, baseAgent.STT, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.vadStream = &fakePipelineVADStream{}
+	pipeline.sttStream = &fakePipelineRecognizeStream{}
+	pipeline.vadSpeechStarted = true
+	pipeline.onVADStall()
+
+	select {
+	case msg := <-baseAgent.turns:
+		t.Fatalf("stalled turn committed without finalization grace: %q", msg.TextContent())
+	case <-time.After(15 * time.Millisecond):
+	}
+	select {
+	case msg := <-baseAgent.turns:
+		if msg.TextContent() != "only segment" {
+			t.Fatalf("turn message text = %q, want only segment", msg.TextContent())
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("stalled turn did not commit after bounded finalization grace")
 	}
 }
 
@@ -5668,6 +5827,97 @@ func TestPipelineAgentInterruptedReplySkipsUnplayedAssistantText(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInterruptedReplySkipsStalePriorPlayout(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "unheard current answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{
+			PlaybackPosition:          200 * time.Millisecond,
+			Interrupted:               true,
+			SynchronizedTranscript:    "heard prior answer",
+			HasSynchronizedTranscript: true,
+		},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no assistant message when current generation forwarded no audio", chatCtx.Items)
+	}
+	if len(speech.ChatItems()) != 0 {
+		t.Fatalf("speech.ChatItems = %#v, want no committed assistant message", speech.ChatItems())
+	}
+}
+
+func TestPipelineAgentAssistantMessageUsesSpeechStartForOrdering(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "assistant started first"}},
+			},
+		},
+	}
+	waitStarted := make(chan struct{})
+	playback := &fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: make(chan struct{}),
+		result:      AudioPlaybackResult{PlaybackPosition: 200 * time.Millisecond},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{0, 1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error { return nil }
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	done := make(chan struct{})
+	go func() {
+		agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
+		close(done)
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not start")
+	}
+	userMessage := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "overlapping user"})
+	close(playback.releaseWait)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reply generation did not finish")
+	}
+
+	if len(chatCtx.Items) != 2 {
+		t.Fatalf("chatCtx.Items = %#v, want assistant and overlapping user", chatCtx.Items)
+	}
+	assistant, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || assistant.Role != llm.ChatRoleAssistant {
+		t.Fatalf("first chat item = %#v, want assistant ordered by speech start", chatCtx.Items[0])
+	}
+	if !assistant.CreatedAt.Before(userMessage.CreatedAt) {
+		t.Fatalf("assistant CreatedAt = %v, want before overlapping user at %v", assistant.CreatedAt, userMessage.CreatedAt)
+	}
+}
+
 func TestPipelineAgentInterruptedReplySkipsGeneratedTextWhenPlayoutWaitCanceled(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -5718,12 +5968,14 @@ func TestPipelineAgentInterruptedReplyCommitsSynchronizedTranscript(t *testing.T
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.SetAudioPlaybackController(playback)
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{0, 1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+	}}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
 	speech := NewSpeechHandle(true, DefaultInputDetails())
-	if err := speech.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v, want nil", err)
+	agent.PublishAudio = func(context.Context, *model.AudioFrame) error {
+		return speech.Interrupt(false)
 	}
 
 	agent.generateReplyWithOptions(pipelineReplyOptions{SpeechHandle: speech})
