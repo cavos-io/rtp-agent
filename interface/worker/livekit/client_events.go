@@ -11,13 +11,15 @@ import (
 
 // clientEventsDispatcher manages sending agent states to the LiveKit Room DataChannel.
 type clientEventsDispatcher struct {
-	room *lksdk.Room
-	mu   sync.Mutex
+	room    *lksdk.Room
+	session *agent.AgentSession
+	mu      sync.Mutex
 }
 
-func newClientEventsDispatcher(room *lksdk.Room) *clientEventsDispatcher {
+func newClientEventsDispatcher(room *lksdk.Room, session *agent.AgentSession) *clientEventsDispatcher {
 	return &clientEventsDispatcher{
-		room: room,
+		room:    room,
+		session: session,
 	}
 }
 
@@ -36,13 +38,13 @@ func (d *clientEventsDispatcher) dispatchData(payload clientEventPayload) {
 
 	b, err := json.Marshal(payload)
 	if err != nil {
-		logger.Logger.Errorw("Failed to marshal client event", err)
+		logger.Logger.Errorw("Failed to marshal client event", err, agent.SessionLogValues(d.session)...)
 		return
 	}
 
 	err = d.room.LocalParticipant.PublishDataPacket(lksdk.UserData(b), lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic("lk-agent-state"))
 	if err != nil {
-		logger.Logger.Errorw("Failed to publish client event data", err)
+		logger.Logger.Errorw("Failed to publish client event data", err, agent.SessionLogValues(d.session)...)
 	}
 }
 
