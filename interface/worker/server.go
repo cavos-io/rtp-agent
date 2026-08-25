@@ -1738,7 +1738,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	jobCtx.token = assignedJob.Token
 	jobCtx.workerID = assignedJob.WorkerID
 	jobCtx.AcceptArguments = assignedJob.AcceptArguments
-	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
+	jobCtx.SetLogContextField("worker_id", jobCtx.WorkerID())
 	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
@@ -1839,7 +1839,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	}
 	localJob := livekitServerLocalJobExecutorPlan(jobCtx.Job)
 	jobCtx.workerID = s.workerID
-	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
+	jobCtx.SetLogContextField("worker_id", jobCtx.WorkerID())
 	shutdownCh := make(chan struct{})
 	_ = jobCtx.AddShutdownCallback(func() {
 		close(shutdownCh)

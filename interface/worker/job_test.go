@@ -747,9 +747,14 @@ func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
 func TestJobContextLogContextFieldsAreMutableAndReplaceable(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_log_fields"}, "", "", "")
 
-	ctx.LogContextFields()["trace_id"] = "trace-a"
+	ctx.SetLogContextField("trace_id", "trace-a")
 	if got := ctx.LogContextFields()["trace_id"]; got != "trace-a" {
 		t.Fatalf("LogContextFields()[trace_id] = %#v, want trace-a", got)
+	}
+
+	ctx.LogContextFields()["mutated"] = "nope"
+	if _, ok := ctx.LogContextFields()["mutated"]; ok {
+		t.Fatal("LogContextFields must return a copy")
 	}
 
 	replacement := map[string]any{"request_id": "req-a"}
@@ -759,6 +764,35 @@ func TestJobContextLogContextFieldsAreMutableAndReplaceable(t *testing.T) {
 	}
 	if _, ok := ctx.LogContextFields()["trace_id"]; ok {
 		t.Fatal("SetLogContextFields did not replace previous fields")
+	}
+}
+
+// SessionLogValues reaches the JobContext through a structural interface, so a
+// signature change on LogContextFields would silently drop every job field.
+func TestJobContextSatisfiesSessionLogValues(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "AJ_test", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	ctx.SetLogContextField("call_logs_id", "42")
+
+	session := &agent.AgentSession{}
+	session.SetJobContext(ctx)
+
+	values := agent.SessionLogValues(session, "msg_field", 1)
+
+	pairs := map[string]any{}
+	for i := 0; i+1 < len(values); i += 2 {
+		pairs[values[i].(string)] = values[i+1]
+	}
+	if pairs["job_id"] != "AJ_test" {
+		t.Fatalf("SessionLogValues job_id = %#v, want AJ_test (values = %v)", pairs["job_id"], values)
+	}
+	if pairs["room"] != "room-a" {
+		t.Fatalf("SessionLogValues room = %#v, want room-a", pairs["room"])
+	}
+	if pairs["call_logs_id"] != "42" {
+		t.Fatalf("SessionLogValues call_logs_id = %#v, want 42", pairs["call_logs_id"])
+	}
+	if pairs["msg_field"] != 1 {
+		t.Fatalf("SessionLogValues dropped the caller values: %v", values)
 	}
 }
 

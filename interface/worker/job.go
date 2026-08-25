@@ -226,6 +226,7 @@ type JobContext struct {
 	tempDirectory          string
 	sessionDirectory       string
 	logContextFields       map[string]any
+	logContextFieldsMu     sync.RWMutex
 	recordingInitialized   bool
 	observability          *telemetry.JobObservability
 	observabilityOnce      sync.Once
@@ -465,13 +466,33 @@ func (c *JobContext) SessionDirectory() string {
 }
 
 func (c *JobContext) LogContextFields() map[string]any {
+	c.logContextFieldsMu.RLock()
+	defer c.logContextFieldsMu.RUnlock()
+
+	fields := make(map[string]any, len(c.logContextFields))
+	for key, value := range c.logContextFields {
+		fields[key] = value
+	}
+	return fields
+}
+
+func (c *JobContext) SetLogContextField(key string, value any) {
+	if key == "" {
+		return
+	}
+	c.logContextFieldsMu.Lock()
+	defer c.logContextFieldsMu.Unlock()
+
 	if c.logContextFields == nil {
 		c.logContextFields = make(map[string]any)
 	}
-	return c.logContextFields
+	c.logContextFields[key] = value
 }
 
 func (c *JobContext) SetLogContextFields(fields map[string]any) {
+	c.logContextFieldsMu.Lock()
+	defer c.logContextFieldsMu.Unlock()
+
 	c.logContextFields = fields
 	if c.logContextFields == nil {
 		c.logContextFields = make(map[string]any)
