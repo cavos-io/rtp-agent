@@ -1736,7 +1736,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
 		endpointing.OnStartOfSpeech(startedAt, overlapping)
 	}
-	logger.Logger.Infow("Start of speech detected")
+	logger.Logger.Infow("Start of speech detected", SessionLogValues(a.Session)...)
 
 	// Cancel pending EOU detection
 	a.cancelPendingEOUDetection()
@@ -1793,7 +1793,7 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		endpointing.OnEndOfSpeech(endedAt, shouldIgnore)
 	}
 	a.overlapSpeechEnded = false
-	logger.Logger.Infow("End of speech detected")
+	logger.Logger.Infow("End of speech detected", SessionLogValues(a.Session)...)
 
 	turnDetection := a.turnDetectionMode()
 	if a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent()) {
