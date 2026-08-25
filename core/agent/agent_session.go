@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -325,6 +326,9 @@ type AgentSession struct {
 	userdataSet             bool
 	jobContext              any
 	jobContextSet           bool
+	// jobLogFields mirrors jobContext for SessionLogValues, which is called
+	// from sites already holding mu.
+	jobLogFields atomic.Pointer[jobLogFieldsProvider]
 	// UserTranscriptFilter, when non-nil, is applied before user transcript
 	// events are recorded or broadcast to RoomIO subscribers.
 	UserTranscriptFilter    func(string) string
@@ -544,6 +548,12 @@ func (s *AgentSession) SetJobContext(value any) {
 
 	s.jobContext = value
 	s.jobContextSet = true
+
+	if provider, ok := value.(jobLogFieldsProvider); ok {
+		s.jobLogFields.Store(&provider)
+	} else {
+		s.jobLogFields.Store(nil)
+	}
 }
 
 func (s *AgentSession) History() *llm.ChatContext {
@@ -1885,7 +1895,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	if metrics == nil {
 		return
 	}
-	telemetry.LogMetrics(metrics)
+	telemetry.LogMetrics(metrics, SessionLogValues(s)...)
 	telemetry.CollectOTelUsageWithContext(s.telemetryContext(), metrics)
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
@@ -2953,7 +2963,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if loggedUserInput == "" && opts.UserMessage != nil {
 		loggedUserInput = opts.UserMessage.TextContent()
 	}
-	logger.Logger.Infow("Generating reply", "userInput", loggedUserInput)
+	logger.Logger.Infow("Generating reply", SessionLogValues(s, "userInput", loggedUserInput)...)
 
 	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
