@@ -407,6 +407,7 @@ type RoomIO struct {
 	agentTranscriptionCancel         context.CancelFunc
 	agentTranscriptionSegmentID      string
 	agentTranscriptionText           string
+	agentTranscriptionOrphaned       bool
 	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
 	transcriptionPacketPublisher     func(*livekit.Transcription) error
 	transcriptionParticipantIdentity func() string
@@ -610,6 +611,11 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 					return
 				}
 				rio.mu.Lock()
+				// A segment still open here belongs to a speech that was killed and replaced.
+				// Its trailing final must not reopen a segment of its own.
+				if rio.agentTranscriptionSegmentID != "" {
+					rio.agentTranscriptionOrphaned = true
+				}
 				rio.agentTranscriptionSegmentID = ""
 				rio.agentTranscriptionText = ""
 				rio.mu.Unlock()
@@ -772,8 +778,18 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
-	if final && transcript == "" && rio.agentTranscriptionSegmentID == "" {
-		return "", "", "", false
+	if final && rio.agentTranscriptionSegmentID == "" {
+
+		if rio.agentTranscriptionOrphaned {
+			rio.agentTranscriptionOrphaned = false
+			return "", "", "", false
+		}
+		if transcript == "" {
+			return "", "", "", false
+		}
+	}
+	if !final {
+		rio.agentTranscriptionOrphaned = false
 	}
 	if rio.agentTranscriptionSegmentID == "" {
 		rio.agentTranscriptionSegmentID = roomIOTranscriptionSegmentID()

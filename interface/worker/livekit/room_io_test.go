@@ -3080,6 +3080,42 @@ func TestRoomIOPublishesEmptyFinalAgentTranscriptionToCloseSegment(t *testing.T)
 	}
 }
 
+func TestRoomIOOrphanedFinalAfterSpeechCreatedDoesNotOpenNewSegment(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 4)
+	rio := &RoomIO{
+		AgentSession: session,
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	defer rio.agentTranscriptionCancel()
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+	receivePublishedText(t, published, "first delta")
+
+	session.EmitSpeechCreated(agent.SpeechCreatedEvent{
+		SpeechHandle: agent.NewSpeechHandle(false, agent.DefaultInputDetails()),
+		Source:       "say",
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("orphaned final opened a new segment: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestRoomIOEmptyFinalAgentTranscriptionDoesNotPublishWhenNoSegmentActive(t *testing.T) {
 	published := make(chan roomIOPublishedText, 1)
 	rio := &RoomIO{
