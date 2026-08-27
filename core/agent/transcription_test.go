@@ -126,3 +126,17 @@ func TestTranscriptSynchronizerPushTextUnblocksOnCancel(t *testing.T) {
 		t.Fatal("PushText stayed blocked after cancel — the send ignored done()")
 	}
 }
+
+func TestTranscriptSynchronizerDiscardDropsUnplayedText(t *testing.T) {
+	syncer := NewTranscriptSynchronizer(20)
+
+	syncer.PushText("never heard ")
+	waitForTranscriptBuffer(t, syncer, "never heard ")
+
+	// Killing a speech must not publish text whose audio was never played.
+	syncer.Discard()
+
+	for text := range syncer.EventCh() {
+		t.Fatalf("discarded synchronizer emitted %q", text)
+	}
+}
