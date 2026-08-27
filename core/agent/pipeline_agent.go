@@ -2018,7 +2018,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		default:
 		}
 		if speech != nil && speech.IsInterrupted() {
-			transcriptSync.Close()
+			transcriptSync.Discard()
 			<-transcriptionDone
 			return ttsGen, nil
 		}
@@ -2043,7 +2043,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		session.notifyAgentSpeakingProgress()
 		if speech != nil && speech.IsInterrupted() {
-			transcriptSync.Close()
+			transcriptSync.Discard()
 			<-transcriptionDone
 			return ttsGen, nil
 		}
