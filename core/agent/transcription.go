@@ -28,6 +28,7 @@ type TranscriptSynchronizer struct {
 
 	closed      bool
 	interrupted bool
+	discarded   bool
 }
 
 // NewTranscriptSynchronizer initializes the synchronizer. Default speaking rate is usually ~3.83 syllables/sec.
@@ -87,6 +88,7 @@ func (s *TranscriptSynchronizer) EventCh() <-chan string {
 }
 
 // Interrupt immediately flushes the remaining text buffer to the event channel and stops syncing.
+// After Discard the buffer is dropped instead, so a killed sentence is never published.
 func (s *TranscriptSynchronizer) Interrupt() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,7 +99,7 @@ func (s *TranscriptSynchronizer) Interrupt() {
 		case text := <-s.textCh:
 			s.textBuffer += text
 		default:
-			if s.textBuffer != "" {
+			if s.textBuffer != "" && !s.discarded {
 				select {
 				case s.eventCh <- s.textBuffer:
 				default:
@@ -106,11 +108,19 @@ func (s *TranscriptSynchronizer) Interrupt() {
 					case <-s.done():
 					}
 				}
-				s.textBuffer = ""
 			}
+			s.textBuffer = ""
 			return
 		}
 	}
+}
+
+func (s *TranscriptSynchronizer) Discard() {
+	s.mu.Lock()
+	s.discarded = true
+	s.mu.Unlock()
+
+	s.Close()
 }
 
 func (s *TranscriptSynchronizer) Close() {
