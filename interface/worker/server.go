@@ -1577,7 +1577,10 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *ServerMessage) {
 		OnAssignment: func(req *JobAssignment) {
 			s.handleAssignment(ctx, req)
 		},
-		OnTermination: s.handleTermination,
+		OnTermination: func(req *JobTermination) {
+			// Shutdown callbacks may block; keep the worker message loop available.
+			go s.handleTermination(req)
+		},
 		OnUnknown: func() {
 			logger.Logger.Warnw("Unhandled message type received", nil)
 		},

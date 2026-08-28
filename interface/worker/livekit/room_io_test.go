@@ -5852,6 +5852,47 @@ func TestRoomIOGuardedTextWriterCloseWaitsForNonCancellingWrite(t *testing.T) {
 	}
 }
 
+type blockedCloseTextStream struct {
+	closeStarted chan struct{}
+	releaseClose chan struct{}
+}
+
+func (*blockedCloseTextStream) Write(string) {}
+
+func (w *blockedCloseTextStream) Close() {
+	close(w.closeStarted)
+	<-w.releaseClose
+}
+
+func TestRoomIOGuardedTextWriterCloseDoesNotWaitForeverForSDK(t *testing.T) {
+	inner := &blockedCloseTextStream{
+		closeStarted: make(chan struct{}),
+		releaseClose: make(chan struct{}),
+	}
+	defer close(inner.releaseClose)
+	writer := &roomIOGuardedTextWriter{
+		inner:        inner,
+		closeTimeout: 20 * time.Millisecond,
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		writer.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-inner.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("inner Close did not start")
+	}
+	select {
+	case <-closeReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Close remained blocked on the SDK writer")
+	}
+}
+
 func TestRoomIOCloseAgentTextStreamCancelsBlockedWrite(t *testing.T) {
 	writer := newGatedTextStream()
 	rio := &RoomIO{

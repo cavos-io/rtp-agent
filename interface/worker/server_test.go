@@ -6292,6 +6292,46 @@ func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
 	}
 }
 
+func TestHandleMessageDoesNotBlockOnJobTerminationShutdown(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_blocked_shutdown"}, "", "", "")
+	shutdownStarted := make(chan struct{})
+	releaseShutdown := make(chan struct{})
+	if err := jobCtx.AddShutdownCallback(func(string) {
+		close(shutdownStarted)
+		<-releaseShutdown
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+	t.Cleanup(func() { close(releaseShutdown) })
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		server.handleMessage(context.Background(), &livekit.ServerMessage{
+			Message: &livekit.ServerMessage_Termination{
+				Termination: &livekit.JobTermination{JobId: jobCtx.Job.Id},
+			},
+		})
+		close(done)
+	}()
+
+	select {
+	case <-shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("job shutdown did not start")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("handleMessage blocked on job shutdown")
+	}
+}
+
 func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 2)

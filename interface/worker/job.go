@@ -398,18 +398,21 @@ func (c *JobContext) FinalizeObservability(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, observabilityFinalizeTimeout)
-	defer cancel()
+	flushCtx, cancelFlush := context.WithTimeout(ctx, observabilityFinalizeTimeout)
+	var flushErr error
 	if c.observability == nil {
-		return errors.Join(
-			c.customTracerProvider.ForceFlush(ctx),
-			c.customTracerProvider.Shutdown(ctx),
-		)
+		flushErr = c.customTracerProvider.ForceFlush(flushCtx)
+	} else {
+		flushErr = c.observability.ForceFlush(flushCtx)
 	}
-	return errors.Join(
-		c.observability.ForceFlush(ctx),
-		c.observability.Shutdown(ctx),
-	)
+	cancelFlush()
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(ctx, observabilityFinalizeTimeout)
+	defer cancelShutdown()
+	if c.observability == nil {
+		return errors.Join(flushErr, c.customTracerProvider.Shutdown(shutdownCtx))
+	}
+	return errors.Join(flushErr, c.observability.Shutdown(shutdownCtx))
 }
 
 func jobObservabilityURL(liveKitURL string) (string, error) {

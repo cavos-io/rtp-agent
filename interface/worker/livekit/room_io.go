@@ -980,7 +980,10 @@ type roomIOTextStreamWriter interface {
 	Close()
 }
 
-const roomIOTextStreamWriteTimeout = 2 * time.Second
+const (
+	roomIOTextStreamWriteTimeout = 2 * time.Second
+	roomIOTextStreamCloseTimeout = 2 * time.Second
+)
 
 type lkTextStreamWriter interface {
 	Write(data string, onDone *func())
@@ -1016,11 +1019,12 @@ func (w roomIOSDKTextStreamWriter) Close() {
 }
 
 type roomIOGuardedTextWriter struct {
-	mu        sync.Mutex
-	writeMu   sync.Mutex
-	inner     roomIOTextStreamWriter
-	closed    bool
-	closeDone chan struct{}
+	mu           sync.Mutex
+	writeMu      sync.Mutex
+	inner        roomIOTextStreamWriter
+	closed       bool
+	closeDone    chan struct{}
+	closeTimeout time.Duration
 }
 
 func (w *roomIOGuardedTextWriter) Write(text string) {
@@ -1044,16 +1048,34 @@ func (w *roomIOGuardedTextWriter) Close() {
 	closeDone := w.closeDone
 	if w.closed {
 		w.mu.Unlock()
-		<-closeDone
+		select {
+		case <-closeDone:
+		case <-time.After(w.effectiveCloseTimeout()):
+		}
 		return
 	}
 	w.closed = true
 	w.mu.Unlock()
 
-	w.inner.Close()
-	w.writeMu.Lock()
-	close(closeDone)
-	w.writeMu.Unlock()
+	go func() {
+		w.inner.Close()
+		w.writeMu.Lock()
+		close(closeDone)
+		w.writeMu.Unlock()
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(w.effectiveCloseTimeout()):
+		logger.Logger.Warnw("text stream writer close timed out", nil)
+	}
+}
+
+func (w *roomIOGuardedTextWriter) effectiveCloseTimeout() time.Duration {
+	if w.closeTimeout > 0 {
+		return w.closeTimeout
+	}
+	return roomIOTextStreamCloseTimeout
 }
 
 func (rio *RoomIO) openRoomTextStream(opts lksdk.StreamTextOptions) roomIOTextStreamWriter {

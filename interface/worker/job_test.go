@@ -489,6 +489,25 @@ type shutdownTrackingSpanProcessor struct {
 	shutdown atomic.Bool
 }
 
+type flushTimeoutSpanProcessor struct {
+	shutdownCalled         atomic.Bool
+	shutdownContextExpired atomic.Bool
+}
+
+func (*flushTimeoutSpanProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+func (*flushTimeoutSpanProcessor) OnEnd(sdktrace.ReadOnlySpan)                     {}
+
+func (*flushTimeoutSpanProcessor) ForceFlush(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (p *flushTimeoutSpanProcessor) Shutdown(ctx context.Context) error {
+	p.shutdownCalled.Store(true)
+	p.shutdownContextExpired.Store(ctx.Err() != nil)
+	return nil
+}
+
 func (p *shutdownTrackingSpanProcessor) Shutdown(ctx context.Context) error {
 	p.shutdown.Store(true)
 	return p.SpanRecorder.Shutdown(ctx)
@@ -730,6 +749,29 @@ func TestJobContextFinalizeObservabilityShutsUninitializedCustomProvider(t *test
 	}
 	if !processor.shutdown.Load() {
 		t.Fatal("uninitialized custom tracer provider was not shut down")
+	}
+}
+
+func TestJobContextFinalizeObservabilityUsesFreshShutdownTimeoutAfterFlushTimeout(t *testing.T) {
+	previousTimeout := observabilityFinalizeTimeout
+	observabilityFinalizeTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { observabilityFinalizeTimeout = previousTimeout })
+
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-custom-provider-flush-timeout"}, "", "", "")
+	processor := &flushTimeoutSpanProcessor{}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	if err := jobCtx.SetTracerProvider(provider); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := jobCtx.FinalizeObservability(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FinalizeObservability() error = %v, want deadline exceeded", err)
+	}
+	if !processor.shutdownCalled.Load() {
+		t.Fatal("Shutdown was not called after ForceFlush timed out")
+	}
+	if processor.shutdownContextExpired.Load() {
+		t.Fatal("Shutdown received the expired ForceFlush context")
 	}
 }
 
