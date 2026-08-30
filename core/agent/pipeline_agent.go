@@ -2114,12 +2114,7 @@ func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferen
 	if va.ttsStreamPacer != nil {
 		opts = append(opts, WithTTSStreamPacer(*va.ttsStreamPacer))
 	}
-	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
-		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
-	}
-	if session != nil && session.Options.DisableTTSTextTransforms {
-		opts = append(opts, WithTTSTextTransformsDisabled())
-	} else if session != nil && session.Options.TTSTextTransformsSet {
+	if session != nil {
 		opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
 	}
 	if va.useTTSAlignedTranscript(session) {

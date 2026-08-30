@@ -85,10 +85,7 @@ type AgentSessionOptions struct {
 	MinConsecutiveSpeechDelay                float64
 	UseTTSAlignedTranscript                  bool
 	TTSStreamPacer                           *tts.SentenceStreamPacerOptions
-	TTSTextReplacements                      map[string]string
-	TTSTextTransforms                        []string
-	TTSTextTransformsSet                     bool
-	DisableTTSTextTransforms                 bool
+	TTSTextTransforms                        []tts.TextTransform
 	LLMParallelToolCalls                     *bool
 	LLMExtraParams                           map[string]any
 	LLMResponseFormat                        map[string]any
@@ -1255,9 +1252,11 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.PreemptiveGenerationMaxRetriesSet && opts.PreemptiveGenerationMaxRetries == 0 {
 		opts.PreemptiveGenerationMaxRetries = 3
 	}
-	if !opts.DisableTTSTextTransforms && !opts.TTSTextTransformsSet {
-		opts.TTSTextTransforms = []string{"filter_markdown", "filter_emoji"}
-		opts.TTSTextTransformsSet = true
+	if opts.TTSTextTransforms == nil {
+		opts.TTSTextTransforms = []tts.TextTransform{
+			tts.FilterMarkdownTransform(),
+			tts.FilterEmojiTransform(),
+		}
 	}
 	if !opts.AECWarmupDurationSet && opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0

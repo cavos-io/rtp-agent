@@ -2175,8 +2175,11 @@ func TestPipelineAgentSessionOptionDisablesTTSTextTransforms(t *testing.T) {
 	}
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
-		DisableTTSTextTransforms: true,
+		TTSTextTransforms: []tts.TextTransform{},
 	})
+	if session.Options.TTSTextTransforms == nil {
+		t.Fatal("TTSTextTransforms = nil, want explicit empty pipeline")
+	}
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
 	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now"), nil); err != nil {
@@ -2199,9 +2202,11 @@ func TestPipelineAgentSessionOptionSelectsTTSTextTransforms(t *testing.T) {
 	}
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
-		TTSTextTransforms:    []string{"filter_emoji"},
-		TTSTextTransformsSet: true,
+		TTSTextTransforms: []tts.TextTransform{tts.FilterEmojiTransform()},
 	})
+	if got := len(session.Options.TTSTextTransforms); got != 1 {
+		t.Fatalf("len(TTSTextTransforms) = %d, want selected transform only", got)
+	}
 	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
 
 	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **hi** 😊"), nil); err != nil {

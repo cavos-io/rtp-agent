@@ -15714,8 +15714,8 @@ func TestDefaultConfigFromEnvConfiguresTTSTextReplacements(t *testing.T) {
 	if got := app.Config.TTSTextReplacements["OpenAI"]; got != "Open A I" {
 		t.Fatalf("Config.TTSTextReplacements[OpenAI] = %q, want Open A I", got)
 	}
-	if got := app.Session.Options.TTSTextReplacements["world"]; got != "there" {
-		t.Fatalf("Session.Options.TTSTextReplacements[world] = %q, want there", got)
+	if got := applyTTSTextTransforms(t, app.Session.Options.TTSTextTransforms, "OpenAI world"); got != "Open A I there" {
+		t.Fatalf("transformed text = %q, want Open A I there", got)
 	}
 }
 
@@ -15732,8 +15732,11 @@ func TestDefaultConfigFromEnvDisablesTTSTextTransforms(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if !app.Session.Options.DisableTTSTextTransforms {
-		t.Fatal("Session.Options.DisableTTSTextTransforms = false, want true")
+	if app.Session.Options.TTSTextTransforms == nil || len(app.Session.Options.TTSTextTransforms) != 0 {
+		t.Fatalf("Session.Options.TTSTextTransforms = %#v, want explicit empty pipeline", app.Session.Options.TTSTextTransforms)
+	}
+	if got := applyTTSTextTransforms(t, app.Session.Options.TTSTextTransforms, "Say **hi** 😊"); got != "Say **hi** 😊" {
+		t.Fatalf("transformed text = %q, want transforms disabled", got)
 	}
 }
 
@@ -15750,11 +15753,49 @@ func TestDefaultConfigFromEnvConfiguresTTSTextTransforms(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if !app.Session.Options.TTSTextTransformsSet {
-		t.Fatal("Session.Options.TTSTextTransformsSet = false, want true")
+	if got := len(app.Session.Options.TTSTextTransforms); got != 2 {
+		t.Fatalf("len(Session.Options.TTSTextTransforms) = %d, want 2", got)
 	}
-	if got, want := app.Session.Options.TTSTextTransforms, []string{"filter_emoji", "filter_markdown"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Session.Options.TTSTextTransforms = %#v, want %#v", got, want)
+	if got := applyTTSTextTransforms(t, app.Session.Options.TTSTextTransforms, "Say **hi** 😊"); got != "Say hi " {
+		t.Fatalf("transformed text = %q, want Say hi ", got)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsUnknownTTSTextTransform(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_TEXT_TRANSFORMS", "unknown")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), "unknown TTS text transform") {
+		t.Fatalf("NewApp() error = %v, want unknown TTS text transform", err)
+	}
+}
+
+func applyTTSTextTransforms(t *testing.T, transforms []tts.TextTransform, chunks ...string) string {
+	t.Helper()
+	index := 0
+	input := tts.NewTextStream(func() (string, error) {
+		if index == len(chunks) {
+			return "", io.EOF
+		}
+		chunk := chunks[index]
+		index++
+		return chunk, nil
+	}, nil)
+	stream, err := tts.ApplyTextTransformPipeline(context.Background(), input, transforms)
+	if err != nil {
+		t.Fatalf("ApplyTextTransformPipeline error = %v", err)
+	}
+	defer stream.Close()
+	var text strings.Builder
+	for {
+		chunk, err := stream.Next()
+		if err == io.EOF {
+			return text.String()
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		text.WriteString(chunk)
 	}
 }
 

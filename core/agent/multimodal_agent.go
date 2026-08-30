@@ -973,14 +973,7 @@ func multimodalTTSInferenceOptions(session *AgentSession) []TTSInferenceOption {
 	if session.Options.TTSStreamPacer != nil {
 		opts = append(opts, WithTTSStreamPacer(*session.Options.TTSStreamPacer))
 	}
-	if len(session.Options.TTSTextReplacements) > 0 {
-		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
-	}
-	if session.Options.DisableTTSTextTransforms {
-		opts = append(opts, WithTTSTextTransformsDisabled())
-	} else if session.Options.TTSTextTransformsSet {
-		opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
-	}
+	opts = append(opts, WithTTSTextTransforms(session.Options.TTSTextTransforms))
 	if session.AudioOutputController() != nil {
 		opts = append(opts, WithTTSRequireAudio())
 	}

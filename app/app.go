@@ -7644,12 +7644,27 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		}
 		opts.TTSStreamPacer = &pacer
 	}
-	opts.TTSTextReplacements = cfg.TTSTextReplacements
-	if len(cfg.TTSTextTransforms) > 0 {
-		opts.TTSTextTransforms = append([]string(nil), cfg.TTSTextTransforms...)
-		opts.TTSTextTransformsSet = true
+	if cfg.DisableTTSTextTransforms {
+		opts.TTSTextTransforms = []coretts.TextTransform{}
+	} else if len(cfg.TTSTextTransforms) > 0 {
+		opts.TTSTextTransforms = make([]coretts.TextTransform, 0, len(cfg.TTSTextTransforms))
+		for _, name := range cfg.TTSTextTransforms {
+			transform, err := coretts.NamedTextTransform(name)
+			if err != nil {
+				return agent.AgentSessionOptions{}, fmt.Errorf("unknown TTS text transform %q: %w", name, err)
+			}
+			opts.TTSTextTransforms = append(opts.TTSTextTransforms, transform)
+		}
 	}
-	opts.DisableTTSTextTransforms = cfg.DisableTTSTextTransforms
+	if len(cfg.TTSTextReplacements) > 0 {
+		if opts.TTSTextTransforms == nil {
+			opts.TTSTextTransforms = []coretts.TextTransform{
+				coretts.FilterMarkdownTransform(),
+				coretts.FilterEmojiTransform(),
+			}
+		}
+		opts.TTSTextTransforms = append(opts.TTSTextTransforms, coretts.ReplaceTransform(cfg.TTSTextReplacements, false))
+	}
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
 	opts.LLMExtraParams = llmExtraParamsFromConfig(cfg)
 	opts.LLMResponseFormat = cfg.LLMResponseFormat

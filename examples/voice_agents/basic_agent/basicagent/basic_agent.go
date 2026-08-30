@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
@@ -165,8 +166,10 @@ func basicAgentSessionOptions() agent.AgentSessionOptions {
 		AECWarmupDuration:        3.0,
 		ResumeFalseInterruption:  true,
 		FalseInterruptionTimeout: 1.0,
-		TTSTextReplacements: map[string]string{
-			"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>",
+		TTSTextTransforms: []tts.TextTransform{
+			tts.FilterMarkdownTransform(),
+			tts.FilterEmojiTransform(),
+			tts.ReplaceTransform(map[string]string{"LiveKit": "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"}, false),
 		},
 	}
 }
@@ -196,12 +199,7 @@ func mergeBasicAgentSessionOptions(existing agent.AgentSessionOptions) agent.Age
 	existing.AECWarmupDuration = reference.AECWarmupDuration
 	existing.ResumeFalseInterruption = reference.ResumeFalseInterruption
 	existing.FalseInterruptionTimeout = reference.FalseInterruptionTimeout
-	if existing.TTSTextReplacements == nil {
-		existing.TTSTextReplacements = make(map[string]string)
-	}
-	for from, to := range reference.TTSTextReplacements {
-		existing.TTSTextReplacements[from] = to
-	}
+	existing.TTSTextTransforms = append(existing.TTSTextTransforms, reference.TTSTextTransforms[len(reference.TTSTextTransforms)-1])
 	return existing
 }
 
