@@ -2,6 +2,7 @@ package basicagent
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestNewBasicAgentMatchesReferenceInstructionsAndTools(t *testing.T) {
@@ -31,6 +33,33 @@ func TestNewBasicAgentMatchesReferenceInstructionsAndTools(t *testing.T) {
 
 	if got, want := toolNames(kelly.Tools), []string{"end_call", "lookup_weather"}; !sameStrings(got, want) {
 		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+}
+
+func applyBasicAgentTTSTextTransforms(t *testing.T, transforms []tts.TextTransform, text string) string {
+	t.Helper()
+	pushed := false
+	stream, err := tts.ApplyTextTransformPipeline(context.Background(), tts.NewTextStream(func() (string, error) {
+		if pushed {
+			return "", io.EOF
+		}
+		pushed = true
+		return text, nil
+	}, nil), transforms)
+	if err != nil {
+		t.Fatalf("ApplyTextTransformPipeline error = %v", err)
+	}
+	defer stream.Close()
+	var transformed strings.Builder
+	for {
+		chunk, err := stream.Next()
+		if err == io.EOF {
+			return transformed.String()
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		transformed.WriteString(chunk)
 	}
 }
 
@@ -121,8 +150,8 @@ func TestBasicAgentConfigMatchesReferenceProvidersAndSessionOptions(t *testing.T
 	if opts.FalseInterruptionTimeout != 1.0 {
 		t.Fatalf("FalseInterruptionTimeout = %#v, want 1.0", opts.FalseInterruptionTimeout)
 	}
-	if got := opts.TTSTextReplacements["LiveKit"]; got != "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>" {
-		t.Fatalf("LiveKit text replacement = %q, want reference pronunciation", got)
+	if got := applyBasicAgentTTSTextTransforms(t, opts.TTSTextTransforms, "LiveKit"); got != "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>" {
+		t.Fatalf("transformed LiveKit text = %q, want reference pronunciation", got)
 	}
 }
 

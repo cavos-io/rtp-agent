@@ -2386,11 +2386,21 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if opts.SessionCloseTranscriptTimeout != 2.0 {
 		t.Fatalf("SessionCloseTranscriptTimeout = %v, want 2.0", opts.SessionCloseTranscriptTimeout)
 	}
-	if !opts.TTSTextTransformsSet {
-		t.Fatal("TTSTextTransformsSet = false, want default transform list marked set")
+	if len(opts.TTSTextTransforms) != 2 {
+		t.Fatalf("len(TTSTextTransforms) = %d, want 2 default transforms", len(opts.TTSTextTransforms))
 	}
-	if want := []string{"filter_markdown", "filter_emoji"}; !reflect.DeepEqual(opts.TTSTextTransforms, want) {
-		t.Fatalf("TTSTextTransforms = %#v, want %#v", opts.TTSTextTransforms, want)
+}
+
+func TestNewAgentSessionPreservesExplicitEmptyTTSTextTransforms(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		TTSTextTransforms: []tts.TextTransform{},
+	})
+
+	if session.Options.TTSTextTransforms == nil {
+		t.Fatal("TTSTextTransforms = nil, want explicit empty pipeline")
+	}
+	if got := len(session.Options.TTSTextTransforms); got != 0 {
+		t.Fatalf("len(TTSTextTransforms) = %d, want 0", got)
 	}
 }
 

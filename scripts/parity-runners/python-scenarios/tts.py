@@ -573,6 +573,30 @@ def tts_value_objects(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "text_custom_transform":
+        transform_module = load_reference_text_transforms()
+        chunks = [str(chunk) for chunk in input_data.get("chunks", [])]
+
+        async def lowercase(text: AsyncIterable[str]) -> AsyncIterable[str]:
+            async for chunk in text:
+                yield chunk.lower()
+
+        output = asyncio.run(
+            collect_text_transform_chunks(
+                transform_module,
+                chunks,
+                [
+                    "filter_markdown",
+                    lowercase,
+                    transform_module.replace({"acme": "[redacted]"}, case_sensitive=True),
+                    "filter_emoji",
+                ],
+            )
+        )
+        return {
+            "contract": "tts-text-transforms",
+            "events": [{"name": "text_custom_transform", "joined": "".join(output)}],
+        }
     if action == "text_replace":
         transform_module = load_reference_text_transforms()
         chunks = [str(chunk) for chunk in input_data.get("chunks", [])]

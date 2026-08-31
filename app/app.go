@@ -5124,7 +5124,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGnani:
-		ttsOpts := []gnani.Option{}
+		ttsOpts := []gnani.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
 		}
@@ -6826,7 +6826,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerGnani:
-		ttsOpts := []gnani.Option{}
+		ttsOpts := []gnani.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
 		}
@@ -7644,12 +7644,27 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		}
 		opts.TTSStreamPacer = &pacer
 	}
-	opts.TTSTextReplacements = cfg.TTSTextReplacements
-	if len(cfg.TTSTextTransforms) > 0 {
-		opts.TTSTextTransforms = append([]string(nil), cfg.TTSTextTransforms...)
-		opts.TTSTextTransformsSet = true
+	if cfg.DisableTTSTextTransforms {
+		opts.TTSTextTransforms = []coretts.TextTransform{}
+	} else if len(cfg.TTSTextTransforms) > 0 {
+		opts.TTSTextTransforms = make([]coretts.TextTransform, 0, len(cfg.TTSTextTransforms))
+		for _, name := range cfg.TTSTextTransforms {
+			transform, err := coretts.NamedTextTransform(name)
+			if err != nil {
+				return agent.AgentSessionOptions{}, fmt.Errorf("unknown TTS text transform %q: %w", name, err)
+			}
+			opts.TTSTextTransforms = append(opts.TTSTextTransforms, transform)
+		}
 	}
-	opts.DisableTTSTextTransforms = cfg.DisableTTSTextTransforms
+	if len(cfg.TTSTextReplacements) > 0 {
+		if opts.TTSTextTransforms == nil {
+			opts.TTSTextTransforms = []coretts.TextTransform{
+				coretts.FilterMarkdownTransform(),
+				coretts.FilterEmojiTransform(),
+			}
+		}
+		opts.TTSTextTransforms = append(opts.TTSTextTransforms, coretts.ReplaceTransform(cfg.TTSTextReplacements, false))
+	}
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
 	opts.LLMExtraParams = llmExtraParamsFromConfig(cfg)
 	opts.LLMResponseFormat = cfg.LLMResponseFormat

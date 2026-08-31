@@ -631,7 +631,7 @@ func TestPerformTTSInferenceStreamsAudioBeforeInputEnds(t *testing.T) {
 	provider := &fakeGenerationTTS{stream: providerStream}
 	textCh := make(chan string, 1)
 
-	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransforms([]tts.TextTransform{}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
@@ -780,7 +780,7 @@ func TestPerformTTSInferenceCanDisableTextTransforms(t *testing.T) {
 	textCh <- "ld** now"
 	close(textCh)
 
-	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransforms([]tts.TextTransform{}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
@@ -813,7 +813,7 @@ func TestPerformTTSInferenceCanSelectEmojiOnlyTextTransform(t *testing.T) {
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextTransforms([]string{"filter_emoji"}),
+		WithTTSTextTransforms([]tts.TextTransform{tts.FilterEmojiTransform()}),
 	)
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
@@ -848,9 +848,10 @@ func TestPerformTTSInferenceAppliesTextReplacements(t *testing.T) {
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextReplacements(map[string]string{
-			"hello": "hi",
-			"world": "there",
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.FilterMarkdownTransform(),
+			tts.FilterEmojiTransform(),
+			tts.ReplaceTransform(map[string]string{"hello": "hi", "world": "there"}, false),
 		}),
 	)
 	if err != nil {
@@ -886,9 +887,8 @@ func TestPerformTTSInferenceBuffersTextReplacementsAcrossRawChunks(t *testing.T)
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextTransformsDisabled(),
-		WithTTSTextReplacements(map[string]string{
-			"LiveKit": "Cavos",
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.ReplaceTransform(map[string]string{"LiveKit": "Cavos"}, false),
 		}),
 	)
 	if err != nil {
@@ -924,9 +924,8 @@ func TestPerformTTSInferenceReplacesReferenceSubstrings(t *testing.T) {
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextTransformsDisabled(),
-		WithTTSTextReplacements(map[string]string{
-			"cat": "dog",
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.ReplaceTransform(map[string]string{"cat": "dog"}, false),
 		}),
 	)
 	if err != nil {
@@ -961,10 +960,8 @@ func TestPerformTTSInferencePreservesOrderedTextReplacements(t *testing.T) {
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextTransformsDisabled(),
-		WithOrderedTTSTextReplacements([]tts.TextReplacement{
-			{Old: "ab", New: "X"},
-			{Old: "a", New: "Y"},
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.ReplaceTransform(map[string]string{"ab": "X", "a": "Y"}, true),
 		}),
 	)
 	if err != nil {
@@ -985,6 +982,62 @@ func TestPerformTTSInferencePreservesOrderedTextReplacements(t *testing.T) {
 	}
 	if want := "X"; pushed.String() != want {
 		t.Fatalf("pushed text = %q, want reference ordered replacement %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
+func TestPerformTTSInferenceAppliesCustomTransformsInOrder(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "Say **ACME** 😊"
+	close(textCh)
+	lowercase := tts.TextTransform(func(_ context.Context, input tts.TextStream) (tts.TextStream, error) {
+		return tts.NewTextStream(func() (string, error) {
+			chunk, err := input.Next()
+			return strings.ToLower(chunk), err
+		}, input.Close), nil
+	})
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.FilterMarkdownTransform(),
+			lowercase,
+			tts.ReplaceTransform(map[string]string{"acme": "Acme Corp"}, true),
+			tts.FilterEmojiTransform(),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	var pushed strings.Builder
+	for _, call := range providerStream.calls[:len(providerStream.calls)-1] {
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if got, want := pushed.String(), "say Acme Corp "; got != want {
+		t.Fatalf("pushed text = %q, want %q", got, want)
+	}
+}
+
+func TestPerformTTSInferenceReturnsTransformSetupErrorBeforeOpeningProvider(t *testing.T) {
+	cause := errors.New("transform setup failed")
+	provider := &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
+	transform := tts.TextTransform(func(context.Context, tts.TextStream) (tts.TextStream, error) {
+		return nil, cause
+	})
+
+	_, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		singleTextChannel("hello"),
+		WithTTSTextTransforms([]tts.TextTransform{transform}),
+	)
+	if !errors.Is(err, cause) {
+		t.Fatalf("PerformTTSInference error = %v, want %v", err, cause)
 	}
 }
 
@@ -1083,7 +1136,7 @@ func TestPerformTTSInferenceStreamsNonStreamingTTSBeforeInputEnds(t *testing.T) 
 	textCh <- "This is the first complete sentence. "
 	textCh <- "Second sentence is still arriving"
 
-	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransformsDisabled())
+	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransforms([]tts.TextTransform{}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
@@ -1130,8 +1183,9 @@ func TestPerformTTSInferenceNonStreamingReplacesReferenceSubstrings(t *testing.T
 		context.Background(),
 		provider,
 		textCh,
-		WithTTSTextTransformsDisabled(),
-		WithTTSTextReplacements(map[string]string{"cat": "dog"}),
+		WithTTSTextTransforms([]tts.TextTransform{
+			tts.ReplaceTransform(map[string]string{"cat": "dog"}, false),
+		}),
 	)
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
@@ -1160,7 +1214,7 @@ func TestPerformTTSInferenceNonStreamingTrimsProviderInputLikeReferenceAdapter(t
 	textCh <- " hello "
 	close(textCh)
 
-	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransforms([]tts.TextTransform{}))
 	if err != nil {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}

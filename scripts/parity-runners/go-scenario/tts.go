@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -26,10 +24,6 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 		CaseSensitive bool              `json:"case_sensitive"`
 	}
 	if err := json.Unmarshal(input, &payload); err != nil {
-		return nil, err
-	}
-	orderedReplacements, err := orderedTTSReplacements(input, payload.Replacements)
-	if err != nil {
 		return nil, err
 	}
 	if payload.Action == "" {
@@ -403,16 +397,34 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
-	case "text_replace":
-		buffer := lktts.NewOrderedTextRegexReplaceBuffer(orderedReplacements, payload.CaseSensitive)
-		chunks := []string{}
-		for _, chunk := range payload.Chunks {
-			chunks = append(chunks, buffer.Push(chunk)...)
+	case "text_custom_transform":
+		lowercase := lktts.TextTransform(func(_ context.Context, input lktts.TextStream) (lktts.TextStream, error) {
+			return lktts.NewTextStream(func() (string, error) {
+				chunk, err := input.Next()
+				return strings.ToLower(chunk), err
+			}, input.Close), nil
+		})
+		joined, err := collectTTSTextPipeline(payload.Chunks, []lktts.TextTransform{
+			lktts.FilterMarkdownTransform(),
+			lowercase,
+			lktts.ReplaceTransform(map[string]string{"acme": "[redacted]"}, true),
+			lktts.FilterEmojiTransform(),
+		})
+		if err != nil {
+			return nil, err
 		}
-		chunks = append(chunks, buffer.Flush()...)
-		joined := ""
-		for _, chunk := range chunks {
-			joined += chunk
+		return map[string]any{
+			"contract": "tts-text-transforms",
+			"events": []map[string]any{
+				{"name": "text_custom_transform", "joined": joined},
+			},
+		}, nil
+	case "text_replace":
+		joined, err := collectTTSTextPipeline(payload.Chunks, []lktts.TextTransform{
+			lktts.ReplaceTransform(payload.Replacements, payload.CaseSensitive),
+		})
+		if err != nil {
+			return nil, err
 		}
 		containsOriginal := false
 		for old := range payload.Replacements {
@@ -1480,54 +1492,32 @@ func hasJSONField(input json.RawMessage, name string) bool {
 	return ok
 }
 
-func orderedTTSReplacements(input json.RawMessage, fallback map[string]string) ([]lktts.TextReplacement, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(input, &fields); err != nil {
-		return nil, err
-	}
-	raw, ok := fields["replacements"]
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		keys := make([]string, 0, len(fallback))
-		for old := range fallback {
-			keys = append(keys, old)
+func collectTTSTextPipeline(chunks []string, transforms []lktts.TextTransform) (string, error) {
+	index := 0
+	input := lktts.NewTextStream(func() (string, error) {
+		if index == len(chunks) {
+			return "", io.EOF
 		}
-		sort.Strings(keys)
-		ordered := make([]lktts.TextReplacement, 0, len(keys))
-		for _, old := range keys {
-			ordered = append(ordered, lktts.TextReplacement{Old: old, New: fallback[old]})
-		}
-		return ordered, nil
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	token, err := decoder.Token()
+		chunk := chunks[index]
+		index++
+		return chunk, nil
+	}, nil)
+	stream, err := lktts.ApplyTextTransformPipeline(context.Background(), input, transforms)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
-		return nil, fmt.Errorf("replacements must be a JSON object")
-	}
-
-	ordered := []lktts.TextReplacement{}
-	for decoder.More() {
-		token, err := decoder.Token()
+	defer stream.Close()
+	var joined strings.Builder
+	for {
+		chunk, err := stream.Next()
+		if err == io.EOF {
+			return joined.String(), nil
+		}
 		if err != nil {
-			return nil, err
+			return "", err
 		}
-		old, ok := token.(string)
-		if !ok {
-			return nil, fmt.Errorf("replacement key must be a string")
-		}
-		var newValue string
-		if err := decoder.Decode(&newValue); err != nil {
-			return nil, err
-		}
-		ordered = append(ordered, lktts.TextReplacement{Old: old, New: newValue})
+		joined.WriteString(chunk)
 	}
-	if _, err := decoder.Token(); err != nil {
-		return nil, err
-	}
-	return ordered, nil
 }
 
 func runTTSFallbackSynthesize(adapter *lktts.FallbackAdapter) error {

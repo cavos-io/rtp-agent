@@ -351,13 +351,10 @@ type TTSGenerationData struct {
 
 type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
-	TextReplacements        map[string]string
-	OrderedTextReplacements []tts.TextReplacement
-	TextTransforms          []string
-	TextTransformsSet       bool
-	DisableTextTransforms   bool
+	TextTransforms          []tts.TextTransform
 	PreserveTimedTranscript bool
 	RequireAudio            bool
+	textTransformsSet       bool
 	metricsHandler          func(*telemetry.TTSMetrics)
 }
 
@@ -369,28 +366,13 @@ func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption 
 	}
 }
 
-func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption {
+func WithTTSTextTransforms(transforms []tts.TextTransform) TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
-		options.TextReplacements = replacements
-	}
-}
-
-func WithOrderedTTSTextReplacements(replacements []tts.TextReplacement) TTSInferenceOption {
-	return func(options *TTSInferenceOptions) {
-		options.OrderedTextReplacements = append([]tts.TextReplacement(nil), replacements...)
-	}
-}
-
-func WithTTSTextTransformsDisabled() TTSInferenceOption {
-	return func(options *TTSInferenceOptions) {
-		options.DisableTextTransforms = true
-	}
-}
-
-func WithTTSTextTransforms(transforms []string) TTSInferenceOption {
-	return func(options *TTSInferenceOptions) {
-		options.TextTransforms = append([]string(nil), transforms...)
-		options.TextTransformsSet = true
+		options.TextTransforms = append([]tts.TextTransform(nil), transforms...)
+		if transforms != nil && len(transforms) == 0 {
+			options.TextTransforms = []tts.TextTransform{}
+		}
+		options.textTransformsSet = true
 	}
 }
 
@@ -447,11 +429,11 @@ func newTTSInferenceMetrics(provider tts.TTS, streamed bool, handler func(*telem
 	return metrics
 }
 
-func (m *ttsInferenceMetrics) start() {
+func (m *ttsInferenceMetrics) startAt(startedAt time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.startedAt.IsZero() {
-		m.startedAt = time.Now()
+		m.startedAt = startedAt
 	}
 }
 
@@ -604,12 +586,39 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		opt(&options)
 	}
 	streamed := t.Capabilities().Streaming
-	transformBuffer, err := newTTSTextTransformBuffer(options)
+	inferenceCtx, cancelInference := context.WithCancel(ctx)
+	var inputStartMu sync.Mutex
+	var inputStartedAt time.Time
+	markInputStart := func() {
+		inputStartMu.Lock()
+		if inputStartedAt.IsZero() {
+			inputStartedAt = time.Now()
+		}
+		inputStartMu.Unlock()
+	}
+	getInputStart := func() time.Time {
+		inputStartMu.Lock()
+		defer inputStartMu.Unlock()
+		if inputStartedAt.IsZero() {
+			return time.Now()
+		}
+		return inputStartedAt
+	}
+	input := newTTSInputTextStream(inferenceCtx, cancelInference, textCh, markInputStart)
+	transforms := options.TextTransforms
+	if !options.textTransformsSet {
+		transforms = []tts.TextTransform{
+			tts.FilterMarkdownTransform(),
+			tts.FilterEmojiTransform(),
+		}
+	}
+	transformedInput, err := tts.ApplyTextTransformPipeline(inferenceCtx, input, transforms)
 	if err != nil {
+		cancelInference()
 		return nil, err
 	}
 	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler)
-	ctx, span := telemetry.NewTTSNodeSpan(ctx, tts.Model(t), tts.Provider(t))
+	ctx, span := telemetry.NewTTSNodeSpan(inferenceCtx, tts.Model(t), tts.Provider(t))
 
 	if !t.Capabilities().Streaming && !options.PreserveTimedTranscript {
 		t = tts.NewStreamAdapter(t)
@@ -619,30 +628,31 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		go func() {
 			defer close(data.AudioCh)
 			defer close(data.TimedTextCh)
+			defer transformedInput.Close()
+			defer cancelInference()
 			defer span.End()
 
 			var text strings.Builder
 			var startTime time.Time
 			var startTimeSet bool
-			for chunk := range textCh {
-				if !startTimeSet {
-					startTime = time.Now()
-					startTimeSet = true
-					metrics.start()
+			for {
+				chunk, inputErr := transformedInput.Next()
+				if inputErr == io.EOF {
+					break
 				}
-				text.WriteString(chunk)
-			}
-			ttsText := text.String()
-			if !options.DisableTextTransforms {
-				var transformErr error
-				ttsText, transformErr = applyTTSTextTransforms(ttsText, options)
-				if transformErr != nil {
-					data.StreamErr = transformErr
+				if inputErr != nil {
+					data.StreamErr = inputErr
 					metrics.close()
 					return
 				}
+				if !startTimeSet {
+					startTime = getInputStart()
+					startTimeSet = true
+					metrics.startAt(startTime)
+				}
+				text.WriteString(chunk)
 			}
-			transformedText := applyTTSTextReplacements(ttsText, options)
+			transformedText := text.String()
 			if strings.TrimSpace(transformedText) == "" {
 				metrics.close()
 				return
@@ -698,9 +708,11 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	stream, err := t.Stream(streamCtx)
 	if err != nil {
+		_ = transformedInput.Close()
 		metrics.close()
 		span.End()
 		cancelStream()
+		cancelInference()
 		return nil, err
 	}
 	if options.StreamPacer != nil {
@@ -710,7 +722,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	go func() {
 		defer close(data.AudioCh)
 		defer close(data.TimedTextCh)
+		defer transformedInput.Close()
 		defer cancelStream()
+		defer cancelInference()
 		defer span.End()
 
 		var closeStreamOnce sync.Once
@@ -737,9 +751,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		var startTimeMu sync.Mutex
 		markStartTime := func() {
 			startTimeMu.Lock()
-			metrics.start()
+			startedAt := getInputStart()
+			metrics.startAt(startedAt)
 			if !startTimeSet && !ttfbObserved {
-				startTime = time.Now()
+				startTime = startedAt
 				startTimeSet = true
 			}
 			startTimeMu.Unlock()
@@ -753,7 +768,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			ttfbObserved = true
 			return time.Since(startTime), true
 		}
-		replaceBuffer := newTTSReplacementBuffer(options)
 		var streamErrMu sync.Mutex
 		setStreamErr := func(err error) {
 			if err == nil {
@@ -764,6 +778,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				data.StreamErr = err
 			}
 			streamErrMu.Unlock()
+			cancelInference()
 			cancelStream()
 			closeStream()
 		}
@@ -813,40 +828,24 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			processText := func(text string) bool {
-				markStartTime()
-				if options.DisableTextTransforms {
-					return pushChunks(replaceBuffer.Push(text))
-				}
-				for _, filteredText := range transformBuffer.Push(text) {
-					if !pushChunks(replaceBuffer.Push(filteredText)) {
-						return false
-					}
-				}
-				return true
-			}
 			for {
-				select {
-				case <-streamCtx.Done():
+				text, inputErr := transformedInput.Next()
+				if inputErr == io.EOF {
+					break
+				}
+				if inputErr != nil {
+					setStreamErr(inputErr)
 					return
-				case text, ok := <-textCh:
-					if !ok {
-						goto inputClosed
-					}
-					if !processText(text) {
-						return
-					}
+				}
+				if text == "" {
+					continue
+				}
+				markStartTime()
+				if !pushChunks([]string{text}) {
+					return
 				}
 			}
-		inputClosed:
-			if !options.DisableTextTransforms {
-				for _, filteredText := range transformBuffer.Flush() {
-					if !pushChunks(replaceBuffer.Push(filteredText)) {
-						return
-					}
-				}
-			}
-			if !pushChunks(replaceBuffer.Flush()) {
+			if streamCtx.Err() != nil {
 				return
 			}
 			if err := tts.EndSynthesizeStreamInput(stream); err != nil {
@@ -906,34 +905,24 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	return data, nil
 }
 
-func applyTTSTextReplacements(text string, options TTSInferenceOptions) string {
-	buffer := newTTSReplacementBuffer(options)
-	chunks := append(buffer.Push(text), buffer.Flush()...)
-	return strings.Join(chunks, "")
-}
-
-func applyTTSTextTransforms(text string, options TTSInferenceOptions) (string, error) {
-	if options.TextTransformsSet {
-		return tts.ApplyTextTransformsWithTransforms(text, options.TextTransforms)
-	}
-	return tts.ApplyTextTransforms(text), nil
-}
-
-func newTTSTextTransformBuffer(options TTSInferenceOptions) (*tts.TextTransformBuffer, error) {
-	if options.DisableTextTransforms {
-		return nil, nil
-	}
-	if options.TextTransformsSet {
-		return tts.NewTextTransformBufferWithTransforms(options.TextTransforms)
-	}
-	return tts.NewTextTransformBuffer(), nil
-}
-
-func newTTSReplacementBuffer(options TTSInferenceOptions) *tts.TextRegexReplaceBuffer {
-	if len(options.OrderedTextReplacements) > 0 {
-		return tts.NewOrderedTextRegexReplaceBuffer(options.OrderedTextReplacements, false)
-	}
-	return tts.NewTextRegexReplaceBuffer(options.TextReplacements, false)
+func newTTSInputTextStream(ctx context.Context, cancel context.CancelFunc, textCh <-chan string, onText func()) tts.TextStream {
+	return tts.NewTextStream(func() (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case text, ok := <-textCh:
+			if !ok {
+				return "", io.EOF
+			}
+			if onText != nil {
+				onText()
+			}
+			return text, nil
+		}
+	}, func() error {
+		cancel()
+		return nil
+	})
 }
 
 type ToolExecutionOutput struct {
