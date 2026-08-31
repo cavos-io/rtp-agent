@@ -15775,7 +15775,7 @@ func TestDefaultConfigFromEnvRejectsUnknownTTSTextTransform(t *testing.T) {
 func applyTTSTextTransforms(t *testing.T, transforms []tts.TextTransform, chunks ...string) string {
 	t.Helper()
 	index := 0
-	input := tts.NewTextStream(func() (string, error) {
+	input := tts.NewTextStream(func(context.Context) (string, error) {
 		if index == len(chunks) {
 			return "", io.EOF
 		}
@@ -15783,14 +15783,18 @@ func applyTTSTextTransforms(t *testing.T, transforms []tts.TextTransform, chunks
 		index++
 		return chunk, nil
 	}, nil)
-	stream, err := tts.ApplyTextTransformPipeline(context.Background(), input, transforms)
+	stream, err := tts.ApplyTextTransformPipeline(input, transforms)
 	if err != nil {
 		t.Fatalf("ApplyTextTransformPipeline error = %v", err)
 	}
-	defer stream.Close()
+	t.Cleanup(func() {
+		if err := stream.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	})
 	var text strings.Builder
 	for {
-		chunk, err := stream.Next()
+		chunk, err := stream.Next(context.Background())
 		if err == io.EOF {
 			return text.String()
 		}
