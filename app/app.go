@@ -5124,7 +5124,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerGnani:
-		ttsOpts := []gnani.Option{}
+		ttsOpts := []gnani.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
 		}
@@ -6826,7 +6826,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = fishaudio.NewTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerGnani:
-		ttsOpts := []gnani.Option{}
+		ttsOpts := []gnani.TTSOption{}
 		if cfg.TTSBaseURL != "" {
 			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
 		}

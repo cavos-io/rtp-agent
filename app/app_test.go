@@ -1,5 +1,7 @@
 package app
 
+// Provider tests use canonical type names instead of deprecated compatibility aliases.
+
 import (
 	"bufio"
 	"bytes"
@@ -2948,7 +2950,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMDeploymentOptions(t *testing.T
 
 	var gotModel, gotEndpoint, gotDeployment, gotAPIVersion string
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotModel = model
 		gotEndpoint = azureEndpoint
 		gotDeployment = azureDeployment
@@ -2975,7 +2977,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMRequestOptions(t *testing.T) {
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -2999,7 +3001,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMPromptCacheOptions(t *testing.
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3023,7 +3025,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMLatencyOptions(t *testing.T) {
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3046,7 +3048,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMReasoningOption(t *testing.T) 
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3077,7 +3079,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMTimeoutOption(t *testing.T) {
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3101,7 +3103,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMMetadataOptions(t *testing.T) 
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3125,7 +3127,7 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMBaseURLOption(t *testing.T) {
 
 	var gotOptions int
 	previous := newAzureLLM
-	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.LLMOption) (llm.LLM, error) {
 		gotOptions = len(opts)
 		return &fakeAppLLM{}, nil
 	}
@@ -3641,9 +3643,9 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTSWithReferenceOptions(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.TTS)
 	if !ok {
-		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+		t.Fatalf("TTS provider type = %T, want *nvidia.TTS", app.Session.TTS)
 	}
 	state := reflect.ValueOf(nvidiaProvider).Elem()
 	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
@@ -3670,9 +3672,9 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTSLocalRivaWithoutAPIKey(t *testing.T
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	nvidiaProvider, ok := app.Session.TTS.(*nvidia.NvidiaTTS)
+	nvidiaProvider, ok := app.Session.TTS.(*nvidia.TTS)
 	if !ok {
-		t.Fatalf("TTS provider type = %T, want *nvidia.NvidiaTTS", app.Session.TTS)
+		t.Fatalf("TTS provider type = %T, want *nvidia.TTS", app.Session.TTS)
 	}
 	useSSL := reflect.ValueOf(nvidiaProvider).Elem().FieldByName("useSSL").Bool()
 	if useSSL {
@@ -4139,9 +4141,9 @@ func TestDefaultConfigFromEnvSelectsNvidiaSTT(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	provider, ok := app.Session.STT.(*nvidia.STT)
 	if !ok {
-		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+		t.Fatalf("STT provider type = %T, want *nvidia.STT", app.Session.STT)
 	}
 	if got, want := provider.Label(), "nvidia.STT"; got != want {
 		t.Fatalf("STT label = %q, want %q", got, want)
@@ -4173,9 +4175,9 @@ func TestDefaultConfigFromEnvSelectsNvidiaSTTLocalRivaWithoutAPIKey(t *testing.T
 	if err != nil {
 		t.Fatalf("NewApp() error = %v, want local Riva config without key", err)
 	}
-	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	provider, ok := app.Session.STT.(*nvidia.STT)
 	if !ok {
-		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+		t.Fatalf("STT provider type = %T, want *nvidia.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(provider).Elem()
 	if state.FieldByName("useSSL").Bool() {
@@ -5562,9 +5564,9 @@ func TestDefaultConfigFromEnvSelectsSonioxSTTWithReferenceLanguageHintFallback(t
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	sonioxProvider, ok := app.Session.STT.(*soniox.SonioxSTT)
+	sonioxProvider, ok := app.Session.STT.(*soniox.STT)
 	if !ok {
-		t.Fatalf("STT provider type = %T, want *soniox.SonioxSTT", app.Session.STT)
+		t.Fatalf("STT provider type = %T, want *soniox.STT", app.Session.STT)
 	}
 	languageHints := reflect.ValueOf(sonioxProvider).Elem().FieldByName("languageHints")
 	got := make([]string, 0, languageHints.Len())
@@ -5851,9 +5853,9 @@ func TestDefaultConfigFromEnvSelectsTelnyxProviders(t *testing.T) {
 	if app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	telnyxLLM, ok := app.Session.LLM.(*telnyx.TelnyxLLM)
+	telnyxLLM, ok := app.Session.LLM.(*telnyx.LLM)
 	if !ok {
-		t.Fatalf("Session LLM type = %T, want *telnyx.TelnyxLLM", app.Session.LLM)
+		t.Fatalf("Session LLM type = %T, want *telnyx.LLM", app.Session.LLM)
 	}
 	if got := telnyxLLM.BaseURL(); got != "https://telnyx.example/v2/ai" {
 		t.Fatalf("Telnyx LLM base URL = %q, want configured base URL", got)
@@ -6990,9 +6992,9 @@ func TestElevenLabsSTTFallbackPassesReferenceKeyterms(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	elevenProvider, ok := provider.(*elevenlabs.STT)
 	if !ok {
-		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+		t.Fatalf("provider type = %T, want *elevenlabs.STT", provider)
 	}
 	if got, want := provider.Label(), "elevenlabs.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7046,9 +7048,9 @@ func TestElevenLabsSTTFallbackPassesReferenceServerVAD(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsSTT)
+	elevenProvider, ok := provider.(*elevenlabs.STT)
 	if !ok {
-		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsSTT", provider)
+		t.Fatalf("provider type = %T, want *elevenlabs.STT", provider)
 	}
 	if caps := provider.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
 		t.Fatalf("Capabilities() = %+v, want streaming word-aligned interim fallback", caps)
@@ -7082,9 +7084,9 @@ func TestElevenLabsTTSFallbackPassesReferenceTextNormalization(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsTTS)
+	elevenProvider, ok := provider.(*elevenlabs.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsTTS", provider)
+		t.Fatalf("provider type = %T, want *elevenlabs.TTS", provider)
 	}
 	state := reflect.ValueOf(elevenProvider).Elem()
 	if got := state.FieldByName("applyTextNormalization").String(); got != "off" {
@@ -7154,8 +7156,8 @@ func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*gradium.GradiumSTT); !ok {
-		t.Fatalf("provider type = %T, want *gradium.GradiumSTT", provider)
+	if _, ok := provider.(*gradium.STT); !ok {
+		t.Fatalf("provider type = %T, want *gradium.STT", provider)
 	}
 	if got, want := provider.Label(), "gradium.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7270,8 +7272,8 @@ func TestBasetenSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*baseten.BasetenSTT); !ok {
-		t.Fatalf("provider type = %T, want *baseten.BasetenSTT", provider)
+	if _, ok := provider.(*baseten.STT); !ok {
+		t.Fatalf("provider type = %T, want *baseten.STT", provider)
 	}
 	if got, want := provider.Label(), "baseten.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7382,8 +7384,8 @@ func TestCartesiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*cartesia.CartesiaSTT); !ok {
-		t.Fatalf("provider type = %T, want *cartesia.CartesiaSTT", provider)
+	if _, ok := provider.(*cartesia.STT); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.STT", provider)
 	}
 	if got, want := provider.Label(), "cartesia.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7485,8 +7487,8 @@ func TestFireworksSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*fireworksai.FireworksSTT); !ok {
-		t.Fatalf("provider type = %T, want *fireworksai.FireworksSTT", provider)
+	if _, ok := provider.(*fireworksai.STT); !ok {
+		t.Fatalf("provider type = %T, want *fireworksai.STT", provider)
 	}
 	if got, want := provider.Label(), "fireworks.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7609,8 +7611,8 @@ func TestSonioxSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*soniox.SonioxSTT); !ok {
-		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+	if _, ok := provider.(*soniox.STT); !ok {
+		t.Fatalf("provider type = %T, want *soniox.STT", provider)
 	}
 	if got, want := provider.Label(), "soniox.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -7687,9 +7689,9 @@ func TestSonioxSTTFallbackUsesReferenceLanguageHintFallback(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	sonioxProvider, ok := provider.(*soniox.SonioxSTT)
+	sonioxProvider, ok := provider.(*soniox.STT)
 	if !ok {
-		t.Fatalf("provider type = %T, want *soniox.SonioxSTT", provider)
+		t.Fatalf("provider type = %T, want *soniox.STT", provider)
 	}
 	state := reflect.ValueOf(sonioxProvider).Elem()
 	languageHints := state.FieldByName("languageHints")
@@ -7790,8 +7792,8 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*speechmatics.SpeechmaticsSTT); !ok {
-		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsSTT", provider)
+	if _, ok := provider.(*speechmatics.STT); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.STT", provider)
 	}
 	if got, want := provider.Label(), "speechmatics.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8216,8 +8218,8 @@ func TestGladiaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*gladia.GladiaSTT); !ok {
-		t.Fatalf("provider type = %T, want *gladia.GladiaSTT", provider)
+	if _, ok := provider.(*gladia.STT); !ok {
+		t.Fatalf("provider type = %T, want *gladia.STT", provider)
 	}
 	if got, want := provider.Label(), "gladia.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8368,8 +8370,8 @@ func TestXaiSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*xai.XaiSTT); !ok {
-		t.Fatalf("provider type = %T, want *xai.XaiSTT", provider)
+	if _, ok := provider.(*xai.STT); !ok {
+		t.Fatalf("provider type = %T, want *xai.STT", provider)
 	}
 	if got, want := provider.Label(), "xai.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8472,8 +8474,8 @@ func TestSmallestAISTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*smallestai.SmallestAISTT); !ok {
-		t.Fatalf("provider type = %T, want *smallestai.SmallestAISTT", provider)
+	if _, ok := provider.(*smallestai.STT); !ok {
+		t.Fatalf("provider type = %T, want *smallestai.STT", provider)
 	}
 	if got, want := provider.Label(), "smallestai.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8586,8 +8588,8 @@ func TestTelnyxSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*telnyx.TelnyxSTT); !ok {
-		t.Fatalf("provider type = %T, want *telnyx.TelnyxSTT", provider)
+	if _, ok := provider.(*telnyx.STT); !ok {
+		t.Fatalf("provider type = %T, want *telnyx.STT", provider)
 	}
 	if got, want := provider.Label(), "telnyx.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8706,8 +8708,8 @@ func TestInworldSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*inworld.InworldSTT); !ok {
-		t.Fatalf("provider type = %T, want *inworld.InworldSTT", provider)
+	if _, ok := provider.(*inworld.STT); !ok {
+		t.Fatalf("provider type = %T, want *inworld.STT", provider)
 	}
 	if got, want := provider.Label(), "inworld.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -8848,8 +8850,8 @@ func TestAssemblyAISTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*assemblyai.AssemblyAISTT); !ok {
-		t.Fatalf("provider type = %T, want *assemblyai.AssemblyAISTT", provider)
+	if _, ok := provider.(*assemblyai.STT); !ok {
+		t.Fatalf("provider type = %T, want *assemblyai.STT", provider)
 	}
 	if got, want := provider.Label(), "assemblyai.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -9137,8 +9139,8 @@ func TestSimplismartSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*simplismart.SimplismartSTT); !ok {
-		t.Fatalf("provider type = %T, want *simplismart.SimplismartSTT", provider)
+	if _, ok := provider.(*simplismart.STT); !ok {
+		t.Fatalf("provider type = %T, want *simplismart.STT", provider)
 	}
 	if got, want := provider.Label(), "simplismart.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -9263,8 +9265,8 @@ func TestClovaSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*clova.ClovaSTT); !ok {
-		t.Fatalf("provider type = %T, want *clova.ClovaSTT", provider)
+	if _, ok := provider.(*clova.STT); !ok {
+		t.Fatalf("provider type = %T, want *clova.STT", provider)
 	}
 	if got, want := provider.Label(), "clova.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -9394,8 +9396,8 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*deepgram.DeepgramSTT); !ok {
-		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+	if _, ok := provider.(*deepgram.STT); !ok {
+		t.Fatalf("provider type = %T, want *deepgram.STT", provider)
 	}
 	if got, want := provider.Label(), "deepgram.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -9476,9 +9478,9 @@ func TestDeepgramSTTFallbackPassesReferenceDetectLanguage(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	deepgramProvider, ok := provider.(*deepgram.DeepgramSTT)
+	deepgramProvider, ok := provider.(*deepgram.STT)
 	if !ok {
-		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTT", provider)
+		t.Fatalf("provider type = %T, want *deepgram.STT", provider)
 	}
 	if got := reflect.ValueOf(deepgramProvider).Elem().FieldByName("detectLanguage").Bool(); !got {
 		t.Fatal("detectLanguage = false, want configured true")
@@ -9672,8 +9674,8 @@ func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*rtzr.RtzrSTT); !ok {
-		t.Fatalf("provider type = %T, want *rtzr.RtzrSTT", provider)
+	if _, ok := provider.(*rtzr.STT); !ok {
+		t.Fatalf("provider type = %T, want *rtzr.STT", provider)
 	}
 	if got, want := provider.Label(), "rtzr.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -9793,8 +9795,8 @@ func TestMistralAISTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*mistralai.MistralAISTT); !ok {
-		t.Fatalf("provider type = %T, want *mistralai.MistralAISTT", provider)
+	if _, ok := provider.(*mistralai.STT); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.STT", provider)
 	}
 	if got, want := provider.Label(), "mistralai.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -10604,7 +10606,7 @@ func TestAWSTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	awsProvider, ok := provider.(*adapteraws.AWSTTS)
+	awsProvider, ok := provider.(*adapteraws.TTS)
 	if !ok {
 		t.Fatalf("provider type = %T, want *aws.AWSTTS", provider)
 	}
@@ -10657,9 +10659,9 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	azureProvider, ok := provider.(*azure.AzureTTS)
+	azureProvider, ok := provider.(*azure.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+		t.Fatalf("provider type = %T, want *azure.TTS", provider)
 	}
 	if got, want := azureProvider.Label(), "azure.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -10707,9 +10709,9 @@ func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	azureProvider, ok := provider.(*azure.AzureTTS)
+	azureProvider, ok := provider.(*azure.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+		t.Fatalf("provider type = %T, want *azure.TTS", provider)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("speechEndpoint").String(), "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1"; got != want {
@@ -10745,9 +10747,9 @@ func TestAzureTTSFallbackPassesReferenceVoiceControls(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	azureProvider, ok := provider.(*azure.AzureTTS)
+	azureProvider, ok := provider.(*azure.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+		t.Fatalf("provider type = %T, want *azure.TTS", provider)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("lexiconURI").String(), "https://voice.example.test/lexicon.xml"; got != want {
@@ -10796,9 +10798,9 @@ func TestAzureTTSFallbackPassesReferenceNumericProsody(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	azureProvider, ok := provider.(*azure.AzureTTS)
+	azureProvider, ok := provider.(*azure.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+		t.Fatalf("provider type = %T, want *azure.TTS", provider)
 	}
 	prosody := reflect.ValueOf(azureProvider).Elem().FieldByName("prosody")
 	if got, want := prosody.FieldByName("Rate").String(), "1.2"; got != want {
@@ -10838,8 +10840,8 @@ func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*baseten.BasetenTTS); !ok {
-		t.Fatalf("provider type = %T, want *baseten.BasetenTTS", provider)
+	if _, ok := provider.(*baseten.TTS); !ok {
+		t.Fatalf("provider type = %T, want *baseten.TTS", provider)
 	}
 	if got, want := provider.Label(), "baseten.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -10915,8 +10917,8 @@ func TestCartesiaTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*cartesia.CartesiaTTS); !ok {
-		t.Fatalf("provider type = %T, want *cartesia.CartesiaTTS", provider)
+	if _, ok := provider.(*cartesia.TTS); !ok {
+		t.Fatalf("provider type = %T, want *cartesia.TTS", provider)
 	}
 	if got, want := provider.Label(), "cartesia.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11039,8 +11041,8 @@ func TestGradiumTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*gradium.GradiumTTS); !ok {
-		t.Fatalf("provider type = %T, want *gradium.GradiumTTS", provider)
+	if _, ok := provider.(*gradium.TTS); !ok {
+		t.Fatalf("provider type = %T, want *gradium.TTS", provider)
 	}
 	if got, want := provider.Label(), "gradium.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11205,8 +11207,8 @@ func TestResembleTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*resemble.ResembleTTS); !ok {
-		t.Fatalf("provider type = %T, want *resemble.ResembleTTS", provider)
+	if _, ok := provider.(*resemble.TTS); !ok {
+		t.Fatalf("provider type = %T, want *resemble.TTS", provider)
 	}
 	if got, want := provider.Label(), "resemble.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11483,8 +11485,8 @@ func TestSonioxTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*soniox.SonioxTTS); !ok {
-		t.Fatalf("provider type = %T, want *soniox.SonioxTTS", provider)
+	if _, ok := provider.(*soniox.TTS); !ok {
+		t.Fatalf("provider type = %T, want *soniox.TTS", provider)
 	}
 	if got, want := provider.Label(), "soniox.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11533,8 +11535,8 @@ func TestSpeechmaticsTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*speechmatics.SpeechmaticsTTS); !ok {
-		t.Fatalf("provider type = %T, want *speechmatics.SpeechmaticsTTS", provider)
+	if _, ok := provider.(*speechmatics.TTS); !ok {
+		t.Fatalf("provider type = %T, want *speechmatics.TTS", provider)
 	}
 	if got, want := provider.Label(), "speechmatics.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11596,8 +11598,8 @@ func TestSpitchTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*spitch.SpitchTTS); !ok {
-		t.Fatalf("provider type = %T, want *spitch.SpitchTTS", provider)
+	if _, ok := provider.(*spitch.TTS); !ok {
+		t.Fatalf("provider type = %T, want *spitch.TTS", provider)
 	}
 	if got, want := provider.Label(), "spitch.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11699,8 +11701,8 @@ func TestXaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*xai.XaiTTS); !ok {
-		t.Fatalf("provider type = %T, want *xai.XaiTTS", provider)
+	if _, ok := provider.(*xai.TTS); !ok {
+		t.Fatalf("provider type = %T, want *xai.TTS", provider)
 	}
 	if got, want := provider.Label(), "xai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11813,8 +11815,8 @@ func TestFishAudioTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*fishaudio.FishAudioTTS); !ok {
-		t.Fatalf("provider type = %T, want *fishaudio.FishAudioTTS", provider)
+	if _, ok := provider.(*fishaudio.TTS); !ok {
+		t.Fatalf("provider type = %T, want *fishaudio.TTS", provider)
 	}
 	if got, want := provider.Label(), "fishaudio.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -11915,8 +11917,8 @@ func TestAsyncAITTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*asyncai.AsyncAITTS); !ok {
-		t.Fatalf("provider type = %T, want *asyncai.AsyncAITTS", provider)
+	if _, ok := provider.(*asyncai.TTS); !ok {
+		t.Fatalf("provider type = %T, want *asyncai.TTS", provider)
 	}
 	if got, want := provider.Label(), "asyncai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12018,8 +12020,8 @@ func TestCambaiTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*cambai.CambaiTTS); !ok {
-		t.Fatalf("provider type = %T, want *cambai.CambaiTTS", provider)
+	if _, ok := provider.(*cambai.TTS); !ok {
+		t.Fatalf("provider type = %T, want *cambai.TTS", provider)
 	}
 	if got, want := provider.Label(), "cambai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12200,8 +12202,8 @@ func TestHumeTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*hume.HumeTTS); !ok {
-		t.Fatalf("provider type = %T, want *hume.HumeTTS", provider)
+	if _, ok := provider.(*hume.TTS); !ok {
+		t.Fatalf("provider type = %T, want *hume.TTS", provider)
 	}
 	if got, want := provider.Label(), "hume.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12307,8 +12309,8 @@ func TestMinimaxTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*minimax.MinimaxTTS); !ok {
-		t.Fatalf("provider type = %T, want *minimax.MinimaxTTS", provider)
+	if _, ok := provider.(*minimax.TTS); !ok {
+		t.Fatalf("provider type = %T, want *minimax.TTS", provider)
 	}
 	if got, want := provider.Label(), "minimax.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12418,8 +12420,8 @@ func TestInworldTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*inworld.InworldTTS); !ok {
-		t.Fatalf("provider type = %T, want *inworld.InworldTTS", provider)
+	if _, ok := provider.(*inworld.TTS); !ok {
+		t.Fatalf("provider type = %T, want *inworld.TTS", provider)
 	}
 	if got, want := provider.Label(), "inworld.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12551,8 +12553,8 @@ func TestGroqTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*groq.GroqTTS); !ok {
-		t.Fatalf("provider type = %T, want *groq.GroqTTS", provider)
+	if _, ok := provider.(*groq.TTS); !ok {
+		t.Fatalf("provider type = %T, want *groq.TTS", provider)
 	}
 	if got, want := provider.Label(), "groq.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12615,9 +12617,9 @@ func TestNvidiaTTSFallbackPassesReferenceLanguage(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	nvidiaProvider, ok := provider.(*nvidia.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+		t.Fatalf("provider type = %T, want *nvidia.TTS", provider)
 	}
 	if got, want := nvidiaProvider.Label(), "nvidia.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12645,9 +12647,9 @@ func TestNvidiaTTSFallbackAllowsLocalRivaWithoutAPIKey(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	nvidiaProvider, ok := provider.(*nvidia.NvidiaTTS)
+	nvidiaProvider, ok := provider.(*nvidia.TTS)
 	if !ok {
-		t.Fatalf("provider type = %T, want *nvidia.NvidiaTTS", provider)
+		t.Fatalf("provider type = %T, want *nvidia.TTS", provider)
 	}
 	state := reflect.ValueOf(nvidiaProvider).Elem()
 	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
@@ -12710,8 +12712,8 @@ func TestMistralAITTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*mistralai.MistralAITTS); !ok {
-		t.Fatalf("provider type = %T, want *mistralai.MistralAITTS", provider)
+	if _, ok := provider.(*mistralai.TTS); !ok {
+		t.Fatalf("provider type = %T, want *mistralai.TTS", provider)
 	}
 	if got, want := provider.Label(), "mistralai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12815,8 +12817,8 @@ func TestLMNTTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*lmnt.LMNTTTS); !ok {
-		t.Fatalf("provider type = %T, want *lmnt.LMNTTTS", provider)
+	if _, ok := provider.(*lmnt.TTS); !ok {
+		t.Fatalf("provider type = %T, want *lmnt.TTS", provider)
 	}
 	if got, want := provider.Label(), "lmnt.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -12925,8 +12927,8 @@ func TestNeuphonicTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*neuphonic.NeuphonicTTS); !ok {
-		t.Fatalf("provider type = %T, want *neuphonic.NeuphonicTTS", provider)
+	if _, ok := provider.(*neuphonic.TTS); !ok {
+		t.Fatalf("provider type = %T, want *neuphonic.TTS", provider)
 	}
 	if got, want := provider.Label(), "neuphonic.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -13028,8 +13030,8 @@ func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*rime.RimeTTS); !ok {
-		t.Fatalf("provider type = %T, want *rime.RimeTTS", provider)
+	if _, ok := provider.(*rime.TTS); !ok {
+		t.Fatalf("provider type = %T, want *rime.TTS", provider)
 	}
 	if got, want := provider.Label(), "rime.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -13152,8 +13154,8 @@ func TestMurfTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*murf.MurfTTS); !ok {
-		t.Fatalf("provider type = %T, want *murf.MurfTTS", provider)
+	if _, ok := provider.(*murf.TTS); !ok {
+		t.Fatalf("provider type = %T, want *murf.TTS", provider)
 	}
 	if got, want := provider.Label(), "murf.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -13265,8 +13267,8 @@ func TestSpeechifyTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*speechify.SpeechifyTTS); !ok {
-		t.Fatalf("provider type = %T, want *speechify.SpeechifyTTS", provider)
+	if _, ok := provider.(*speechify.TTS); !ok {
+		t.Fatalf("provider type = %T, want *speechify.TTS", provider)
 	}
 	if got, want := provider.Label(), "speechify.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -13378,8 +13380,8 @@ func TestSimplismartTTSFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
 	}
 
-	if _, ok := provider.(*simplismart.SimplismartTTS); !ok {
-		t.Fatalf("provider type = %T, want *simplismart.SimplismartTTS", provider)
+	if _, ok := provider.(*simplismart.TTS); !ok {
+		t.Fatalf("provider type = %T, want *simplismart.TTS", provider)
 	}
 	if got, want := provider.Label(), "simplismart.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -13750,7 +13752,7 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	if got := llm.Provider(app.Session.LLM); got != "AWS Bedrock" {
 		t.Fatalf("LLM provider = %q, want AWS Bedrock", got)
 	}
-	awsLLM, ok := app.Session.LLM.(*adapteraws.AWSLLM)
+	awsLLM, ok := app.Session.LLM.(*adapteraws.LLM)
 	if !ok {
 		t.Fatalf("LLM = %T, want *aws.AWSLLM", app.Session.LLM)
 	}
@@ -13778,7 +13780,7 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "aws.STT" {
 		t.Fatalf("STT label = %q, want aws.STT", got)
 	}
-	awsSTT, ok := app.Session.STT.(*adapteraws.AWSSTT)
+	awsSTT, ok := app.Session.STT.(*adapteraws.STT)
 	if !ok {
 		t.Fatalf("STT = %T, want *aws.AWSSTT", app.Session.STT)
 	}
@@ -13847,9 +13849,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
@@ -13875,9 +13877,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTSpeechEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("speechEndpoint").String(), "https://speech.endpoint.test/custom/stt"; got != want {
@@ -13898,9 +13900,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("language").String(), "en-US"; got != want {
@@ -13927,9 +13929,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTSegmentationOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := int(state.FieldByName("segmentationSilence").Int()), 250; got != want {
@@ -13953,9 +13955,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTTranscriptOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if !state.FieldByName("trueTextPostProcessing").Bool() {
@@ -13986,9 +13988,9 @@ func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	azureProvider, ok := app.Session.STT.(*azure.STT)
 	if !ok {
-		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+		t.Fatalf("STT provider = %T, want *azure.STT", app.Session.STT)
 	}
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
@@ -15118,9 +15120,9 @@ func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
 	}
 
-	groqProvider, ok := provider.(*groq.GroqSTT)
+	groqProvider, ok := provider.(*groq.STT)
 	if !ok {
-		t.Fatalf("provider type = %T, want *groq.GroqSTT", provider)
+		t.Fatalf("provider type = %T, want *groq.STT", provider)
 	}
 	if got, want := provider.Label(), "groq.STT"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -15174,9 +15176,9 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if got := llm.Provider(app.Session.LLM); got != "groq.example" {
 		t.Fatalf("LLM provider = %q, want configured Groq OpenAI-compatible host", got)
 	}
-	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	groqLLM, ok := app.Session.LLM.(*groq.LLM)
 	if !ok {
-		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+		t.Fatalf("LLM provider type = %T, want *groq.LLM", app.Session.LLM)
 	}
 	llmState := reflect.ValueOf(groqLLM).Elem()
 	if got := llmState.FieldByName("baseURL").String(); got != "https://groq.example/openai/v1" {
@@ -15330,9 +15332,9 @@ func TestDefaultConfigFromEnvMapsGroqLLMTimeoutOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	groqLLM, ok := app.Session.LLM.(*groq.LLM)
 	if !ok {
-		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+		t.Fatalf("LLM provider type = %T, want *groq.LLM", app.Session.LLM)
 	}
 	if got := time.Duration(groqLLMDefaultConnectInt64(t, groqLLM, "Timeout")); got != 750*time.Millisecond {
 		t.Fatalf("Groq LLM default timeout = %v, want 750ms from model options", got)
@@ -15378,7 +15380,7 @@ func TestDefaultConfigFromEnvMapsGroqLLMMaxRetriesOption(t *testing.T) {
 	}
 }
 
-func groqLLMDefaultConnectInt64(t *testing.T, provider *groq.GroqLLM, field string) int64 {
+func groqLLMDefaultConnectInt64(t *testing.T, provider *groq.LLM, field string) int64 {
 	t.Helper()
 
 	state := reflect.ValueOf(provider).Elem()
@@ -16162,7 +16164,7 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	if got := llm.RealtimeProvider(app.RealtimeModel); got != "Amazon" {
 		t.Fatalf("Realtime provider = %q, want Amazon", got)
 	}
-	model, ok := app.RealtimeModel.(*adapteraws.AWSRealtimeModel)
+	model, ok := app.RealtimeModel.(*adapteraws.RealtimeModel)
 	if !ok {
 		t.Fatalf("RealtimeModel = %T, want *aws.AWSRealtimeModel", app.RealtimeModel)
 	}
@@ -16797,8 +16799,8 @@ func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if _, ok := app.Session.LLM.(*anthropic.AnthropicLLM); !ok {
-		t.Fatalf("Session LLM = %T, want *anthropic.AnthropicLLM", app.Session.LLM)
+	if _, ok := app.Session.LLM.(*anthropic.LLM); !ok {
+		t.Fatalf("Session LLM = %T, want *anthropic.LLM", app.Session.LLM)
 	}
 	if got := llm.Provider(app.Session.LLM); got != "anthropic.example" {
 		t.Fatalf("LLM provider = %q, want configured Anthropic base URL host", got)
