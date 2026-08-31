@@ -2,6 +2,6 @@ package rime
 
 const (
 	PluginTitle   = "rtp-agent.plugins.rime"
-	PluginVersion = "v0.6.0"
+	PluginVersion = "v0.7.0"
 	PluginPackage = "rtp-agent.plugins.rime"
 )
