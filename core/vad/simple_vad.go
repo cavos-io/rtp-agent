@@ -549,19 +549,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 			s.silenceDuration = s.accumulatedSilenceDuration
 			s.appendSpeechFrame(frame, duration)
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
-				s.speaking = false
-				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
-				s.enqueueEvent(&VADEvent{
-					Type:            VADEventEndOfSpeech,
-					SamplesIndex:    s.samplesIndex,
-					Timestamp:       s.timestamp,
-					SpeechDuration:  normalizeDuration(max(s.speechDuration-s.silenceDuration, 0)),
-					SilenceDuration: s.silenceDuration,
-					Frames:          combineFrames(frames),
-					Speaking:        false,
-				})
-				s.lastActivity = time.Now()
-				s.resetSegmentWithPrefixTail(frames)
+				s.finalizeSegmentLocked()
 			}
 		} else {
 			s.silenceDuration += duration
@@ -620,6 +608,26 @@ func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) *te
 	return metrics
 }
 
+func (s *simpleVADStream) finalizeSegmentLocked() bool {
+	if !s.speaking {
+		return false
+	}
+	s.speaking = false
+	frames := append([]*model.AudioFrame(nil), s.speechFrames...)
+	s.enqueueEvent(&VADEvent{
+		Type:            VADEventEndOfSpeech,
+		SamplesIndex:    s.samplesIndex,
+		Timestamp:       s.timestamp,
+		SpeechDuration:  normalizeDuration(max(s.speechDuration-s.silenceDuration, 0)),
+		SilenceDuration: s.silenceDuration,
+		Frames:          combineFrames(frames),
+		Speaking:        false,
+	})
+	s.lastActivity = time.Now()
+	s.resetSegmentWithPrefixTail(frames)
+	return true
+}
+
 func (s *simpleVADStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -632,7 +640,23 @@ func (s *simpleVADStream) Flush() error {
 	if err := s.contextErr(); err != nil {
 		return err
 	}
-	s.resetState()
+	s.finalizeSegmentLocked()
+	return nil
+}
+
+func (s *simpleVADStream) DiscardSegment() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
+	}
+	if err := s.contextErr(); err != nil {
+		return err
+	}
+	s.resetSegment()
 	return nil
 }
 

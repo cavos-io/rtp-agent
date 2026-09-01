@@ -106,3 +106,7 @@ type VADStream interface {
 	Close() error
 	Next() (*VADEvent, error)
 }
+
+type SegmentDiscarder interface {
+	DiscardSegment() error
+}
