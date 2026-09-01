@@ -238,9 +238,10 @@ type scheduledSpeech struct {
 }
 
 type pausedSpeechInfo struct {
-	handle     *SpeechHandle
-	agentState AgentState
-	timeout    time.Duration
+	handle            *SpeechHandle
+	agentState        AgentState
+	timeout           time.Duration
+	awaitedTranscript bool
 }
 
 type inputTranscriptionFlusher interface {
@@ -1690,6 +1691,11 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
+	// The user speaking again is the last chance to act on speech parked by
+	// holdSTTEventWhileAgentSpeaking. Drain — decide, then reset — before the new turn
+	// overwrites userSpeechStartedAt, or a replayed transcript gets the new turn's timestamp.
+	a.drainHeldUserTranscriptWindow()
+
 	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
@@ -1723,7 +1729,6 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.syntheticEOU = false
 	a.syntheticEOUNotBefore = time.Time{}
 	a.userTurnMu.Unlock()
-	a.clearHeldUserTranscriptWindow()
 	if a.Session != nil {
 		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
 	}
@@ -2217,9 +2222,32 @@ func overlappingSpeechIgnoreUntil(ev OverlappingSpeechEvent) time.Time {
 	return ev.DetectedAt
 }
 
-func (a *AgentActivity) clearHeldUserTranscriptWindow() {
+func (a *AgentActivity) recognizePendingForLastTurn() bool {
+	if a == nil {
+		return false
+	}
+	stoppedAt := a.userSpeechStoppedAt
+	if stoppedAt.IsZero() || time.Since(stoppedAt) >= 2*time.Second {
+		return false
+	}
+	if a.pendingFinalTranscriptPresent() {
+		return false
+	}
+	a.userTurnMu.Lock()
+	hasHeld := len(a.heldSTTEvents) > 0
+	a.userTurnMu.Unlock()
+	return !hasHeld
+}
+
+func (a *AgentActivity) drainHeldUserTranscriptWindow() {
 	if a == nil {
 		return
+	}
+	a.userTurnMu.Lock()
+	hasHeld := len(a.heldSTTEvents) > 0
+	a.userTurnMu.Unlock()
+	if hasHeld {
+		a.commitHeldBargeIn()
 	}
 	a.userTurnMu.Lock()
 	a.ignoreUserTranscriptUntil = time.Time{}
@@ -2590,6 +2618,28 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	// heldSTTEvents and is otherwise only flushed on a real interruption. When the barge-in
 	// resolves here as a false interruption, a genuine (non-short) utterance would be silently
 	// discarded. Commit it instead so we don't resume over the user.
+	//
+	// Evidence before decision: with timeout 0 (agent thinking) this fires the instant
+	// speech ends, while the segment's Recognize round-trip (~300-450ms) is still in
+	// flight — judging heldSTTEvents now sees an empty buffer and resumes over a user who
+	// said something real (test8's lost text_len:15). If the last segment ended but no
+	// transcript has landed yet, wait once for it before judging.
+	if !paused.awaitedTranscript && a.recognizePendingForLastTurn() {
+		paused.awaitedTranscript = true
+		a.falseInterruptionMu.Lock()
+		if a.pausedSpeech == nil {
+			a.pausedSpeech = paused
+			if a.falseInterruptionTimer != nil {
+				a.falseInterruptionTimer.Stop()
+			}
+			a.falseInterruptionTimer = time.AfterFunc(500*time.Millisecond, a.resumeFalseInterruption)
+			a.falseInterruptionMu.Unlock()
+			return
+		}
+		// a new pause raced in; let its own lifecycle decide
+		a.falseInterruptionMu.Unlock()
+		return
+	}
 	if a.commitHeldBargeIn() {
 		return
 	}

@@ -812,6 +812,142 @@ func TestAgentActivityResumeFalseInterruptionCommitsHeldBargeIn(t *testing.T) {
 	}
 }
 
+// Regression for the resume/recognize race (test8's lost text_len:15): with timeout 0 the
+// false-interruption timer fires the instant speech ends, while the segment's Recognize is
+// still in flight. The resume must wait once for the transcript instead of judging an empty
+// buffer and resuming over the user.
+func TestAgentActivityResumeFalseInterruptionWaitsForPendingTranscript(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: current, agentState: AgentStateSpeaking}
+	activity.holdSTTWhileAgentSpeaking = true
+	// Speech just ended; Recognize has not returned yet — nothing held, nothing pending.
+	activity.userSpeechStoppedAt = time.Now()
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	activity.resumeFalseInterruption()
+
+	if audioOutput.resumeCount != 0 {
+		t.Fatalf("ResumeAudioOutput calls = %d, want 0 while transcript still in flight", audioOutput.resumeCount)
+	}
+	activity.falseInterruptionMu.Lock()
+	deferred := activity.pausedSpeech
+	activity.falseInterruptionMu.Unlock()
+	if deferred == nil || !deferred.awaitedTranscript {
+		t.Fatal("resume did not defer for the in-flight transcript")
+	}
+
+	// The transcript lands; the re-armed resume fires and must commit it.
+	activity.userTurnMu.Lock()
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "jangan ditutup dulu ya", Confidence: 0.9}},
+	}}
+	activity.userTurnMu.Unlock()
+
+	activity.resumeFalseInterruption()
+
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "jangan ditutup dulu ya" {
+			t.Fatalf("committed transcript = %q, want the late-arriving barge-in", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late transcript was discarded instead of committed after the deferral")
+	}
+}
+
+// Regression for test9: the user barges in, the transcript lands while the agent is still
+// speaking so it is parked, and then the user simply keeps talking. onStartOfSpeech used to
+// reach clearHeldUserTranscriptWindow() and nil the buffer, destroying a completed transcript
+// with no log. The new turn must commit the parked speech first.
+func TestAgentActivityStartOfSpeechCommitsHeldBargeIn(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+	})
+	session.agentState = AgentStateSpeaking
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: current, agentState: AgentStateSpeaking}
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Ya, jadi gini, jadi gini. Bentar, bentar", Confidence: 0.9}},
+	}}
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	// The user starts their next sentence before the false-interruption timer fires.
+	activity.onStartOfSpeech(nil, nil)
+
+	if len(activity.heldSTTEvents) != 0 {
+		t.Fatalf("held STT events = %d, want committed on the next start of speech", len(activity.heldSTTEvents))
+	}
+	select {
+	case ev := <-userTranscriptEvents:
+		if ev.Transcript != "Ya, jadi gini, jadi gini. Bentar, bentar" {
+			t.Fatalf("committed transcript = %q, want the held barge-in", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("held barge-in transcript was discarded by the next start of speech instead of committed")
+	}
+}
+
+// A bare backchannel grunted over the agent must still be dropped, so the agent does not
+// interrupt itself on "iya"/"oke". Guards against the fix above over-delivering.
+func TestAgentActivityStartOfSpeechDropsShortHeldBackchannel(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{} // shortInterruptionTranscript only applies with an STT model
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:              TurnDetectionModeVAD,
+		ResumeFalseInterruption:    true,
+		ResumeFalseInterruptionSet: true,
+		MinInterruptionWords:       3,
+	})
+	session.agentState = AgentStateSpeaking
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	defer current.MarkDone()
+	activity.pausedSpeech = &pausedSpeechInfo{handle: current, agentState: AgentStateSpeaking}
+	activity.holdSTTWhileAgentSpeaking = true
+	activity.heldSTTEvents = []*stt.SpeechEvent{{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "iya", Confidence: 0.9}},
+	}}
+	userTranscriptEvents := session.UserInputTranscribedEvents()
+
+	activity.onStartOfSpeech(nil, nil)
+
+	select {
+	case ev := <-userTranscriptEvents:
+		t.Fatalf("committed transcript = %q, want a short backchannel to stay suppressed", ev.Transcript)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityResumeFalseInterruptionKeepsResumeForNoise(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
