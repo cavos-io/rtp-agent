@@ -2616,14 +2616,15 @@ func TestSimpleVADLimitsBufferedSpeechAtSampleBoundary(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, firstSpeech, secondSpeech, audioFrame(16000, 80, 8000))
 }
 
-func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
+func TestSimpleVADFlushFinalizesOpenSegment(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
 
-	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+	speech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
 	assertEventType(t, stream, VADEventInferenceDone)
@@ -2632,6 +2633,18 @@ func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
+
+	// Flush finalizes the turn in flight: the buffered speech must surface as EndOfSpeech
+	// so stt.StreamAdapter can transcribe it, instead of being discarded silently.
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type after Flush() = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if len(end.Frames) == 0 {
+		t.Fatal("EndOfSpeech after Flush() carried no audio frames")
+	}
+
+	// The detector stays warm across a flush: sample index and timestamp keep counting.
 	afterFlushSilence := audioFrame(16000, 160, 0)
 	if err := stream.PushFrame(afterFlushSilence); err != nil {
 		t.Fatalf("PushFrame() after Flush() error = %v", err)
@@ -2640,15 +2653,40 @@ func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
 	if inference.Type != VADEventInferenceDone {
 		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
 	}
-	if inference.SamplesIndex != int(afterFlushSilence.SamplesPerChannel) {
-		t.Fatalf("SamplesIndex after Flush() = %d, want %d", inference.SamplesIndex, afterFlushSilence.SamplesPerChannel)
+	wantIndex := int(speech.SamplesPerChannel + afterFlushSilence.SamplesPerChannel)
+	if inference.SamplesIndex != wantIndex {
+		t.Fatalf("SamplesIndex after Flush() = %d, want %d", inference.SamplesIndex, wantIndex)
 	}
-	if inference.Timestamp != 0.01 {
-		t.Fatalf("Timestamp after Flush() = %v, want 0.01", inference.Timestamp)
+	if inference.Timestamp != 0.02 {
+		t.Fatalf("Timestamp after Flush() = %v, want 0.02", inference.Timestamp)
 	}
 
 	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
 		t.Fatalf("PushFrame() second segment error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADFlushWithoutOpenSegmentEmitsNothing(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	// No segment was open, so the flush is a no-op rather than a spurious EndOfSpeech.
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() after Flush() error = %v", err)
 	}
 	assertEventType(t, stream, VADEventInferenceDone)
 	assertEventType(t, stream, VADEventStartOfSpeech)

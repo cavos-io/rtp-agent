@@ -203,7 +203,7 @@ func TestSileroVADONNXUpdateOptionsKeepsReferenceProbabilityThreshold(t *testing
 	assertNoSileroVADEvent(t, stream, "0.5 probability should stay below updated ONNX threshold 0.6")
 }
 
-func TestSileroVADFlushResetsONNXEstimatorState(t *testing.T) {
+func TestSileroVADFlushKeepsONNXEstimatorWarm(t *testing.T) {
 	originalFactory := newSileroProbabilityEstimatorFactory
 	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
 
@@ -245,13 +245,18 @@ func TestSileroVADFlushResetsONNXEstimatorState(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
+	// Flush finalizes the open segment instead of discarding it.
+	assertSileroVADEventType(t, stream, vad.VADEventEndOfSpeech)
+
+	// ...and keeps the ONNX estimator alive. The fake scores 0.9 once per instance, so a
+	// second StartOfSpeech here would mean the model was rebuilt cold — the drift that made
+	// the STT-side VAD disagree with the pipeline VAD and lose whole user turns.
 	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
 		t.Fatalf("PushFrame() after Flush() error = %v", err)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
-	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
-	if created != 2 {
-		t.Fatalf("ONNX estimator instances = %d, want 2 after flush reset", created)
+	if created != 1 {
+		t.Fatalf("ONNX estimator instances = %d, want 1 (estimator must survive a flush)", created)
 	}
 }
 

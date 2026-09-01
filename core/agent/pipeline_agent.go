@@ -528,7 +528,14 @@ func (va *PipelineAgent) onVADStall() {
 	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
 	if stream != nil {
-		if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+
+		var err error
+		if discarder, ok := stream.(vad.SegmentDiscarder); ok {
+			err = discarder.DiscardSegment()
+		} else {
+			err = stream.Flush()
+		}
+		if err != nil && !isSpeechStreamShutdownError(err) {
 			logger.Logger.Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
 			va.emitError(err, va.vad)
 		}
