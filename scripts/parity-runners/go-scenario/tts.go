@@ -398,9 +398,9 @@ func runTTSValueObjects(input json.RawMessage) (any, error) {
 			},
 		}, nil
 	case "text_custom_transform":
-		lowercase := lktts.TextTransform(func(_ context.Context, input lktts.TextStream) (lktts.TextStream, error) {
-			return lktts.NewTextStream(func() (string, error) {
-				chunk, err := input.Next()
+		lowercase := lktts.TextTransform(func(input lktts.TextStream) (lktts.TextStream, error) {
+			return lktts.NewTextStream(func(ctx context.Context) (string, error) {
+				chunk, err := input.Next(ctx)
 				return strings.ToLower(chunk), err
 			}, input.Close), nil
 		})
@@ -1494,7 +1494,7 @@ func hasJSONField(input json.RawMessage, name string) bool {
 
 func collectTTSTextPipeline(chunks []string, transforms []lktts.TextTransform) (string, error) {
 	index := 0
-	input := lktts.NewTextStream(func() (string, error) {
+	input := lktts.NewTextStream(func(context.Context) (string, error) {
 		if index == len(chunks) {
 			return "", io.EOF
 		}
@@ -1502,14 +1502,15 @@ func collectTTSTextPipeline(chunks []string, transforms []lktts.TextTransform) (
 		index++
 		return chunk, nil
 	}, nil)
-	stream, err := lktts.ApplyTextTransformPipeline(context.Background(), input, transforms)
+
+	stream, err := lktts.ApplyTextTransformPipeline(input, transforms)
 	if err != nil {
 		return "", err
 	}
 	defer stream.Close()
 	var joined strings.Builder
 	for {
-		chunk, err := stream.Next()
+		chunk, err := stream.Next(context.Background())
 		if err == io.EOF {
 			return joined.String(), nil
 		}

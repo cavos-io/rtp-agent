@@ -11,32 +11,41 @@ import (
 	"unicode/utf8"
 )
 
+// TextStream supplies transformed text chunks until exhaustion or cancellation.
 type TextStream interface {
-	Next() (string, error)
+	Next(ctx context.Context) (string, error)
 	Close() error
 }
 
-type TextTransform func(context.Context, TextStream) (TextStream, error)
+// TextTransform wraps a text stream with one stage of transformation.
+type TextTransform func(TextStream) (TextStream, error)
 
 type textStream struct {
-	next      func() (string, error)
+	next      func(context.Context) (string, error)
 	close     func() error
 	closeOnce sync.Once
 	closeErr  error
 }
 
-func NewTextStream(next func() (string, error), close func() error) TextStream {
+// NewTextStream creates a TextStream from pull and close functions.
+func NewTextStream(next func(context.Context) (string, error), closeFn func() error) TextStream {
 	if next == nil {
-		next = func() (string, error) { return "", io.EOF }
+		next = func(context.Context) (string, error) { return "", io.EOF }
 	}
-	if close == nil {
-		close = func() error { return nil }
+
+	if closeFn == nil {
+		closeFn = func() error { return nil }
 	}
-	return &textStream{next: next, close: close}
+
+	return &textStream{next: next, close: closeFn}
 }
 
-func (s *textStream) Next() (string, error) {
-	return s.next()
+func (s *textStream) Next(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	return s.next(ctx)
 }
 
 func (s *textStream) Close() error {
@@ -46,10 +55,8 @@ func (s *textStream) Close() error {
 	return s.closeErr
 }
 
-func ApplyTextTransformPipeline(ctx context.Context, input TextStream, transforms []TextTransform) (TextStream, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+// ApplyTextTransformPipeline applies transforms in slice order and owns every stage.
+func ApplyTextTransformPipeline(input TextStream, transforms []TextTransform) (TextStream, error) {
 	if input == nil {
 		return nil, fmt.Errorf("text transform input stream is nil")
 	}
@@ -61,7 +68,8 @@ func ApplyTextTransformPipeline(ctx context.Context, input TextStream, transform
 			_ = closeTextStreams(owned)
 			return nil, fmt.Errorf("text transform %d is nil", i)
 		}
-		next, err := transform(ctx, stream)
+
+		next, err := transform(stream)
 		if err != nil {
 			_ = closeTextStreams(owned)
 			return nil, err
@@ -129,9 +137,8 @@ type textTransformBuffer interface {
 }
 
 func bufferedTextTransform(newBuffer func() textTransformBuffer) TextTransform {
-	return func(ctx context.Context, input TextStream) (TextStream, error) {
+	return func(input TextStream) (TextStream, error) {
 		return &bufferedTextStream{
-			ctx:    ctx,
 			input:  input,
 			buffer: newBuffer(),
 		}, nil
@@ -139,7 +146,6 @@ func bufferedTextTransform(newBuffer func() textTransformBuffer) TextTransform {
 }
 
 type bufferedTextStream struct {
-	ctx       context.Context
 	input     TextStream
 	buffer    textTransformBuffer
 	pending   []string
@@ -148,8 +154,11 @@ type bufferedTextStream struct {
 	closeErr  error
 }
 
-func (s *bufferedTextStream) Next() (string, error) {
+func (s *bufferedTextStream) Next(ctx context.Context) (string, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if len(s.pending) > 0 {
 			chunk := s.pending[0]
 			s.pending = s.pending[1:]
@@ -161,11 +170,8 @@ func (s *bufferedTextStream) Next() (string, error) {
 		if s.inputDone {
 			return "", io.EOF
 		}
-		if err := s.ctx.Err(); err != nil {
-			return "", err
-		}
 
-		chunk, err := s.input.Next()
+		chunk, err := s.input.Next(ctx)
 		switch err {
 		case nil:
 			s.pending = s.buffer.Push(chunk)

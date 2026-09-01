@@ -39,7 +39,7 @@ func TestNewBasicAgentMatchesReferenceInstructionsAndTools(t *testing.T) {
 func applyBasicAgentTTSTextTransforms(t *testing.T, transforms []tts.TextTransform, text string) string {
 	t.Helper()
 	pushed := false
-	stream, err := tts.ApplyTextTransformPipeline(context.Background(), tts.NewTextStream(func() (string, error) {
+	stream, err := tts.ApplyTextTransformPipeline(tts.NewTextStream(func(context.Context) (string, error) {
 		if pushed {
 			return "", io.EOF
 		}
@@ -49,10 +49,14 @@ func applyBasicAgentTTSTextTransforms(t *testing.T, transforms []tts.TextTransfo
 	if err != nil {
 		t.Fatalf("ApplyTextTransformPipeline error = %v", err)
 	}
-	defer stream.Close()
+	t.Cleanup(func() {
+		if err := stream.Close(); err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	})
 	var transformed strings.Builder
 	for {
-		chunk, err := stream.Next()
+		chunk, err := stream.Next(context.Background())
 		if err == io.EOF {
 			return transformed.String()
 		}

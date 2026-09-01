@@ -604,7 +604,24 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		}
 		return inputStartedAt
 	}
-	input := newTTSInputTextStream(inferenceCtx, cancelInference, textCh, markInputStart)
+	input := tts.NewTextStream(func(ctx context.Context) (string, error) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case text, ok := <-textCh:
+			if !ok {
+				return "", io.EOF
+			}
+
+			markInputStart()
+
+			return text, nil
+		}
+	}, func() error {
+		cancelInference()
+
+		return nil
+	})
 	transforms := options.TextTransforms
 	if !options.textTransformsSet {
 		transforms = []tts.TextTransform{
@@ -612,7 +629,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			tts.FilterEmojiTransform(),
 		}
 	}
-	transformedInput, err := tts.ApplyTextTransformPipeline(inferenceCtx, input, transforms)
+
+	transformedInput, err := tts.ApplyTextTransformPipeline(input, transforms)
 	if err != nil {
 		cancelInference()
 		return nil, err
@@ -636,7 +654,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			var startTime time.Time
 			var startTimeSet bool
 			for {
-				chunk, inputErr := transformedInput.Next()
+				chunk, inputErr := transformedInput.Next(ctx)
 				if inputErr == io.EOF {
 					break
 				}
@@ -829,7 +847,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		go func() {
 			defer wg.Done()
 			for {
-				text, inputErr := transformedInput.Next()
+				text, inputErr := transformedInput.Next(streamCtx)
 				if inputErr == io.EOF {
 					break
 				}
@@ -903,26 +921,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	}()
 
 	return data, nil
-}
-
-func newTTSInputTextStream(ctx context.Context, cancel context.CancelFunc, textCh <-chan string, onText func()) tts.TextStream {
-	return tts.NewTextStream(func() (string, error) {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case text, ok := <-textCh:
-			if !ok {
-				return "", io.EOF
-			}
-			if onText != nil {
-				onText()
-			}
-			return text, nil
-		}
-	}, func() error {
-		cancel()
-		return nil
-	})
 }
 
 type ToolExecutionOutput struct {

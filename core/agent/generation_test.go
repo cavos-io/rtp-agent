@@ -991,9 +991,9 @@ func TestPerformTTSInferenceAppliesCustomTransformsInOrder(t *testing.T) {
 	textCh := make(chan string, 1)
 	textCh <- "Say **ACME** 😊"
 	close(textCh)
-	lowercase := tts.TextTransform(func(_ context.Context, input tts.TextStream) (tts.TextStream, error) {
-		return tts.NewTextStream(func() (string, error) {
-			chunk, err := input.Next()
+	lowercase := tts.TextTransform(func(input tts.TextStream) (tts.TextStream, error) {
+		return tts.NewTextStream(func(ctx context.Context) (string, error) {
+			chunk, err := input.Next(ctx)
 			return strings.ToLower(chunk), err
 		}, input.Close), nil
 	})
@@ -1013,6 +1013,9 @@ func TestPerformTTSInferenceAppliesCustomTransformsInOrder(t *testing.T) {
 		t.Fatalf("PerformTTSInference error = %v", err)
 	}
 	<-data.AudioCh
+	if data.StreamErr != nil {
+		t.Fatalf("StreamErr = %v", data.StreamErr)
+	}
 
 	var pushed strings.Builder
 	for _, call := range providerStream.calls[:len(providerStream.calls)-1] {
@@ -1026,7 +1029,7 @@ func TestPerformTTSInferenceAppliesCustomTransformsInOrder(t *testing.T) {
 func TestPerformTTSInferenceReturnsTransformSetupErrorBeforeOpeningProvider(t *testing.T) {
 	cause := errors.New("transform setup failed")
 	provider := &fakeGenerationTTS{stream: newEndInputGenerationTTSStream()}
-	transform := tts.TextTransform(func(context.Context, tts.TextStream) (tts.TextStream, error) {
+	transform := tts.TextTransform(func(tts.TextStream) (tts.TextStream, error) {
 		return nil, cause
 	})
 
