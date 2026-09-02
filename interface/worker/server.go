@@ -250,6 +250,19 @@ func (s *AgentServer) ID() string {
 	return s.workerID
 }
 
+func (s *AgentServer) Registered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn != nil && s.workerID != "" && s.workerID != "unregistered"
+}
+
+func (s *AgentServer) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running && s.conn != nil && s.workerID != "" && s.workerID != "unregistered" &&
+		!s.draining && !s.connectionFailed
+}
+
 func (s *AgentServer) WorkerInfo() WorkerInfo {
 	s.mu.Lock()
 	httpPort := s.httpPort
@@ -1409,11 +1422,7 @@ func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) (bool, error
 	s.mu.Unlock()
 	defer func() {
 		_ = conn.Close()
-		s.mu.Lock()
-		if s.conn == conn {
-			s.conn = nil
-		}
-		s.mu.Unlock()
+		s.clearWorkerConnection(conn)
 	}()
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
@@ -1431,6 +1440,16 @@ func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) (bool, error
 	s.startReloadIPCSessionFromEnv(ctx)
 
 	return true, s.runWorkerMessageLoop(ctx, conn.ReadMessage, conn.Close)
+}
+
+func (s *AgentServer) clearWorkerConnection(conn *websocket.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != conn {
+		return
+	}
+	s.conn = nil
+	s.workerID = "unregistered"
 }
 
 func (s *AgentServer) RunUnregistered(ctx context.Context) error {
