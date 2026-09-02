@@ -10,7 +10,7 @@ import (
 
 const (
 	PluginTitle   = "rtp-agent.plugins.pipecat"
-	PluginVersion = "v0.8.1"
+	PluginVersion = "v0.8.2"
 	PluginPackage = "rtp-agent.plugins.pipecat"
 
 	smartTurnCPUModelFileName = "smart-turn-v3.2-cpu.onnx"
