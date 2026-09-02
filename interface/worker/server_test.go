@@ -1366,6 +1366,70 @@ func TestAgentServerActiveJobsReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentServerRegistrationReadinessTracksLifecycle(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Registered() {
+		t.Fatal("new server Registered() = true, want false")
+	}
+	if server.Ready() {
+		t.Fatal("new server Ready() = true, want false")
+	}
+
+	server.mu.Lock()
+	server.running = true
+	server.conn = &websocket.Conn{}
+	server.workerID = "worker-a"
+	server.mu.Unlock()
+
+	if !server.Registered() {
+		t.Fatal("registered connection Registered() = false, want true")
+	}
+	if !server.Ready() {
+		t.Fatal("registered connection Ready() = false, want true")
+	}
+
+	server.mu.Lock()
+	server.draining = true
+	server.mu.Unlock()
+	if !server.Registered() {
+		t.Fatal("draining connection Registered() = false, want true")
+	}
+	if server.Ready() {
+		t.Fatal("draining connection Ready() = true, want false")
+	}
+
+	server.mu.Lock()
+	server.draining = false
+	server.connectionFailed = true
+	server.mu.Unlock()
+	if server.Ready() {
+		t.Fatal("failed connection Ready() = true, want false")
+	}
+}
+
+func TestAgentServerClearConnectionRemovesRegistration(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	conn := &websocket.Conn{}
+	server.mu.Lock()
+	server.running = true
+	server.conn = conn
+	server.workerID = "worker-a"
+	server.mu.Unlock()
+
+	server.clearWorkerConnection(conn)
+
+	if server.Registered() {
+		t.Fatal("disconnected server Registered() = true, want false")
+	}
+	if server.Ready() {
+		t.Fatal("disconnected server Ready() = true, want false")
+	}
+	if got := server.ID(); got != "unregistered" {
+		t.Fatalf("disconnected server ID() = %q, want unregistered", got)
+	}
+}
+
 func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerID = "worker-a"

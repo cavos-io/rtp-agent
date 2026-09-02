@@ -25,7 +25,8 @@ pre-push:
       run: scripts/go-test-ffmpeg.sh
 
     - name: staticcheck and deadcode
-      run: scripts/check-deadcode.sh {push_files}
+      files: git diff origin/main --name-only --diff-filter=ACMR -- '*.go'
+      run: scripts/check-deadcode.sh {files}
 
 ci:
   parallel: true
