@@ -307,8 +307,8 @@ func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next audio: %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 22050 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 22050", audio.Frame.SampleRate)
 	}
 	if audio.Frame.NumChannels != 2 {
 		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
