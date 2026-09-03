@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -56,8 +55,6 @@ func (e workerReferenceError) Error() string {
 }
 
 var localEntrypointCloseWait = 15 * time.Second
-
-var teardownStepTimeout = 30 * time.Second
 
 func defaultJobExecutorType() JobExecutorType {
 	if runtime.GOOS == "windows" {
@@ -204,8 +201,6 @@ type AgentServer struct {
 	startedHandlers        []WorkerStartedHandler
 	registeredInfoHandlers []WorkerRegisteredInfoHandler
 	registeredHandlers     []WorkerRegisteredHandler
-
-	stuckTeardownSteps atomic.Int64
 
 	consoleSession any // Store local session for CLI console
 	transportRun   func(context.Context) error
@@ -1838,7 +1833,7 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 		jobCtx.markTerminated()
 	}
 	if plan.Shutdown {
-		s.runTeardownStep("shutdown", jobID, func() { jobCtx.Shutdown("") })
+		jobCtx.Shutdown("")
 	}
 	if plan.WaitEntrypoint {
 		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
@@ -1987,42 +1982,6 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 	})
 }
 
-func (s *AgentServer) runTeardownStep(name string, jobID string, step func()) {
-	if step == nil {
-		return
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("teardown step panicked", fmt.Errorf("%v", recovered), "step", name, "jobId", jobID)
-			}
-		}()
-		step()
-	}()
-
-	timer := time.NewTimer(teardownStepTimeout)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		stuck := s.stuckTeardownSteps.Add(1)
-		go func() {
-			<-done
-			s.stuckTeardownSteps.Add(-1)
-		}()
-		logger.Logger.Warnw("teardown step timed out", nil, "step", name, "jobId", jobID, "stuckSteps", stuck)
-	}
-}
-
-func (s *AgentServer) StuckTeardownSteps() int64 {
-	if s == nil {
-		return 0
-	}
-	return s.stuckTeardownSteps.Load()
-}
-
 func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	if jobCtx == nil {
 		return false
@@ -2043,19 +2002,16 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
-	s.runTeardownStep("shutdown", plan.JobID, func() { jobCtx.Shutdown("") })
+	jobCtx.Shutdown("")
 	s.runSessionEnd(jobCtx)
-	s.runTeardownStep("upload_session_report", plan.JobID, func() { s.uploadJobSessionReport(jobCtx) })
-	s.runTeardownStep("finalize_observability", plan.JobID, func() {
-		if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
-			logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-		}
-	})
-	s.runTeardownStep("cleanup", plan.JobID, func() {
-		if err := jobCtx.onCleanUp(); err != nil {
-			logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-		}
-	})
+	s.uploadJobSessionReport(jobCtx)
+	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+	}
+	err := jobCtx.onCleanUp()
+	if err != nil {
+		logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+	}
 	return true
 }
 
