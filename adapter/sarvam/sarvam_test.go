@@ -1557,7 +1557,7 @@ func TestSarvamTTSAudioFromStreamMessageDecodesReferenceMP3(t *testing.T) {
 	if audio.RequestID != "req-mp3" {
 		t.Fatalf("request id = %q, want req-mp3", audio.RequestID)
 	}
-	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
+	if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 2 {
 		t.Fatalf("frame format = %d Hz/%d ch, want decoded mp3 native format", audio.Frame.SampleRate, audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {

@@ -3207,19 +3207,32 @@ func TestSpeechmaticsSTTStreamRetriesReferenceStartupWriteFailure(t *testing.T) 
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		if attempt == 1 {
-			if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
-				_ = tcpConn.SetLinger(0)
-			}
-			_ = conn.UnderlyingConn().Close()
-			return
-		}
 		defer conn.Close()
 		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Errorf("read start message: %v", err)
+			if attempt > 1 {
+				t.Errorf("read start message: %v", err)
+			}
 		}
 	}))
 	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	var dials atomic.Int32
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if dials.Add(1) == 1 {
+				return &speechmaticsFailAfterHandshakeWriteConn{Conn: conn}, nil
+			}
+			return conn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
 	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
 	stream, err := provider.Stream(context.Background(), "")

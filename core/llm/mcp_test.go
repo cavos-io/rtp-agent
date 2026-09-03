@@ -827,6 +827,10 @@ func TestMCPServerStdioSendRequestReportsClosedTransport(t *testing.T) {
 
 func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
 	tmpDir := t.TempDir()
+	canonicalTmpDir, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", tmpDir, err)
+	}
 	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")
 	script := `#!/bin/sh
 if [ "$MCP_TEST_TOKEN" != "expected-token" ]; then
@@ -848,10 +852,10 @@ done
 	}
 
 	server := NewMCPServerStdio("sh", []string{scriptPath})
-	server.Cwd = tmpDir
+	server.Cwd = canonicalTmpDir
 	server.Env = map[string]string{
 		"MCP_TEST_TOKEN": "expected-token",
-		"MCP_TEST_CWD":   tmpDir,
+		"MCP_TEST_CWD":   canonicalTmpDir,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

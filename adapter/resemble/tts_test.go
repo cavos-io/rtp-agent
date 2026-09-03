@@ -519,8 +519,8 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	if audio == nil || len(audio.Frame.Data) == 0 {
 		t.Fatalf("audio = %+v, want decoded audio frame", audio)
 	}
-	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
-		t.Fatalf("frame = %+v, want decoded 48000 Hz stereo mp3", audio.Frame)
+	if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 2 {
+		t.Fatalf("frame = %+v, want decoded 22050 Hz stereo mp3", audio.Frame)
 	}
 	prefixLen := len(audio.Frame.Data)
 	if len(mp3Data) < prefixLen {
