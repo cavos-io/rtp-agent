@@ -94,6 +94,30 @@ ln -s "$WORKDIR/shared-tmp" "$TEMP_ENV_REPO/.tmp"
   [[ "$TMPDIR" == "$TEMP_ENV_REPO/.tmp/gotmp" ]]
 )
 
+ISOLATED_TMP_ONE="$WORKDIR/isolated-tmp-one"
+ISOLATED_TMP_TWO="$WORKDIR/isolated-tmp-two"
+(
+  REPO_ROOT="$TEMP_ENV_REPO"
+  REPO_TEMP_ENV_FORCE=1
+  REPO_TEMP_ENV_ISOLATE=1
+  source "$ROOT/scripts/repo-temp-env.sh"
+  printf '%s\n' "$TMPDIR" > "$ISOLATED_TMP_ONE"
+  [[ "$TMPDIR" != "$TEMP_ENV_REPO"/* ]]
+)
+(
+  REPO_ROOT="$TEMP_ENV_REPO"
+  REPO_TEMP_ENV_FORCE=1
+  REPO_TEMP_ENV_ISOLATE=1
+  source "$ROOT/scripts/repo-temp-env.sh"
+  printf '%s\n' "$TMPDIR" > "$ISOLATED_TMP_TWO"
+  [[ "$TMPDIR" != "$TEMP_ENV_REPO"/* ]]
+)
+isolated_tmp_one=$(cat "$ISOLATED_TMP_ONE")
+isolated_tmp_two=$(cat "$ISOLATED_TMP_TWO")
+[[ "$isolated_tmp_one" != "$isolated_tmp_two" ]]
+[[ ! -e "$isolated_tmp_one" ]]
+[[ ! -e "$isolated_tmp_two" ]]
+
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'go-dev-mode'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
