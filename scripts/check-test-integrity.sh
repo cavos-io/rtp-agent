@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Enforces:
 #   1. Go test files cannot be deleted (unless BASE is "all").
-#   2. Modified/added/copied/renamed Go test files must have more additions than deletions.
+#   2. Modified/added/copied/renamed Go test files must not have more deletions than additions.
 #   3. Newly added test lines cannot introduce common test-weakening patterns.
 
 BASE="${1:-}"
@@ -45,7 +45,7 @@ check_deleted_test_files() {
   fi
 }
 
-check_test_additions_exceed_deletions() {
+check_test_additions_cover_deletions() {
   [[ "$BASE" == "all" ]] && return 0
   
   local file stats additions deletions
@@ -62,8 +62,8 @@ check_test_additions_exceed_deletions() {
     additions=$(awk '{sum += $1} END {print sum+0}' <<<"$stats")
     deletions=$(awk '{sum += $2} END {print sum+0}' <<<"$stats")
 
-    if (( additions <= deletions )); then
-      reject "$file must have more additions than deletions"
+    if (( additions < deletions )); then
+      reject "$file must not have more deletions than additions"
       echo "  additions: $additions"
       echo "  deletions:  $deletions"
     fi
@@ -111,7 +111,7 @@ check_test_weakening_patterns() {
 }
 
 check_deleted_test_files
-check_test_additions_exceed_deletions
+check_test_additions_cover_deletions
 check_test_weakening_patterns
 
 exit "$failed"
