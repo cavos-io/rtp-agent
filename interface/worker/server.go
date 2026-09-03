@@ -1596,7 +1596,9 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *ServerMessage) {
 		OnAssignment: func(req *JobAssignment) {
 			s.handleAssignment(ctx, req)
 		},
-		OnTermination: s.handleTermination,
+		OnTermination: func(req *JobTermination) {
+			go s.handleTermination(req)
+		},
 		OnUnknown: func() {
 			logger.Logger.Warnw("Unhandled message type received", nil)
 		},
@@ -1814,6 +1816,10 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 	termination := livekitJobTerminationInfo(req)
 	jobID := termination.JobID
 	logger.Logger.Infow("Received job termination", "jobId", jobID)
+	terminationStart := time.Now()
+	defer func() {
+		logger.Logger.Infow("job termination handled", "jobId", jobID, "duration", time.Since(terminationStart))
+	}()
 
 	s.mu.Lock()
 	jobCtx, exists := s.activeJobs[jobID]
