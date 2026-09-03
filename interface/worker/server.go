@@ -1834,7 +1834,7 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 		jobCtx.markTerminated()
 	}
 	if plan.Shutdown {
-		jobCtx.Shutdown("")
+		s.runTeardownStep("shutdown", jobID, func() { jobCtx.Shutdown("") })
 	}
 	if plan.WaitEntrypoint {
 		if !jobCtx.waitForEntrypointDone(localEntrypointCloseWait) {
@@ -2039,16 +2039,19 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	delete(s.activeJobs, plan.JobID)
 	s.mu.Unlock()
 
-	jobCtx.Shutdown("")
+	s.runTeardownStep("shutdown", plan.JobID, func() { jobCtx.Shutdown("") })
 	s.runSessionEnd(jobCtx)
-	s.uploadJobSessionReport(jobCtx)
-	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
-		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-	}
-	err := jobCtx.onCleanUp()
-	if err != nil {
-		logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-	}
+	s.runTeardownStep("upload_session_report", plan.JobID, func() { s.uploadJobSessionReport(jobCtx) })
+	s.runTeardownStep("finalize_observability", plan.JobID, func() {
+		if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+			logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+		}
+	})
+	s.runTeardownStep("cleanup", plan.JobID, func() {
+		if err := jobCtx.onCleanUp(); err != nil {
+			logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+		}
+	})
 	return true
 }
 
