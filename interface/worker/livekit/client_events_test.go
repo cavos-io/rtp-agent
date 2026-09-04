@@ -8,7 +8,7 @@ import (
 )
 
 func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
-	dispatcher := newClientEventsDispatcher(nil)
+	dispatcher := newClientEventsDispatcher(nil, nil)
 
 	dispatcher.DispatchAgentState(agent.AgentStateIdle)
 	dispatcher.DispatchAgentState(agent.AgentStateThinking)
@@ -21,7 +21,7 @@ func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
 }
 
 func TestClientEventsDispatcherNoopsWhenRoomDisconnected(t *testing.T) {
-	dispatcher := newClientEventsDispatcher(&lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}})
+	dispatcher := newClientEventsDispatcher(&lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}}, nil)
 
 	dispatcher.DispatchAgentState(agent.AgentStateThinking)
 	dispatcher.DispatchUserState(agent.UserStateSpeaking)

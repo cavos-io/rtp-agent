@@ -3,6 +3,7 @@ package livekit
 import (
 	"context"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
 	lkprotocol "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -85,7 +86,7 @@ func ConnectRoom(_ context.Context, opts RoomConnectOptions) (*lksdk.Room, error
 	if connector.Connect == nil {
 		connector.Connect = lksdk.ConnectToRoom
 	}
-	connectOptions := ConnectOptionsForAutoSubscribe(opts.AutoSubscribe)
+	connectOptions := ConnectOptionsForAutoSubscribe(opts.AutoSubscribe, opts.Job)
 	if opts.Token != "" {
 		return connector.ConnectWithToken(opts.URL, opts.Token, opts.Callback, connectOptions...)
 	}
@@ -152,7 +153,7 @@ func JoinPreparedRoom(ctx context.Context, opts PreparedRoomConnectOptions) erro
 			return room.JoinWithContext(ctx, url, info, options...)
 		}
 	}
-	connectOptions := ConnectOptionsForAutoSubscribe(opts.AutoSubscribe)
+	connectOptions := ConnectOptionsForAutoSubscribe(opts.AutoSubscribe, opts.Job)
 	if opts.Token != "" {
 		return connector.JoinWithToken(ctx, opts.Room, opts.URL, opts.Token, connectOptions...)
 	}
@@ -163,8 +164,27 @@ func JoinPreparedRoom(ctx context.Context, opts PreparedRoomConnectOptions) erro
 	return connector.Join(ctx, opts.Room, opts.URL, info, connectOptions...)
 }
 
-func ConnectOptionsForAutoSubscribe(mode string) []lksdk.ConnectOption {
-	return []lksdk.ConnectOption{
+func ConnectOptionsForAutoSubscribe(mode string, job *lkprotocol.Job) []lksdk.ConnectOption {
+	options := []lksdk.ConnectOption{
 		lksdk.WithAutoSubscribe(AutoSubscribeSDKEnabled(mode)),
 	}
+	if values := jobLogValues(job); len(values) > 0 {
+		options = append(options, lksdk.WithLogger(logger.Logger.WithValues(values...)))
+	}
+	return options
+}
+
+func jobLogValues(job *lkprotocol.Job) []any {
+	if job == nil {
+		return nil
+	}
+	fields := JobLogContextFields(job)
+	values := make([]any, 0, len(fields)*2)
+	for key, value := range fields {
+		if key == "" || value == nil {
+			continue
+		}
+		values = append(values, key, value)
+	}
+	return values
 }

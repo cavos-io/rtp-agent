@@ -508,7 +508,7 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 		return
 	}
 	rio.Room = room
-	rio.clientEvents = newClientEventsDispatcher(room)
+	rio.clientEvents = newClientEventsDispatcher(room, rio.AgentSession)
 	if !rio.Options.DisableAudioInput && !rio.Options.DisablePreConnectAudio && rio.preConnectAudio == nil {
 		rio.preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(rio.Options))
 		rio.preConnectAudio.Register()
@@ -888,7 +888,7 @@ func (rio *RoomIO) publishTranscriptionPacketWithSegment(participantIdentity str
 		TrackId:                        trackID,
 		Segments:                       []*livekit.TranscriptionSegment{segment},
 	}); err != nil {
-		logger.Logger.Warnw("failed to publish transcription packet", err)
+		logger.Logger.Warnw("failed to publish transcription packet", err, agent.SessionLogValues(rio.AgentSession)...)
 	}
 }
 

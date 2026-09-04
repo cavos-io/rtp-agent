@@ -70,13 +70,23 @@ func TestJobConnectInfoUsesJobRoomName(t *testing.T) {
 }
 
 func TestConnectOptionsForAutoSubscribeBuildsSDKOptions(t *testing.T) {
-	options := workerlivekit.ConnectOptionsForAutoSubscribe("audio_only")
+	options := workerlivekit.ConnectOptionsForAutoSubscribe("audio_only", nil)
 
 	if len(options) != 1 {
 		t.Fatalf("ConnectOptionsForAutoSubscribe() len = %d, want 1", len(options))
 	}
 	if options[0] == nil {
 		t.Fatal("ConnectOptionsForAutoSubscribe()[0] = nil, want SDK option")
+	}
+}
+
+func TestConnectOptionsForAutoSubscribeScopesSDKLoggerToJob(t *testing.T) {
+	job := &lkprotocol.Job{Id: "AJ_test", Room: &lkprotocol.Room{Name: "room-a"}}
+
+	options := workerlivekit.ConnectOptionsForAutoSubscribe("audio_only", job)
+
+	if len(options) != 2 {
+		t.Fatalf("ConnectOptionsForAutoSubscribe() len = %d, want 2 (auto-subscribe + job logger)", len(options))
 	}
 }
 
@@ -193,8 +203,8 @@ func TestConnectRoomUsesJobConnectInfoWithoutToken(t *testing.T) {
 				if info.ParticipantIdentity != "agent-a" {
 					t.Fatalf("ConnectInfo.ParticipantIdentity = %q, want agent-a", info.ParticipantIdentity)
 				}
-				if len(options) != 1 {
-					t.Fatalf("Connect options = %d, want 1", len(options))
+				if len(options) != 2 {
+					t.Fatalf("Connect options = %d, want 2 (auto-subscribe + job logger)", len(options))
 				}
 				return wantRoom, nil
 			},
@@ -247,8 +257,8 @@ func TestJoinPreparedRoomUsesExistingRoomWithJobConnectInfo(t *testing.T) {
 				if info.ParticipantIdentity != "agent-a" {
 					t.Fatalf("ConnectInfo.ParticipantIdentity = %q, want agent-a", info.ParticipantIdentity)
 				}
-				if len(options) != 1 {
-					t.Fatalf("join options = %d, want 1", len(options))
+				if len(options) != 2 {
+					t.Fatalf("join options = %d, want 2 (auto-subscribe + job logger)", len(options))
 				}
 				joined = true
 				return nil

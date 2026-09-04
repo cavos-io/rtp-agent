@@ -412,7 +412,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		}
 
 		if ev.Type == vad.VADEventStartOfSpeech {
-			logger.Logger.Infow("User started speaking")
+			logger.Logger.Infow("User started speaking", SessionLogValues(va.session)...)
 			va.mu.Lock()
 			va.vadSpeechStarted = true
 			va.resetVADStallTimerLocked()
@@ -425,7 +425,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 			va.resetGenerationCtxUnlessPaused()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
-			logger.Logger.Infow("User stopped speaking")
+			logger.Logger.Infow("User stopped speaking", SessionLogValues(va.session)...)
 			va.mu.Lock()
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
@@ -939,7 +939,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		ctx = replyCtx
 	}
 
-	logger.Logger.Infow("Generating reply")
+	logger.Logger.Infow("Generating reply", SessionLogValues(session)...)
 	session.UpdateAgentState(AgentStateThinking)
 
 	registeredTools, err := sessionRegisteredTools(ctx, session)
@@ -979,7 +979,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		}
 	}
 	appendToolOutput := func(toolOut ToolExecutionOutput, functionCalls *[]*llm.FunctionCall, functionCallOutputs *[]*llm.FunctionCallOutput) bool {
-		logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+		logger.Logger.Infow("Tool executed", SessionLogValues(session, "name", toolOut.FncCall.Name)...)
 		fncCall := toolOut.FncCall
 		*functionCalls = append(*functionCalls, &fncCall)
 		*functionCallOutputs = append(*functionCallOutputs, toolOut.FncCallOut)
@@ -1927,11 +1927,14 @@ func (va *PipelineAgent) logProviderError(message string, err error, source any,
 	logger.Logger.Errorw(
 		message,
 		err,
-		"error", err.Error(),
-		"error_type", fmt.Sprintf("%T", err),
-		"source", fmt.Sprintf("%T", source),
-		"provider", provider,
-		"stage", stage,
+		SessionLogValues(
+			va.session,
+			"error", err.Error(),
+			"error_type", fmt.Sprintf("%T", err),
+			"source", fmt.Sprintf("%T", source),
+			"provider", provider,
+			"stage", stage,
+		)...,
 	)
 }
 

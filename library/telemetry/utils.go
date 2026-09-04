@@ -4,8 +4,12 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
-func LogMetrics(metrics AgentMetrics) {
+func LogMetrics(metrics AgentMetrics, extra ...any) {
 	var metadata map[string]interface{}
+
+	emit := func(message string, values ...any) {
+		logger.Logger.Infow(message, append(values, extra...)...)
+	}
 
 	switch m := metrics.(type) {
 	case *LLMMetrics:
@@ -15,7 +19,7 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		logger.Logger.Infow("LLM metrics",
+		emit("LLM metrics",
 			"type", m.GetType(),
 			"ttft", m.TTFT,
 			"prompt_tokens", m.PromptTokens,
@@ -42,7 +46,7 @@ func LogMetrics(metrics AgentMetrics) {
 			inputCachedAudioTokens = m.InputTokenDetails.CachedTokensDetails.AudioTokens
 		}
 
-		logger.Logger.Infow("RealtimeModel metrics",
+		emit("RealtimeModel metrics",
 			"type", m.GetType(),
 			"ttft", m.TTFT,
 			"input_tokens", m.InputTokens,
@@ -71,7 +75,7 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		logger.Logger.Infow("TTS metrics",
+		emit("TTS metrics",
 			"type", m.GetType(),
 			"ttfb", m.TTFB,
 			"audio_duration", m.AudioDuration,
@@ -84,7 +88,7 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		logger.Logger.Infow("EOU metrics",
+		emit("EOU metrics",
 			"type", m.GetType(),
 			"end_of_utterance_delay", m.EndOfUtteranceDelay,
 			"transcription_delay", m.TranscriptionDelay,
@@ -97,7 +101,7 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		logger.Logger.Infow("STT metrics",
+		emit("STT metrics",
 			"type", m.GetType(),
 			"audio_duration", m.AudioDuration,
 			"metadata", metadata,
@@ -109,7 +113,7 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		logger.Logger.Infow("Interruption metrics",
+		emit("Interruption metrics",
 			"type", m.GetType(),
 			"total_duration", m.TotalDuration,
 			"prediction_duration", m.PredictionDuration,
@@ -130,7 +134,7 @@ func LogMetrics(metrics AgentMetrics) {
 		if m.SessionStartedTime != nil && m.AvatarJoinedTime != nil {
 			avatarJoinLatency = m.AvatarJoinedTime.Sub(*m.SessionStartedTime).Seconds()
 		}
-		logger.Logger.Infow("Avatar metrics",
+		emit("Avatar metrics",
 			"type", m.GetType(),
 			"avatar_join_latency", avatarJoinLatency,
 			"playback_latency", m.PlaybackLatency,
