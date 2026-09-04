@@ -3,16 +3,24 @@ package main
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestMainGoFileRunsStandalone(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "warm-transfer")
+	build := exec.Command("go", "build", "-o", binary, "main.go")
+	build.Dir = "."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build main.go error = %v\n%s", err, out)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "go", "run", "main.go", "--help")
+	cmd := exec.CommandContext(ctx, binary, "--help")
 	cmd.Dir = "."
 	cmd.Env = append(cmd.Environ(),
 		"LIVEKIT_API_KEY=test-key",
@@ -22,9 +30,9 @@ func TestMainGoFileRunsStandalone(t *testing.T) {
 	)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("go run main.go --help timed out\n%s", out)
+		t.Fatalf("built main.go --help timed out\n%s", out)
 	}
 	if err != nil && !strings.Contains(string(out), "Usage: worker [subcommand]") {
-		t.Fatalf("go run main.go --help error = %v\n%s", err, out)
+		t.Fatalf("built main.go --help error = %v\n%s", err, out)
 	}
 }

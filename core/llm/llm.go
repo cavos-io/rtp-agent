@@ -2104,13 +2104,17 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 
 		s.rememberActiveMetadata()
 		s.closeActive()
-		s.markUnavailable(s.activeIndex, true)
+		failedIndex := s.activeIndex
+		s.markUnavailable(failedIndex, false)
 		if s.activeIndex+1 >= len(s.adapter.llms) {
+			s.tryRecovery(failedIndex)
 			return nil, s.allFailedError(err)
 		}
 		if startErr := s.tryStart(s.activeIndex + 1); startErr != nil {
+			s.tryRecovery(failedIndex)
 			return nil, startErr
 		}
+		s.tryRecovery(failedIndex)
 	}
 }
 

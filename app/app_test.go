@@ -9333,6 +9333,7 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		query         map[string][]string
 	}
 	records := make(chan wsRecord, 1)
+	frameReceived := make(chan error, 1)
 	upgrader := websocket.Upgrader{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -9346,6 +9347,8 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 			authorization: r.Header.Get("Authorization"),
 			query:         map[string][]string(r.URL.Query()),
 		}
+		_, _, err = conn.ReadMessage()
+		frameReceived <- err
 	})
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -9424,6 +9427,14 @@ func TestDeepgramSTTFallbackPassesReferenceOptions(t *testing.T) {
 		SamplesPerChannel: 1600,
 	}); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case err := <-frameReceived:
+		if err != nil {
+			t.Fatalf("read audio frame: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Deepgram STT audio frame")
 	}
 
 	select {

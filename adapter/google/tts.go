@@ -725,6 +725,7 @@ type googleTTSSynthesizeStream struct {
 	custom      *texttospeechpb.CustomPronunciations
 	markup      bool
 	buffer      strings.Builder
+	closing     atomic.Bool
 	closed      bool
 	ignoreInput bool
 	inputEnded  bool
@@ -980,6 +981,7 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 
 func (s *googleTTSSynthesizeStream) Close() error {
 	s.closeOnce.Do(func() {
+		s.closing.Store(true)
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -1000,6 +1002,9 @@ func (s *googleTTSSynthesizeStream) Close() error {
 }
 
 func (s *googleTTSSynthesizeStream) isClosed() bool {
+	if s.closing.Load() {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed

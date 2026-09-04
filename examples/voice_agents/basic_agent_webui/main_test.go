@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,17 +155,24 @@ func TestIndexServesLiveKitBrowserClientAndControls(t *testing.T) {
 }
 
 func TestMainGoFileShowsHelpStandalone(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "basic-agent-webui")
+	build := exec.Command("go", "build", "-o", binary, "main.go")
+	build.Dir = "."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build main.go error = %v\n%s", err, out)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "go", "run", "main.go", "--help")
+	cmd := exec.CommandContext(ctx, binary, "--help")
 	cmd.Dir = "."
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("go run main.go --help timed out\n%s", out)
+		t.Fatalf("built main.go --help timed out\n%s", out)
 	}
 	if err != nil {
-		t.Fatalf("go run main.go --help error = %v\n%s", err, out)
+		t.Fatalf("built main.go --help error = %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "Usage: basic_agent_webui") {
 		t.Fatalf("help output = %q, want webui usage", string(out))
