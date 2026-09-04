@@ -9,3 +9,9 @@ awk '
   in_pre_commit && /run: REPO_TEMP_ENV_ISOLATE=1 scripts\/go-test-targeted\.sh \{staged_files\}/ { found = 1 }
   END { exit !found }
 ' "$ROOT/lefthook.yaml"
+
+awk '
+  /^ci:/ { in_ci = 1 }
+  in_ci && /- name: targeted tests/ { found = 1 }
+  END { exit found }
+' "$ROOT/lefthook.yaml"
