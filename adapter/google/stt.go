@@ -2426,6 +2426,7 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame != nil && frame.SampleRate != 0 {
 		if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+			s.mu.Unlock()
 			return errors.New("the sample rate of the input frames must be consistent")
 		}
 		s.pushedSampleRate = frame.SampleRate

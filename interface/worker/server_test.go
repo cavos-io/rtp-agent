@@ -3045,7 +3045,9 @@ func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
 }
 
 func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
-	server := NewAgentServer(WorkerOptions{})
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 { return 0 },
+	})
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
@@ -3145,7 +3147,9 @@ func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
 		assignmentTimeout = oldTimeout
 	})
 
-	server := NewAgentServer(WorkerOptions{})
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 { return 0 },
+	})
 	sentCh := make(chan *livekit.WorkerMessage, 1)
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
 		sentCh <- msg
