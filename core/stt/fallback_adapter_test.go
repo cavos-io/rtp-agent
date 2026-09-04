@@ -1414,6 +1414,31 @@ func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamNextDrainsBufferedEventBeforeEOF(t *testing.T) {
+	for range 100 {
+		event := &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "final"}},
+		}
+		closeCh := make(chan struct{})
+		stream := &fallbackRecognizeStream{
+			eventCh: make(chan *SpeechEvent, 1),
+			errCh:   make(chan error, 1),
+			closeCh: closeCh,
+		}
+		stream.eventCh <- event
+		close(closeCh)
+
+		got, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error with buffered event: %v", err)
+		}
+		if got != event {
+			t.Fatalf("Next event = %p, want %p", got, event)
+		}
+	}
+}
+
 func TestFallbackStreamRecoversSkippedUnavailableProvider(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{
