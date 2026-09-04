@@ -505,6 +505,23 @@ func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSClosedStreamNextReturnsStreamError(t *testing.T) {
+	streamErr := errors.New("terminal stream error")
+	stream := &inferenceTTSStream{
+		eventCh:   make(chan *coretts.SynthesizedAudio),
+		closed:    true,
+		streamErr: streamErr,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, streamErr) {
+		t.Fatalf("Next() error = %v, want %v", err, streamErr)
+	}
+}
+
 func TestInferenceTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	conn := &recordingTTSConn{}
 	ctx, cancel := context.WithCancel(context.Background())
