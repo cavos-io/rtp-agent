@@ -2738,6 +2738,7 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for reconnected stream")
 	}
+	waitForGoogleV1Stream(t, stream, secondStream)
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after negative min confidence update")
 	}
@@ -2753,6 +2754,9 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Text; got != "noise" {
 		t.Fatalf("transcript = %q, want noise", got)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after transcript error = %v, want EOF", err)
 	}
 }
 

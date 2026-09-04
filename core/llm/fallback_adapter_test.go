@@ -468,15 +468,24 @@ func TestFallbackAdapterRetriesAfterUsageOnlyChunk(t *testing.T) {
 
 func TestFallbackAdapterDoesNotRetrySameLLMBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
+	type attempt struct {
+		provider string
+		options  ChatOptions
+	}
+	attempts := make(chan attempt, 3)
 	primary := &fakeFallbackLLM{streams: []LLMStream{
 		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
 		&fakeFallbackStream{events: []fakeFallbackEvent{
 			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovered"}}},
 		}},
+	}, onChatOptions: func(_ context.Context, options ChatOptions) {
+		attempts <- attempt{provider: "primary", options: options}
 	}}
 	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
-	}}}
+	}}, onChatOptions: func(_ context.Context, options ChatOptions) {
+		attempts <- attempt{provider: "fallback", options: options}
+	}}
 	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
 		MaxRetryPerLLM: 1,
 		RetryInterval:  time.Nanosecond,
@@ -494,16 +503,11 @@ func TestFallbackAdapterDoesNotRetrySameLLMBeforeFallback(t *testing.T) {
 	if got := chunk.Delta.Content; got != "fallback" {
 		t.Fatalf("chunk content = %q, want fallback", got)
 	}
-	if primary.calls != 1 {
-		t.Fatalf("primary calls = %d, want 1", primary.calls)
+	first, second := <-attempts, <-attempts
+	if first.provider != "primary" || second.provider != "fallback" {
+		t.Fatalf("first attempts = %q, %q; want primary, fallback", first.provider, second.provider)
 	}
-	if fallback.calls != 1 {
-		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
-	}
-	if len(primary.options) != 1 {
-		t.Fatalf("primary options = %d, want 1", len(primary.options))
-	}
-	connectOptions := primary.options[0].ConnectOptions
+	connectOptions := first.options.ConnectOptions
 	if connectOptions == nil {
 		t.Fatal("primary ConnectOptions = nil, want fallback attempt options")
 	}
@@ -1440,14 +1444,15 @@ type fakeFallbackLLM struct {
 	MetricsEmitter
 	ErrorEmitter
 
-	streams []LLMStream
-	stream  LLMStream
-	errs    []error
-	err     error
-	label   string
-	calls   int
-	onChat  func(context.Context)
-	options []ChatOptions
+	streams       []LLMStream
+	stream        LLMStream
+	errs          []error
+	err           error
+	label         string
+	calls         int
+	onChat        func(context.Context)
+	onChatOptions func(context.Context, ChatOptions)
+	options       []ChatOptions
 
 	prewarmCalls int
 }
@@ -1461,6 +1466,9 @@ func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...Chat
 	f.options = append(f.options, options)
 	if f.onChat != nil {
 		f.onChat(ctx)
+	}
+	if f.onChatOptions != nil {
+		f.onChatOptions(ctx, options)
 	}
 	if len(f.errs) > 0 {
 		err := f.errs[0]
