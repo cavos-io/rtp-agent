@@ -941,7 +941,7 @@ func TestElevenLabsTTSStreamNextReturnsAPIConnectionErrorOnDialFailure(t *testin
 }
 
 func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -992,7 +992,7 @@ func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
 }
 
 func TestElevenLabsTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -1057,7 +1057,7 @@ func TestElevenLabsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyMP3Audio(t
 }
 
 func TestElevenLabsTTSChunkedMP3StreamsBeforeProviderEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -4078,7 +4078,7 @@ func TestElevenLabsTTSWebsocketMP3FinalAlignmentWithoutAudioEmitsFinalMarker(t *
 }
 
 func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -4208,7 +4208,7 @@ func TestElevenLabsTTSWebsocketOpusDecodesSplitProviderAudio(t *testing.T) {
 }
 
 func TestElevenLabsTTSWebsocketMP3CarriesReferenceAlignmentMetadata(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -4327,7 +4327,7 @@ func TestElevenLabsTTSWebsocketCompressedFinalMarkerCarriesBufferedAlignment(t *
 }
 
 func TestElevenLabsTTSWebsocketMP3BuffersAlignmentUntilAudioLikeReference(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -5637,7 +5637,7 @@ func TestElevenLabsTTSPreferredAlignmentOverrideMatchesReference(t *testing.T) {
 }
 
 func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

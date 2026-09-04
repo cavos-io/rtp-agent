@@ -3219,7 +3219,7 @@ func (c *upliftAITestSocketIOConn) Close() error {
 }
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -3254,7 +3254,7 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 }
 
 func TestUpliftAITTSChunkedStreamStreamsReferenceMP3BeforeEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -3296,7 +3296,7 @@ func TestUpliftAITTSChunkedStreamStreamsReferenceMP3BeforeEOF(t *testing.T) {
 }
 
 func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -3334,7 +3334,7 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 }
 
 func TestUpliftAITTSChunkedStreamMP3KeepsAudioReturnedWithReadError(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
