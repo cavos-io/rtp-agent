@@ -6,7 +6,7 @@ pre-commit:
       run: scripts/check-test-integrity.sh --cached {files}
 
     - name: targeted tests
-      run: scripts/go-test-targeted.sh {staged_files}
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/go-test-targeted.sh {staged_files}
 
     - name: architecture
       glob: "**/*.go"

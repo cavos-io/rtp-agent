@@ -803,7 +803,7 @@ func TestTelnyxTTSAudioFromMessageIgnoresReferenceEmptyBase64Noise(t *testing.T)
 }
 
 func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -845,7 +845,7 @@ func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 }
 
 func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

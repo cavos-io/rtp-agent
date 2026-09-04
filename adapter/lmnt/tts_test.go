@@ -279,7 +279,7 @@ func TestLMNTTTSDefaultsLanguageToEnglishForNonBlizzard(t *testing.T) {
 }
 
 func TestLMNTTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestLMNTTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 }
 
 func TestLMNTTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

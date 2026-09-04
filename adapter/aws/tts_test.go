@@ -238,7 +238,7 @@ func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 }
 
 func TestAWSTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read reference mp3: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestAWSTTSLazySynthesizeSnapshotsReferenceOptions(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamUsesReferenceSnapshotSampleRate(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestAWSTTSChunkedStreamUsesReferenceSnapshotSampleRate(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamUsesReferenceZeroSnapshotSampleRate(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestAWSTTSChunkedStreamUsesReferenceZeroSnapshotSampleRate(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamCarriesReferenceRequestID(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestAWSTTSChunkedStreamCarriesReferenceRequestID(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamYieldsAudioBeforeResponseEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestAWSTTSChunkedStreamYieldsAudioBeforeResponseEOF(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -688,7 +688,7 @@ func TestAWSTTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 }
 
 func TestAWSTTSChunkedStreamReadFailureAfterAudioIsReferenceNonRetryable(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

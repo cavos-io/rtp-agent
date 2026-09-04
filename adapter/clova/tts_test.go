@@ -142,7 +142,7 @@ func TestClovaTTSStreamReportsUnsupportedNativeStreaming(t *testing.T) {
 }
 
 func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
 }
 
 func TestClovaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
