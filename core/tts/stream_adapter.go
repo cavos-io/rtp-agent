@@ -191,11 +191,11 @@ func (w *streamAdapterWrapper) run() {
 					return
 				}
 				if input.flush {
-					tokenizer.Flush()
 					select {
 					case w.flushCh <- struct{}{}:
 					default:
 					}
+					tokenizer.Flush()
 					continue
 				}
 				tokenizer.PushText(input.text)

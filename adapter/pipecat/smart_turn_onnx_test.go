@@ -134,7 +134,11 @@ func TestNewLocalSmartTurnUsesDownloadedCPUModelPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLocalSmartTurn error = %v", err)
 	}
-	wantPath := filepath.Join(dir, "resources", "models", smartTurnCPUModelFileName)
+	canonicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", dir, err)
+	}
+	wantPath := filepath.Join(canonicalDir, "resources", "models", smartTurnCPUModelFileName)
 	if gotOptions.ModelPath != wantPath {
 		t.Fatalf("ModelPath = %q, want %q", gotOptions.ModelPath, wantPath)
 	}

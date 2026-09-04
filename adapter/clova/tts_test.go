@@ -142,7 +142,7 @@ func TestClovaTTSStreamReportsUnsupportedNativeStreaming(t *testing.T) {
 }
 
 func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -162,13 +162,13 @@ func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
 	if bytes.HasPrefix(audio.Frame.Data, []byte("ID3")) || bytes.HasPrefix(audio.Frame.Data, []byte{0xff, 0xfb}) {
 		t.Fatalf("frame data starts with MP3 container bytes, want decoded PCM")
 	}
-	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 || audio.Frame.SamplesPerChannel == 0 {
+	if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 2 || audio.Frame.SamplesPerChannel == 0 {
 		t.Fatalf("frame shape = rate %d channels %d samples %d, want decoded PCM frame", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
 	}
 }
 
 func TestClovaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

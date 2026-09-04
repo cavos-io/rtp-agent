@@ -1088,6 +1088,11 @@ func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.closeCh:
+		select {
+		case ev := <-s.eventCh:
+			return ev, nil
+		default:
+		}
 		s.mu.Lock()
 		err := s.terminalErr
 		s.mu.Unlock()

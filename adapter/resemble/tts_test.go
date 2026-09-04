@@ -501,7 +501,7 @@ func TestResembleTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T
 }
 
 func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -519,8 +519,8 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	if audio == nil || len(audio.Frame.Data) == 0 {
 		t.Fatalf("audio = %+v, want decoded audio frame", audio)
 	}
-	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
-		t.Fatalf("frame = %+v, want decoded 48000 Hz stereo mp3", audio.Frame)
+	if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 2 {
+		t.Fatalf("frame = %+v, want decoded 22050 Hz stereo mp3", audio.Frame)
 	}
 	prefixLen := len(audio.Frame.Data)
 	if len(mp3Data) < prefixLen {

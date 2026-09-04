@@ -526,7 +526,11 @@ func TestProcessJobExecutorCloseWaitsForShutdownExitBeforeKill(t *testing.T) {
 func TestProcessJobExecutorCloseExtendsExitWaitAfterShutdownAck(t *testing.T) {
 	oldKill := processKill
 	oldGraceTimeout := processShutdownGraceTimeout
-	processShutdownGraceTimeout = 20 * time.Millisecond
+	const (
+		graceTimeout = 500 * time.Millisecond
+		ackDelay     = 200 * time.Millisecond
+	)
+	processShutdownGraceTimeout = graceTimeout
 	defer func() {
 		processKill = oldKill
 		processShutdownGraceTimeout = oldGraceTimeout
@@ -579,11 +583,11 @@ func TestProcessJobExecutorCloseExtendsExitWaitAfterShutdownAck(t *testing.T) {
 		t.Fatal("Close() did not send ShutdownRequest")
 	}
 
-	time.Sleep(15 * time.Millisecond)
+	time.Sleep(ackDelay)
 	executor.HandleShutdownRequestAck(ShutdownRequestAck{})
 	executor.HandleShuttingDown(ShuttingDown{})
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(graceTimeout - ackDelay + 50*time.Millisecond)
 	select {
 	case <-killCalled:
 		t.Fatal("Close() killed process at original grace deadline after shutdown ack")

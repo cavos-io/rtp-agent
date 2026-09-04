@@ -1272,7 +1272,7 @@ func TestOpenAITTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 }
 
 func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -1964,7 +1964,7 @@ func assertOpenAITTSProviderUsageOnly(t *testing.T, metrics *telemetry.TTSMetric
 }
 
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2108,7 +2108,7 @@ func TestOpenAITTSChunkedStreamStreamsWAVDataAfterHeader(t *testing.T) {
 }
 
 func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2145,7 +2145,7 @@ func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
 }
 
 func TestOpenAITTSAudioMP3DrainsAndFinalizesAfterEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2184,7 +2184,7 @@ func TestOpenAITTSAudioMP3DrainsAndFinalizesAfterEOF(t *testing.T) {
 }
 
 func TestOpenAITTSSSEMP3StreamsBeforeDoneEvent(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2222,7 +2222,7 @@ func TestOpenAITTSSSEMP3StreamsBeforeDoneEvent(t *testing.T) {
 }
 
 func TestOpenAITTSSSEMP3DrainsAudioBeforeReadFailure(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2262,7 +2262,7 @@ func TestOpenAITTSSSEMP3DrainsAudioBeforeReadFailure(t *testing.T) {
 }
 
 func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -2303,7 +2303,7 @@ func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
 }
 
 func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterCleanEOF(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}

@@ -6,7 +6,7 @@ pre-commit:
       run: scripts/check-test-integrity.sh --cached {files}
 
     - name: targeted tests
-      run: scripts/go-test-targeted.sh {staged_files}
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/go-test-targeted.sh {staged_files}
 
     - name: architecture
       glob: "**/*.go"
@@ -38,19 +38,15 @@ ci:
     - name: architecture
       run: go tool go-file-arch -config .architecture.yaml ./...
 
-    - name: targeted tests
-      files: git diff origin/main --name-only --diff-filter=ACMR -- '*.go'
-      run: scripts/go-test-targeted.sh {files}
-
     - name: staticcheck and deadcode
       files: git diff origin/main --name-only --diff-filter=ACMR -- '*.go'
-      run: scripts/check-deadcode.sh {files}
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/check-deadcode.sh {files}
 
     - name: full build
-      run: scripts/go-build-all.sh
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/go-build-all.sh
 
     - name: full tests
-      run: scripts/go-test-all.sh
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/go-test-all.sh
 
     - name: ffmpeg tests
-      run: scripts/go-test-ffmpeg.sh
+      run: REPO_TEMP_ENV_ISOLATE=1 scripts/go-test-ffmpeg.sh

@@ -362,7 +362,7 @@ func TestHumeTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
 }
 
 func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
@@ -389,8 +389,8 @@ func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 22050 {
+		t.Fatalf("sample rate = %d, want decoded mp3 rate 22050", audio.Frame.SampleRate)
 	}
 	if audio.Frame.NumChannels != 2 {
 		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
@@ -439,7 +439,7 @@ func TestHumeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 }
 
 func TestHumeTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
-	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "audio", "long.mp3"))
 	if err != nil {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
