@@ -1210,8 +1210,8 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer close(recvBlock)
 	defer stream.Close()
+	defer close(recvBlock)
 	if len(streamClient.sent) != 1 {
 		t.Fatalf("initial sends = %d, want 1", len(streamClient.sent))
 	}
@@ -1866,8 +1866,8 @@ func TestGoogleSTTStreamPushFrameClonesReferenceAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer close(recvBlock)
 	defer stream.Close()
+	defer close(recvBlock)
 	audio := []byte{1, 2, 3, 4}
 	if err := stream.PushFrame(&model.AudioFrame{Data: audio, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}); err != nil {
 		t.Fatalf("PushFrame returned error: %v", err)
@@ -1883,7 +1883,8 @@ func TestGoogleSTTStreamPushFrameClonesReferenceAudio(t *testing.T) {
 }
 
 func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "en-US")
@@ -1891,6 +1892,7 @@ func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	defer stream.Close()
+	defer close(recvBlock)
 
 	frame := &model.AudioFrame{
 		Data:              []byte{1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0},
@@ -1911,7 +1913,8 @@ func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 }
 
 func TestGoogleSTTStreamDownmixesStereoInputLikeReference(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "en-US")
@@ -1919,6 +1922,7 @@ func TestGoogleSTTStreamDownmixesStereoInputLikeReference(t *testing.T) {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	defer stream.Close()
+	defer close(recvBlock)
 
 	frame := &model.AudioFrame{
 		Data:              []byte{232, 3, 184, 11, 208, 7, 160, 15},
@@ -1947,8 +1951,8 @@ func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer close(recvBlock)
 	defer stream.Close()
+	defer close(recvBlock)
 
 	frame := &model.AudioFrame{
 		Data:              []byte{7, 0},
@@ -1982,8 +1986,8 @@ func TestGoogleSTTStreamFlushSendsEndpointingSilence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer close(recvBlock)
 	defer stream.Close()
+	defer close(recvBlock)
 
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
@@ -2026,8 +2030,8 @@ func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testin
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer close(recvBlock)
 	defer stream.Close()
+	defer close(recvBlock)
 
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              []byte{7, 0},
@@ -4402,13 +4406,16 @@ func TestGoogleSTTStreamPushFrameReturnsAPIStatusErrorForAudioSendFailure(t *tes
 }
 
 func TestGoogleSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "en-US")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer stream.Close()
+	defer close(recvBlock)
 
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
 		t.Fatalf("first PushFrame error = %v", err)
