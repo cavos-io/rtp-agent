@@ -663,7 +663,10 @@ func (c *JobContext) roomNeedsConnect() bool {
 func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
 	opts := livekitJobContextNormalizeConnectOptions(options...)
 	c.AddRoomCallback(cb)
-	return jobContextNewRoom(c.roomCallbackWithEntrypoints(c.RoomCallbacks().Callback(), opts.AutoSubscribe))
+	room := jobContextNewRoom(c.roomCallbackWithEntrypoints(c.RoomCallbacks().Callback(), opts.AutoSubscribe))
+	room.SetLogger(logger.Logger.WithValues(jobLogValues(c)...))
+
+	return room
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...ConnectOptions) error {
