@@ -6,18 +6,28 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 // clientEventsDispatcher manages sending agent states to the LiveKit Room DataChannel.
 type clientEventsDispatcher struct {
 	room *lksdk.Room
+	log  protoLogger.Logger
 	mu   sync.Mutex
 }
 
 func newClientEventsDispatcher(room *lksdk.Room) *clientEventsDispatcher {
+	return newClientEventsDispatcherWithLogger(room, logger.Logger)
+}
+
+func newClientEventsDispatcherWithLogger(room *lksdk.Room, log protoLogger.Logger) *clientEventsDispatcher {
+	if log == nil {
+		log = logger.Logger
+	}
 	return &clientEventsDispatcher{
 		room: room,
+		log:  log,
 	}
 }
 
@@ -36,13 +46,13 @@ func (d *clientEventsDispatcher) dispatchData(payload clientEventPayload) {
 
 	b, err := json.Marshal(payload)
 	if err != nil {
-		logger.Logger.Errorw("Failed to marshal client event", err)
+		d.log.Errorw("Failed to marshal client event", err)
 		return
 	}
 
 	err = d.room.LocalParticipant.PublishDataPacket(lksdk.UserData(b), lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic("lk-agent-state"))
 	if err != nil {
-		logger.Logger.Errorw("Failed to publish client event data", err)
+		d.log.Errorw("Failed to publish client event data", err)
 	}
 }
 

@@ -112,6 +112,8 @@ type Job = workerlivekit.Job
 
 type SDKRoom = workerlivekit.SDKRoom
 
+type ProtoLogger = workerlivekit.ProtoLogger
+
 type Room = workerlivekit.Room
 
 type LocalParticipant = workerlivekit.LocalParticipant

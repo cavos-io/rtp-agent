@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	protoLogger "github.com/livekit/protocol/logger"
 )
 
 type RecorderIO struct {
@@ -57,6 +58,14 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 		done:    make(chan struct{}),
 		now:     time.Now,
 	}
+}
+
+func (r *RecorderIO) logger() protoLogger.Logger {
+	if r == nil || r.Session == nil {
+		return logger.Logger
+	}
+
+	return r.Session.Logger()
 }
 
 func (r *RecorderIO) Recording() bool {
@@ -276,7 +285,7 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 		case <-done:
 			r.flush(sampleRate, r.now())
 			if err := r.writer.Close(); err != nil {
-				logger.Logger.Errorw("Failed to close recording writer", err)
+				r.logger().Errorw("Failed to close recording writer", err)
 				r.setRecordingError(fmt.Errorf("close recording writer: %w", err))
 			}
 			return
@@ -309,9 +318,10 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	}
 
 	endSample := int64(endTime.Sub(*timelineStart).Seconds() * float64(sampleRate))
-	in := normalizeRecordedFrames(inFrames, uint32(sampleRate), *timelineStart)
-	out := normalizeRecordedFrames(outFrames, uint32(sampleRate), *timelineStart)
-	aux := normalizeRecordedFrames(auxFrames, uint32(sampleRate), *timelineStart)
+	in := normalizeRecordedFrames(r.logger(), inFrames, uint32(sampleRate), *timelineStart)
+	out := normalizeRecordedFrames(r.logger(), outFrames, uint32(sampleRate), *timelineStart)
+
+	aux := normalizeRecordedFrames(r.logger(), auxFrames, uint32(sampleRate), *timelineStart)
 	for _, frames := range [][]normalizedRecordedFrame{in, out, aux} {
 		for _, f := range frames {
 			if frameEnd := f.startSample + int64(len(f.samples)); frameEnd > endSample {
@@ -330,7 +340,7 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 
 	writtenSamples, err := r.writer.WritePCM(stereoBuf)
 	if err != nil {
-		logger.Logger.Errorw("Failed to write recording audio", err)
+		r.logger().Errorw("Failed to write recording audio", err)
 		r.setRecordingError(fmt.Errorf("write recording audio: %w", err))
 	}
 
@@ -362,12 +372,12 @@ type normalizedRecordedFrame struct {
 	samples     []int16
 }
 
-func normalizeRecordedFrames(frames []recordedAudioFrame, sampleRate uint32, timelineStart time.Time) []normalizedRecordedFrame {
+func normalizeRecordedFrames(log protoLogger.Logger, frames []recordedAudioFrame, sampleRate uint32, timelineStart time.Time) []normalizedRecordedFrame {
 	normalized := make([]normalizedRecordedFrame, 0, len(frames))
 	for _, recorded := range frames {
 		frame, err := resampleRecordedAudioFrame(recorded.frame, sampleRate)
 		if err != nil {
-			logger.Logger.Warnw("Failed to resample recorded audio", err)
+			log.Warnw("Failed to resample recorded audio", err)
 			continue
 		}
 		if frame == nil || frame.NumChannels == 0 {

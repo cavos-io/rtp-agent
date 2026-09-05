@@ -5,6 +5,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/library/logger"
 	lkprotocol "github.com/livekit/protocol/livekit"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 )
@@ -25,6 +26,7 @@ type RoomCallbackRegistry struct {
 	entries []roomCallbackEntry
 	nextID  uint64
 	fanOut  *lksdk.RoomCallback
+	log     protoLogger.Logger
 }
 
 type roomCallbackEntry struct {
@@ -33,9 +35,24 @@ type roomCallbackEntry struct {
 }
 
 func NewRoomCallbackRegistry() *RoomCallbackRegistry {
-	registry := &RoomCallbackRegistry{}
+	registry := &RoomCallbackRegistry{log: logger.Logger}
 	registry.fanOut = registry.newFanOutCallback()
 	return registry
+}
+
+// SetLogger overrides the callback registry logger.
+func (r *RoomCallbackRegistry) SetLogger(log protoLogger.Logger) {
+	if r == nil {
+		return
+	}
+
+	if log == nil {
+		log = logger.Logger
+	}
+
+	r.mu.Lock()
+	r.log = log
+	r.mu.Unlock()
 }
 
 // Add registers cb and returns a function that removes it again. A nil callback
@@ -110,11 +127,18 @@ func (r *RoomCallbackRegistry) snapshot() []*lksdk.RoomCallback {
 // listeners; the registry needs it more, because it hands the same event to
 // arbitrary downstream callbacks alongside RoomIO's own audio/track handlers.
 func (r *RoomCallbackRegistry) forEach(invoke func(*lksdk.RoomCallback)) {
+	r.mu.RLock()
+	log := r.log
+	r.mu.RUnlock()
+
+	if log == nil {
+		log = logger.Logger
+	}
 	for _, c := range r.snapshot() {
 		func(c *lksdk.RoomCallback) {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Logger.Warnw("room callback panicked", nil, "panic", recovered)
+					log.Warnw("room callback panicked", nil, "panic", recovered)
 				}
 			}()
 			invoke(c)

@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -24,6 +25,7 @@ type PreConnectAudioBuffer struct {
 
 type PreConnectAudioHandler struct {
 	room     *lksdk.Room
+	log      protoLogger.Logger
 	timeout  time.Duration
 	maxDelta time.Duration
 
@@ -37,8 +39,16 @@ type PreConnectAudioHandler struct {
 }
 
 func NewPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration) *PreConnectAudioHandler {
+	return newPreConnectAudioHandler(room, timeout, logger.Logger)
+}
+
+func newPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration, log protoLogger.Logger) *PreConnectAudioHandler {
+	if log == nil {
+		log = logger.Logger
+	}
 	return &PreConnectAudioHandler{
 		room:     room,
+		log:      log,
 		timeout:  timeout,
 		maxDelta: 1 * time.Second,
 		buffers:  make(map[string]chan *PreConnectAudioBuffer),
@@ -58,7 +68,7 @@ func (h *PreConnectAudioHandler) Register() {
 
 	err := h.room.RegisterByteStreamHandler(PreConnectAudioBufferStream, h.handler)
 	if err != nil {
-		logger.Logger.Warnw("failed to register pre-connect audio handler", err)
+		h.log.Warnw("failed to register pre-connect audio handler", err)
 	} else {
 		h.registered = true
 	}
@@ -92,33 +102,33 @@ func (h *PreConnectAudioHandler) handler(reader *lksdk.ByteStreamReader, partici
 func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, participantIdentity string) {
 	attrs := preConnectByteStreamAttributes(reader)
 	if attrs == nil {
-		logger.Logger.Warnw("pre-connect audio received but no attributes", nil, "participant", participantIdentity)
+		h.log.Warnw("pre-connect audio received but no attributes", nil, "participant", participantIdentity)
 		return
 	}
 
 	trackID := attrs["trackId"]
 	if trackID == "" {
-		logger.Logger.Warnw("pre-connect audio received but no trackId", nil, "participant", participantIdentity)
+		h.log.Warnw("pre-connect audio received but no trackId", nil, "participant", participantIdentity)
 		return
 	}
 
 	sampleRateStr := attrs["sampleRate"]
 	channelsStr := attrs["channels"]
 	if sampleRateStr == "" || channelsStr == "" {
-		logger.Logger.Warnw("sampleRate or channels not found in pre-connect byte stream", nil)
+		h.log.Warnw("sampleRate or channels not found in pre-connect byte stream", nil)
 		h.failBuffer(trackID)
 		return
 	}
 
 	sampleRate, err := strconv.Atoi(sampleRateStr)
 	if err != nil {
-		logger.Logger.Warnw("invalid sampleRate in pre-connect byte stream", err)
+		h.log.Warnw("invalid sampleRate in pre-connect byte stream", err)
 		h.failBuffer(trackID)
 		return
 	}
 	channels, err := strconv.Atoi(channelsStr)
 	if err != nil {
-		logger.Logger.Warnw("invalid channels in pre-connect byte stream", err)
+		h.log.Warnw("invalid channels in pre-connect byte stream", err)
 		h.failBuffer(trackID)
 		return
 	}
@@ -134,7 +144,7 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	if isOpus {
 		frames, err := readPreConnectOpusFrames(reader, sampleRate, channels)
 		if err != nil {
-			logger.Logger.Warnw("error reading pre-connect opus stream", err)
+			h.log.Warnw("error reading pre-connect opus stream", err)
 			h.failBuffer(trackID)
 			return
 		}
@@ -143,7 +153,7 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		// Raw PCM
 		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
 		if err != nil {
-			logger.Logger.Warnw("error reading pre-connect pcm stream", err)
+			h.log.Warnw("error reading pre-connect pcm stream", err)
 			h.failBuffer(trackID)
 			return
 		}
@@ -260,7 +270,7 @@ func (h *PreConnectAudioHandler) failBuffer(trackID string) {
 
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
 	if h.afterConnect {
-		logger.Logger.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)
+		h.log.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)
 	}
 
 	h.mu.Lock()
@@ -301,7 +311,7 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 			return nil
 		}
 		if time.Since(buf.Timestamp) > h.maxDelta {
-			logger.Logger.Warnw("pre-connect audio buffer is too old", nil, "track_id", trackID)
+			h.log.Warnw("pre-connect audio buffer is too old", nil, "track_id", trackID)
 			return []*model.AudioFrame{}
 		}
 		return buf.Frames

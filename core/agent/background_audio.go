@@ -13,7 +13,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
 	"github.com/jfreymuth/oggvorbis"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -327,7 +326,7 @@ func (p *BackgroundAudioPlayer) playTask(handle *PlayHandle, sound AudioSource, 
 	var stream <-chan *model.AudioFrame
 	switch s := sound.(type) {
 	case string:
-		stream = readAudioFramesFromFile(s, loop, handle.stopCh)
+		stream = p.readAudioFramesFromFile(s, loop, handle.stopCh)
 	case <-chan *model.AudioFrame:
 		stream = s
 	}
@@ -552,7 +551,7 @@ func (p *BackgroundAudioPlayer) runMixerTask(ctx context.Context, track *lksdk.L
 
 			n, err := p.opusEnc.Encode(pcm, p.opusBuf)
 			if err != nil {
-				logger.Logger.Errorw("background audio opus encode failed", err)
+				p.agentSession.Logger().Errorw("background audio opus encode failed", err)
 				continue
 			}
 			track.WriteSample(media.Sample{Data: p.opusBuf[:n], Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
@@ -560,7 +559,7 @@ func (p *BackgroundAudioPlayer) runMixerTask(ctx context.Context, track *lksdk.L
 	}
 }
 
-func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-chan *model.AudioFrame {
+func (p *BackgroundAudioPlayer) readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-chan *model.AudioFrame {
 	out := make(chan *model.AudioFrame)
 
 	go func() {
@@ -575,7 +574,7 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 				case ".pcm", ".raw", ".mp3", "":
 					frames, err := audio.AudioFramesFromFile(path, audio.AudioFramesFromFileOptions{})
 					if err != nil {
-						logger.Logger.Errorw("failed to read audio file", err, "path", path)
+						p.agentSession.Logger().Errorw("failed to read audio file", err, "path", path)
 						return
 					}
 					for _, frame := range frames {
@@ -591,13 +590,13 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 					continue
 				case ".ogg":
 				default:
-					logger.Logger.Warnw("unsupported audio format for background audio", nil, "path", path)
+					p.agentSession.Logger().Warnw("unsupported audio format for background audio", nil, "path", path)
 					return
 				}
 
 				file, err := os.Open(path)
 				if err != nil {
-					logger.Logger.Errorw("failed to open audio file", err, "path", path)
+					p.agentSession.Logger().Errorw("failed to open audio file", err, "path", path)
 					return
 				}
 				defer file.Close()
@@ -608,7 +607,7 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 				case ".ogg":
 					vorbis, err := oggvorbis.NewReader(file)
 					if err != nil {
-						logger.Logger.Errorw("failed to create ogg reader", err)
+						p.agentSession.Logger().Errorw("failed to create ogg reader", err)
 						return
 					}
 					sampleRate = uint32(vorbis.SampleRate())
@@ -622,7 +621,7 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 						if err == io.EOF {
 							break
 						} else if err != nil {
-							logger.Logger.Errorw("error reading ogg file", err)
+							p.agentSession.Logger().Errorw("error reading ogg file", err)
 							return
 						}
 

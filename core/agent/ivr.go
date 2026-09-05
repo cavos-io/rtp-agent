@@ -5,8 +5,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type IVRActivity struct {
@@ -110,7 +108,8 @@ func (i *IVRActivity) onUserInputTranscribed(ev UserInputTranscribedEvent) {
 	if !loopDetected {
 		return
 	}
-	logger.Logger.Debugw("IVRActivity: speech loop detected; sending notification")
+
+	i.Session.Logger().Debugw("IVRActivity: speech loop detected; sending notification")
 	allowInterruptions := false
 	if _, err := i.Session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
 		AllowInterruptions: &allowInterruptions,
@@ -154,7 +153,7 @@ func (i *IVRActivity) onSilenceDetected() {
 	i.lastShouldScheduleCheck = false
 	i.mu.Unlock()
 
-	logger.Logger.Debugw("IVRActivity: silence detected; sending notification")
+	i.Session.Logger().Debugw("IVRActivity: silence detected; sending notification")
 	if _, err := i.Session.GenerateReply(context.Background(), ""); err != nil && err != ErrAgentSessionNotRunning {
 		i.Session.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
 	}

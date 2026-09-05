@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
@@ -428,6 +429,14 @@ type audioOutputWaitResult struct {
 	drop bool
 }
 
+func (rio *RoomIO) logger() protoLogger.Logger {
+	if rio == nil || rio.AgentSession == nil {
+		return logger.Logger
+	}
+
+	return rio.AgentSession.Logger()
+}
+
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
 	if opts.AudioOutputSampleRate == 0 {
 		opts.AudioOutputSampleRate = roomIODefaultInputSampleRate
@@ -508,9 +517,10 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 		return
 	}
 	rio.Room = room
-	rio.clientEvents = newClientEventsDispatcher(room)
+
+	rio.clientEvents = newClientEventsDispatcherWithLogger(room, rio.logger())
 	if !rio.Options.DisableAudioInput && !rio.Options.DisablePreConnectAudio && rio.preConnectAudio == nil {
-		rio.preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(rio.Options))
+		rio.preConnectAudio = newPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(rio.Options), rio.logger())
 		rio.preConnectAudio.Register()
 	}
 	if !rio.Options.DisableTextInput {
@@ -812,7 +822,7 @@ func (rio *RoomIO) forwardAgentTranscriptionNextOutput(text string, final bool) 
 		return
 	}
 	if err := rio.Options.TranscriptionNextOutput.CaptureText(context.Background(), text); err != nil {
-		logger.Logger.Warnw("failed to forward agent transcription text", err)
+		rio.logger().Warnw("failed to forward agent transcription text", err)
 	}
 	if final {
 		rio.Options.TranscriptionNextOutput.Flush()
@@ -888,7 +898,7 @@ func (rio *RoomIO) publishTranscriptionPacketWithSegment(participantIdentity str
 		TrackId:                        trackID,
 		Segments:                       []*livekit.TranscriptionSegment{segment},
 	}); err != nil {
-		logger.Logger.Warnw("failed to publish transcription packet", err)
+		rio.logger().Warnw("failed to publish transcription packet", err)
 	}
 }
 
@@ -1195,7 +1205,7 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 			close(done)
 		}()
 		if err := deleteRoom(context.Background(), roomName); err != nil && !RoomDeleteNotFound(err) {
-			logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
+			rio.logger().Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
 		}
 	}()
 }
@@ -1279,7 +1289,7 @@ func (rio *RoomIO) registerTextInput() {
 	}
 	defer func() {
 		if recover() != nil {
-			logger.Logger.Warnw("failed to register room text input handler", nil)
+			rio.logger().Warnw("failed to register room text input handler", nil)
 		}
 	}()
 	_ = rio.Room.RegisterTextStreamHandler(RoomIOChatTopic, rio.onChatTextStream)
@@ -1419,7 +1429,7 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("failed to handle chat text stream", nil, "panic", recovered)
+			rio.logger().Warnw("failed to handle chat text stream", nil, "panic", recovered)
 		}
 	}()
 	if !rio.shouldHandleParticipant(participantIdentity) {
@@ -1433,7 +1443,7 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 		Info:                info,
 		ParticipantIdentity: participantIdentity,
 	}); err != nil {
-		logger.Logger.Warnw("failed to handle chat text stream", err)
+		rio.logger().Warnw("failed to handle chat text stream", err)
 	}
 }
 
@@ -1859,7 +1869,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	inputStream := rio.newInputAudioStream()
-	converter := newRoomIOInputConverter(rio.audioInputSampleRate())
+	converter := newRoomIOInputConverter(rio.audioInputSampleRate(), rio.logger())
 
 	if rio.preConnectAudio != nil {
 		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
@@ -1942,7 +1952,7 @@ func shouldRecordAuxTrack(options RoomOptions, trackKind webrtc.RTPCodecType, pa
 func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
 	dec, err := newOpusDecoder(48000, 1)
 	if err != nil {
-		logger.Logger.Warnw("aux audio track decoder init failed", err)
+		rio.logger().Warnw("aux audio track decoder init failed", err)
 		return
 	}
 	defer dec.Close()
@@ -2028,13 +2038,20 @@ type roomIOInputConverter struct {
 	resampler  *audio.StreamingResampler
 	inputRate  uint32
 	channels   uint32
+	log        protoLogger.Logger
 }
 
-func newRoomIOInputConverter(targetRate uint32) *roomIOInputConverter {
+func newRoomIOInputConverter(targetRate uint32, logs ...protoLogger.Logger) *roomIOInputConverter {
 	if targetRate == 0 {
 		targetRate = roomIODefaultInputSampleRate
 	}
-	return &roomIOInputConverter{targetRate: targetRate}
+
+	log := logger.Logger
+	if len(logs) > 0 && logs[0] != nil {
+		log = logs[0]
+	}
+
+	return &roomIOInputConverter{targetRate: targetRate, log: log}
 }
 
 // Convert returns audio at the room input rate, or nil while the resampler is
@@ -2046,7 +2063,7 @@ func (c *roomIOInputConverter) Convert(frame *model.AudioFrame) *model.AudioFram
 	if frame.NumChannels > 1 {
 		mono, err := roomIOMonoAudioFrame(frame)
 		if err != nil {
-			logger.Logger.Warnw("room audio input downmix failed", err, "channels", frame.NumChannels)
+			c.log.Warnw("room audio input downmix failed", err, "channels", frame.NumChannels)
 			return frame
 		}
 		frame = mono
@@ -2064,7 +2081,7 @@ func (c *roomIOInputConverter) Convert(frame *model.AudioFrame) *model.AudioFram
 	if c.resampler == nil {
 		resampler, err := audio.NewStreamingResampler(frame.SampleRate, c.targetRate, frame.NumChannels)
 		if err != nil {
-			logger.Logger.Warnw("room audio input resampler setup failed", err, "from", frame.SampleRate, "to", c.targetRate)
+			c.log.Warnw("room audio input resampler setup failed", err, "from", frame.SampleRate, "to", c.targetRate)
 			return frame
 		}
 		c.resampler = resampler
@@ -2074,7 +2091,7 @@ func (c *roomIOInputConverter) Convert(frame *model.AudioFrame) *model.AudioFram
 
 	converted, err := c.resampler.Push(frame)
 	if err != nil {
-		logger.Logger.Warnw("room audio input resample failed", err, "from", frame.SampleRate, "to", c.targetRate)
+		c.log.Warnw("room audio input resample failed", err, "from", frame.SampleRate, "to", c.targetRate)
 		return frame
 	}
 	return joinRoomIOInputFrames(tail, converted)
@@ -2160,7 +2177,7 @@ func (rio *RoomIO) processRoomInputFrame(ctx context.Context, frame *model.Audio
 	}
 	frames, err := rio.Options.AudioInputProcessor.Process(ctx, frame)
 	if err != nil {
-		logger.Logger.Warnw("room audio input processor failed", err, "sample_rate", frame.SampleRate)
+		rio.logger().Warnw("room audio input processor failed", err, "sample_rate", frame.SampleRate)
 		return []*model.AudioFrame{frame}
 	}
 	return frames
@@ -2189,7 +2206,7 @@ func (rio *RoomIO) closeAudioInputProcessor() {
 	}
 	rio.audioInputProcessorClosed = true
 	if err := rio.Options.AudioInputProcessor.Close(); err != nil {
-		logger.Logger.Warnw("room audio input processor close failed", err)
+		rio.logger().Warnw("room audio input processor close failed", err)
 	}
 }
 
@@ -2239,7 +2256,7 @@ func (rio *RoomIO) emitRoomEvent(ev RoomEvent) {
 		func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Logger.Warnw("room event listener panicked", nil, "event", ev.Type(), "panic", recovered)
+					rio.logger().Warnw("room event listener panicked", nil, "event", ev.Type(), "panic", recovered)
 				}
 			}()
 			listener(ev)
@@ -2553,7 +2570,7 @@ func (rio *RoomIO) recordAudioOutputError(err error) {
 	rio.audioOutputDiagnostics.LastErrorAt = now
 	rio.playbackAudioLastError = errText
 	rio.mu.Unlock()
-	logger.Logger.Warnw("room audio output publish failed", err)
+	rio.logger().Warnw("room audio output publish failed", err)
 }
 
 func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript string) {
@@ -2618,7 +2635,7 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 		close(waiter)
 	}
 	for _, handler := range handlers {
-		callPlaybackFinishedHandler(handler, ev)
+		callPlaybackFinishedHandler(rio.logger(), handler, ev)
 	}
 }
 
@@ -2678,7 +2695,7 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	started, handlers, ok := rio.startPlayback()
 	if ok {
 		for _, handler := range handlers {
-			callPlaybackStartedHandler(handler, started)
+			callPlaybackStartedHandler(rio.logger(), handler, started)
 		}
 	}
 	rio.recordPlaybackInputFrame(frame)
@@ -2744,7 +2761,7 @@ func (rio *RoomIO) waitForAudioSubscriptionReady(ctx context.Context) error {
 	case <-ch:
 		return nil
 	case <-timer.C:
-		logger.Logger.Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
+		rio.logger().Warnw("room audio output publish subscription wait timed out", nil, "timeout", timeout)
 		rio.releaseAudioSubscriptionFallback(ch)
 		if rio.AgentSession != nil {
 			rio.AgentSession.RefreshUserAwayTimer()
@@ -2811,7 +2828,7 @@ func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
 	case <-ch:
 		return nil
 	case <-timer.C:
-		logger.Logger.Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
+		rio.logger().Warnw("room audio output subscription wait timed out", nil, "timeout", timeout)
 		rio.releaseAudioSubscriptionFallback(ch)
 		if rio.AgentSession != nil {
 			rio.AgentSession.RefreshUserAwayTimer()
@@ -3151,19 +3168,19 @@ func roomIOValidOpusSamples(samples uint32) uint32 {
 	return roomIOOpusFrameSamples
 }
 
-func callPlaybackStartedHandler(handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {
+func callPlaybackStartedHandler(log protoLogger.Logger, handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("failed to emit playback_started", fmt.Errorf("panic: %v", recovered))
+			log.Warnw("failed to emit playback_started", fmt.Errorf("panic: %v", recovered))
 		}
 	}()
 	handler(ev)
 }
 
-func callPlaybackFinishedHandler(handler func(PlaybackFinishedEvent), ev PlaybackFinishedEvent) {
+func callPlaybackFinishedHandler(log protoLogger.Logger, handler func(PlaybackFinishedEvent), ev PlaybackFinishedEvent) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("failed to emit playback_finished", fmt.Errorf("panic: %v", recovered))
+			log.Warnw("failed to emit playback_finished", fmt.Errorf("panic: %v", recovered))
 		}
 	}()
 	handler(ev)
@@ -3209,7 +3226,7 @@ func (rio *RoomIO) Close() error {
 		select {
 		case <-deleteRoomDone:
 		case <-time.After(roomIODeleteRoomCloseTimeout):
-			logger.Logger.Warnw("automatic room deletion timed out", nil)
+			rio.logger().Warnw("automatic room deletion timed out", nil)
 		}
 	}
 

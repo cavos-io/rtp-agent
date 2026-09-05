@@ -12,7 +12,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -66,7 +65,7 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	ma.mu.Unlock()
 
 	if err := ma.initializeRealtimeSession(rtSession); err != nil {
-		logger.Logger.Errorw("failed to initialize realtime session", err)
+		ma.session.Logger().Errorw("failed to initialize realtime session", err)
 		_ = rtSession.Close()
 		ma.mu.Lock()
 		if ma.rtSession == rtSession {
@@ -340,7 +339,8 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			logger.Logger.Errorw("failed to synthesize realtime say text", err)
+
+			ma.session.Logger().Errorw("failed to synthesize realtime say text", err)
 			if publishedAudio {
 				session.UpdateAgentState(AgentStateListening)
 			}
@@ -354,7 +354,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			playoutOK := true
 			if playback := session.AudioPlaybackController(); playback != nil && !speech.IsInterrupted() {
 				if _, err := playback.WaitForPlayout(ctx); err != nil {
-					logger.Logger.Warnw("failed to wait for realtime say playback", err)
+					ma.session.Logger().Warnw("failed to wait for realtime say playback", err)
 					playoutOK = false
 				}
 			}
@@ -375,7 +375,8 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			logger.Logger.Errorw("failed to say text with realtime session", err)
+
+			ma.session.Logger().Errorw("failed to say text with realtime session", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
 					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
@@ -393,7 +394,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 
 	registeredTools, err := sessionRegisteredTools(ctx, session)
 	if err != nil {
-		logger.Logger.Errorw("failed to register realtime reply tools", err)
+		ma.session.Logger().Errorw("failed to register realtime reply tools", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{Error: err, Source: ma})
 		}
@@ -401,7 +402,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 	selectedTools, err := resolveToolsByID(registeredTools, speech.Generation.Tools)
 	if err != nil {
-		logger.Logger.Errorw("failed to resolve realtime reply tools", err)
+		ma.session.Logger().Errorw("failed to resolve realtime reply tools", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{Error: err, Source: ma})
 		}
@@ -412,7 +413,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 	if speech.Generation.UserMessage != nil && ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(speech.Generation.UserMessage, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
-			logger.Logger.Errorw("failed to update realtime chat context", err)
+			ma.session.Logger().Errorw("failed to update realtime chat context", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{Error: err, Source: ma})
 			}
@@ -422,7 +423,8 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			logger.Logger.Errorw("failed to update realtime session chat context", err)
+
+			ma.session.Logger().Errorw("failed to update realtime session chat context", err)
 			if session != nil {
 				session.EmitError(ErrorEvent{
 					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
@@ -437,7 +439,8 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		logger.Logger.Errorw(message, err)
+
+		ma.session.Logger().Errorw(message, err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
 				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
@@ -505,7 +508,8 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		logger.Logger.Errorw("failed to generate realtime reply", err)
+
+		ma.session.Logger().Errorw("failed to generate realtime reply", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
 				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
@@ -516,7 +520,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 }
 
 func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSession) {
-	logger.Logger.Infow("MultimodalAgent started")
+	ma.session.Logger().Infow("MultimodalAgent started")
 
 	eventCh := rtSession.EventCh()
 
@@ -539,7 +543,8 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 					if errors.Is(err, context.Canceled) {
 						continue
 					}
-					logger.Logger.Errorw("failed to push audio to multimodal session", err)
+
+					ma.session.Logger().Errorw("failed to push audio to multimodal session", err)
 					ma.mu.Lock()
 					session := ma.session
 					ma.mu.Unlock()
@@ -563,7 +568,7 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 	switch ev.Type {
 	case llm.RealtimeEventTypeSpeechStarted:
-		logger.Logger.Infow("User started speaking (multimodal)")
+		ma.session.Logger().Infow("User started speaking (multimodal)")
 		if ma.session != nil && ma.session.activity != nil {
 			ma.session.activity.OnInputSpeechStarted()
 		} else if ma.session != nil {
@@ -571,7 +576,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeSpeechStopped:
-		logger.Logger.Infow("User stopped speaking (multimodal)")
+		ma.session.Logger().Infow("User stopped speaking (multimodal)")
 		if ma.session != nil && ma.session.activity != nil {
 			speechStopped := llm.InputSpeechStoppedEvent{}
 			if ev.SpeechStopped != nil {
@@ -617,11 +622,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 		if ma.session.activity != nil {
 			if _, err := ma.session.activity.OnGenerationCreated(*ev.Generation, ma.attachPendingRealtimeAutoToolReply); err != nil {
-				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+				ma.session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
 			}
 			return
 		}
-		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
+
+		handle := newSpeechHandleWithLogger(ma.session.Options.AllowInterruptions, DefaultInputDetails(), ma.session.Logger())
 		handle.Generation.RealtimeGeneration = ev.Generation
 		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
 			UserInitiated: false,
@@ -631,7 +637,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		ma.attachPendingRealtimeAutoToolReply(handle)
 		if ma.session.activity != nil {
 			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
-				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+				ma.session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
 			}
 		}
 
@@ -709,7 +715,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 
 	case llm.RealtimeEventTypeError:
 		if ev.Error != io.EOF {
-			logger.Logger.Errorw("Realtime stream error", ev.Error)
+			ma.session.Logger().Errorw("Realtime stream error", ev.Error)
 			if ma.session != nil && ev.Error != nil {
 				err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
 				if ma.session.activity != nil {
@@ -841,7 +847,8 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			if errors.Is(err, context.Canceled) {
 				return false
 			}
-			logger.Logger.Errorw("failed to synthesize text-only realtime response", err)
+
+			ma.session.Logger().Errorw("failed to synthesize text-only realtime response", err)
 			if fallbackPublishedAudio && ma.session != nil {
 				ma.session.UpdateAgentState(AgentStateListening)
 			}
@@ -866,7 +873,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	if publishedAudio && !interrupted && ma.session != nil {
 		if playback := ma.session.AudioPlaybackController(); playback != nil {
 			if _, err := playback.WaitForPlayout(ctx); err != nil {
-				logger.Logger.Warnw("failed to wait for realtime message playback", err)
+				ma.session.Logger().Warnw("failed to wait for realtime message playback", err)
 				playoutOK = false
 			}
 		}
@@ -901,7 +908,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	}
 	if ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
-			logger.Logger.Errorw("failed to update realtime chat context with generated message", err)
+			ma.session.Logger().Errorw("failed to update realtime chat context with generated message", err)
 		}
 	}
 	if ma.session != nil {
@@ -1004,7 +1011,7 @@ func (ma *MultimodalAgent) forwardedRealtimeTextAfterInterruption(ctx context.Co
 	playoutCtx := context.WithoutCancel(ctx)
 	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
-		logger.Logger.Warnw("failed to wait for interrupted realtime playback", err)
+		ma.session.Logger().Warnw("failed to wait for interrupted realtime playback", err)
 		return "", AudioPlaybackResult{}
 	}
 	if ev.PlaybackPosition <= 0 {
@@ -1039,7 +1046,7 @@ func (ma *MultimodalAgent) truncateInterruptedRealtimeMessage(messageID string, 
 		AudioEndMillis:  int(playback.PlaybackPosition / time.Millisecond),
 		AudioTranscript: &audioTranscript,
 	}); err != nil {
-		logger.Logger.Warnw("failed to truncate interrupted realtime message", err, "message_id", messageID)
+		ma.session.Logger().Warnw("failed to truncate interrupted realtime message", err, "message_id", messageID)
 	}
 }
 
@@ -1055,7 +1062,7 @@ func (ma *MultimodalAgent) syncRealtimeChatContextAfterSkippedMessages() {
 		return
 	}
 	if err := rtSession.UpdateChatContext(chatCtx); err != nil {
-		logger.Logger.Warnw("failed to sync realtime chat context after skipped messages", err)
+		ma.session.Logger().Warnw("failed to sync realtime chat context after skipped messages", err)
 	}
 }
 
@@ -1078,11 +1085,12 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	if functionCall.CreatedAt.IsZero() {
 		functionCall.CreatedAt = time.Now()
 	}
-	logger.Logger.Infow("Executing tool (multimodal)", "name", functionCall.Name)
+
+	ma.session.Logger().Infow("Executing tool (multimodal)", "name", functionCall.Name)
 
 	tools, err := ma.realtimeTools()
 	if err != nil {
-		logger.Logger.Errorw("failed to register realtime tools", err)
+		ma.session.Logger().Errorw("failed to register realtime tools", err)
 		if ma.session != nil {
 			ma.session.EmitError(ErrorEvent{Error: err, Source: ma})
 		}
@@ -1183,7 +1191,7 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 
 func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, outputs []*llm.FunctionCallOutput) {
 	if len(calls) != len(outputs) {
-		logger.Logger.Errorw("failed to append realtime tool results", ErrFunctionToolEventLengthMismatch)
+		ma.session.Logger().Errorw("failed to append realtime tool results", ErrFunctionToolEventLengthMismatch)
 		return
 	}
 	type realtimeToolResult struct {
@@ -1220,7 +1228,7 @@ func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, 
 		var err error
 		ev, err = NewFunctionToolsExecutedEvent(eventCalls, eventOutputs)
 		if err != nil {
-			logger.Logger.Errorw("failed to create realtime function tools executed event", err)
+			ma.session.Logger().Errorw("failed to create realtime function tools executed event", err)
 			return
 		}
 		ev.ReplyRequired = len(results) > 0
@@ -1234,7 +1242,8 @@ func (ma *MultimodalAgent) appendRealtimeToolResults(calls []*llm.FunctionCall, 
 				return
 			}
 			syncFailed = true
-			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
+
+			ma.session.Logger().Errorw("failed to update realtime session chat context with tool result", err)
 			if ma.session != nil {
 				ma.session.EmitError(ErrorEvent{
 					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
@@ -1274,13 +1283,14 @@ func (ma *MultimodalAgent) generateRealtimeToolReply() {
 		return
 	}
 	if err := rtSession.Interrupt(); err != nil {
-		logger.Logger.Warnw("failed to interrupt realtime session before tool reply", err)
+		ma.session.Logger().Warnw("failed to interrupt realtime session before tool reply", err)
 	}
 	if err := rtSession.GenerateReply(llm.RealtimeGenerateReplyOptions{ToolChoice: "auto"}); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		logger.Logger.Errorw("failed to generate realtime tool reply", err)
+
+		ma.session.Logger().Errorw("failed to generate realtime tool reply", err)
 		if ma.session != nil {
 			ma.session.EmitError(ErrorEvent{
 				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, true),
@@ -1301,7 +1311,8 @@ func (ma *MultimodalAgent) installPendingRealtimeAutoToolReply() {
 		ma.mu.Unlock()
 		return
 	}
-	pending := NewSpeechHandle(false, DefaultInputDetails())
+
+	pending := newSpeechHandleWithLogger(false, DefaultInputDetails(), ma.session.Logger())
 	ma.pendingAutoToolReply = pending
 	ma.mu.Unlock()
 
@@ -1311,7 +1322,7 @@ func (ma *MultimodalAgent) installPendingRealtimeAutoToolReply() {
 	}
 
 	timer := time.AfterFunc(5*time.Second, func() {
-		logger.Logger.Warnw("timed out waiting for realtime auto tool reply", nil)
+		ma.session.Logger().Warnw("timed out waiting for realtime auto tool reply", nil)
 		ma.releasePendingRealtimeAutoToolReply(pending)
 	})
 	ma.mu.Lock()
@@ -1383,7 +1394,8 @@ func (ma *MultimodalAgent) OnVideoFrame(ctx context.Context, frame *images.Video
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		logger.Logger.Errorw("failed to push video to multimodal session", err)
+
+		ma.session.Logger().Errorw("failed to push video to multimodal session", err)
 		if session != nil {
 			session.EmitError(ErrorEvent{
 				Error:  llm.NewRealtimeError("failed to push video to realtime session", err),

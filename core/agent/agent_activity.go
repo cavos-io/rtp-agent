@@ -15,7 +15,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"go.opentelemetry.io/otel/attribute"
@@ -267,7 +266,7 @@ func (a *AgentActivity) Start() {
 	))
 	defer startSpan.End()
 	if err := a.recordInitialConfiguration(); err != nil {
-		logger.Logger.Errorw("failed to record initial agent configuration", err)
+		a.Session.Logger().Errorw("failed to record initial agent configuration", err)
 	}
 	if a.Session != nil && a.Session.LLM != nil {
 		if collector, ok := a.Session.LLM.(llmMetricsCollector); ok {
@@ -819,7 +818,7 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 	schedulingPaused := a.schedulingPaused
 	a.queueMu.Unlock()
 	if schedulingPaused {
-		logger.Logger.Warnw("skipping user turn exceeded, speech scheduling is paused", nil, "num_words", ev.AccumulatedWordCount, "duration", ev.Duration)
+		a.Session.Logger().Warnw("skipping user turn exceeded, speech scheduling is paused", nil, "num_words", ev.AccumulatedWordCount, "duration", ev.Duration)
 		return
 	}
 
@@ -851,7 +850,8 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			logger.Logger.Errorw("user turn exceeded wait failed", err)
+
+			a.Session.Logger().Errorw("user turn exceeded wait failed", err)
 			return
 		}
 		if !shouldRun {
@@ -878,7 +878,7 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 		}()
 
 		if err := a.AgentIntf.OnUserTurnExceeded(a.ctx, ev); err != nil {
-			logger.Logger.Errorw("error in OnUserTurnExceeded callback", err)
+			a.Session.Logger().Errorw("error in OnUserTurnExceeded callback", err)
 		}
 	}()
 }
@@ -1516,7 +1516,7 @@ func (a *AgentActivity) OnInputSpeechStarted() {
 	}
 	go func() {
 		if err := a.Interrupt(false); err != nil {
-			logger.Logger.Errorw("realtime input speech started but current speech is not interruptable", err)
+			a.Session.Logger().Errorw("realtime input speech started but current speech is not interruptable", err)
 		}
 	}()
 }
@@ -1619,7 +1619,7 @@ func (a *AgentActivity) OnGenerationCreated(ev llm.GenerationCreatedEvent, confi
 		return nil, ErrSpeechSchedulingPaused
 	}
 
-	handle := NewSpeechHandle(a.AllowInterruptions(), DefaultInputDetails())
+	handle := newSpeechHandleWithLogger(a.AllowInterruptions(), DefaultInputDetails(), a.Session.Logger())
 	handle.Generation.RealtimeGeneration = &ev
 	for _, configureHandle := range configure {
 		if configureHandle != nil {
@@ -1741,7 +1741,8 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
 		endpointing.OnStartOfSpeech(startedAt, overlapping)
 	}
-	logger.Logger.Infow("Start of speech detected")
+
+	a.Session.Logger().Infow("Start of speech detected")
 
 	// Cancel pending EOU detection
 	a.cancelPendingEOUDetection()
@@ -1798,7 +1799,7 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		endpointing.OnEndOfSpeech(endedAt, shouldIgnore)
 	}
 	a.overlapSpeechEnded = false
-	logger.Logger.Infow("End of speech detected")
+	a.Session.Logger().Infow("End of speech detected")
 
 	turnDetection := a.turnDetectionMode()
 	if a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent()) {
@@ -1891,7 +1892,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		confidence = ev.Alternatives[0].Confidence
 	}
 	if a.shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev) {
-		logger.Logger.Debugw("dropping stale interim transcript before agent speech end", "transcript", transcript)
+		a.Session.Logger().Debugw("dropping stale interim transcript before agent speech end", "transcript", transcript)
 		return
 	}
 	a.userTurnMu.Lock()
@@ -1959,7 +1960,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		return
 	}
 	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
-		logger.Logger.Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
+		a.Session.Logger().Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
 		return
 	}
 	if a.Session != nil {
@@ -1971,7 +1972,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		})
 	}
 	if rejectsZeroConfidenceTranscript(transcript, confidence) {
-		logger.Logger.Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
+		a.Session.Logger().Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
 		return
 	}
 	if a.isInterimCommittedTurn() {
@@ -1980,7 +1981,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		// turn-taking purposes. The transcript event above already surfaced it live
 		// — it must not re-trigger an interrupt or a second reply for an utterance
 		// the agent has already answered.
-		logger.Logger.Debugw("dropping late final transcript for already-committed interim turn", "transcript", transcript)
+		a.Session.Logger().Debugw("dropping late final transcript for already-committed interim turn", "transcript", transcript)
 		return
 	}
 
@@ -2396,7 +2397,7 @@ func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
 	a.trimUserAudioFramesLocked()
 	size := audioFramesBytes(a.userAudioFrames)
 	a.userAudioMu.Unlock()
-	logger.Logger.Debugw("turn_audio_buffer.append",
+	a.Session.Logger().Debugw("turn_audio_buffer.append",
 		"size_bytes", size,
 		"duration_ms", size*500/int(max(frame.SampleRate, 1)))
 }
@@ -2430,7 +2431,7 @@ func (a *AgentActivity) trimUserAudioFramesLocked() {
 	}
 	if start > 0 {
 		a.userAudioFrames = append([]*model.AudioFrame(nil), a.userAudioFrames[start:]...)
-		logger.Logger.Debugw("turn_audio_buffer.capped",
+		a.Session.Logger().Debugw("turn_audio_buffer.capped",
 			"max_audio_secs", int(audioTurnDetectorWindowSeconds),
 			"size_bytes", audioFramesBytes(a.userAudioFrames))
 	}
@@ -2492,7 +2493,7 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 		return
 	}
 	if _, err := a.interruptHandles(false, false); err != nil {
-		logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
+		a.Session.Logger().Warnw("failed to interrupt speech for "+reason, err, key, value)
 	}
 }
 
@@ -2564,7 +2565,7 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 	a.falseInterruptionMu.Unlock()
 
 	controller.PauseAudioOutput()
-	logger.Logger.Infow("false_interruption.paused", "timeout", timeout.Seconds(), "handle", current.ID, "agent_state", a.Session.AgentState())
+	a.Session.Logger().Infow("false_interruption.paused", "timeout", timeout.Seconds(), "handle", current.ID, "agent_state", a.Session.AgentState())
 	if updateAgentState {
 		a.Session.UpdateAgentState(AgentStateListening)
 	}
@@ -2652,12 +2653,14 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	if current == paused.handle && !paused.handle.IsDone() && controller != nil && controller.CanPauseAudioOutput() && a.Session.Options.ResumeFalseInterruption {
 		a.Session.UpdateAgentState(paused.agentState)
 		resumed = true
-		logger.Logger.Infow("false_interruption.resumed", "agent_state", paused.agentState)
+
+		a.Session.Logger().Infow("false_interruption.resumed", "agent_state", paused.agentState)
 	}
 	if controller != nil && controller.CanPauseAudioOutput() {
 		controller.ResumeAudioOutput()
 	}
-	logger.Logger.Infow("false_interruption.resolved", "resumed", resumed)
+
+	a.Session.Logger().Infow("false_interruption.resolved", "resumed", resumed)
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
 
@@ -2687,7 +2690,8 @@ func (a *AgentActivity) commitHeldBargeIn() bool {
 	if heldText == "" || a.shortInterruptionTranscript(heldText) {
 		return false
 	}
-	logger.Logger.Infow("false_interruption.commit_held_barge_in", "transcript", heldText)
+
+	a.Session.Logger().Infow("false_interruption.commit_held_barge_in", "transcript", heldText)
 	if controller := a.Session.AudioOutputController(); controller != nil && controller.CanPauseAudioOutput() {
 		controller.ResumeAudioOutput()
 	}
@@ -2760,12 +2764,12 @@ func (a *AgentActivity) ClearUserTurn() {
 		a.Session.mu.Unlock()
 		if clearer, ok := assistant.(realtimeAudioClearer); ok {
 			if err := clearer.ClearAudio(); err != nil {
-				logger.Logger.Warnw("failed to clear realtime audio", err)
+				a.Session.Logger().Warnw("failed to clear realtime audio", err)
 			}
 		}
 		if clearer, ok := assistant.(inputTranscriptionClearer); ok {
 			if err := clearer.ClearInputTranscription(); err != nil {
-				logger.Logger.Warnw("failed to clear input transcription", err)
+				a.Session.Logger().Warnw("failed to clear input transcription", err)
 			}
 		}
 	}
@@ -3101,7 +3105,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
 		a.cancelPreemptiveGeneration()
-		logger.Logger.Warnw("skipping zero-confidence user turn", nil, "transcript", info.NewTranscript)
+		a.Session.Logger().Warnw("skipping zero-confidence user turn", nil, "transcript", info.NewTranscript)
 		return nil, nil
 	}
 	confidence := info.TranscriptConfidence
@@ -3129,7 +3133,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if currentSpeech != nil && !currentSpeech.AllowInterruptions && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
-		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
+		a.Session.Logger().Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
 		if a.Session != nil && a.Session.Options.RecordUncommittedTranscript {
 			a.recordTranscriptOnlyUserMessage(info.NewTranscript, info.TranscriptConfidence)
 		}
@@ -3141,7 +3145,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
-		logger.Logger.Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		a.Session.Logger().Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		if a.Session != nil && a.Session.isClosing() {
 			newMsg.Metrics = metricsReportFromEndOfTurn(info, 0)
 			a.commitUserMessage(newMsg)
@@ -3189,7 +3193,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			return nil, nil
 		}
 		a.cancelPreemptiveGeneration()
-		logger.Logger.Errorw("error occurred during on_user_turn_completed", err)
+		a.Session.Logger().Errorw("error occurred during on_user_turn_completed", err)
 		return nil, nil
 	}
 	hookDelay := time.Since(hookStart).Seconds()
@@ -3227,7 +3231,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	a.queueMu.Unlock()
 	if schedulingPaused {
 		a.cancelPreemptiveGeneration()
-		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		a.Session.Logger().Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
 	handle, err := a.usePreemptiveGenerationIfMatching(chatCtx, newMsg)
@@ -3325,7 +3329,7 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 		SmartTurnProbability: stProb,
 	}
 	decision, reason := decider.DecideBargeIn(input)
-	logger.Logger.Infow("barge_in.decision",
+	a.Session.Logger().Infow("barge_in.decision",
 		"decision", decision.String(),
 		"reason", reason,
 		"text", transcript,
@@ -3528,7 +3532,7 @@ func (a *AgentActivity) maybeStartPreemptiveGeneration(transcript string, confid
 		UserInitiated:  &userInitiated,
 	})
 	if err != nil {
-		logger.Logger.Warnw("failed to start preemptive generation", err, "transcript", transcript)
+		a.Session.Logger().Warnw("failed to start preemptive generation", err, "transcript", transcript)
 		return
 	}
 
@@ -3574,7 +3578,7 @@ func (a *AgentActivity) usePreemptiveGenerationIfMatching(chatCtx *llm.ChatConte
 	// this user message before the preemptive-match branch runs, and a second emit
 	// duplicates the user line in ChatCtx and every transcript built from it.
 	a.Session.watchActiveRunSpeechHandle(preemptive.speech)
-	logger.Logger.Debugw("using preemptive generation", "preemptiveLeadTime", time.Since(preemptive.createdAt).Seconds())
+	a.Session.Logger().Debugw("using preemptive generation", "preemptiveLeadTime", time.Since(preemptive.createdAt).Seconds())
 	return preemptive.speech, nil
 }
 
@@ -3813,7 +3817,7 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	}
 	if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); realtime && TurnDetectionMode(mode) != TurnDetectionModeRealtimeLLM {
 		if turnDetection && mode != "" {
-			logger.Logger.Warnw("turn_detection is set to a local mode, but realtime server turn detection is enabled", nil)
+			a.Session.Logger().Warnw("turn_detection is set to a local mode, but realtime server turn detection is enabled", nil)
 			return ""
 		}
 		if !turnDetection && (mode == "" || TurnDetectionMode(mode) == TurnDetectionModeSTT) {
@@ -3821,7 +3825,7 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 				return TurnDetectionModeVAD
 			}
 			if TurnDetectionMode(mode) == TurnDetectionModeSTT {
-				logger.Logger.Warnw("turn_detection is set to stt, but realtime model local STT turn detection is ignored", nil)
+				a.Session.Logger().Warnw("turn_detection is set to stt, but realtime model local STT turn detection is ignored", nil)
 				return ""
 			}
 		}
@@ -3829,17 +3833,17 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	switch TurnDetectionMode(mode) {
 	case TurnDetectionModeSTT:
 		if !a.hasSTTModel() {
-			logger.Logger.Warnw("turn_detection is set to stt, but no STT model is provided", nil)
+			a.Session.Logger().Warnw("turn_detection is set to stt, but no STT model is provided", nil)
 			return ""
 		}
 	case TurnDetectionModeVAD:
 		if !a.hasVADModel() {
-			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
+			a.Session.Logger().Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
 			return ""
 		}
 	case TurnDetectionModeRealtimeLLM:
 		if realtime, turnDetection := a.realtimeTurnDetectionCapabilities(); !realtime || !turnDetection {
-			logger.Logger.Warnw("turn_detection is set to realtime_llm, but no realtime model with turn detection is provided", nil)
+			a.Session.Logger().Warnw("turn_detection is set to realtime_llm, but no realtime model with turn detection is provided", nil)
 			if realtime && a.hasVADModel() {
 				return TurnDetectionModeVAD
 			}
@@ -3992,13 +3996,13 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				attribute.String(telemetry.AttrEOULanguage, info.Language),
 			}
 			if err == nil {
-				logger.Logger.Infow("EOU prediction", "probability", prob)
+				a.Session.Logger().Infow("EOU prediction", "probability", prob)
 				attrs = append(attrs, attribute.Float64(telemetry.AttrEOUProbability, prob))
 				if prob < threshold {
 					endpointingDelay = maxDelay
 				}
 			} else {
-				logger.Logger.Errorw("EOU prediction failed", err)
+				a.Session.Logger().Errorw("EOU prediction failed", err)
 			}
 			attrs = append(attrs, attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay))
 			eouSpan.SetAttributes(attrs...)
@@ -4052,7 +4056,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		}
 		a.clearPendingUserTurn()
 		if _, err := a.completeUserTurn(a.ctx, info); err != nil {
-			logger.Logger.Errorw("user turn completion failed", err)
+			a.Session.Logger().Errorw("user turn completion failed", err)
 			return
 		}
 		a.clearCommittedSpeechTiming(turnSeq)
@@ -4095,12 +4099,12 @@ func (a *AgentActivity) startSmartTurnPrediction(info EndOfTurnInfo, spokeAtOnse
 	out := make(chan smartTurnOutcome, 1)
 
 	go func() {
-		logger.Logger.Infow("turn_audio_buffer.reset", "old_size_bytes", audioFramesBytes(frames))
+		a.Session.Logger().Infow("turn_audio_buffer.reset", "old_size_bytes", audioFramesBytes(frames))
 		predictCtx, predictCancel := context.WithTimeout(context.WithoutCancel(a.ctx), smartTurnPredictTimeout)
 		res, err := detector.PredictEndOfTurnAudio(predictCtx, frames)
 		predictCancel()
 		if err != nil {
-			logger.Logger.Errorw("smart_turn.predict_failed", err, "fallback", "max_delay")
+			a.Session.Logger().Errorw("smart_turn.predict_failed", err, "fallback", "max_delay")
 			out <- smartTurnOutcome{stretch: true}
 			return
 		}
@@ -4115,7 +4119,7 @@ func (a *AgentActivity) startSmartTurnPrediction(info EndOfTurnInfo, spokeAtOnse
 		}
 		a.falseInterruptionMu.Unlock()
 
-		logger.Logger.Infow("smart_turn.result_observed",
+		a.Session.Logger().Infow("smart_turn.result_observed",
 			"probability", res.Probability,
 			"inference_ms", res.InferenceMs,
 			"is_complete", res.IsComplete,
