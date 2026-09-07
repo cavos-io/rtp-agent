@@ -2,7 +2,7 @@ package nltk
 
 const (
 	PluginTitle   = "rtp-agent.plugins.nltk"
-	PluginVersion = "v0.8.2"
+	PluginVersion = "v0.8.3"
 	PluginPackage = "rtp-agent.plugins.nltk"
 )
 
