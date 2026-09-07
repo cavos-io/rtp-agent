@@ -110,7 +110,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
-	livekitlogger "github.com/livekit/protocol/logger"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 	"google.golang.org/genai"
@@ -629,7 +629,7 @@ type AppConfig struct {
 	WorkerOptions   worker.WorkerOptions
 	Agora           workeragora.Options
 	AgoraGreeting   string
-	Logger          livekitlogger.Logger
+	Logger          protoLogger.Logger
 	MetricsRegistry *telemetry.MetricRegistry
 	Instructions    string
 
@@ -2334,6 +2334,9 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 	}
 	defer a.closeMCPServers()
 	if ctx != nil {
+		if err := a.Session.SetLogger(ctx.Logger()); err != nil {
+			return fmt.Errorf("set session logger: %w", err)
+		}
 		ctx.SetPrimarySession(a.Session)
 		a.Session.SetJobContext(ctx)
 	}

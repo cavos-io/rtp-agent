@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/google/uuid"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -138,6 +139,7 @@ type AgentSessionUpdateOptions struct {
 
 var (
 	ErrAgentSessionNotRunning                     = errors.New("AgentSession isn't running")
+	ErrAgentSessionRunning                        = errors.New("agent session is running")
 	ErrAgentSessionNestedRun                      = errors.New("nested runs are not supported")
 	ErrAgentSessionUserdataNotSet                 = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet               = errors.New("agent session job context is not set")
@@ -286,6 +288,7 @@ type AgentSession struct {
 	Tools         []llm.Tool
 	Assistant     SessionAssistant
 	Room          *lksdk.Room
+	log           protoLogger.Logger
 
 	MetricsCollector    *telemetry.UsageCollector
 	ModelUsageCollector *telemetry.ModelUsageCollector
@@ -294,6 +297,7 @@ type AgentSession struct {
 	agentState AgentState
 
 	mu                      sync.Mutex
+	logMu                   sync.RWMutex
 	lifecycleGate           chan struct{}
 	activity                *AgentActivity
 	started                 bool
@@ -689,7 +693,7 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 		return func() {}
 	}
 	if eventType == "metrics_collected" {
-		logger.Logger.Warnw("metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency.", nil)
+		s.Logger().Warnw("metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency.", nil)
 	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
@@ -833,7 +837,7 @@ func (s *AgentSession) recordEvent(ev Event) {
 	listeners = append(listeners, s.collectEventListenersLocked(allAgentEventsType)...)
 	s.mu.Unlock()
 	for _, listener := range listeners {
-		callAgentSessionListener(eventType, listener, ev)
+		callAgentSessionListener(s.Logger(), eventType, listener, ev)
 	}
 }
 
@@ -1187,6 +1191,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 		lifecycleGate:       make(chan struct{}, 1),
 		teardownCh:          make(chan struct{}),
+		log:                 logger.Logger,
 	}
 	session.Timeline = NewEventTimeline(session)
 	if opts.VideoSampler != nil {
@@ -1195,6 +1200,45 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		session.videoSampler = NewVoiceActivityVideoSampler(session, 1.0, images.EncodeOptions{})
 	}
 	return session
+}
+
+// SetLogger sets the session logger before the session starts.
+func (s *AgentSession) SetLogger(log protoLogger.Logger) error {
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+
+		return ErrAgentSessionRunning
+	}
+
+	s.logMu.Lock()
+
+	s.mu.Unlock()
+	defer s.logMu.Unlock()
+
+	if log == nil {
+		log = logger.Logger
+	}
+
+	s.log = log
+
+	return nil
+}
+
+// Logger returns the logger bound to this session.
+func (s *AgentSession) Logger() protoLogger.Logger {
+	if s == nil {
+		return logger.Logger
+	}
+
+	s.logMu.RLock()
+	defer s.logMu.RUnlock()
+
+	if s.log == nil {
+		return logger.Logger
+	}
+
+	return s.log
 }
 
 func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
@@ -2267,7 +2311,7 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
 	s.appendRecordedEvent(ev)
 	for _, listener := range closeEventListeners {
-		callAgentSessionListener("close", listener, ev)
+		callAgentSessionListener(s.Logger(), "close", listener, ev)
 	}
 	if closePrimarySubscribed {
 		closePrimary <- *ev
@@ -2368,10 +2412,10 @@ func (s *AgentSession) closeEventListenersLocked() []func(Event) {
 	return listeners
 }
 
-func callAgentSessionListener(eventType string, listener func(Event), ev Event) {
+func callAgentSessionListener(log protoLogger.Logger, eventType string, listener func(Event), ev Event) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("failed to emit event "+eventType, panicAsError(recovered))
+			log.Warnw("failed to emit event "+eventType, panicAsError(recovered))
 		}
 	}()
 	listener(ev)
@@ -2665,12 +2709,12 @@ func (s *AgentSession) updateAgentState(state AgentState, spanCtx context.Contex
 	}
 	if avatar != nil {
 		if err := avatar.UpdateState(avatarStateForAgentState(state)); err != nil {
-			logger.Logger.Warnw("avatar state update failed", err, "state", state)
+			s.Logger().Warnw("avatar state update failed", err, "state", state)
 		}
 	}
 	s.updateUserAwayTimer()
 
-	logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+	s.Logger().Debugw("Agent state changed", "old", oldState, "new", state)
 	ev := AgentStateChangedEvent{
 		OldState:  oldState,
 		NewState:  state,
@@ -2730,7 +2774,7 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 
 	s.updateUserAwayTimer()
 
-	logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
+	s.Logger().Debugw("User state changed", "old", oldState, "new", state)
 	ev := UserStateChangedEvent{
 		OldState:  oldState,
 		NewState:  state,
@@ -2864,11 +2908,11 @@ func (s *AgentSession) onAgentSpeakingStall() {
 	timeout := s.Options.AgentSpeakingStallTimeout
 	s.mu.Unlock()
 
-	logger.Logger.Warnw("agent speaking stalled; interrupting stuck reply to recover", nil,
+	s.Logger().Warnw("agent speaking stalled; interrupting stuck reply to recover", nil,
 		"timeout_seconds", timeout)
 
 	if err := s.Interrupt(true); err != nil {
-		logger.Logger.Warnw("failed to interrupt stalled agent speech", err)
+		s.Logger().Warnw("failed to interrupt stalled agent speech", err)
 	}
 }
 
@@ -2952,7 +2996,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if loggedUserInput == "" && opts.UserMessage != nil {
 		loggedUserInput = opts.UserMessage.TextContent()
 	}
-	logger.Logger.Infow("Generating reply", "userInput", loggedUserInput)
+
+	s.Logger().Infow("Generating reply", "userInput", loggedUserInput)
 
 	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
@@ -2965,7 +3010,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if inputModality == "" {
 		inputModality = "text"
 	}
-	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
+
+	handle := newSpeechHandleWithLogger(allowInterruptions, InputDetails{Modality: inputModality}, s.Logger())
 	if opts.InstructionVariants != nil {
 		handle.Generation.Instructions = opts.InstructionVariants
 	} else if opts.Instructions != "" {
@@ -3059,7 +3105,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 		}
 	}
 
-	logger.Logger.Infow("Saying text", "text", opts.Text)
+	s.Logger().Infow("Saying text", "text", opts.Text)
 
 	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
@@ -3076,7 +3122,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 		addToChatContext = true
 	}
 
-	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	handle := newSpeechHandleWithLogger(allowInterruptions, InputDetails{Modality: "text"}, s.Logger())
 	handle.Generation.Text = opts.Text
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
@@ -3254,11 +3300,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 			runCtx = context.Background()
 		}
 		if err := replacementAssistant.Start(runCtx, s); err != nil {
-			logger.Logger.Errorw("failed to start replacement assistant", err)
+			s.Logger().Errorw("failed to start replacement assistant", err)
 			s.EmitError(ErrorEvent{Error: err, Source: replacementAssistant})
 		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
 			if err := closer.Close(); err != nil {
-				logger.Logger.Errorw("failed to close replaced assistant", err)
+				s.Logger().Errorw("failed to close replaced assistant", err)
 				s.EmitError(ErrorEvent{Error: err, Source: previousAssistant})
 			}
 		}
@@ -3268,7 +3314,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	if replacementAssistant == nil {
 		if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
 			if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
-				logger.Logger.Errorw("failed to update realtime model on assistant", err)
+				s.Logger().Errorw("failed to update realtime model on assistant", err)
 				s.EmitError(ErrorEvent{Error: err, Source: sessionRealtimeModel})
 			}
 		}
@@ -3361,7 +3407,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.signalTeardown()
 		s.clearEventListenersLocked()
 		s.mu.Unlock()
-		runAgentSessionPreCloseCallbacks(preCloseCallbacks)
+		runAgentSessionPreCloseCallbacks(s.Logger(), preCloseCallbacks)
 		return nil
 	}
 	s.signalTeardown()
@@ -3469,7 +3515,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
-	runAgentSessionPreCloseCallbacks(preCloseCallbacks)
+
+	runAgentSessionPreCloseCallbacks(s.Logger(), preCloseCallbacks)
 	if agentSpeakingSpan != nil {
 		agentSpeakingSpan.End()
 	}
@@ -3497,12 +3544,12 @@ func (s *AgentSession) preCloseCallbacksForCycleLocked() []func() {
 	return append([]func(){}, s.preCloseCallbacks...)
 }
 
-func runAgentSessionPreCloseCallbacks(callbacks []func()) {
+func runAgentSessionPreCloseCallbacks(log protoLogger.Logger, callbacks []func()) {
 	for _, callback := range callbacks {
 		func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("agent session pre-close callback panicked", fmt.Errorf("%v", recovered))
+					log.Errorw("agent session pre-close callback panicked", panicAsError(recovered))
 				}
 			}()
 			callback()

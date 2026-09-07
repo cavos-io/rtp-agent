@@ -471,6 +471,11 @@ func (c *JobContext) LogContextFields() map[string]any {
 	return c.logContextFields
 }
 
+// Logger returns the process logger with this job's current fields attached.
+func (c *JobContext) Logger() ProtoLogger {
+	return logger.Logger.WithValues(jobLogValues(c)...)
+}
+
 func (c *JobContext) SetLogContextFields(fields map[string]any) {
 	c.logContextFields = fields
 	if c.logContextFields == nil {
@@ -595,6 +600,7 @@ func (c *JobContext) RoomCallbacks() *RoomCallbackRegistry {
 			c.roomCallbacks = livekitNewRoomCallbackRegistry()
 		}
 	})
+	c.roomCallbacks.SetLogger(c.Logger())
 	return c.roomCallbacks
 }
 
@@ -663,7 +669,10 @@ func (c *JobContext) roomNeedsConnect() bool {
 func (c *JobContext) NewRoom(cb *RoomCallback, options ...ConnectOptions) *SDKRoom {
 	opts := livekitJobContextNormalizeConnectOptions(options...)
 	c.AddRoomCallback(cb)
-	return jobContextNewRoom(c.roomCallbackWithEntrypoints(c.RoomCallbacks().Callback(), opts.AutoSubscribe))
+	room := jobContextNewRoom(c.roomCallbackWithEntrypoints(c.RoomCallbacks().Callback(), opts.AutoSubscribe))
+	room.SetLogger(c.Logger())
+
+	return room
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...ConnectOptions) error {
@@ -731,6 +740,10 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	sessionCtx := opts.SessionContext
 	if sessionCtx == nil {
 		sessionCtx = ctx
+	}
+
+	if err := session.SetLogger(c.Logger()); err != nil {
+		return fmt.Errorf("set session logger: %w", err)
 	}
 
 	c.SetPrimarySession(session)

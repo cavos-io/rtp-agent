@@ -19,7 +19,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -188,7 +187,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	va.mu.Unlock()
 	if oldStream != nil {
 		if err := oldStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
-			logger.Logger.Warnw("failed to close old STT stream while clearing input transcription", err)
+			va.session.Logger().Warnw("failed to close old STT stream while clearing input transcription", err)
 		}
 	}
 	if sttObj == nil {
@@ -245,7 +244,7 @@ func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
-	logger.Logger.Infow("PipelineAgent started")
+	va.session.Logger().Infow("PipelineAgent started")
 
 	var vadStream vad.VADStream
 	if va.vad != nil {
@@ -365,7 +364,7 @@ func (va *PipelineAgent) pushSTTFrame(frame *model.AudioFrame) error {
 		if resampled, err := audio.ResampleAudioFrame(sttFrame, targetRate); err == nil {
 			sttFrame = resampled
 		} else {
-			logger.Logger.Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
+			va.session.Logger().Warnw("STT resample failed", err, "from", sttFrame.SampleRate, "to", targetRate)
 		}
 	}
 	va.mu.Lock()
@@ -412,7 +411,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		}
 
 		if ev.Type == vad.VADEventStartOfSpeech {
-			logger.Logger.Infow("User started speaking")
+			va.session.Logger().Infow("User started speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = true
 			va.resetVADStallTimerLocked()
@@ -425,7 +424,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 			va.resetGenerationCtxUnlessPaused()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
-			logger.Logger.Infow("User stopped speaking")
+			va.session.Logger().Infow("User stopped speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
@@ -525,7 +524,7 @@ func (va *PipelineAgent) onVADStall() {
 	session := va.session
 	va.mu.Unlock()
 
-	logger.Logger.Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
+	va.session.Logger().Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
 	if stream != nil {
 
@@ -536,7 +535,7 @@ func (va *PipelineAgent) onVADStall() {
 			err = stream.Flush()
 		}
 		if err != nil && !isSpeechStreamShutdownError(err) {
-			logger.Logger.Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
+			va.session.Logger().Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
 			va.emitError(err, va.vad)
 		}
 	}
@@ -631,7 +630,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 
 		if ev.Type == stt.SpeechEventFinalTranscript {
 			transcript := alternative.Text
-			logger.Logger.Infow("Final transcript", "text", transcript)
+			va.session.Logger().Infow("Final transcript", "text", transcript)
 
 			msg := &llm.ChatMessage{
 				Role: llm.ChatRoleUser,
@@ -674,7 +673,7 @@ func (va *PipelineAgent) flushActiveVADSegment() {
 		return
 	}
 	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
-		logger.Logger.Warnw("failed to flush VAD stream after STT end-of-speech", err)
+		va.session.Logger().Warnw("failed to flush VAD stream after STT end-of-speech", err)
 		va.emitError(err, va.vad)
 	}
 }
@@ -939,19 +938,19 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		ctx = replyCtx
 	}
 
-	logger.Logger.Infow("Generating reply")
+	va.session.Logger().Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
 
 	registeredTools, err := sessionRegisteredTools(ctx, session)
 	if err != nil {
-		logger.Logger.Errorw("failed to register reply tools", err)
+		va.session.Logger().Errorw("failed to register reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
 		session.UpdateAgentState(AgentStateListening)
 		return
 	}
 	selectedTools, err := resolveToolsByID(registeredTools, opts.Tools)
 	if err != nil {
-		logger.Logger.Errorw("failed to resolve reply tools", err)
+		va.session.Logger().Errorw("failed to resolve reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
 		session.UpdateAgentState(AgentStateListening)
 		return
@@ -979,7 +978,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		}
 	}
 	appendToolOutput := func(toolOut ToolExecutionOutput, functionCalls *[]*llm.FunctionCall, functionCallOutputs *[]*llm.FunctionCallOutput) bool {
-		logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+		va.session.Logger().Infow("Tool executed", "name", toolOut.FncCall.Name)
 		fncCall := toolOut.FncCall
 		*functionCalls = append(*functionCalls, &fncCall)
 		*functionCallOutputs = append(*functionCallOutputs, toolOut.FncCallOut)
@@ -1040,7 +1039,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				inferenceCtx = replyCtx.Copy()
 			}
 			if err := updateAgentInstructionsMessage(inferenceCtx, llm.NewInstructions(toolReplyInstructions), true); err != nil {
-				logger.Logger.Warnw("failed to set reply instructions", err)
+				va.session.Logger().Warnw("failed to set reply instructions", err)
 			}
 			toolReplyInstructions = ""
 		}
@@ -1273,7 +1272,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 			if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
 				if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
-					logger.Logger.Warnw("failed to refresh reply instructions", err)
+					va.session.Logger().Warnw("failed to refresh reply instructions", err)
 				}
 			}
 		}
@@ -1333,7 +1332,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 					}
 					if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
 						if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
-							logger.Logger.Warnw("failed to refresh reply instructions", err)
+							va.session.Logger().Warnw("failed to refresh reply instructions", err)
 						}
 					}
 				}
@@ -1693,7 +1692,8 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 		if suppressContextCanceledError(ctx, speech, err) {
 			return false
 		}
-		logger.Logger.Warnw("failed to wait for assistant playback", err)
+
+		va.session.Logger().Warnw("failed to wait for assistant playback", err)
 		return false
 	}
 	if session.activity != nil {
@@ -1759,7 +1759,7 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	playoutCtx := context.WithoutCancel(ctx)
 	ev, err := playback.WaitForPlayout(playoutCtx)
 	if err != nil {
-		logger.Logger.Warnw("failed to wait for interrupted playback", err)
+		va.session.Logger().Warnw("failed to wait for interrupted playback", err)
 		return ""
 	}
 	if session.activity != nil {
@@ -1924,7 +1924,8 @@ func (va *PipelineAgent) logProviderError(message string, err error, source any,
 	if provider == "" {
 		provider = "unknown"
 	}
-	logger.Logger.Errorw(
+
+	va.session.Logger().Errorw(
 		message,
 		err,
 		"error", err.Error(),

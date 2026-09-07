@@ -20,6 +20,16 @@ type failingRecordingWriter struct {
 func (w *failingRecordingWriter) WritePCM([]int16) (int, error) { return 0, w.writeErr }
 func (w *failingRecordingWriter) Close() error                  { return w.closeErr }
 
+func TestRecorderIOFlushRejectsInvalidSampleRate(t *testing.T) {
+	for _, rate := range []int{-1, 0, 1 << 32} {
+		recorder := NewRecorderIO(nil)
+		recorder.flush(rate, time.Now())
+		if !errors.Is(recorder.recordingError(), errInvalidRecordingSampleRate) {
+			t.Fatalf("flush(%d) error = %v", rate, recorder.recordingError())
+		}
+	}
+}
+
 func TestRecorderIORecordingStartedAtReturnsNilBeforeAudio(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
 

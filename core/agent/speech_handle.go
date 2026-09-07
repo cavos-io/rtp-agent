@@ -13,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/google/uuid"
+	protoLogger "github.com/livekit/protocol/logger"
 )
 
 const (
@@ -76,6 +77,7 @@ type SpeechHandle struct {
 	Generation         SpeechGenerationOptions
 	Priority           int
 	CreatedAt          time.Time
+	log                protoLogger.Logger
 
 	numSteps               int
 	chatItems              []llm.ChatItem
@@ -103,14 +105,23 @@ type SpeechHandle struct {
 }
 
 func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *SpeechHandle {
+	return newSpeechHandleWithLogger(allowInterruptions, inputDetails, logger.Logger)
+}
+
+func newSpeechHandleWithLogger(allowInterruptions bool, inputDetails InputDetails, log protoLogger.Logger) *SpeechHandle {
 	if inputDetails.Modality == "" {
 		inputDetails = DefaultInputDetails()
+	}
+
+	if log == nil {
+		log = logger.Logger
 	}
 	return &SpeechHandle{
 		ID:                 "speech_" + uuid.NewString()[:12],
 		AllowInterruptions: allowInterruptions,
 		InputDetails:       inputDetails,
 		CreatedAt:          time.Now(),
+		log:                log,
 		numSteps:           1,
 		interruptCh:        make(chan struct{}),
 		doneCh:             make(chan struct{}),
@@ -464,7 +475,7 @@ func (s *SpeechHandle) AddChatItems(items ...llm.ChatItem) {
 		s.mu.Unlock()
 
 		for _, callback := range callbacks {
-			callSpeechItemAddedCallback(callback, item)
+			callSpeechItemAddedCallback(callback, item, s)
 		}
 
 		s.mu.Lock()
@@ -553,7 +564,7 @@ func (s *SpeechHandle) MarkGenerationDone() error {
 func callSpeechDoneCallback(callback func(*SpeechHandle), speech *SpeechHandle) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("error in done_callback", panicAsError(recovered))
+			speech.logger().Warnw("error in done_callback", panicAsError(recovered))
 		}
 	}()
 	callback(speech)
@@ -565,10 +576,10 @@ func callSpeechDoneCallbacks(callbacks []func(*SpeechHandle), speech *SpeechHand
 	}
 }
 
-func callSpeechItemAddedCallback(callback func(llm.ChatItem), item llm.ChatItem) {
+func callSpeechItemAddedCallback(callback func(llm.ChatItem), item llm.ChatItem, speech *SpeechHandle) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Warnw("error in item_added_callback", panicAsError(recovered))
+			speech.logger().Warnw("error in item_added_callback", panicAsError(recovered))
 		}
 	}()
 	callback(item)
@@ -585,6 +596,14 @@ func (s *SpeechHandle) closeGenerationLocked(index int) {
 	if !isClosed(s.generationChs[index]) {
 		close(s.generationChs[index])
 	}
+}
+
+func (s *SpeechHandle) logger() protoLogger.Logger {
+	if s == nil || s.log == nil {
+		return logger.Logger
+	}
+
+	return s.log
 }
 
 func isClosed(ch <-chan struct{}) bool {

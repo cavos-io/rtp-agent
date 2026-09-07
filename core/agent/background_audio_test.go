@@ -315,7 +315,7 @@ func TestReadAudioFramesFromFileReadsPCMBackgroundAudio(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	frames := readAudioFramesFromFile(path, false, make(chan struct{}))
+	frames := (&BackgroundAudioPlayer{}).readAudioFramesFromFile(path, false, make(chan struct{}))
 
 	select {
 	case frame, ok := <-frames:

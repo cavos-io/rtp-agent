@@ -18,7 +18,7 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
-	livekitlogger "github.com/livekit/protocol/logger"
+	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/twitchtv/twirp"
@@ -4312,6 +4312,31 @@ func TestRoomIOHandleAgentSessionCloseWarnsOnDeleteRoomUnknownError(t *testing.T
 	}
 }
 
+func TestRoomIOUsesAgentSessionLogger(t *testing.T) {
+	sessionLogger := &roomIORecordingLogger{}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	if err := session.SetLogger(sessionLogger); err != nil {
+		t.Fatalf("SetLogger() error = %v", err)
+	}
+
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(context.Context, string) error {
+				return errors.New("boom")
+			},
+		},
+		roomName: func() string { return "room-a" },
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	waitForRoomDeleteIdle(t, rio)
+	if !stringSliceContains(sessionLogger.warnMessages, "failed to delete room on agent session close") {
+		t.Fatalf("warn messages = %#v, want session-scoped RoomIO warning", sessionLogger.warnMessages)
+	}
+}
+
 func waitForRoomDeleteIdle(t *testing.T, rio *RoomIO) {
 	t.Helper()
 
@@ -4341,19 +4366,19 @@ func (l *roomIORecordingLogger) Warnw(msg string, err error, keysAndValues ...an
 	l.warnMessages = append(l.warnMessages, msg)
 }
 func (l *roomIORecordingLogger) Errorw(string, error, ...any) {}
-func (l *roomIORecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
+func (l *roomIORecordingLogger) WithValues(keysAndValues ...any) protoLogger.Logger {
 	return l
 }
-func (l *roomIORecordingLogger) WithUnlikelyValues(keysAndValues ...any) livekitlogger.UnlikelyLogger {
-	return livekitlogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
+func (l *roomIORecordingLogger) WithUnlikelyValues(keysAndValues ...any) protoLogger.UnlikelyLogger {
+	return protoLogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
 }
-func (l *roomIORecordingLogger) WithName(string) livekitlogger.Logger      { return l }
-func (l *roomIORecordingLogger) WithComponent(string) livekitlogger.Logger { return l }
-func (l *roomIORecordingLogger) WithCallDepth(int) livekitlogger.Logger    { return l }
-func (l *roomIORecordingLogger) WithItemSampler() livekitlogger.Logger     { return l }
-func (l *roomIORecordingLogger) WithoutSampler() livekitlogger.Logger      { return l }
-func (l *roomIORecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
-	return livekitlogger.GetDiscardLogger().WithDeferredValues()
+func (l *roomIORecordingLogger) WithName(string) protoLogger.Logger      { return l }
+func (l *roomIORecordingLogger) WithComponent(string) protoLogger.Logger { return l }
+func (l *roomIORecordingLogger) WithCallDepth(int) protoLogger.Logger    { return l }
+func (l *roomIORecordingLogger) WithItemSampler() protoLogger.Logger     { return l }
+func (l *roomIORecordingLogger) WithoutSampler() protoLogger.Logger      { return l }
+func (l *roomIORecordingLogger) WithDeferredValues() (protoLogger.Logger, protoLogger.DeferredFieldResolver) {
+	return protoLogger.GetDiscardLogger().WithDeferredValues()
 }
 
 func stringSliceContains(values []string, want string) bool {
