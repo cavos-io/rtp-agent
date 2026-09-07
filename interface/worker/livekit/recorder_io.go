@@ -1,7 +1,9 @@
 package livekit
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -52,20 +54,14 @@ type recordedAudioFrame struct {
 
 const recordedAudioContinuityTolerance = 500 * time.Millisecond
 
+var errInvalidRecordingSampleRate = errors.New("recording sample rate must fit a positive uint32")
+
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	return &RecorderIO{
 		Session: session,
 		done:    make(chan struct{}),
 		now:     time.Now,
 	}
-}
-
-func (r *RecorderIO) logger() protoLogger.Logger {
-	if r == nil || r.Session == nil {
-		return logger.Logger
-	}
-
-	return r.Session.Logger()
 }
 
 func (r *RecorderIO) Recording() bool {
@@ -296,6 +292,12 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 }
 
 func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
+	if sampleRate <= 0 || uint64(sampleRate) > math.MaxUint32 {
+		r.setRecordingError(fmt.Errorf("%w: %d", errInvalidRecordingSampleRate, sampleRate))
+
+		return
+	}
+
 	r.mu.Lock()
 	if r.err != nil {
 		r.inFrames = nil
@@ -495,4 +497,12 @@ func copyRecordedChannel(stereo []int16, frames []normalizedRecordedFrame, baseS
 			stereo[destination] = frame.samples[i]
 		}
 	}
+}
+
+func (r *RecorderIO) logger() protoLogger.Logger {
+	if r == nil || r.Session == nil {
+		return logger.Logger
+	}
+
+	return r.Session.Logger()
 }

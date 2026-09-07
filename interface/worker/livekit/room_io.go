@@ -429,14 +429,6 @@ type audioOutputWaitResult struct {
 	drop bool
 }
 
-func (rio *RoomIO) logger() protoLogger.Logger {
-	if rio == nil || rio.AgentSession == nil {
-		return logger.Logger
-	}
-
-	return rio.AgentSession.Logger()
-}
-
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
 	if opts.AudioOutputSampleRate == 0 {
 		opts.AudioOutputSampleRate = roomIODefaultInputSampleRate
@@ -3257,4 +3249,12 @@ func (rio *RoomIO) clearAudioInputStateLocked() {
 	rio.audioInputParticipantID = ""
 	rio.audioInputGeneration++
 	rio.audioInputTracks = nil
+}
+
+func (rio *RoomIO) logger() protoLogger.Logger {
+	if rio == nil || rio.AgentSession == nil {
+		return logger.Logger
+	}
+
+	return rio.AgentSession.Logger()
 }

@@ -112,6 +112,7 @@ type Job = workerlivekit.Job
 
 type SDKRoom = workerlivekit.SDKRoom
 
+// ProtoLogger is the LiveKit protocol logger contract.
 type ProtoLogger = workerlivekit.ProtoLogger
 
 type Room = workerlivekit.Room

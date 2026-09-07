@@ -132,14 +132,6 @@ func newSpeechHandleWithLogger(allowInterruptions bool, inputDetails InputDetail
 	}
 }
 
-func (s *SpeechHandle) logger() protoLogger.Logger {
-	if s == nil || s.log == nil {
-		return logger.Logger
-	}
-
-	return s.log
-}
-
 func (s *SpeechHandle) IsDone() bool {
 	select {
 	case <-s.doneCh:
@@ -604,6 +596,14 @@ func (s *SpeechHandle) closeGenerationLocked(index int) {
 	if !isClosed(s.generationChs[index]) {
 		close(s.generationChs[index])
 	}
+}
+
+func (s *SpeechHandle) logger() protoLogger.Logger {
+	if s == nil || s.log == nil {
+		return logger.Logger
+	}
+
+	return s.log
 }
 
 func isClosed(ch <-chan struct{}) bool {

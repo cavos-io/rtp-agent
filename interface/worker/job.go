@@ -743,7 +743,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	}
 
 	if err := session.SetLogger(c.Logger()); err != nil {
-		return err
+		return fmt.Errorf("set session logger: %w", err)
 	}
 
 	c.SetPrimarySession(session)

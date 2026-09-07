@@ -3549,7 +3549,7 @@ func runAgentSessionPreCloseCallbacks(log protoLogger.Logger, callbacks []func()
 		func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					log.Errorw("agent session pre-close callback panicked", fmt.Errorf("%v", recovered))
+					log.Errorw("agent session pre-close callback panicked", panicAsError(recovered))
 				}
 			}()
 			callback()

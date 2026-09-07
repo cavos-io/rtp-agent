@@ -2335,7 +2335,7 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 	defer a.closeMCPServers()
 	if ctx != nil {
 		if err := a.Session.SetLogger(ctx.Logger()); err != nil {
-			return err
+			return fmt.Errorf("set session logger: %w", err)
 		}
 		ctx.SetPrimarySession(a.Session)
 		a.Session.SetJobContext(ctx)
