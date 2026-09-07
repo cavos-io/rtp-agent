@@ -581,9 +581,13 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 
 			s.applyTiming(stream)
 			s.adapter.setAvailable(i, true)
-			s.activeStream = stream
-			s.activeCancel = streamCancel
-			s.activeIndex = i
+			if err := s.installActiveStream(stream, streamCancel, i); err != nil {
+				_ = stream.Close()
+				if streamCancel != nil {
+					streamCancel()
+				}
+				return err
+			}
 			return nil
 		}
 	}
@@ -592,6 +596,18 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 		return s.allFailedError(lastErr)
 	}
 	return s.allFailedError(s.lastErr)
+}
+
+func (s *fallbackRecognizeStream) installActiveStream(stream RecognizeStream, cancel context.CancelFunc, index int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return context.Canceled
+	}
+	s.activeStream = stream
+	s.activeCancel = cancel
+	s.activeIndex = index
+	return nil
 }
 
 func (s *fallbackRecognizeStream) startProviderStream(ctx context.Context, stt STT) (RecognizeStream, context.CancelFunc, error) {
@@ -774,8 +790,14 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				s.adapter.setAvailable(s.activeIndex, false)
 				s.tryRecoverStream(s.activeIndex)
 			}
+			s.mu.Unlock()
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.mu.Lock()
+				if s.closed {
+					s.mu.Unlock()
+					return
+				}
 				recoveries := s.detachRecoveriesLocked()
 				s.closed = true
 				s.terminalErr = fbErr
@@ -784,7 +806,6 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				closeStreams(recoveries)
 				return
 			}
-			s.mu.Unlock()
 			continue
 		}
 
@@ -1023,11 +1044,13 @@ func (s *fallbackRecognizeStream) EndInput() error {
 
 func (s *fallbackRecognizeStream) Close() error {
 	s.mu.Lock()
+	// Close always ends input, even if the monitor already marked the stream closed
+	// (e.g. provider EOF). Callers expect post-Close input ops to report "input ended".
+	s.inputEnded = true
 	if s.closed {
 		s.mu.Unlock()
 		return nil
 	}
-	s.inputEnded = true
 	s.closed = true
 	activeStream := s.activeStream
 	activeCancel := s.activeCancel
