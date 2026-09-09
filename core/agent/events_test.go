@@ -1626,3 +1626,93 @@ func TestClientStateStringsExposeReferenceVocabulary(t *testing.T) {
 		}
 	}
 }
+
+func TestRunContextWithFillerSpeaksOnceToolSpeechGenerationIsDone(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	speechEvents := session.SpeechCreatedEvents()
+
+	toolSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	toolSpeech.AuthorizeGeneration()
+	if err := toolSpeech.MarkGenerationDone(); err != nil {
+		t.Fatalf("MarkGenerationDone: %v", err)
+	}
+	activity.queueMu.Lock()
+	activity.currentSpeech = toolSpeech
+	activity.queueMu.Unlock()
+	runCtx := NewRunContext(session, toolSpeech, &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 10 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "say" || ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != "still working" {
+			t.Fatalf("filler speech event = %#v, want say still working", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("filler stayed silent although the generation was already done")
+	}
+
+	close(releaseWork)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WithFiller did not return after work completed")
+	}
+}
+
+func TestRunContextWithFillerStaysSilentWhileGenerationRuns(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	speechEvents := session.SpeechCreatedEvents()
+
+	toolSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	toolSpeech.AuthorizeGeneration()
+	activity.queueMu.Lock()
+	activity.currentSpeech = toolSpeech
+	activity.queueMu.Unlock()
+	runCtx := NewRunContext(session, toolSpeech, &llm.FunctionCall{Name: "lookup"})
+
+	workStarted := make(chan struct{})
+	releaseWork := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "still working",
+			Delay: 10 * time.Millisecond,
+		}, func(context.Context) error {
+			close(workStarted)
+			<-releaseWork
+			return nil
+		})
+	}()
+	<-workStarted
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("filler spoke through the idle gate: %#v", ev)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(releaseWork)
+	<-done
+}
