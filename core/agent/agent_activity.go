@@ -268,6 +268,7 @@ func (a *AgentActivity) Start() {
 	if err := a.recordInitialConfiguration(); err != nil {
 		a.Session.Logger().Errorw("failed to record initial agent configuration", err)
 	}
+	a.bindPipelineChatContext()
 	if a.Session != nil && a.Session.LLM != nil {
 		if collector, ok := a.Session.LLM.(llmMetricsCollector); ok {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
@@ -578,6 +579,9 @@ func (a *AgentActivity) EndpointingOpts() EndpointingOptions {
 }
 
 func (a *AgentActivity) recordInitialConfiguration() error {
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
 	}
@@ -933,18 +937,22 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 		Instructions: &instructions,
 		CreatedAt:    time.Now(),
 	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
 	}
 	a.Agent.ChatCtx.Insert(configUpdate)
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, llm.NewInstructions(instructions), true); err != nil {
+		chatCtxMu.Unlock()
+		return err
+	}
+	chatCtxMu.Unlock()
 	if a.Session != nil {
 		if a.Session.ChatCtx == nil {
 			a.Session.ChatCtx = llm.NewChatContext()
 		}
 		a.Session.ChatCtx.Insert(configUpdate)
-	}
-	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, llm.NewInstructions(instructions), true); err != nil {
-		return err
 	}
 	if a.Session != nil {
 		if updater, ok := a.Session.Assistant.(instructionUpdatingAssistant); ok {
@@ -988,10 +996,13 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 			ToolsRemoved: toolsRemoved,
 			CreatedAt:    time.Now(),
 		}
+		chatCtxMu := a.Agent.chatContextMutex()
+		chatCtxMu.Lock()
 		if a.Agent.ChatCtx == nil {
 			a.Agent.ChatCtx = llm.NewChatContext()
 		}
 		a.Agent.ChatCtx.Insert(configUpdate)
+		chatCtxMu.Unlock()
 		if a.Session != nil {
 			if a.Session.ChatCtx == nil {
 				a.Session.ChatCtx = llm.NewChatContext()
@@ -1006,7 +1017,11 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 			}
 		}
 	}
-	return a.UpdateChatContext(ctx, a.Agent.ChatCtx)
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	chatCtx := a.Agent.ChatCtx
+	chatCtxMu.Unlock()
+	return a.UpdateChatContext(ctx, chatCtx)
 }
 
 func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
@@ -1019,17 +1034,27 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		excludeInvalid = excludeInvalidFunctionCalls[0]
 	}
 	if chatCtx == nil {
+		chatCtxMu := a.Agent.chatContextMutex()
+		chatCtxMu.Lock()
 		a.Agent.ChatCtx = llm.NewChatContext()
 		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
+			chatCtxMu.Unlock()
 			return err
 		}
+		chatCtxMu.Unlock()
+		a.bindPipelineChatContext()
 		return a.updateRealtimeChatContext(ctx)
 	}
 	if !excludeInvalid {
+		chatCtxMu := a.Agent.chatContextMutex()
+		chatCtxMu.Lock()
 		a.Agent.ChatCtx = chatCtx.Copy()
 		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
+			chatCtxMu.Unlock()
 			return err
 		}
+		chatCtxMu.Unlock()
+		a.bindPipelineChatContext()
 		return a.updateRealtimeChatContext(ctx)
 	}
 	tools := a.Tools()
@@ -1047,12 +1072,17 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 			}
 		}
 	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: tools,
 	})
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
+		chatCtxMu.Unlock()
 		return err
 	}
+	chatCtxMu.Unlock()
+	a.bindPipelineChatContext()
 	if err := a.updateRealtimeChatContext(ctx); err != nil {
 		return err
 	}
@@ -1107,6 +1137,20 @@ func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
 	chatCtx := a.Agent.ChatContext()
 	removeAgentInstructionsMessage(chatCtx)
 	return updater.UpdateChatContext(ctx, chatCtx)
+}
+
+func (a *AgentActivity) bindPipelineChatContext() {
+	if a == nil || a.Agent == nil || a.Session == nil {
+		return
+	}
+	pipeline, ok := a.Session.Assistant.(*PipelineAgent)
+	if !ok {
+		return
+	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	pipeline.setChatContext(a.Agent.ChatCtx, chatCtxMu)
+	chatCtxMu.Unlock()
 }
 
 func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
@@ -1556,14 +1600,25 @@ func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscrip
 		},
 		CreatedAt: time.Now(),
 	}
-	if a.Agent != nil && a.Agent.ChatCtx != nil {
-		_ = a.Agent.ChatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
+	if a.Agent != nil {
+		chatCtxMu := a.Agent.chatContextMutex()
+		chatCtxMu.Lock()
+		if a.Agent.ChatCtx != nil {
+			_ = a.Agent.ChatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
+		}
+		chatCtxMu.Unlock()
 	}
 	a.Session.EmitConversationItemAdded(msg)
 }
 
 func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
-	if a == nil || a.Agent == nil || a.Agent.ChatCtx == nil || ev.Item == nil {
+	if a == nil || a.Agent == nil || ev.Item == nil {
+		return
+	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
+	if a.Agent.ChatCtx == nil {
 		return
 	}
 	item := ev.Item
@@ -3650,10 +3705,13 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	if msg == nil || msg.TextContent() == "" {
 		return
 	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
 	}
 	a.Agent.ChatCtx.Append(msg)
+	chatCtxMu.Unlock()
 	if a.Session != nil {
 		a.Session.EmitConversationItemAdded(msg)
 	}
@@ -3664,6 +3722,9 @@ func (a *AgentActivity) recordTranscriptOnlyUserMessage(transcript string, confi
 	if transcript == "" {
 		return
 	}
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
 	}

@@ -2479,7 +2479,7 @@ func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {
 
 func openAIChatMessageTextOnly(msg *llm.ChatMessage) bool {
 	for _, c := range msg.Content {
-		if c.Image != nil || c.Audio != nil || c.Instructions != nil {
+		if c.Image != nil || c.Audio != nil {
 			return false
 		}
 	}

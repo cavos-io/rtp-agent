@@ -111,3 +111,22 @@ func TestBuildOpenAIChatMessagesCombinesTextOnlyParts(t *testing.T) {
 		t.Fatalf("MultiContent = %#v, want text-only message serialized as string content", messages[0].MultiContent)
 	}
 }
+
+func TestBuildOpenAIChatMessagesSerializesInstructionsAsText(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		Role: llm.ChatRoleSystem,
+		Content: []llm.ChatContent{{
+			Instructions: llm.NewInstructions("Follow the system policy."),
+		}},
+	})
+
+	messages := buildOpenAIChatMessages(ctx)
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	if got, want := messages[0].Content, "Follow the system policy."; got != want {
+		t.Fatalf("Content = %q, want instructions text %q", got, want)
+	}
+}

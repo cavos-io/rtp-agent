@@ -34,6 +34,7 @@ type PipelineAgent struct {
 	LLM     llm.LLM
 	tts     tts.TTS
 	chatCtx *llm.ChatContext
+	chatMu  *sync.Mutex
 
 	ttsStreamPacer *tts.SentenceStreamPacerOptions
 
@@ -85,6 +86,7 @@ func NewPipelineAgent(
 		LLM:       llmObj,
 		tts:       tts,
 		chatCtx:   chatCtx,
+		chatMu:    &sync.Mutex{},
 		audioInCh: make(chan *model.AudioFrame, 100),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -241,6 +243,25 @@ func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj
 	va.stt = sttObj
 	va.LLM = llmObj
 	va.tts = ttsObj
+}
+
+func (va *PipelineAgent) setChatContext(chatCtx *llm.ChatContext, chatMu *sync.Mutex) {
+	if chatCtx == nil {
+		chatCtx = llm.NewChatContext()
+	}
+	if chatMu == nil {
+		chatMu = &sync.Mutex{}
+	}
+	va.mu.Lock()
+	va.chatCtx = chatCtx
+	va.chatMu = chatMu
+	va.mu.Unlock()
+}
+
+func (va *PipelineAgent) chatContext() (*llm.ChatContext, *sync.Mutex) {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	return va.chatCtx, va.chatMu
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
@@ -638,7 +659,10 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 					{Text: transcript},
 				},
 			}
-			va.chatCtx.Append(msg)
+			chatCtx, chatMu := va.chatContext()
+			chatMu.Lock()
+			chatCtx.Append(msg)
+			chatMu.Unlock()
 			if session != nil {
 				session.EmitConversationItemAdded(msg)
 			}
@@ -848,7 +872,10 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
 				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
-				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+				chatCtx, chatMu := va.chatContext()
+				chatMu.Lock()
+				insertChatItemIfMissing(chatCtx, speech.Generation.AssistantMessage)
+				chatMu.Unlock()
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 			}
@@ -965,30 +992,29 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
 
-	replyCtx := va.chatCtx
+	activeChatCtx, activeChatMu := va.chatContext()
+	activeChatMu.Lock()
+	replyCtx := activeChatCtx.Copy()
 	if opts.ChatCtx != nil {
 		replyCtx = opts.ChatCtx.Copy()
 	}
 	if opts.UserMessage != nil {
-		insertChatItemIfMissing(va.chatCtx, opts.UserMessage)
-		if replyCtx == va.chatCtx {
-			replyCtx = va.chatCtx.Copy()
-		} else {
-			insertChatItemIfMissing(replyCtx, opts.UserMessage)
-		}
+		insertChatItemIfMissing(activeChatCtx, opts.UserMessage)
+		insertChatItemIfMissing(replyCtx, opts.UserMessage)
 	}
+	activeChatMu.Unlock()
 	appendToolOutput := func(toolOut ToolExecutionOutput, functionCalls *[]*llm.FunctionCall, functionCallOutputs *[]*llm.FunctionCallOutput) bool {
 		va.session.Logger().Infow("Tool executed", "name", toolOut.FncCall.Name)
 		fncCall := toolOut.FncCall
 		*functionCalls = append(*functionCalls, &fncCall)
 		*functionCallOutputs = append(*functionCallOutputs, toolOut.FncCallOut)
 		if toolOut.FncCallOut != nil {
-			va.chatCtx.Append(&fncCall)
-			va.chatCtx.Append(toolOut.FncCallOut)
-			if replyCtx != va.chatCtx {
-				replyCtx.Append(&fncCall)
-				replyCtx.Append(toolOut.FncCallOut)
-			}
+			activeChatMu.Lock()
+			activeChatCtx.Append(&fncCall)
+			activeChatCtx.Append(toolOut.FncCallOut)
+			activeChatMu.Unlock()
+			replyCtx.Append(&fncCall)
+			replyCtx.Append(toolOut.FncCallOut)
 		}
 		return toolOut.FncCallOut != nil
 	}
@@ -1194,7 +1220,9 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
-			msg := va.chatCtx.AddMessage(args)
+			activeChatMu.Lock()
+			msg := activeChatCtx.AddMessage(args)
+			activeChatMu.Unlock()
 			session.EmitConversationItemAdded(msg)
 			if opts.SpeechHandle != nil {
 				opts.SpeechHandle.AddChatItems(msg)
@@ -1236,12 +1264,16 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 		}
 		if releasedByUpdate {
-			pendingToolReplyTailItem = lastChatItem(va.chatCtx)
+			activeChatMu.Lock()
+			pendingToolReplyTailItem = lastChatItem(activeChatCtx)
+			activeChatMu.Unlock()
 			pendingToolOutCh = toolOutCh
 		}
 		if !executedTools && pendingToolOutCh != nil {
 			deferredToolReply = true
-			deferredToolReplyAtTail = chatItemIsTail(va.chatCtx, pendingToolReplyTailItem)
+			activeChatMu.Lock()
+			deferredToolReplyAtTail = chatItemIsTail(activeChatCtx, pendingToolReplyTailItem)
+			activeChatMu.Unlock()
 			for toolOut := range pendingToolOutCh {
 				executedTools = true
 				if appendToolOutput(toolOut, &functionCalls, &functionCallOutputs) {
@@ -1317,7 +1349,9 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 					pendingToolReplyTailItem = nil
 				}
 				if pendingReleasedByUpdate {
-					pendingToolReplyTailItem = lastChatItem(va.chatCtx)
+					activeChatMu.Lock()
+					pendingToolReplyTailItem = lastChatItem(activeChatCtx)
+					activeChatMu.Unlock()
 				}
 				if executedTools {
 					if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
@@ -1337,7 +1371,10 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 					}
 				}
 				if replyRequired {
-					toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, chatItemIsTail(va.chatCtx, pendingToolReplyTailItem))
+					activeChatMu.Lock()
+					atTail := chatItemIsTail(activeChatCtx, pendingToolReplyTailItem)
+					activeChatMu.Unlock()
+					toolReplyInstructions = pipelineToolReplyInstructions(functionCallOutputs, atTail)
 				}
 			}
 			if !executedTools || !replyRequired {
@@ -1787,16 +1824,16 @@ func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *A
 		selectedTools = filterOnEnterIgnoredTools(selectedTools)
 	}
 
-	replyCtx := va.chatCtx
+	activeChatCtx, activeChatMu := va.chatContext()
+	activeChatMu.Lock()
+	replyCtx := activeChatCtx.Copy()
 	if opts.ChatCtx != nil {
 		replyCtx = opts.ChatCtx.Copy()
 	}
 	if opts.UserMessage != nil {
-		if replyCtx == va.chatCtx {
-			replyCtx = va.chatCtx.Copy()
-		}
 		insertChatItemIfMissing(replyCtx, opts.UserMessage)
 	}
+	activeChatMu.Unlock()
 
 	inferenceCtx := replyCtx
 	inputModality := ""
