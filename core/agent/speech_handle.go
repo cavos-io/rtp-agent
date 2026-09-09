@@ -561,6 +561,26 @@ func (s *SpeechHandle) MarkGenerationDone() error {
 	return nil
 }
 
+func (s *SpeechHandle) generationSettled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.generationChs) == 0 {
+		return false
+	}
+	return isClosed(s.generationChs[len(s.generationChs)-1])
+}
+
+func (s *SpeechHandle) currentGenerationDone() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.generationChs) == 0 {
+		return nil
+	}
+	return s.generationChs[len(s.generationChs)-1]
+}
+
 func callSpeechDoneCallback(callback func(*SpeechHandle), speech *SpeechHandle) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
