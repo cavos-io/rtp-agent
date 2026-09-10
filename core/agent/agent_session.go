@@ -1821,6 +1821,20 @@ func (s *AgentSession) insertChatItem(item llm.ChatItem) {
 	s.ChatCtx.Insert(item)
 }
 
+// forwards generated items to the current activity
+func (s *AgentSession) commitItemsToAgentChatCtx(items ...llm.ChatItem) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return
+	}
+	activity.commitItemsToAgentChatCtx(items...)
+}
+
 func (s *AgentSession) hasChatItem(item llm.ChatItem) bool {
 	if s == nil || item == nil {
 		return false

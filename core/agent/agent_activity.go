@@ -105,6 +105,7 @@ type AgentActivity struct {
 	Agent            *Agent
 	Session          *AgentSession
 	agentStateMu     sync.Mutex
+	agentChatCtxMu   sync.Mutex
 	agentStateEvents <-chan AgentStateChangedEvent
 
 	currentSpeech  *SpeechHandle
@@ -3656,6 +3657,26 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	a.Agent.ChatCtx.Append(msg)
 	if a.Session != nil {
 		a.Session.EmitConversationItemAdded(msg)
+	}
+}
+
+// commitItemsToAgentChatCtx mirrors the reference _pipeline_reply_task: after a
+// speech plays out, the generated assistant/tool items are appended into the
+// agent-owned chat context — the one the next reply's prompt is built from
+// (RetrieveChatCtx). Without this, tool-registration copies (Agent.UpdateTools /
+// UpdateChatCtx) fork the agent ctx away from the session ctx and the model
+// never sees its own replies.
+func (a *AgentActivity) commitItemsToAgentChatCtx(items ...llm.ChatItem) {
+	if a == nil || a.Agent == nil {
+		return
+	}
+	a.agentChatCtxMu.Lock()
+	defer a.agentChatCtxMu.Unlock()
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	for _, item := range items {
+		insertChatItemIfMissing(a.Agent.ChatCtx, item)
 	}
 }
 
