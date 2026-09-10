@@ -1716,3 +1716,56 @@ func TestRunContextWithFillerStaysSilentWhileGenerationRuns(t *testing.T) {
 	close(releaseWork)
 	<-done
 }
+
+func TestRunContextWithFillerTakesTheFloorWhileToolStillRuns(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	speechEvents := session.SpeechCreatedEvents()
+
+	const holdLine = "This is taking a little longer than expected. I'm still searching."
+
+	toolSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	toolSpeech.AuthorizeGeneration()
+	if err := toolSpeech.MarkGenerationDone(); err != nil {
+		t.Fatalf("MarkGenerationDone: %v", err)
+	}
+	activity.queueMu.Lock()
+	activity.currentSpeech = toolSpeech
+	activity.queueMu.Unlock()
+
+	runCtx := NewRunContext(session, toolSpeech, &llm.FunctionCall{Name: "search_knowledge_base"})
+
+	if err := runCtx.WithFiller(context.Background(), FillerOptions{
+		Text:  holdLine,
+		Delay: 10 * time.Millisecond,
+	}, func(context.Context) error {
+		select {
+		case ev := <-speechEvents:
+			if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != holdLine {
+				t.Errorf("filler speech event = %#v, want the hold line", ev)
+				return nil
+			}
+		case <-time.After(time.Second):
+			t.Error("filler never asked to speak while the tool ran")
+			return nil
+		}
+
+		activity.processQueue()
+
+		activity.queueMu.Lock()
+		current := activity.currentSpeech
+		queued := len(activity.speechQueue)
+		activity.queueMu.Unlock()
+		if current == nil || current.Generation.Text != holdLine {
+			t.Errorf("currentSpeech = %v, want the hold line to hold the floor while the tool runs", current)
+		}
+		if queued != 0 {
+			t.Errorf("queued speeches = %d, want the hold line drained off the queue", queued)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithFiller error = %v, want nil", err)
+	}
+}

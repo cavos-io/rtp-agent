@@ -1394,7 +1394,7 @@ func (a *AgentActivity) schedulingTask() {
 func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
 
-	if a.currentSpeech != nil && a.currentSpeech.IsDone() {
+	if a.currentSpeech != nil && (a.currentSpeech.IsDone() || a.currentSpeech.generationSettled()) {
 		a.currentSpeech = nil
 	}
 	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
