@@ -213,6 +213,141 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+// assertAgentChatCtxHas fails unless agentCtx holds the wanted item pointers in
+// order (other items may sit between them).
+func assertAgentChatCtxHas(t *testing.T, agentCtx *llm.ChatContext, want ...llm.ChatItem) {
+	t.Helper()
+	if agentCtx == nil {
+		t.Fatal("agent ChatCtx is nil")
+	}
+	found := 0
+	for _, item := range agentCtx.Items {
+		if found < len(want) && item == want[found] {
+			found++
+		}
+	}
+	if found != len(want) {
+		t.Fatalf("agent ChatCtx items = %#v, want it to contain %d generated item(s) in order, matched %d", agentCtx.Items, len(want), found)
+	}
+}
+
+func TestPipelineAgentGenerateReplyCommitsAssistantMessageToAgentChatCtx(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello world"}},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("pipeline chatCtx items = %d, want 1 assistant message", len(chatCtx.Items))
+	}
+	assertAgentChatCtxHas(t, baseAgent.ChatCtx, chatCtx.Items[0])
+}
+
+func TestPipelineAgentSayCommitsAssistantMessageToAgentChatCtx(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.Generation.Text = "direct speech"
+	assistantMsg := &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "direct speech"}},
+	}
+	speech.Generation.AssistantMessage = assistantMsg
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte{1, 2},
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 100,
+			}},
+		},
+	}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	assertAgentChatCtxHas(t, baseAgent.ChatCtx, assistantMsg)
+}
+
+func TestPipelineAgentToolItemsCommittedToAgentChatCtx(t *testing.T) {
+	persistentCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, persistentCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	var fncCall *llm.FunctionCall
+	var fncOut *llm.FunctionCallOutput
+	var finalMsg *llm.ChatMessage
+	for _, item := range baseAgent.ChatCtx.Items {
+		switch v := item.(type) {
+		case *llm.FunctionCall:
+			fncCall = v
+		case *llm.FunctionCallOutput:
+			fncOut = v
+		case *llm.ChatMessage:
+			if v.Role == llm.ChatRoleAssistant {
+				finalMsg = v
+			}
+		}
+	}
+	if fncCall == nil || fncCall.CallID != "call_lookup" {
+		t.Fatalf("agent ChatCtx function call = %#v, want call_lookup", fncCall)
+	}
+	if fncOut == nil || fncOut.Output != "tool result" {
+		t.Fatalf("agent ChatCtx function output = %#v, want tool result", fncOut)
+	}
+	if finalMsg == nil || finalMsg.TextContent() != "done" {
+		t.Fatalf("agent ChatCtx assistant message = %#v, want final reply \"done\"", finalMsg)
+	}
+}
+
 func TestSessionRegisteredToolsAddsCancellationHelpersForCancellableTools(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", flags: llm.ToolFlagCancellable}}

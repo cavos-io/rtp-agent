@@ -849,6 +849,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
 				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+				session.commitItemsToAgentChatCtx(speech.Generation.AssistantMessage)
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 			}
@@ -985,6 +986,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		if toolOut.FncCallOut != nil {
 			va.chatCtx.Append(&fncCall)
 			va.chatCtx.Append(toolOut.FncCallOut)
+			va.session.commitItemsToAgentChatCtx(&fncCall, toolOut.FncCallOut)
 			if replyCtx != va.chatCtx {
 				replyCtx.Append(&fncCall)
 				replyCtx.Append(toolOut.FncCallOut)
@@ -1132,6 +1134,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 		}
 		waitForLLMGenerationDone(genData)
+		chatdbgCompletion(va.session.Logger(), genData)
 		if genData.StreamErr != nil {
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, genData.StreamErr) {
 				va.logLLMError("LLM stream failed", genData.StreamErr, "llm_stream")
@@ -1195,6 +1198,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
+			session.commitItemsToAgentChatCtx(msg)
 			session.EmitConversationItemAdded(msg)
 			if opts.SpeechHandle != nil {
 				opts.SpeechHandle.AddChatItems(msg)
