@@ -719,6 +719,7 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 		}
 		for _, speech := range active {
 			select {
+			case <-speech.currentGenerationDone():
 			case <-speech.doneCh:
 			case <-a.ctx.Done():
 				return errAgentActivityClosed
@@ -770,7 +771,7 @@ func (a *AgentActivity) activeSpeechHandles() []*SpeechHandle {
 	defer a.queueMu.Unlock()
 
 	active := make([]*SpeechHandle, 0, len(a.speechQueue)+1)
-	if a.currentSpeech != nil && !a.currentSpeech.IsDone() {
+	if a.currentSpeech != nil && !a.currentSpeech.IsDone() && !a.currentSpeech.generationSettled() {
 		active = append(active, a.currentSpeech)
 	}
 	for _, queued := range a.speechQueue {
@@ -1393,7 +1394,7 @@ func (a *AgentActivity) schedulingTask() {
 func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
 
-	if a.currentSpeech != nil && a.currentSpeech.IsDone() {
+	if a.currentSpeech != nil && (a.currentSpeech.IsDone() || a.currentSpeech.generationSettled()) {
 		a.currentSpeech = nil
 	}
 	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
