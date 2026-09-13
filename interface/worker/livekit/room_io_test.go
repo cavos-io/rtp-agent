@@ -3266,6 +3266,141 @@ func TestRoomIOPublishTranscriptionPacketNoopsWhenRoomDisconnected(t *testing.T)
 	}
 }
 
+func TestRoomIOClosingGateRejectsNewTranscriptionPublication(t *testing.T) {
+	var published atomic.Int32
+	rio := &RoomIO{
+		transcriptionPacketPublisher: func(*livekit.Transcription) error {
+			published.Add(1)
+			return nil
+		},
+	}
+
+	rio.BeginShutdown()
+	rio.userTranscriptionParticipantID = "caller-a"
+	rio.userTranscriptionTrackID = "TR_user_audio"
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "late transcript", IsFinal: true})
+
+	if got := published.Load(); got != 0 {
+		t.Fatalf("publication calls after closing gate = %d, want 0", got)
+	}
+}
+
+func TestRoomIOShutdownWaitsForAdmittedTranscriptionPublication(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	rio := &RoomIO{
+		transcriptionPacketPublisher: func(*livekit.Transcription) error {
+			close(entered)
+			<-release
+			return nil
+		},
+		publicationTransportUsable: func() bool { return true },
+	}
+
+	published := make(chan struct{})
+	go func() {
+		rio.userTranscriptionParticipantID = "caller-a"
+		rio.userTranscriptionTrackID = "TR_user_audio"
+		rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "pending transcript", IsFinal: true})
+		close(published)
+	}()
+	<-entered
+
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- rio.Shutdown(context.Background()) }()
+	select {
+	case err := <-shutdown:
+		t.Fatalf("Shutdown returned before admitted publication completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		t.Fatal("admitted publication did not finish")
+	}
+	select {
+	case err := <-shutdown:
+		if err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not return after admitted publication finished")
+	}
+}
+
+type shutdownTrackingTextWriter struct {
+	writes atomic.Int32
+	closes atomic.Int32
+}
+
+func (w *shutdownTrackingTextWriter) Write(string) { w.writes.Add(1) }
+func (w *shutdownTrackingTextWriter) Close()       { w.closes.Add(1) }
+
+func TestRoomIOShutdownDrainsQueuedTranscriptionAndClosesTrailer(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var packetCalls atomic.Int32
+	writer := &shutdownTrackingTextWriter{}
+	rio := NewRoomIO(nil, session, RoomOptions{DisableAudioOutput: true, DisableTextInput: true})
+	rio.audioTrackID = "TR_agent_audio"
+	rio.transcriptionParticipantIdentity = func() string { return "agent-a" }
+	rio.transcriptionPacketPublisher = func(*livekit.Transcription) error {
+		if packetCalls.Add(1) == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		}
+		return nil
+	}
+	rio.publicationTransportUsable = func() bool { return true }
+	rio.agentTextStreamOpener = func(lksdk.StreamTextOptions) roomIOTextStreamWriter { return writer }
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "pending ", IsFinal: false})
+	<-firstEntered
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "transcript", IsFinal: true})
+
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- rio.Shutdown(context.Background()) }()
+	close(releaseFirst)
+
+	select {
+	case err := <-shutdown:
+		if err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not drain queued transcription")
+	}
+	if got := packetCalls.Load(); got != 2 {
+		t.Fatalf("published transcription packets = %d, want 2", got)
+	}
+	if got := writer.closes.Load(); got != 1 {
+		t.Fatalf("text stream trailer closes = %d, want 1", got)
+	}
+}
+
+func TestRoomIOShutdownAlreadyDisconnectedSkipsStreamTrailer(t *testing.T) {
+	writer := &shutdownTrackingTextWriter{}
+	rio := &RoomIO{
+		Room:                  &lksdk.Room{},
+		Options:               RoomOptions{DisableTextInput: true},
+		agentTextStreamWriter: writer,
+	}
+
+	started := time.Now()
+	if err := rio.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("Shutdown() elapsed = %v, want prompt disconnected cleanup", elapsed)
+	}
+	if got := writer.closes.Load(); got != 0 {
+		t.Fatalf("disconnected stream trailer closes = %d, want 0", got)
+	}
+}
+
 func TestRoomIOSetParticipantClearsStaleUserTranscriptionTarget(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan *livekit.Transcription, 1)

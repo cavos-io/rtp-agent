@@ -2379,12 +2379,7 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 				roomIO.ReconcileParticipants()
 			}
 			a.RoomIO = roomIO
-			if err := ctx.AddShutdownCallback(func() {
-				_ = a.Session.Stop(context.Background())
-				_ = roomIO.Close()
-			}); err != nil {
-				logutil.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
-			}
+			ctx.SetPrimaryRoomIO(roomIO)
 			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
 				return err
 			}

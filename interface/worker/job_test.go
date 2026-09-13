@@ -173,7 +173,10 @@ func TestJobContextShutdownRunsCallbacksConcurrently(t *testing.T) {
 	}
 
 	go func() {
-		livekitJobContextRunShutdown("job done", callbacks, nil, "job_shutdown_concurrent")
+		livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+			Callbacks: callbacks,
+			Timeout:   time.Second,
+		}, "job_shutdown_concurrent")
 		close(done)
 	}()
 
@@ -259,21 +262,104 @@ func TestJobContextShutdownContinuesAfterCallbackPanic(t *testing.T) {
 	}
 }
 
-func TestJobContextShutdownDisconnectsBeforeCallbacks(t *testing.T) {
+func TestJobContextShutdownDrainsPublicationBeforeDisconnect(t *testing.T) {
 	var calls []string
-	callbacks := []func(string){
-		func(reason string) {
-			calls = append(calls, "callback:"+reason)
+	livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+		Drain: func(context.Context) {
+			calls = append(calls, "transcription", "stream trailer")
 		},
-	}
-
-	livekitJobContextRunShutdown("job done", callbacks, func() {
-		calls = append(calls, "disconnect")
+		StopPublishing: func() {
+			calls = append(calls, "publication gate")
+		},
+		Callbacks: []func(string){func(reason string) {
+			calls = append(calls, "callback:"+reason)
+		}},
+		Disconnect: func() {
+			calls = append(calls, "disconnect")
+		},
+		Timeout: time.Second,
 	}, "job_shutdown_order")
 
-	want := []string{"disconnect", "callback:job done"}
+	want := []string{"transcription", "stream trailer", "publication gate", "disconnect", "callback:job done"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("shutdown order = %#v, want %#v", calls, want)
+	}
+}
+
+func TestJobContextShutdownDrainTimeoutStillDisconnects(t *testing.T) {
+	release := make(chan struct{})
+	gateClosed := make(chan struct{})
+	disconnected := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+			Drain:          func(context.Context) { <-release },
+			StopPublishing: func() { close(gateClosed) },
+			Disconnect:     func() { close(disconnected) },
+			Timeout:        10 * time.Millisecond,
+		}, "job_shutdown_timeout")
+		close(done)
+	}()
+
+	for _, result := range []struct {
+		name string
+		ch   <-chan struct{}
+	}{{"publication gate", gateClosed}, {"disconnect", disconnected}, {"shutdown", done}} {
+		select {
+		case <-result.ch:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatalf("%s did not complete after drain deadline", result.name)
+		}
+	}
+	close(release)
+}
+
+func TestJobContextShutdownDrainPanicStillDisconnects(t *testing.T) {
+	gateClosed := false
+	disconnected := false
+	livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+		Drain:          func(context.Context) { panic("drain panic") },
+		StopPublishing: func() { gateClosed = true },
+		Disconnect:     func() { disconnected = true },
+		Timeout:        time.Second,
+	}, "job_shutdown_panic")
+
+	if !gateClosed {
+		t.Fatal("publication gate remained open after drain panic")
+	}
+	if !disconnected {
+		t.Fatal("room was not disconnected after drain panic")
+	}
+}
+
+func TestJobContextConcurrentShutdownExecutesOnce(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_concurrent_once"}, "", "", "")
+	var calls atomic.Int32
+	if err := ctx.AddShutdownCallback(func() { calls.Add(1) }); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+
+	start := make(chan struct{})
+	var callers sync.WaitGroup
+	for range 8 {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			<-start
+			ctx.Shutdown("done")
+		}()
+	}
+	close(start)
+	callers.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("shutdown callback calls = %d, want 1", got)
+	}
+	select {
+	case <-ctx.ShutdownDone():
+	default:
+		t.Fatal("ShutdownDone was not released")
 	}
 }
 
