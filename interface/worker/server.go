@@ -369,6 +369,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			DefaultWorkerID: s.workerID,
 		})
 		jobCtx := NewJobContext(reloadedJob.Job, reloadedJob.URL, s.Options.APIKey, s.Options.APISecret)
+		jobCtx.shutdownTimeout = time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second))
 		jobCtx.process = s.newJobProcess()
 		if reloadedJob.EnableRecording {
 			jobCtx.InitRecording(livekitServerRecordingOptions())
@@ -406,6 +407,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		DefaultWorkerID: s.workerID,
 	})
 	jobCtx := NewJobContext(runningJob.Job, runningJob.URL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.shutdownTimeout = time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second))
 	jobCtx.process = s.newJobProcess()
 	if runningJob.EnableRecording {
 		jobCtx.InitRecording(livekitServerRecordingOptions())
@@ -1752,6 +1754,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 		WorkerID:        s.workerID,
 	})
 	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.shutdownTimeout = time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second))
 	jobCtx.process = s.newJobProcess()
 	if assignedJob.EnableRecording {
 		jobCtx.InitRecording(livekitServerRecordingOptions())
@@ -2137,6 +2140,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	})
 
 	jobCtx := NewJobContext(localPlan.Job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.shutdownTimeout = time.Duration(opts.ShutdownProcessTimeoutSeconds * float64(time.Second))
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: localPlan.AcceptIdentity}
 	jobCtx.fakeJob = localPlan.FakeJob
 	if localPlan.InitRecording {

@@ -30,6 +30,9 @@ var currentJobContexts sync.Map
 
 var observabilityFinalizeTimeout = 10 * time.Second
 
+var errNilJobContext = errors.New("job context is nil")
+var errShutdownStepPanic = errors.New("shutdown step panicked")
+
 const errNoJobContext = "no job context found, are you running this code inside a job entrypoint?"
 
 func init() {
@@ -233,6 +236,8 @@ type JobContext struct {
 	customTracerProvider   *sdktrace.TracerProvider
 	customTraceMetadata    []attribute.KeyValue
 	shutdownCallbacks      []func(string)
+	shutdownMu             sync.Mutex
+	shutdownTimeout        time.Duration
 	shutdownOnce           sync.Once
 	shutdownDone           chan struct{}
 	entrypointStarted      atomic.Bool
@@ -274,6 +279,7 @@ func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobCo
 		tagger:           tagger,
 		process:          NewJobProcess(JobExecutorTypeThread, nil, ""),
 		shutdownDone:     make(chan struct{}),
+		shutdownTimeout:  time.Duration(defaultProcessTimeout * float64(time.Second)),
 		entrypointDone:   make(chan struct{}),
 		tempDirectory:    tmpDir,
 		sessionDirectory: tmpDir,
@@ -492,6 +498,15 @@ func (c *JobContext) Proc() *JobProcess {
 
 func (c *JobContext) SetPrimarySession(session *agent.AgentSession) {
 	c.primarySession = session
+}
+
+// SetPrimaryRoomIO registers RoomIO for bounded pre-disconnect teardown.
+func (c *JobContext) SetPrimaryRoomIO(roomIO SessionRoomIO) {
+	if c == nil {
+		return
+	}
+
+	c.primaryRoomIO = roomIO
 }
 
 func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
@@ -785,12 +800,6 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			c.AddRoomCallback(roomIO.GetCallback())
 			roomIO.ReconcileParticipants()
 		}
-		if err := c.AddShutdownCallback(func() {
-			_ = session.Stop(context.Background())
-			_ = roomIO.Close()
-		}); err != nil {
-			logger.Logger.Warnw("failed to register RoomIO teardown on job shutdown", err)
-		}
 		if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
 			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
 				return err
@@ -808,7 +817,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		}
 	}
 
-	c.primaryRoomIO = roomIO
+	c.SetPrimaryRoomIO(roomIO)
 
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
@@ -865,6 +874,12 @@ func (c *JobContext) participantsAvailable(participants []RemoteParticipantView)
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {
+	if c == nil {
+		return errNilJobContext
+	}
+
+	c.shutdownMu.Lock()
+	defer c.shutdownMu.Unlock()
 	switch cb := callback.(type) {
 	case func():
 		c.shutdownCallbacks = append(c.shutdownCallbacks, func(string) {
@@ -1020,43 +1035,158 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 }
 
 func (c *JobContext) Shutdown(reasons ...string) {
+	if c == nil {
+		return
+	}
 	reason := ""
 	if len(reasons) > 0 {
 		reason = reasons[0]
 	}
 	c.shutdownOnce.Do(func() {
+		c.shutdownMu.Lock()
 		if c.shutdownDone == nil {
 			c.shutdownDone = make(chan struct{})
 		}
+
+		done := c.shutdownDone
+		callbacks := append([]func(string){}, c.shutdownCallbacks...)
+		timeout := c.shutdownTimeout
+		roomIO := c.primaryRoomIO
+		session := c.primarySession
+		c.shutdownMu.Unlock()
+
+		defer close(done)
+
 		disconnect := func() {}
 		if c.Room != nil {
 			disconnect = func() {
 				c.Room.Disconnect()
 			}
 		}
-		livekitJobContextRunShutdown(reason, c.shutdownCallbacks, disconnect, c.JobID())
-		close(c.shutdownDone)
+
+		stopPublishing := func() {
+			if rio, ok := roomIO.(interface{ BeginShutdown() }); ok {
+				rio.BeginShutdown()
+			}
+		}
+		transportUsable := livekitJobContextRoomReadyForRoomIOStart(c.Room)
+		drain := func(ctx context.Context) {
+			if !transportUsable {
+				stopPublishing()
+			}
+
+			if roomIO != nil {
+				defer func() {
+					var err error
+					if rio, ok := roomIO.(interface {
+						Shutdown(ctx context.Context) error
+					}); ok {
+						err = rio.Shutdown(ctx)
+					} else {
+						err = roomIO.Close()
+					}
+
+					if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+						logger.Logger.Warnw("failed to close RoomIO during job shutdown", err, "job_id", c.JobID())
+					}
+				}()
+			}
+
+			if session != nil {
+				if err := session.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					logger.Logger.Warnw("failed to stop agent session during job shutdown", err, "job_id", c.JobID())
+				}
+			}
+		}
+		livekitJobContextRunShutdown(reason, jobContextShutdownPlan{
+			Drain:          drain,
+			StopPublishing: stopPublishing,
+			Callbacks:      callbacks,
+			Disconnect:     disconnect,
+			Timeout:        timeout,
+		}, c.JobID())
 	})
 }
 
-func livekitJobContextRunShutdown(reason string, callbacks []func(string), disconnect func(), jobID string) {
-	if disconnect != nil {
-		disconnect()
+type jobContextShutdownPlan struct {
+	Drain          func(context.Context)
+	StopPublishing func()
+	Callbacks      []func(string)
+	Disconnect     func()
+	Timeout        time.Duration
+}
+
+func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), plan.Timeout)
+	defer cancel()
+
+	disconnect := sync.OnceFunc(func() {
+		callJobShutdownStep("room disconnect", jobID, func() {
+			if plan.Disconnect != nil {
+				plan.Disconnect()
+			}
+		})
+	})
+	defer disconnect()
+
+	if plan.Drain != nil {
+		drainDone := make(chan struct{})
+		go func() {
+			defer close(drainDone)
+
+			callJobShutdownStep("pre-disconnect drain", jobID, func() { plan.Drain(ctx) })
+		}()
+
+		select {
+		case <-drainDone:
+		case <-ctx.Done():
+			logger.Logger.Warnw("pre-disconnect shutdown drain timed out", ctx.Err(), "job_id", jobID)
+		}
 	}
+
+	callJobShutdownStep("publication gate", jobID, plan.StopPublishing)
+	disconnect()
+
 	var wg sync.WaitGroup
-	for _, callback := range callbacks {
+
+	for _, callback := range plan.Callbacks {
+		if callback == nil {
+			continue
+		}
 		wg.Add(1)
 		go func(callback func(string)) {
 			defer wg.Done()
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("Shutdown callback panicked", fmt.Errorf("%v", recovered), "job_id", jobID)
-				}
-			}()
-			callback(reason)
+
+			callJobShutdownStep("callback", jobID, func() { callback(reason) })
 		}(callback)
 	}
-	wg.Wait()
+
+	callbacksDone := make(chan struct{})
+
+	go func() {
+		wg.Wait()
+		close(callbacksDone)
+	}()
+
+	select {
+	case <-callbacksDone:
+	case <-ctx.Done():
+		logger.Logger.Warnw("shutdown callbacks timed out", ctx.Err(), "job_id", jobID)
+	}
+}
+
+func callJobShutdownStep(name string, jobID string, step func()) {
+	if step == nil {
+		return
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Errorw("Shutdown step panicked", errShutdownStepPanic, "step", name, "job_id", jobID, "panic", recovered)
+		}
+	}()
+
+	step()
 }
 
 func (c *JobContext) ShutdownDone() <-chan struct{} {
@@ -1065,6 +1195,9 @@ func (c *JobContext) ShutdownDone() <-chan struct{} {
 		close(ch)
 		return ch
 	}
+
+	c.shutdownMu.Lock()
+	defer c.shutdownMu.Unlock()
 	if c.shutdownDone == nil {
 		c.shutdownDone = make(chan struct{})
 	}

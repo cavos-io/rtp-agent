@@ -151,6 +151,9 @@ const roomIOAudioSubscriptionTimeout = 10 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
 const roomIOOutputMaxLead = 200 * time.Millisecond
 
+var errRoomIOShutdownContextNil = errors.New("room IO shutdown context is nil")
+var errRoomIOShutdownPanic = errors.New("room IO shutdown panicked")
+
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
@@ -338,6 +341,16 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 
+	publicationActive          int
+	publicationTransportUsable func() bool
+	publicationDone            chan struct{}
+	publicationDoneClosed      bool
+	shutdownMu                 sync.Mutex
+	shutdownStarted            bool
+	shutdownDone               chan struct{}
+	shutdownErr                error
+	publicationListenersWG     sync.WaitGroup
+
 	audioTrack    *lksdk.LocalTrack
 	audioTrackID  string
 	decoder       AudioDecoder
@@ -399,13 +412,17 @@ type RoomIO struct {
 	userTranscriptionSegmentID     string
 
 	agentStateCancel         context.CancelFunc
+	agentStateEvents         <-chan agent.AgentStateChangedEvent
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
 	agentStatePublishSeq     uint64
 	userStateCancel          context.CancelFunc
+	userStateEvents          <-chan agent.UserStateChangedEvent
 	clientEvents             roomIOClientEvents
 
 	agentTranscriptionCancel         context.CancelFunc
+	speechCreatedEvents              <-chan agent.SpeechCreatedEvent
+	agentTranscriptionEvents         <-chan agent.AgentOutputTranscribedEvent
 	agentTranscriptionSegmentID      string
 	agentTranscriptionText           string
 	agentTranscriptionOrphaned       bool
@@ -419,10 +436,12 @@ type RoomIO struct {
 	agentTextStreamSegmentID  string
 	agentTextStreamHasContent bool
 
-	sessionCloseCancel context.CancelFunc
-	deletingRoom       bool
-	deleteRoomDone     chan struct{}
-	roomName           func() string
+	sessionCloseCancel      context.CancelFunc
+	sessionCloseEvents      <-chan agent.CloseEvent
+	userTranscriptionEvents <-chan agent.UserInputTranscribedEvent
+	deletingRoom            bool
+	deleteRoomDone          chan struct{}
+	roomName                func() string
 }
 
 type audioOutputWaitResult struct {
@@ -457,6 +476,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.roomName = rio.liveKitRoomName
 	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
 	rio.agentStatePublishEnabled = rio.roomConnected
+	rio.publicationTransportUsable = rio.roomConnected
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
 	rio.startUserTranscriptionListener()
@@ -473,6 +493,83 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	rio.AttachRoom(room)
 	return rio
+}
+
+// BeginShutdown atomically rejects new RoomIO publication work.
+func (rio *RoomIO) BeginShutdown() {
+	if rio == nil {
+		return
+	}
+
+	rio.mu.Lock()
+
+	rio.closed = true
+	if rio.publicationDone == nil {
+		rio.publicationDone = make(chan struct{})
+	}
+
+	rio.signalPublicationsDrainedLocked()
+	rio.mu.Unlock()
+	rio.releaseAudioSubscriptionWaiters()
+}
+
+// Shutdown drains publication work and closes RoomIO within ctx.
+func (rio *RoomIO) Shutdown(ctx context.Context) error {
+	if rio == nil {
+		return nil
+	}
+
+	if ctx == nil {
+		return errRoomIOShutdownContextNil
+	}
+
+	rio.shutdownMu.Lock()
+	if rio.shutdownDone == nil {
+		rio.shutdownDone = make(chan struct{})
+	}
+
+	done := rio.shutdownDone
+	if rio.shutdownStarted {
+		rio.shutdownMu.Unlock()
+
+		select {
+		case <-done:
+			rio.shutdownMu.Lock()
+			err := rio.shutdownErr
+			rio.shutdownMu.Unlock()
+
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	rio.shutdownStarted = true
+	rio.shutdownMu.Unlock()
+
+	var err error
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("%w: %v", errRoomIOShutdownPanic, recovered)
+			}
+		}()
+
+		err = rio.shutdown(ctx)
+	}()
+	rio.shutdownMu.Lock()
+	rio.shutdownErr = err
+
+	close(done)
+	rio.shutdownMu.Unlock()
+
+	return err
+}
+
+// Close shuts down RoomIO without a caller deadline.
+func (rio *RoomIO) Close() error {
+	return rio.Shutdown(context.Background())
 }
 
 type roomIOPlaybackController struct {
@@ -536,7 +633,8 @@ func (rio *RoomIO) startAgentStateListener() {
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.agentStateCancel = cancel
 	events := rio.AgentSession.AgentStateChangedEvents()
-	go func() {
+	rio.agentStateEvents = events
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -548,7 +646,7 @@ func (rio *RoomIO) startAgentStateListener() {
 				rio.handleAgentStateChanged(ev)
 			}
 		}
-	}()
+	})
 }
 
 func (rio *RoomIO) startUserStateListener() {
@@ -558,7 +656,8 @@ func (rio *RoomIO) startUserStateListener() {
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.userStateCancel = cancel
 	events := rio.AgentSession.UserStateChangedEvents()
-	go func() {
+	rio.userStateEvents = events
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -570,7 +669,7 @@ func (rio *RoomIO) startUserStateListener() {
 				rio.handleUserStateChanged(ev)
 			}
 		}
-	}()
+	})
 }
 
 func (rio *RoomIO) startSessionCloseListener() {
@@ -580,7 +679,8 @@ func (rio *RoomIO) startSessionCloseListener() {
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.sessionCloseCancel = cancel
 	closeEvents := rio.AgentSession.CloseEvents()
-	go func() {
+	rio.sessionCloseEvents = closeEvents
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -592,7 +692,7 @@ func (rio *RoomIO) startSessionCloseListener() {
 				rio.handleAgentSessionClose(ev)
 			}
 		}
-	}()
+	})
 }
 
 func (rio *RoomIO) startAgentTranscriptionListener() {
@@ -603,7 +703,8 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 	rio.agentTranscriptionCancel = cancel
 
 	speechEvents := rio.AgentSession.SpeechCreatedEvents()
-	go func() {
+	rio.speechCreatedEvents = speechEvents
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -612,22 +713,15 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 				if !ok {
 					return
 				}
-				rio.mu.Lock()
-				// A segment still open here belongs to a speech that was killed and replaced.
-				// Its trailing final must not reopen a segment of its own.
-				if rio.agentTranscriptionSegmentID != "" {
-					rio.agentTranscriptionOrphaned = true
-				}
-				rio.agentTranscriptionSegmentID = ""
-				rio.agentTranscriptionText = ""
-				rio.mu.Unlock()
-				rio.closeAgentTextStream()
+
+				rio.handleSpeechCreatedForTranscription()
 			}
 		}
-	}()
+	})
 
 	events := rio.AgentSession.AgentOutputTranscribedEvents()
-	go func() {
+	rio.agentTranscriptionEvents = events
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -639,7 +733,7 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 				rio.handleAgentOutputTranscribed(ev)
 			}
 		}
-	}()
+	})
 }
 
 func (rio *RoomIO) startUserTranscriptionListener() {
@@ -649,7 +743,8 @@ func (rio *RoomIO) startUserTranscriptionListener() {
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.userTranscriptionCancel = cancel
 	events := rio.AgentSession.UserInputTranscribedEvents()
-	go func() {
+	rio.userTranscriptionEvents = events
+	rio.publicationListenersWG.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -661,7 +756,7 @@ func (rio *RoomIO) startUserTranscriptionListener() {
 				rio.handleUserInputTranscribed(ev)
 			}
 		}
-	}()
+	})
 }
 
 func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
@@ -698,7 +793,8 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
-	if rio.agentStatePublisher != nil {
+
+	if rio.agentStatePublisher != nil && rio.beginPublication() {
 		publisher := rio.agentStatePublisher
 		enabled := rio.agentStatePublishEnabled
 		attrs := map[string]string{
@@ -709,6 +805,7 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 		seq := rio.agentStatePublishSeq
 		rio.mu.Unlock()
 		go func() {
+			defer rio.endPublication()
 			if !rio.isCurrentAgentStatePublish(seq) {
 				return
 			}
@@ -721,8 +818,10 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 			publisher(attrs)
 		}()
 	}
-	if rio.clientEvents != nil {
+
+	if rio.clientEvents != nil && rio.beginPublication() {
 		rio.clientEvents.DispatchAgentState(ev.NewState)
+		rio.endPublication()
 	}
 }
 
@@ -736,42 +835,11 @@ func (rio *RoomIO) isCurrentAgentStatePublish(seq uint64) bool {
 }
 
 func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
-	if rio == nil || rio.clientEvents == nil {
+	if rio == nil || rio.clientEvents == nil || !rio.beginPublication() {
 		return
 	}
+	defer rio.endPublication()
 	rio.clientEvents.DispatchUserState(ev.NewState)
-}
-
-func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
-	if rio == nil {
-		return
-	}
-	if ev.Transcript == "" && !ev.IsFinal {
-		rio.setPlaybackTranscript("", false)
-		return
-	}
-	segmentID, streamText, legacyText, ok := rio.agentOutputTranscriptionState(ev.Transcript, ev.IsFinal)
-	if !ok {
-		return
-	}
-	if legacyText != "" {
-		rio.setPlaybackTranscript(legacyText, ev.IsFinal)
-	}
-	attributes := map[string]string{
-		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
-		RoomIOTranscriptionSegmentIDAttribute: segmentID,
-	}
-	if trackID := rio.transcriptionTrackID(); trackID != "" {
-		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
-	}
-	legacyEv := ev
-	legacyEv.Transcript = legacyText
-	rio.publishLegacyAgentTranscription(legacyEv, segmentID)
-	rio.publishAgentTranscriptionStream(streamText, lksdk.StreamTextOptions{
-		Topic:      RoomIOTranscriptionTopic,
-		Attributes: attributes,
-	})
-	rio.forwardAgentTranscriptionNextOutput(streamText, ev.IsFinal)
 }
 
 func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string, string, bool) {
@@ -841,9 +909,10 @@ func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (s
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
-	if rio == nil {
+	if rio == nil || !rio.beginPublication() {
 		return
 	}
+	defer rio.endPublication()
 	trackID, participantID := rio.userTranscriptionTarget()
 	if trackID == "" || participantID == "" {
 		return
@@ -1391,6 +1460,11 @@ func (rio *RoomIO) PublishDTMF(code int32, digit string) error {
 	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
 		return errors.New("room local participant not available")
 	}
+
+	if !rio.beginPublication() {
+		return nil
+	}
+	defer rio.endPublication()
 	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
 		return errors.New("room is not connected")
 	}
@@ -2635,6 +2709,11 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
+
+	if !rio.beginPublication() {
+		return nil
+	}
+	defer rio.endPublication()
 	if err := rio.waitForAudioSubscriptionReady(ctx); err != nil {
 		return err
 	}
@@ -3178,70 +3257,310 @@ func callPlaybackFinishedHandler(log protoLogger.Logger, handler func(PlaybackFi
 	handler(ev)
 }
 
-func (rio *RoomIO) Close() error {
+func (rio *RoomIO) shutdown(ctx context.Context) error {
+	transportUsable := rio.roomConnected()
+	if rio.publicationTransportUsable != nil {
+		transportUsable = rio.publicationTransportUsable()
+	}
+
+	return errors.Join(
+		rio.shutdownPublications(ctx, transportUsable),
+		rio.shutdownResources(ctx),
+	)
+}
+
+func (rio *RoomIO) shutdownPublications(ctx context.Context, transportUsable bool) error {
+	rio.stopPublicationListeners()
+
+	if !transportUsable {
+		rio.BeginShutdown()
+		rio.abandonAgentTextStream()
+
+		return nil
+	}
+
+	if err := rio.waitForPublicationListeners(ctx); err != nil {
+		rio.BeginShutdown()
+		rio.abandonAgentTextStream()
+
+		return err
+	}
+
+	rio.drainQueuedPublicationEvents()
+	rio.BeginShutdown()
+
+	if err := rio.waitForPublications(ctx); err != nil {
+		rio.abandonAgentTextStream()
+
+		return err
+	}
+
+	rio.closeAgentTextStream()
+
+	return nil
+}
+
+func (rio *RoomIO) shutdownResources(ctx context.Context) error {
 	if rio.AgentSession != nil {
 		rio.AgentSession.SetUserAwayTimerGate(nil)
 	}
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
-	rio.closed = true
 	rio.clearAudioInputStateLocked()
 	rio.agentStatePublishSeq++
-	if rio.agentStateCancel != nil {
-		rio.agentStateCancel()
-		rio.agentStateCancel = nil
-	}
-	if rio.userStateCancel != nil {
-		rio.userStateCancel()
-		rio.userStateCancel = nil
-	}
-	if rio.userTranscriptionCancel != nil {
-		rio.userTranscriptionCancel()
-		rio.userTranscriptionCancel = nil
-	}
-	if rio.sessionCloseCancel != nil {
-		rio.sessionCloseCancel()
-		rio.sessionCloseCancel = nil
-	}
-	if rio.agentTranscriptionCancel != nil {
-		rio.agentTranscriptionCancel()
-		rio.agentTranscriptionCancel = nil
-	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
-	rio.closeAgentTextStream()
 	rio.releaseAudioSubscriptionWaiters()
 	rio.finishPlayback(true, "")
 	rio.closeAudioInputProcessor()
 
-	if deleteRoomDone != nil {
-		select {
-		case <-deleteRoomDone:
-		case <-time.After(roomIODeleteRoomCloseTimeout):
-			rio.logger().Warnw("automatic room deletion timed out", nil)
-		}
+	return errors.Join(rio.waitForDeleteRoom(ctx, deleteRoomDone), rio.closeRoomIOResources())
+}
+
+func (rio *RoomIO) waitForDeleteRoom(ctx context.Context, done <-chan struct{}) error {
+	if done == nil {
+		return nil
+	}
+
+	timer := time.NewTimer(roomIODeleteRoomCloseTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		rio.logger().Warnw("automatic room deletion timed out", nil)
+
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (rio *RoomIO) closeRoomIOResources() error {
+	rio.mu.Lock()
+
+	var closeErr error
+	if rio.decoder != nil {
+		closeErr = errors.Join(closeErr, rio.decoder.Close())
+		rio.decoder = nil
+	}
+
+	if rio.encoder != nil {
+		closeErr = errors.Join(closeErr, rio.encoder.Close())
+		rio.encoder = nil
+	}
+
+	if rio.preConnectAudio != nil {
+		rio.preConnectAudio.Close()
+		rio.preConnectAudio = nil
+	}
+
+	recorder := rio.Recorder
+	rio.Recorder = nil
+	room := rio.Room
+	disableTextInput := rio.Options.DisableTextInput
+	rio.mu.Unlock()
+
+	var recorderErr error
+	if recorder != nil {
+		recorderErr = recorder.Stop()
+	}
+
+	if room != nil && !disableTextInput {
+		room.UnregisterTextStreamHandler(RoomIOChatTopic)
+	}
+
+	return errors.Join(closeErr, recorderErr)
+}
+
+func (rio *RoomIO) beginPublication() bool {
+	if rio == nil {
+		return false
 	}
 
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
-	if rio.decoder != nil {
-		rio.decoder.Close()
+
+	if rio.closed {
+		return false
 	}
-	if rio.encoder != nil {
-		rio.encoder.Close()
+
+	rio.publicationActive++
+
+	return true
+}
+
+func (rio *RoomIO) endPublication() {
+	if rio == nil {
+		return
 	}
-	if rio.preConnectAudio != nil {
-		rio.preConnectAudio.Close()
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+
+	if rio.publicationActive > 0 {
+		rio.publicationActive--
 	}
-	if rio.Recorder != nil {
-		if err := rio.Recorder.Stop(); err != nil {
-			return err
+
+	rio.signalPublicationsDrainedLocked()
+}
+
+func (rio *RoomIO) signalPublicationsDrainedLocked() {
+	if rio.closed && rio.publicationActive == 0 && rio.publicationDone != nil && !rio.publicationDoneClosed {
+		close(rio.publicationDone)
+		rio.publicationDoneClosed = true
+	}
+}
+
+func (rio *RoomIO) waitForPublications(ctx context.Context) error {
+	rio.mu.Lock()
+	done := rio.publicationDone
+	rio.mu.Unlock()
+
+	if done == nil {
+		return nil
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (rio *RoomIO) handleSpeechCreatedForTranscription() {
+	if rio == nil || !rio.beginPublication() {
+		return
+	}
+	defer rio.endPublication()
+
+	rio.mu.Lock()
+	// A segment still open here belongs to a speech that was killed and replaced.
+	// Its trailing final must not reopen a segment of its own.
+	if rio.agentTranscriptionSegmentID != "" {
+		rio.agentTranscriptionOrphaned = true
+	}
+
+	rio.agentTranscriptionSegmentID = ""
+	rio.agentTranscriptionText = ""
+	rio.mu.Unlock()
+	rio.closeAgentTextStream()
+}
+
+func (rio *RoomIO) handleAgentOutputTranscribed(event agent.AgentOutputTranscribedEvent) {
+	if rio == nil || !rio.beginPublication() {
+		return
+	}
+	defer rio.endPublication()
+
+	if event.Transcript == "" && !event.IsFinal {
+		rio.setPlaybackTranscript("", false)
+
+		return
+	}
+
+	segmentID, streamText, legacyText, ok := rio.agentOutputTranscriptionState(event.Transcript, event.IsFinal)
+	if !ok {
+		return
+	}
+
+	if legacyText != "" {
+		rio.setPlaybackTranscript(legacyText, event.IsFinal)
+	}
+
+	attributes := map[string]string{
+		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(event.IsFinal),
+		RoomIOTranscriptionSegmentIDAttribute: segmentID,
+	}
+	if trackID := rio.transcriptionTrackID(); trackID != "" {
+		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
+
+	legacyEv := event
+	legacyEv.Transcript = legacyText
+	rio.publishLegacyAgentTranscription(legacyEv, segmentID)
+	rio.publishAgentTranscriptionStream(streamText, lksdk.StreamTextOptions{
+		Topic:      RoomIOTranscriptionTopic,
+		Attributes: attributes,
+	})
+	rio.forwardAgentTranscriptionNextOutput(streamText, event.IsFinal)
+}
+
+func (rio *RoomIO) abandonAgentTextStream() {
+	if rio == nil {
+		return
+	}
+
+	rio.agentTextStreamMu.Lock()
+	rio.agentTextStreamWriter = nil
+	rio.agentTextStreamSegmentID = ""
+	rio.agentTextStreamHasContent = false
+	rio.agentTextStreamMu.Unlock()
+}
+
+func (rio *RoomIO) stopPublicationListeners() {
+	rio.mu.Lock()
+	cancels := []context.CancelFunc{
+		rio.agentStateCancel,
+		rio.userStateCancel,
+		rio.userTranscriptionCancel,
+		rio.sessionCloseCancel,
+		rio.agentTranscriptionCancel,
+	}
+	rio.agentStateCancel = nil
+	rio.userStateCancel = nil
+	rio.userTranscriptionCancel = nil
+	rio.sessionCloseCancel = nil
+	rio.agentTranscriptionCancel = nil
+	rio.mu.Unlock()
+
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
 		}
 	}
-	if rio.Room != nil && !rio.Options.DisableTextInput {
-		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
+}
+
+func (rio *RoomIO) waitForPublicationListeners(ctx context.Context) error {
+	done := make(chan struct{})
+
+	go func() {
+		rio.publicationListenersWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return nil
+}
+
+func (rio *RoomIO) drainQueuedPublicationEvents() {
+	drainEvents(rio.agentStateEvents, rio.handleAgentStateChanged)
+	drainEvents(rio.userStateEvents, rio.handleUserStateChanged)
+	drainEvents(rio.speechCreatedEvents, func(agent.SpeechCreatedEvent) { rio.handleSpeechCreatedForTranscription() })
+	drainEvents(rio.agentTranscriptionEvents, rio.handleAgentOutputTranscribed)
+	drainEvents(rio.userTranscriptionEvents, rio.handleUserInputTranscribed)
+	drainEvents(rio.sessionCloseEvents, rio.handleAgentSessionClose)
+}
+
+func drainEvents[T any](events <-chan T, handle func(T)) {
+	for events != nil {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+
+			handle(ev)
+		default:
+			return
+		}
+	}
 }
 
 func (rio *RoomIO) clearAudioInputStateLocked() {

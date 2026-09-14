@@ -3402,9 +3402,9 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 
 func TestFallbackSynthesizeStreamEndsInputOnRetryAfterEndInput(t *testing.T) {
 	streamErr := errors.New("primary stream failed")
-	recovered := &endInputSynthesizeStream{events: []*SynthesizedAudio{{
+	recovered := &blockingEndInputSynthesizeStream{events: []*SynthesizedAudio{{
 		Frame: &model.AudioFrame{Data: []byte("primary recovered")},
-	}}}
+	}}, ended: make(chan struct{})}
 	primary := &metadataTTS{
 		label:        "primary",
 		sampleRate:   24000,
