@@ -107,6 +107,32 @@ func TestLiveKitInferenceLLMChatBuildsTokenBeforeDelegating(t *testing.T) {
 	}
 }
 
+func TestLiveKitInferenceLLMChatSendsAgentInstructions(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://livekit.test/v1"
+	provider.httpClient = capture
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		Role: llm.ChatRoleSystem,
+		Content: []llm.ChatContent{{
+			Instructions: llm.NewInstructions("Follow the system policy."),
+		}},
+	})
+
+	_ = runLiveKitInferenceLLMRequest(t, provider, context.Background(), chatCtx, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"role":"system","content":"Follow the system policy."`) {
+		t.Fatalf("request body = %s, want agent instructions in system message", capture.requestBody)
+	}
+}
+
 func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusUnauthorized,

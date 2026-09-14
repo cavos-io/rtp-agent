@@ -2540,6 +2540,146 @@ func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentActivityPipelineUsesActiveAgentChatContextLikeReference(t *testing.T) {
+	const primaryInstructions = "Follow the primary support policy."
+	const replacementInstructions = "Follow the replacement support policy."
+
+	t.Run("startup", func(t *testing.T) {
+		baseAgent := NewAgent(primaryInstructions)
+		session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+		provider := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}},
+		}}
+		pipeline := NewPipelineAgent(nil, nil, provider, &fakePipelineTTS{}, session.ChatCtx)
+		pipeline.session = session
+		pipeline.ctx = context.Background()
+		session.Assistant = pipeline
+		activity := NewAgentActivity(baseAgent, session)
+
+		activity.Start()
+		defer activity.Stop()
+		pipeline.generateReply()
+
+		if len(provider.chatContexts) != 1 {
+			t.Fatalf("LLM chat contexts = %d, want one startup inference", len(provider.chatContexts))
+		}
+		if got := instructionMessageFromContext(t, provider.chatContexts[0]).TextContent(); got != primaryInstructions {
+			t.Fatalf("pipeline instructions = %q, want active agent instructions", got)
+		}
+		if session.ChatCtx.GetByID(agentInstructionsMessageID) != nil {
+			t.Fatal("session report context contains the inference-only instruction message")
+		}
+	})
+
+	t.Run("update chat context", func(t *testing.T) {
+		baseAgent := NewAgent(primaryInstructions)
+		session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+		provider := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "order answer"}}},
+		}}
+		pipeline := NewPipelineAgent(nil, nil, provider, &fakePipelineTTS{}, session.ChatCtx)
+		pipeline.session = session
+		pipeline.ctx = context.Background()
+		session.Assistant = pipeline
+		activity := NewAgentActivity(baseAgent, session)
+		activity.Start()
+		defer activity.Stop()
+
+		source := llm.NewChatContext()
+		source.Append(&llm.ChatMessage{
+			ID:      "customer",
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{{Text: "Where is my order?"}},
+		})
+		if err := activity.UpdateChatCtx(context.Background(), source); err != nil {
+			t.Fatalf("UpdateChatCtx error = %v", err)
+		}
+		pipeline.generateReply()
+
+		if len(provider.chatContexts) != 1 {
+			t.Fatalf("LLM chat contexts = %d, want one inference after UpdateChatCtx", len(provider.chatContexts))
+		}
+		inferenceCtx := provider.chatContexts[0]
+		if inferenceCtx.GetByID("customer") == nil {
+			t.Fatal("pipeline chat context is missing updated customer history")
+		}
+		if got := instructionMessageFromContext(t, inferenceCtx).TextContent(); got != primaryInstructions {
+			t.Fatalf("pipeline instructions after update = %q, want active agent instructions", got)
+		}
+	})
+
+	t.Run("replacement activity", func(t *testing.T) {
+		initialAgent := NewAgent(primaryInstructions)
+		session := NewAgentSession(initialAgent, nil, AgentSessionOptions{})
+		provider := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "replacement answer"}}},
+		}}
+		pipeline := NewPipelineAgent(nil, nil, provider, &fakePipelineTTS{}, session.ChatCtx)
+		pipeline.session = session
+		pipeline.ctx = context.Background()
+		session.Assistant = pipeline
+		initialActivity := NewAgentActivity(initialAgent, session)
+		initialActivity.Start()
+		defer initialActivity.Stop()
+
+		nextAgent := NewAgent(replacementInstructions)
+		nextActivity := NewAgentActivity(nextAgent, session)
+		nextActivity.Start()
+		defer nextActivity.Stop()
+		pipeline.generateReply()
+
+		if len(provider.chatContexts) != 1 {
+			t.Fatalf("LLM chat contexts = %d, want one replacement-agent inference", len(provider.chatContexts))
+		}
+		if got := instructionMessageFromContext(t, provider.chatContexts[0]).TextContent(); got != replacementInstructions {
+			t.Fatalf("replacement pipeline instructions = %q, want replacement agent instructions", got)
+		}
+	})
+
+	t.Run("concurrent activity and pipeline history", func(t *testing.T) {
+		const turns = 25
+		baseAgent := NewAgent(primaryInstructions)
+		session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+		streams := make([]llm.LLMStream, turns)
+		for i := range streams {
+			streams[i] = &fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "reply"}}},
+			}
+		}
+		pipeline := NewPipelineAgent(nil, nil, &fakeGenerationLLM{streams: streams}, &fakePipelineTTS{}, session.ChatCtx)
+		pipeline.session = session
+		pipeline.ctx = context.Background()
+		session.Assistant = pipeline
+		activity := NewAgentActivity(baseAgent, session)
+		activity.Start()
+		defer activity.Stop()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range turns {
+				activity.recordTranscriptOnlyUserMessage("overlap", 1)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for range turns {
+				pipeline.generateReply()
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		if got := len(baseAgent.ChatContext().Items); got != 2+(2*turns) {
+			t.Fatalf("agent chat items = %d, want instructions, config, and %d concurrent turn items", got, 2*turns)
+		}
+	})
+}
+
 func TestAgentActivityStartRecordsInitialMCPTools(t *testing.T) {
 	agent := NewAgent("")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

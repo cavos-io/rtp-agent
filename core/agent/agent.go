@@ -67,6 +67,8 @@ type Agent struct {
 	RealtimeModel     llm.RealtimeModel
 	TTS               tts.TTS
 
+	chatCtxMu *sync.Mutex
+
 	AllowInterruptions         bool
 	AllowInterruptionsSet      bool
 	MinConsecutiveSpeechDelay  float64
@@ -84,7 +86,18 @@ func NewAgent(instructions string) *Agent {
 		Instructions: instructions,
 		ChatCtx:      llm.NewChatContext(),
 		Tools:        make([]llm.Tool, 0),
+		chatCtxMu:    &sync.Mutex{},
 	}
+}
+
+// ponytail: zero-value Agents share one lock; use NewAgent for per-agent concurrency.
+var zeroAgentChatCtxMu sync.Mutex
+
+func (a *Agent) chatContextMutex() *sync.Mutex {
+	if a != nil && a.chatCtxMu != nil {
+		return a.chatCtxMu
+	}
+	return &zeroAgentChatCtxMu
 }
 
 func (a *Agent) GetAgent() *Agent {
@@ -111,7 +124,13 @@ func (a *Agent) OnExit()  {}
 // inspect the returned context without mutating the agent's internal history.
 // Use UpdateChatContext to replace the agent-owned context.
 func (a *Agent) ChatContext() *llm.ChatContext {
-	if a == nil || a.ChatCtx == nil {
+	if a == nil {
+		return llm.NewChatContext().ReadOnly()
+	}
+	chatCtxMu := a.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
+	if a.ChatCtx == nil {
 		return llm.NewChatContext().ReadOnly()
 	}
 	return a.ChatCtx.ReadOnly()
@@ -150,6 +169,9 @@ func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
 		return err
 	}
 	a.Tools = deduped
+	chatCtxMu := a.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
 	if a.ChatCtx != nil {
 		a.ChatCtx = a.ChatCtx.Copy(llm.ChatContextCopyOptions{
 			Tools: agentToolsAsInterfaces(a.Tools),
@@ -196,6 +218,9 @@ func (a *Agent) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatContext, exc
 	if a.activity != nil {
 		return a.activity.UpdateChatCtx(ctx, chatCtx, excludeInvalidFunctionCalls...)
 	}
+	chatCtxMu := a.chatContextMutex()
+	chatCtxMu.Lock()
+	defer chatCtxMu.Unlock()
 	excludeInvalid := true
 	if len(excludeInvalidFunctionCalls) > 0 {
 		excludeInvalid = excludeInvalidFunctionCalls[0]
