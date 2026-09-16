@@ -22,6 +22,7 @@ import (
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -776,6 +777,27 @@ func TestJobContextCustomTracerProviderWorksWithoutCloudReporting(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestJobContextPropagatesProjectRedactionToTelemetry(t *testing.T) {
+	jobCtx := NewJobContext(&livekit.Job{
+		Id:              "job-redacted",
+		Room:            &livekit.Room{Sid: "room-redacted"},
+		EnableRedaction: true,
+	}, "wss://test.livekit.cloud", "", "")
+	provider := sdktrace.NewTracerProvider()
+	if err := jobCtx.SetTracerProvider(provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobCtx.ensureObservability(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if telemetry.CaptureGenAIContent(jobCtx.Observability().Context(context.Background())) {
+		t.Fatal("GenAI content capture enabled for a redacted project job")
+	}
+	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

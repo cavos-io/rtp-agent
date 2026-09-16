@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -10,12 +12,17 @@ import (
 
 var Tracer = otel.Tracer("livekit-agents")
 
+// Trace attribute and event names follow the LiveKit Agent Insights telemetry contract.
 const (
-	AttrSpeechID   = "lk.speech_id"
-	AttrAgentLabel = "lk.agent_label"
-	AttrStartTime  = "lk.start_time"
-	AttrEndTime    = "lk.end_time"
-	AttrRetryCount = "lk.retry_count"
+	AttrSpeechID           = "lk.speech_id"
+	AttrAgentLabel         = "lk.agent_label"
+	AttrStartTime          = "lk.start_time"
+	AttrEndTime            = "lk.end_time"
+	AttrRetryCount         = "lk.retry_count"
+	AttrProviderRequestIDs = "lk.provider_request_ids"
+	AttrLLMMetrics         = "lk.llm_metrics"
+	AttrTTSMetrics         = "lk.tts_metrics"
+	AttrRedactionEnabled   = "lk.redaction.enabled"
 
 	AttrParticipantID       = "lk.participant_id"
 	AttrParticipantIdentity = "lk.participant_identity"
@@ -47,7 +54,7 @@ const (
 	AttrFunctionToolIsError = "lk.function_tool.is_error"
 	AttrFunctionToolOutput  = "lk.function_tool.output"
 
-	AttrTTSInputText = "lk.input_text"
+	AttrTTSInputText = "lk.pii.input_text"
 	AttrTTSStreaming = "lk.tts.streaming"
 	AttrTTSLabel     = "lk.tts.label"
 
@@ -61,11 +68,25 @@ const (
 	AttrEndOfTurnDelay       = "lk.end_of_turn_delay"
 	AttrE2ELatency           = "lk.e2e_latency"
 
-	AttrGenAIOperationName     = "gen_ai.operation.name"
-	AttrGenAIProviderName      = "gen_ai.provider.name"
-	AttrGenAIRequestModel      = "gen_ai.request.model"
-	AttrGenAIUsageInputTokens  = "gen_ai.usage.input_tokens"
-	AttrGenAIUsageOutputTokens = "gen_ai.usage.output_tokens"
+	AttrGenAIOperationName      = "gen_ai.operation.name"
+	AttrGenAIProviderName       = "gen_ai.provider.name"
+	AttrGenAIRequestModel       = "gen_ai.request.model"
+	AttrGenAIRequestStream      = "gen_ai.request.stream"
+	AttrGenAIResponseID         = "gen_ai.response.id"
+	AttrGenAIResponseModel      = "gen_ai.response.model"
+	AttrGenAIResponseReasons    = "gen_ai.response.finish_reasons"
+	AttrGenAIResponseTTFC       = "gen_ai.response.time_to_first_chunk"
+	AttrGenAIUsageInputTokens   = "gen_ai.usage.input_tokens"
+	AttrGenAIUsageOutputTokens  = "gen_ai.usage.output_tokens"
+	AttrGenAIUsageCacheRead     = "gen_ai.usage.cache_read.input_tokens"
+	AttrGenAIUsageCacheWrite    = "gen_ai.usage.cache_write.input_tokens"
+	AttrGenAIInputCachedTokens  = "gen_ai.usage.input_cached_tokens"
+	AttrGenAISystemInstructions = "gen_ai.system_instructions"
+	AttrGenAIInputMessages      = "gen_ai.input.messages"
+	AttrGenAIOutputMessages     = "gen_ai.output.messages"
+	AttrGenAIToolDefinitions    = "gen_ai.tool.definitions"
+	AttrGenAIOutputType         = "gen_ai.output.type"
+	AttrErrorType               = "error.type"
 
 	EventGenAISystemMessage    = "gen_ai.system.message"
 	EventGenAIUserMessage      = "gen_ai.user.message"
@@ -74,20 +95,24 @@ const (
 	EventGenAIChoice           = "gen_ai.choice"
 )
 
-type ChatTraceEvent struct {
-	Name       string
-	Attributes []attribute.KeyValue
+// RedactionEnabled reports whether observability content must be redacted for the current job.
+func RedactionEnabled(ctx context.Context) bool {
+	observability := JobObservabilityFromContext(ctx)
+
+	return observability != nil && observability.redactionEnabled
 }
 
-func AddChatTraceEvents(span trace.Span, events []ChatTraceEvent) {
-	if span == nil {
-		return
+// CaptureGenAIContent reports whether GenAI request and response content may be added to traces.
+func CaptureGenAIContent(ctx context.Context) bool {
+	if RedactionEnabled(ctx) {
+		return false
 	}
-	for _, event := range events {
-		if event.Name == "" {
-			continue
-		}
-		span.AddEvent(event.Name, trace.WithAttributes(event.Attributes...))
+
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -111,20 +136,6 @@ func TracerFromContext(ctx context.Context) trace.Tracer {
 type SpanContext struct {
 	SpeechID string
 	Span     trace.Span
-}
-
-func NewLLMSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
-	return StartSpan(ctx, "llm_inference", trace.WithAttributes(
-		attribute.String(AttrGenAIRequestModel, model),
-		attribute.String(AttrGenAIProviderName, provider),
-	))
-}
-
-func NewTTSStreamSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
-	return StartSpan(ctx, "tts_stream", trace.WithAttributes(
-		attribute.String(AttrGenAIRequestModel, model),
-		attribute.String(AttrGenAIProviderName, provider),
-	))
 }
 
 func NewTTSNodeSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {

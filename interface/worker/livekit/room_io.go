@@ -3357,7 +3357,6 @@ func (rio *RoomIO) closeRoomIOResources() error {
 	}
 
 	recorder := rio.Recorder
-	rio.Recorder = nil
 	room := rio.Room
 	disableTextInput := rio.Options.DisableTextInput
 	rio.mu.Unlock()

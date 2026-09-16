@@ -266,6 +266,7 @@ type JobContext struct {
 
 func NewJobContext(job *Job, url string, apiKey string, apiSecret string) *JobContext {
 	report, tagger := livekitNewJobContextSessionReport(job)
+	report.RedactionEnabled = job.GetEnableRedaction()
 	tmpDir, err := os.MkdirTemp("", job.GetId())
 	if err != nil {
 		logger.Logger.Errorw("failed to create temporary directory", err)
@@ -383,6 +384,8 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 			headers = map[string]string{"Authorization": "Bearer " + token}
 		}
 		room := c.Job.GetRoom()
+		traceMetadata := append([]attribute.KeyValue(nil), c.customTraceMetadata...)
+		traceMetadata = append(traceMetadata, attribute.Bool(telemetry.AttrRedactionEnabled, c.Job.GetEnableRedaction()))
 		c.observability, c.observabilityErr = telemetry.NewJobObservability(ctx, telemetry.JobObservabilityConfig{
 			EndpointURL:    endpoint,
 			Headers:        headers,
@@ -391,7 +394,7 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 			RoomName:       room.GetName(),
 			AgentName:      c.Job.GetAgentName(),
 			TracerProvider: c.customTracerProvider,
-			TraceMetadata:  c.customTraceMetadata,
+			TraceMetadata:  traceMetadata,
 		})
 	})
 	return c.observabilityErr
@@ -538,6 +541,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 
 	report := agent.NewSessionReport(session)
 	livekitPopulateJobContextSessionReport(report, c.Job)
+	report.RedactionEnabled = c.Job.GetEnableRedaction()
 
 	if c.primaryRoomIO != nil && c.Report != nil {
 		c.primaryRoomIO.PopulateSessionReport(c.Report)

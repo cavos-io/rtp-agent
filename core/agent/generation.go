@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -20,7 +22,22 @@ import (
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	llmFinishReasonError    = "error"
+	llmFinishReasonStop     = "stop"
+	llmFinishReasonToolCall = "tool_call"
+	traceJSONKeyArguments   = "arguments"
+	traceJSONKeyContent     = "content"
+	traceJSONKeyName        = "name"
+	traceJSONKeyParts       = "parts"
+	traceJSONKeyRole        = "role"
+	traceJSONKeyType        = "type"
+	traceJSONRoleAssistant  = "assistant"
+	traceJSONTypeText       = "text"
 )
 
 type LLMGenerationData struct {
@@ -116,12 +133,32 @@ func performLLMInference(
 	}
 	nodeAttrs = append(nodeAttrs, llmToolSpanAttributes(toolCtx)...)
 	ctx, nodeSpan := telemetry.StartSpan(ctx, "llm_node", trace.WithAttributes(nodeAttrs...))
-	telemetry.AddChatTraceEvents(nodeSpan, llmChatTraceEvents(chatCtx))
-	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
+
+	requestAttrs := []attribute.KeyValue{
+		attribute.String(telemetry.AttrGenAIOperationName, "chat"),
+		attribute.String(telemetry.AttrGenAIProviderName, normalizeGenAIProvider(llm.Provider(l))),
+		attribute.String(telemetry.AttrGenAIRequestModel, llm.Model(l)),
+		attribute.Bool(telemetry.AttrGenAIRequestStream, true),
+		attribute.String(telemetry.AttrGenAIOutputType, "text"),
+	}
+	if telemetry.CaptureGenAIContent(ctx) {
+		requestAttrs = append(requestAttrs, llmRequestContentAttributes(chatCtx, tools)...)
+	}
+
+	requestCtx, requestSpan := telemetry.StartSpan(ctx, "llm_request", trace.WithAttributes(requestAttrs...))
+	runCtx, runSpan := telemetry.StartSpan(requestCtx, "llm_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, 0)))
+
+	stream, err := l.Chat(runCtx, chatCtx, chatOptions...)
 	if err != nil {
+		recordInferenceSpanError(runCtx, runSpan, err)
+		recordInferenceSpanError(requestCtx, requestSpan, err)
+		runSpan.End()
+		requestSpan.End()
 		nodeSpan.End()
 		return nil, err
 	}
+
+	providerRequestIDs := make([]string, 0, 1)
 
 	go func() {
 		defer close(data.TextCh)
@@ -132,14 +169,53 @@ func performLLMInference(
 		defer close(data.Done)
 		defer stream.Close()
 		defer func() {
-			attrs := make([]attribute.KeyValue, 0, 2)
-			if data.GeneratedText != "" {
-				attrs = append(attrs, attribute.String(telemetry.AttrResponseText, data.GeneratedText))
-			}
+			attrs := make([]attribute.KeyValue, 0, 1)
 			if data.TTFT > 0 {
 				attrs = append(attrs, attribute.Float64(telemetry.AttrResponseTTFT, data.TTFT.Seconds()))
 			}
 			nodeSpan.SetAttributes(attrs...)
+
+			finishReason := llmFinishReasonStop
+			if len(data.GeneratedFunctions) > 0 {
+				finishReason = llmFinishReasonToolCall
+			}
+
+			if data.StreamErr != nil {
+				finishReason = llmFinishReasonError
+
+				recordInferenceSpanError(requestCtx, requestSpan, data.StreamErr)
+				recordInferenceSpanError(runCtx, runSpan, data.StreamErr)
+			}
+
+			requestSpan.SetAttributes(
+				attribute.String(telemetry.AttrGenAIResponseModel, llm.Model(l)),
+				attribute.StringSlice(telemetry.AttrGenAIResponseReasons, []string{finishReason}),
+			)
+
+			if data.RequestID != "" {
+				requestSpan.SetAttributes(attribute.String(telemetry.AttrGenAIResponseID, data.RequestID))
+			}
+
+			if len(providerRequestIDs) > 0 {
+				runSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, providerRequestIDs))
+			}
+
+			if data.TTFT > 0 {
+				requestSpan.SetAttributes(attribute.Float64(telemetry.AttrGenAIResponseTTFC, data.TTFT.Seconds()))
+			}
+
+			if data.Usage != nil {
+				setLLMUsageSpanAttributes(requestSpan, data.Usage, data.RequestID, llm.Model(l), llm.Provider(l), data.TTFT, data.Duration, errors.Is(data.StreamErr, context.Canceled) || ctx.Err() != nil)
+			}
+
+			if telemetry.CaptureGenAIContent(requestCtx) {
+				if output := llmOutputMessagesJSON(data.GeneratedText, data.GeneratedFunctions, finishReason); output != "" {
+					requestSpan.SetAttributes(attribute.String(telemetry.AttrGenAIOutputMessages, output))
+				}
+			}
+
+			runSpan.End()
+			requestSpan.End()
 			nodeSpan.End()
 		}()
 
@@ -159,6 +235,9 @@ func performLLMInference(
 			data.Duration = time.Since(startTime)
 			if chunk.ID != "" {
 				data.RequestID = chunk.ID
+				if !slices.Contains(providerRequestIDs, chunk.ID) {
+					providerRequestIDs = append(providerRequestIDs, chunk.ID)
+				}
 			}
 			if chunk.Usage != nil {
 				usage := *chunk.Usage
@@ -211,6 +290,310 @@ func performLLMInference(
 	return data, nil
 }
 
+func recordInferenceSpanError(ctx context.Context, span trace.Span, err error) {
+	if span == nil || err == nil {
+		return
+	}
+
+	span.SetAttributes(attribute.String(telemetry.AttrErrorType, fmt.Sprintf("%T", err)))
+
+	if telemetry.RedactionEnabled(ctx) {
+		span.SetStatus(codes.Error, "")
+
+		return
+	}
+
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+}
+
+func setLLMUsageSpanAttributes(span trace.Span, usage *llm.CompletionUsage, requestID, modelName, modelProvider string, ttft, duration time.Duration, cancelled bool) {
+	if span == nil || usage == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.Int(telemetry.AttrGenAIUsageInputTokens, usage.PromptTokens),
+		attribute.Int(telemetry.AttrGenAIUsageOutputTokens, usage.CompletionTokens),
+	}
+
+	cacheRead := usage.CacheReadTokens
+	if cacheRead == 0 {
+		cacheRead = usage.PromptCachedTokens
+	}
+
+	if cacheRead != 0 {
+		attrs = append(attrs,
+			attribute.Int(telemetry.AttrGenAIUsageCacheRead, cacheRead),
+			attribute.Int(telemetry.AttrGenAIInputCachedTokens, cacheRead),
+		)
+	}
+
+	if usage.CacheCreationTokens != 0 {
+		attrs = append(attrs, attribute.Int(telemetry.AttrGenAIUsageCacheWrite, usage.CacheCreationTokens))
+	}
+
+	span.SetAttributes(attrs...)
+
+	metrics := &telemetry.LLMMetrics{
+		RequestID:          requestID,
+		TTFT:               ttft.Seconds(),
+		Duration:           duration.Seconds(),
+		Cancelled:          cancelled,
+		CompletionTokens:   usage.CompletionTokens,
+		PromptTokens:       usage.PromptTokens,
+		PromptCachedTokens: usage.PromptCachedTokens,
+		TotalTokens:        usage.TotalTokens,
+		Metadata:           &telemetry.Metadata{ModelName: modelName, ModelProvider: modelProvider},
+	}
+	if payload, err := json.Marshal(metrics); err == nil {
+		span.SetAttributes(attribute.String(telemetry.AttrLLMMetrics, string(payload)))
+	}
+}
+
+func normalizeGenAIProvider(provider string) string {
+	value := strings.TrimSpace(provider)
+
+	host := strings.ToLower(value)
+	if normalized := normalizeGenAIProviderHost(host); normalized != "" {
+		return normalized
+	}
+
+	canonical := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return r
+		}
+
+		return -1
+	}, host)
+
+	if normalized := normalizeCanonicalGenAIProvider(canonical); normalized != "" {
+		return normalized
+	}
+
+	return value
+}
+
+func normalizeGenAIProviderHost(host string) string {
+	switch host {
+	case "api.anthropic.com":
+		return "anthropic"
+	case "api.cohere.ai", "api.cohere.com":
+		return "cohere"
+	case "api.deepseek.com":
+		return "deepseek"
+	case "api.groq.com":
+		return "groq"
+	case "api.mistral.ai":
+		return "mistral_ai"
+	case "api.moonshot.ai", "api.moonshot.cn":
+		return "moonshot_ai"
+	case "api.openai.com":
+		return "openai"
+	case "api.perplexity.ai":
+		return "perplexity"
+	default:
+		return normalizeOtherGenAIProviderHost(host)
+	}
+}
+
+func normalizeOtherGenAIProviderHost(host string) string {
+	switch host {
+	case "api.x.ai":
+		return "x_ai"
+	case "generativelanguage.googleapis.com":
+		return "gcp.gemini"
+	}
+
+	if strings.HasSuffix(host, ".openai.azure.com") {
+		return "azure.ai.openai"
+	}
+
+	if strings.HasSuffix(host, ".services.ai.azure.com") {
+		return "azure.ai.inference"
+	}
+
+	if strings.HasSuffix(host, ".aiplatform.googleapis.com") {
+		return "gcp.vertex_ai"
+	}
+
+	if strings.HasPrefix(host, "bedrock") && strings.HasSuffix(host, ".amazonaws.com") {
+		return "aws.bedrock"
+	}
+
+	return ""
+}
+
+func normalizeCanonicalGenAIProvider(canonical string) string {
+	switch canonical {
+	case "openai":
+		return "openai"
+	case "google", "googlegenai", "googlecloudplatform":
+		return "gcp.gen_ai"
+	case "gemini", "generativelanguagegoogleapiscom":
+		return "gcp.gemini"
+	case "vertexai", "vertexaimodelgarden":
+		return "gcp.vertex_ai"
+	case "amazon", "amazonbedrock", "awsbedrock", "bedrock":
+		return "aws.bedrock"
+	case "mistral", "mistralai":
+		return "mistral_ai"
+	case "xai":
+		return "x_ai"
+	default:
+		return ""
+	}
+}
+
+func llmRequestContentAttributes(chatCtx *llm.ChatContext, tools []llm.Tool) []attribute.KeyValue {
+	var attrs []attribute.KeyValue
+	if payload := llmSystemInstructionsJSON(chatCtx); payload != "" {
+		attrs = append(attrs, attribute.String(telemetry.AttrGenAISystemInstructions, payload))
+	}
+
+	if payload := llmInputMessagesJSON(chatCtx); payload != "" {
+		attrs = append(attrs, attribute.String(telemetry.AttrGenAIInputMessages, payload))
+	}
+
+	definitions := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+
+		definition := map[string]any{traceJSONKeyType: "function", traceJSONKeyName: tool.Name()}
+		if description := tool.Description(); description != "" {
+			definition["description"] = description
+		}
+
+		definitions = append(definitions, definition)
+	}
+
+	if payload := marshalTraceJSON(definitions); payload != "" {
+		attrs = append(attrs, attribute.String(telemetry.AttrGenAIToolDefinitions, payload))
+	}
+
+	return attrs
+}
+
+func llmSystemInstructionsJSON(chatCtx *llm.ChatContext) string {
+	if chatCtx == nil {
+		return ""
+	}
+
+	parts := make([]map[string]any, 0)
+
+	for _, item := range chatCtx.Items {
+		message, ok := item.(*llm.ChatMessage)
+		if !ok || (message.Role != llm.ChatRoleSystem && message.Role != llm.ChatRoleDeveloper) {
+			continue
+		}
+
+		if text := message.TextContent(); text != "" {
+			parts = append(parts, map[string]any{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text})
+		}
+	}
+
+	return marshalTraceJSON(parts)
+}
+
+func llmInputMessagesJSON(chatCtx *llm.ChatContext) string {
+	if chatCtx == nil {
+		return ""
+	}
+
+	messages := make([]map[string]any, 0, len(chatCtx.Items))
+	for _, item := range chatCtx.Items {
+		role, parts := llmInputMessageParts(item)
+		if role == "" || len(parts) == 0 {
+			continue
+		}
+
+		if appendLLMInputMessageParts(messages, item, parts) {
+			continue
+		}
+
+		messages = append(messages, map[string]any{traceJSONKeyRole: role, traceJSONKeyParts: parts})
+	}
+
+	return marshalTraceJSON(messages)
+}
+
+func llmInputMessageParts(item llm.ChatItem) (string, []map[string]any) {
+	switch value := item.(type) {
+	case *llm.ChatMessage:
+		if value.Role == llm.ChatRoleSystem || value.Role == llm.ChatRoleDeveloper {
+			return "", nil
+		}
+
+		if text := value.TextContent(); text != "" {
+			return string(value.Role), []map[string]any{{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text}}
+		}
+	case *llm.FunctionCall:
+		return traceJSONRoleAssistant, []map[string]any{{traceJSONKeyType: llmFinishReasonToolCall, "id": value.CallID, traceJSONKeyName: value.Name, traceJSONKeyArguments: traceJSONValue(value.Arguments)}}
+	case *llm.FunctionCallOutput:
+		return "tool", []map[string]any{{traceJSONKeyType: "tool_call_response", "id": value.CallID, "response": traceJSONValue(value.Output)}}
+	}
+
+	return "", nil
+}
+
+func appendLLMInputMessageParts(messages []map[string]any, item llm.ChatItem, parts []map[string]any) bool {
+	if _, ok := item.(*llm.FunctionCall); !ok || len(messages) == 0 {
+		return false
+	}
+
+	previous := messages[len(messages)-1]
+
+	previousParts, ok := previous[traceJSONKeyParts].([]map[string]any)
+	if previous[traceJSONKeyRole] != traceJSONRoleAssistant || !ok {
+		return false
+	}
+
+	previous[traceJSONKeyParts] = append(previousParts, parts...)
+
+	return true
+}
+
+func llmOutputMessagesJSON(text string, calls []llm.FunctionToolCall, finishReason string) string {
+	parts := make([]map[string]any, 0, len(calls)+1)
+	if text != "" {
+		parts = append(parts, map[string]any{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text})
+	}
+
+	for _, call := range calls {
+		parts = append(parts, map[string]any{traceJSONKeyType: llmFinishReasonToolCall, "id": call.CallID, traceJSONKeyName: call.Name, traceJSONKeyArguments: traceJSONValue(call.Arguments)})
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return marshalTraceJSON([]map[string]any{{traceJSONKeyRole: traceJSONRoleAssistant, traceJSONKeyParts: parts, "finish_reason": finishReason}})
+}
+
+func traceJSONValue(raw string) any {
+	var value any
+	if raw != "" && json.Unmarshal([]byte(raw), &value) == nil {
+		return value
+	}
+
+	return raw
+}
+
+func marshalTraceJSON(value any) string {
+	if reflect.ValueOf(value).Len() == 0 {
+		return ""
+	}
+
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+
+	return string(payload)
+}
+
 type llmChunkResult struct {
 	chunk *llm.ChatChunk
 	err   error
@@ -240,60 +623,6 @@ func nextLLMChunk(ctx context.Context, stream llm.LLMStream) (*llm.ChatChunk, er
 		}
 		_ = stream.Close()
 		return nil, ctx.Err()
-	}
-}
-
-func llmChatTraceEvents(chatCtx *llm.ChatContext) []telemetry.ChatTraceEvent {
-	if chatCtx == nil {
-		return nil
-	}
-	events := make([]telemetry.ChatTraceEvent, 0, len(chatCtx.Items))
-	for _, item := range chatCtx.Items {
-		switch it := item.(type) {
-		case *llm.ChatMessage:
-			eventName := llmChatMessageTraceEventName(it.Role)
-			if eventName != "" {
-				events = append(events, telemetry.ChatTraceEvent{Name: eventName, Attributes: []attribute.KeyValue{attribute.String("content", it.TextContent())}})
-			}
-		case *llm.FunctionCall:
-			toolCall, err := json.Marshal(map[string]any{
-				"function": map[string]any{"name": it.Name, "arguments": it.Arguments},
-				"id":       it.CallID,
-				"type":     "function",
-			})
-			if err == nil {
-				events = append(events, telemetry.ChatTraceEvent{
-					Name: telemetry.EventGenAIAssistantMessage,
-					Attributes: []attribute.KeyValue{
-						attribute.String("role", "assistant"),
-						attribute.StringSlice("tool_calls", []string{string(toolCall)}),
-					},
-				})
-			}
-		case *llm.FunctionCallOutput:
-			events = append(events, telemetry.ChatTraceEvent{
-				Name: telemetry.EventGenAIToolMessage,
-				Attributes: []attribute.KeyValue{
-					attribute.String("content", it.Output),
-					attribute.String("name", it.Name),
-					attribute.String("id", it.CallID),
-				},
-			})
-		}
-	}
-	return events
-}
-
-func llmChatMessageTraceEventName(role llm.ChatRole) string {
-	switch role {
-	case llm.ChatRoleSystem, llm.ChatRoleDeveloper:
-		return telemetry.EventGenAISystemMessage
-	case llm.ChatRoleUser:
-		return telemetry.EventGenAIUserMessage
-	case llm.ChatRoleAssistant:
-		return telemetry.EventGenAIAssistantMessage
-	default:
-		return ""
 	}
 }
 
@@ -407,13 +736,19 @@ type ttsInferenceMetrics struct {
 	audioDuration float64
 	providerData  []*telemetry.TTSMetrics
 	unsubscribe   func()
+	requestSpan   trace.Span
+	runSpan       trace.Span
+	recordInput   bool
 }
 
-func newTTSInferenceMetrics(provider tts.TTS, streamed bool, handler func(*telemetry.TTSMetrics)) *ttsInferenceMetrics {
+func newTTSInferenceMetrics(provider tts.TTS, streamed bool, handler func(*telemetry.TTSMetrics), requestSpan, runSpan trace.Span, recordInput bool) *ttsInferenceMetrics {
 	metrics := &ttsInferenceMetrics{
-		provider: provider,
-		handler:  handler,
-		streamed: streamed,
+		provider:    provider,
+		handler:     handler,
+		streamed:    streamed,
+		requestSpan: requestSpan,
+		runSpan:     runSpan,
+		recordInput: recordInput,
 	}
 	if collector, ok := provider.(ttsMetricsCollector); ok {
 		metrics.unsubscribe = collector.OnMetricsCollected(func(providerMetrics *telemetry.TTSMetrics) {
@@ -469,9 +804,6 @@ func (m *ttsInferenceMetrics) emit(cancelled bool) {
 		return
 	}
 	defer m.close()
-	if m.handler == nil {
-		return
-	}
 	m.mu.Lock()
 	startedAt := m.startedAt
 	firstAudioAt := m.firstAudioAt
@@ -504,10 +836,29 @@ func (m *ttsInferenceMetrics) emit(cancelled bool) {
 		}
 	}
 	mergeProviderTTSMetrics(metrics, providerData)
+
+	providerRequestID := metrics.RequestID
 	if metrics.RequestID == "" {
 		metrics.RequestID = cavosmath.ShortUUID("")
 	}
-	m.handler(metrics)
+
+	if m.requestSpan != nil {
+		if payload, err := json.Marshal(metrics); err == nil {
+			m.requestSpan.SetAttributes(attribute.String(telemetry.AttrTTSMetrics, string(payload)))
+		}
+
+		if m.recordInput {
+			m.requestSpan.SetAttributes(attribute.String(telemetry.AttrTTSInputText, text))
+		}
+	}
+
+	if m.runSpan != nil && providerRequestID != "" {
+		m.runSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, []string{providerRequestID}))
+	}
+
+	if m.handler != nil {
+		m.handler(metrics)
+	}
 }
 
 func (m *ttsInferenceMetrics) close() {
@@ -635,8 +986,16 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		cancelInference()
 		return nil, err
 	}
-	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler)
 	ctx, span := telemetry.NewTTSNodeSpan(inferenceCtx, tts.Model(t), tts.Provider(t))
+	requestCtx, requestSpan := telemetry.StartSpan(ctx, "tts_request", trace.WithAttributes(
+		attribute.String(telemetry.AttrGenAIRequestModel, tts.Model(t)),
+		attribute.String(telemetry.AttrGenAIProviderName, normalizeGenAIProvider(tts.Provider(t))),
+		attribute.Bool(telemetry.AttrTTSStreaming, streamed),
+		attribute.String(telemetry.AttrTTSLabel, t.Label()),
+	))
+	runCtx, runSpan := telemetry.StartSpan(requestCtx, "tts_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, 0)))
+	ctx = runCtx
+	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler, requestSpan, runSpan, !telemetry.RedactionEnabled(requestCtx))
 
 	if !t.Capabilities().Streaming && !options.PreserveTimedTranscript {
 		t = tts.NewStreamAdapter(t)
@@ -649,6 +1008,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			defer transformedInput.Close()
 			defer cancelInference()
 			defer span.End()
+			defer requestSpan.End()
+			defer runSpan.End()
 
 			var text strings.Builder
 			var startTime time.Time
@@ -660,6 +1021,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 				if inputErr != nil {
 					data.StreamErr = inputErr
+					recordInferenceSpanError(runCtx, runSpan, inputErr)
+					recordInferenceSpanError(requestCtx, requestSpan, inputErr)
 					metrics.close()
 					return
 				}
@@ -683,6 +1046,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			stream, err := t.Synthesize(ctx, transformedText)
 			if err != nil {
 				data.StreamErr = err
+				recordInferenceSpanError(runCtx, runSpan, err)
+				recordInferenceSpanError(requestCtx, requestSpan, err)
 				metrics.close()
 				return
 			}
@@ -699,6 +1064,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					} else {
 						data.StreamErr = fmt.Errorf("no audio frames were pushed for text: %s", transformedText)
 					}
+
+					recordInferenceSpanError(runCtx, runSpan, data.StreamErr)
+					recordInferenceSpanError(requestCtx, requestSpan, data.StreamErr)
 					return
 				}
 				for _, timedText := range timedTranscript {
@@ -712,6 +1080,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					} else {
 						data.StreamErr = fmt.Errorf("no audio frames were pushed for text: %s", transformedText)
 					}
+
+					recordInferenceSpanError(runCtx, runSpan, data.StreamErr)
+					recordInferenceSpanError(requestCtx, requestSpan, data.StreamErr)
 					return
 				}
 			}
@@ -728,6 +1099,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	if err != nil {
 		_ = transformedInput.Close()
 		metrics.close()
+		recordInferenceSpanError(runCtx, runSpan, err)
+		recordInferenceSpanError(requestCtx, requestSpan, err)
+		runSpan.End()
+		requestSpan.End()
 		span.End()
 		cancelStream()
 		cancelInference()
@@ -744,6 +1119,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer cancelStream()
 		defer cancelInference()
 		defer span.End()
+		defer requestSpan.End()
+		defer runSpan.End()
 
 		var closeStreamOnce sync.Once
 		closeStream := func() {
@@ -794,6 +1171,8 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			streamErrMu.Lock()
 			if data.StreamErr == nil {
 				data.StreamErr = err
+				recordInferenceSpanError(runCtx, runSpan, err)
+				recordInferenceSpanError(requestCtx, requestSpan, err)
 			}
 			streamErrMu.Unlock()
 			cancelInference()

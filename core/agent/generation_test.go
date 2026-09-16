@@ -3,8 +3,8 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -210,7 +211,7 @@ func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
 	}
 }
 
-func TestPerformLLMInferenceRecordsOnlyLLMNodeSpan(t *testing.T) {
+func TestPerformLLMInferenceRecordsRequestSpanHierarchy(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -231,7 +232,10 @@ func TestPerformLLMInferenceRecordsOnlyLLMNodeSpan(t *testing.T) {
 		model:    "test-model",
 		provider: "test-provider",
 		stream: &fakeGenerationLLMStream{
-			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}},
+			chunks: []*llm.ChatChunk{
+				{ID: "request-1", Delta: &llm.ChoiceDelta{Content: "hello"}},
+				{ID: "request-2", Delta: &llm.ChoiceDelta{Content: "!"}, Usage: &llm.CompletionUsage{PromptTokens: 7, CompletionTokens: 3, PromptCachedTokens: 2, CacheCreationTokens: 1}},
+			},
 		},
 	}
 
@@ -242,20 +246,27 @@ func TestPerformLLMInferenceRecordsOnlyLLMNodeSpan(t *testing.T) {
 	drainStrings(data.TextCh)
 
 	spans := recorder.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("ended spans = %#v, want only llm_node", spans)
+	if len(spans) != 3 {
+		t.Fatalf("ended spans = %#v, want llm_node, llm_request, and llm_request_run", spans)
 	}
-	var nodeSpan sdktrace.ReadOnlySpan
+	byName := make(map[string]sdktrace.ReadOnlySpan, len(spans))
 	for _, span := range spans {
-		if span.Name() == "llm_inference" {
-			t.Fatalf("unexpected llm_inference span: %#v", span)
-		}
-		if span.Name() == "llm_node" {
-			nodeSpan = span
-		}
+		byName[span.Name()] = span
 	}
+	nodeSpan := byName["llm_node"]
 	if nodeSpan == nil {
 		t.Fatalf("spans = %#v, want llm_node", spans)
+	}
+	requestSpan := byName["llm_request"]
+	requestRunSpan := byName["llm_request_run"]
+	if requestSpan == nil || requestRunSpan == nil {
+		t.Fatalf("spans = %#v, want llm_request and llm_request_run", spans)
+	}
+	if requestSpan.Parent().SpanID() != nodeSpan.SpanContext().SpanID() {
+		t.Fatalf("llm_request parent = %s, want llm_node %s", requestSpan.Parent().SpanID(), nodeSpan.SpanContext().SpanID())
+	}
+	if requestRunSpan.Parent().SpanID() != requestSpan.SpanContext().SpanID() {
+		t.Fatalf("llm_request_run parent = %s, want llm_request %s", requestRunSpan.Parent().SpanID(), requestSpan.SpanContext().SpanID())
 	}
 	nodeAttrs := spanAttributeValues(nodeSpan.Attributes())
 	if got := nodeAttrs[telemetry.AttrGenAIRequestModel].AsString(); got != "test-model" {
@@ -264,37 +275,159 @@ func TestPerformLLMInferenceRecordsOnlyLLMNodeSpan(t *testing.T) {
 	if got := nodeAttrs[telemetry.AttrGenAIProviderName].AsString(); got != "test-provider" {
 		t.Fatalf("llm_node provider = %q, want test-provider", got)
 	}
-	if got := nodeAttrs[telemetry.AttrResponseText].AsString(); got != "hello" {
-		t.Fatalf("llm_node response text = %q, want hello", got)
-	}
 	if got := nodeAttrs["lk.response.ttft"].AsFloat64(); got <= 0 {
 		t.Fatalf("llm_node response ttft = %v, want positive first-token latency", got)
 	}
 
-	events := nodeSpan.Events()
-	if len(events) != 5 {
-		t.Fatalf("span events = %d, want 5 chat context events: %#v", len(events), events)
+	if events := nodeSpan.Events(); len(events) != 0 {
+		t.Fatalf("llm_node events = %#v, want legacy GenAI content events removed", events)
 	}
-	assertSpanEvent(t, events[0], telemetry.EventGenAISystemMessage, map[string]string{"content": "system prompt"})
-	assertSpanEvent(t, events[1], telemetry.EventGenAIUserMessage, map[string]string{"content": "hello"})
-	assertSpanEvent(t, events[2], telemetry.EventGenAIAssistantMessage, map[string]string{"content": "hi there"})
-	assertSpanEvent(t, events[3], telemetry.EventGenAIAssistantMessage, map[string]string{"role": "assistant"})
-	toolCalls := spanEventAttributeValues(events[3].Attributes)["tool_calls"].AsStringSlice()
-	if len(toolCalls) != 1 {
-		t.Fatalf("tool_calls event attribute = %#v, want one lookup call JSON", toolCalls)
+	requestAttrs := spanAttributeValues(requestSpan.Attributes())
+	if got := requestAttrs["gen_ai.operation.name"].AsString(); got != "chat" {
+		t.Fatalf("llm_request operation = %q, want chat", got)
 	}
-	var toolCall map[string]any
-	if err := json.Unmarshal([]byte(toolCalls[0]), &toolCall); err != nil {
-		t.Fatalf("tool call JSON unmarshal error = %v; payload %s", err, toolCalls[0])
+	if got := requestAttrs["gen_ai.request.model"].AsString(); got != "test-model" {
+		t.Fatalf("llm_request model = %q, want test-model", got)
 	}
-	function, ok := toolCall["function"].(map[string]any)
-	if !ok || function["name"] != "lookup" || function["arguments"] != `{"city":"Jakarta"}` || toolCall["id"] != "call_lookup" || toolCall["type"] != "function" {
-		t.Fatalf("tool call event = %#v, want lookup function call", toolCall)
+	if got := requestAttrs["gen_ai.provider.name"].AsString(); got != "test-provider" {
+		t.Fatalf("llm_request provider = %q, want test-provider", got)
 	}
-	assertSpanEvent(t, events[4], telemetry.EventGenAIToolMessage, map[string]string{"content": "sunny", "name": "lookup", "id": "call_lookup"})
+	if !requestAttrs["gen_ai.request.stream"].AsBool() {
+		t.Fatal("llm_request stream = false, want true")
+	}
+	if got := requestAttrs["gen_ai.response.id"].AsString(); got != "request-2" {
+		t.Fatalf("llm_request response id = %q, want request-2", got)
+	}
+	if got := requestAttrs["gen_ai.response.finish_reasons"].AsStringSlice(); len(got) != 1 || got[0] != "stop" {
+		t.Fatalf("llm_request finish reasons = %#v, want [stop]", got)
+	}
+	if got := requestAttrs["gen_ai.usage.input_tokens"].AsInt64(); got != 7 {
+		t.Fatalf("llm_request input tokens = %d, want 7", got)
+	}
+	if got := requestAttrs["gen_ai.usage.output_tokens"].AsInt64(); got != 3 {
+		t.Fatalf("llm_request output tokens = %d, want 3", got)
+	}
+	if got := requestAttrs["gen_ai.usage.cache_read.input_tokens"].AsInt64(); got != 2 {
+		t.Fatalf("llm_request cache read tokens = %d, want 2", got)
+	}
+	if got := requestAttrs["gen_ai.usage.cache_write.input_tokens"].AsInt64(); got != 1 {
+		t.Fatalf("llm_request cache write tokens = %d, want 1", got)
+	}
+	if got := requestAttrs["gen_ai.system_instructions"].AsString(); got == "" || !strings.Contains(got, "system prompt") {
+		t.Fatalf("llm_request system instructions = %q, want system prompt JSON", got)
+	}
+	if got := requestAttrs["gen_ai.input.messages"].AsString(); got == "" || !strings.Contains(got, "call_lookup") || !strings.Contains(got, "sunny") {
+		t.Fatalf("llm_request input messages = %q, want conversation and tool JSON", got)
+	}
+	if got := requestAttrs["gen_ai.output.messages"].AsString(); got == "" || !strings.Contains(got, "hello!") {
+		t.Fatalf("llm_request output messages = %q, want response JSON", got)
+	}
+	runAttrs := spanAttributeValues(requestRunSpan.Attributes())
+	if got := runAttrs[telemetry.AttrRetryCount].AsInt64(); got != 0 {
+		t.Fatalf("llm_request_run retry count = %d, want 0", got)
+	}
+	if got := runAttrs["lk.provider_request_ids"].AsStringSlice(); len(got) != 2 || got[0] != "request-1" || got[1] != "request-2" {
+		t.Fatalf("llm_request_run provider request IDs = %#v, want [request-1 request-2]", got)
+	}
 }
 
-func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
+func TestPerformLLMInferenceOmitsContentWhenCaptureDisabled(t *testing.T) {
+	t.Setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "0")
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "secret system"}}})
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "secret input"}}})
+	data, err := PerformLLMInference(context.Background(), &fakeGenerationLLM{
+		model: "model", provider: "provider",
+		stream: &fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "secret output"}}}},
+	}, chatCtx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStrings(data.TextCh)
+
+	request := spanByName(t, recorder.Ended(), "llm_request")
+	attrs := spanAttributeValues(request.Attributes())
+	for _, key := range []string{telemetry.AttrGenAISystemInstructions, telemetry.AttrGenAIInputMessages, telemetry.AttrGenAIOutputMessages} {
+		if _, ok := attrs[key]; ok {
+			t.Fatalf("llm_request contains %s with content capture disabled", key)
+		}
+	}
+	if attrs[telemetry.AttrGenAIOperationName].AsString() != "chat" {
+		t.Fatalf("non-content GenAI attributes missing: %#v", attrs)
+	}
+}
+
+func TestNormalizeGenAIProviderMatchesReferenceRegistry(t *testing.T) {
+	tests := map[string]string{
+		"api.openai.com":                   "openai",
+		"api.mistral.ai":                   "mistral_ai",
+		"AWS Bedrock":                      "aws.bedrock",
+		"tenant.openai.azure.com":          "azure.ai.openai",
+		"region.aiplatform.googleapis.com": "gcp.vertex_ai",
+		"custom-provider":                  "custom-provider",
+	}
+	for input, want := range tests {
+		if got := normalizeGenAIProvider(input); got != want {
+			t.Errorf("normalizeGenAIProvider(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestPerformLLMInferenceRedactsContentAndExceptionDetails(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	observability, err := telemetry.NewJobObservability(context.Background(), telemetry.JobObservabilityConfig{
+		TracerProvider: provider,
+		JobID:          "AJ_redacted",
+		RoomID:         "RM_redacted",
+		TraceMetadata:  []attribute.KeyValue{attribute.Bool(telemetry.AttrRedactionEnabled, true)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observability.Shutdown(context.Background()) })
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "private input"}}})
+	data, err := PerformLLMInference(observability.Context(context.Background()), &fakeGenerationLLM{
+		model: "model", provider: "provider",
+		stream: &fakeGenerationLLMStream{err: errors.New("private provider error")},
+	}, chatCtx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainStrings(data.TextCh)
+
+	request := spanByName(t, recorder.Ended(), "llm_request")
+	attrs := spanAttributeValues(request.Attributes())
+	for _, key := range []string{telemetry.AttrGenAIInputMessages, telemetry.AttrGenAIOutputMessages} {
+		if _, ok := attrs[key]; ok {
+			t.Fatalf("redacted llm_request contains %s", key)
+		}
+	}
+	if got := attrs[telemetry.AttrErrorType].AsString(); got == "" {
+		t.Fatal("redacted llm_request is missing error.type")
+	}
+	if request.Status().Code != codes.Error {
+		t.Fatalf("llm_request status = %v, want error", request.Status())
+	}
+	for _, event := range request.Events() {
+		if strings.Contains(fmt.Sprint(event.Attributes), "private provider error") {
+			t.Fatalf("redacted exception details leaked in event: %#v", event)
+		}
+	}
+}
+
+func TestPerformTTSInferenceRecordsRequestSpanHierarchy(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -311,7 +444,7 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 		model:    "test-voice",
 		provider: "test-provider",
 		stream: &fakeGenerationTTSStream{
-			audio: []*tts.SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1, 2}}}},
+			audio: []*tts.SynthesizedAudio{{RequestID: "tts-request-1", Frame: &model.AudioFrame{Data: []byte{1, 2}}}},
 		},
 	}
 	ttsProvider := &fakeGenerationTTSWrapper{TTS: innerTTSProvider}
@@ -323,22 +456,88 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 	drainAudioFrames(data.AudioCh)
 
 	spans := recorder.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("ended spans = %d, want 1", len(spans))
+	if len(spans) != 3 {
+		t.Fatalf("ended spans = %d, want tts_node, tts_request, and tts_request_run", len(spans))
 	}
-	if spans[0].Name() != "tts_node" {
-		t.Fatalf("span name = %q, want tts_node", spans[0].Name())
+	byName := make(map[string]sdktrace.ReadOnlySpan, len(spans))
+	for _, span := range spans {
+		byName[span.Name()] = span
 	}
-	attrs := spanAttributes(spans[0].Attributes())
+	nodeSpan := byName["tts_node"]
+	requestSpan := byName["tts_request"]
+	requestRunSpan := byName["tts_request_run"]
+	if nodeSpan == nil || requestSpan == nil || requestRunSpan == nil {
+		t.Fatalf("spans = %#v, want complete TTS request hierarchy", spans)
+	}
+	if requestSpan.Parent().SpanID() != nodeSpan.SpanContext().SpanID() || requestRunSpan.Parent().SpanID() != requestSpan.SpanContext().SpanID() {
+		t.Fatalf("TTS span hierarchy is incorrect: node=%s request.parent=%s request=%s run.parent=%s", nodeSpan.SpanContext().SpanID(), requestSpan.Parent().SpanID(), requestSpan.SpanContext().SpanID(), requestRunSpan.Parent().SpanID())
+	}
+	attrs := spanAttributes(nodeSpan.Attributes())
 	if attrs[telemetry.AttrGenAIRequestModel] != "test-voice" {
 		t.Fatalf("span model attr = %q, want test-voice", attrs[telemetry.AttrGenAIRequestModel])
 	}
 	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
 		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
-	attrValues := spanAttributeValues(spans[0].Attributes())
+	attrValues := spanAttributeValues(nodeSpan.Attributes())
 	if got := attrValues[telemetry.AttrResponseTTFB].AsFloat64(); got <= 0 {
 		t.Fatalf("span ttfb attr = %v, want first audio latency", got)
+	}
+	requestAttrs := spanAttributeValues(requestSpan.Attributes())
+	if !requestAttrs[telemetry.AttrTTSStreaming].AsBool() {
+		t.Fatal("tts_request streaming = false, want true")
+	}
+	if got := requestAttrs[telemetry.AttrTTSLabel].AsString(); got != "fake-generation-tts" {
+		t.Fatalf("tts_request label = %q, want fake-generation-tts", got)
+	}
+	if got := requestAttrs[telemetry.AttrTTSInputText].AsString(); got != "hello" {
+		t.Fatalf("tts_request input text = %q, want hello", got)
+	}
+	if got := requestAttrs["lk.tts_metrics"].AsString(); got == "" || !strings.Contains(got, "tts-request-1") {
+		t.Fatalf("tts_request metrics = %q, want request ID", got)
+	}
+	runAttrs := spanAttributeValues(requestRunSpan.Attributes())
+	if got := runAttrs[telemetry.AttrRetryCount].AsInt64(); got != 0 {
+		t.Fatalf("tts_request_run retry count = %d, want 0", got)
+	}
+	if got := runAttrs["lk.provider_request_ids"].AsStringSlice(); len(got) != 1 || got[0] != "tts-request-1" {
+		t.Fatalf("tts_request_run provider request IDs = %#v, want [tts-request-1]", got)
+	}
+}
+
+func TestPerformTTSInferenceRecordsRequestError(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+	data, err := PerformTTSInference(context.Background(), &fakeGenerationTTS{
+		model: "voice", provider: "provider",
+		stream: &fakeGenerationTTSStream{err: errors.New("provider failed")},
+	}, textCh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAudioFrames(data.AudioCh)
+	if data.StreamErr == nil {
+		t.Fatal("StreamErr = nil, want provider failure")
+	}
+
+	for _, name := range []string{"tts_request", "tts_request_run"} {
+		span := spanByName(t, recorder.Ended(), name)
+		if span.Status().Code != codes.Error {
+			t.Fatalf("%s status = %v, want error", name, span.Status())
+		}
+		if got := spanAttributeValues(span.Attributes())[telemetry.AttrErrorType].AsString(); got == "" {
+			t.Fatalf("%s error.type is empty", name)
+		}
 	}
 }
 
@@ -2376,35 +2575,6 @@ func mustReceiveToolOutput(t *testing.T, outCh <-chan ToolExecutionOutput) ToolE
 	}
 }
 
-func assertSpanEvent(t *testing.T, event sdktrace.Event, wantName string, wantAttrs map[string]string) {
-	t.Helper()
-	if event.Name != wantName {
-		t.Fatalf("event name = %q, want %q", event.Name, wantName)
-	}
-	attrs := spanEventAttributes(event.Attributes)
-	for key, want := range wantAttrs {
-		if attrs[key] != want {
-			t.Fatalf("event %q attr %q = %q, want %q; attrs=%#v", event.Name, key, attrs[key], want, attrs)
-		}
-	}
-}
-
-func spanEventAttributes(attrs []attribute.KeyValue) map[string]string {
-	values := make(map[string]string, len(attrs))
-	for _, attr := range attrs {
-		values[string(attr.Key)] = attr.Value.AsString()
-	}
-	return values
-}
-
-func spanEventAttributeValues(attrs []attribute.KeyValue) map[string]attribute.Value {
-	values := make(map[string]attribute.Value, len(attrs))
-	for _, attr := range attrs {
-		values[string(attr.Key)] = attr.Value
-	}
-	return values
-}
-
 func spanAttributes(attrs []attribute.KeyValue) map[string]string {
 	values := make(map[string]string, len(attrs))
 	for _, attr := range attrs {
@@ -2419,6 +2589,17 @@ func spanAttributeValues(attrs []attribute.KeyValue) map[string]attribute.Value 
 		values[string(attr.Key)] = attr.Value
 	}
 	return values
+}
+
+func spanByName(t *testing.T, spans []sdktrace.ReadOnlySpan, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	for _, span := range spans {
+		if span.Name() == name {
+			return span
+		}
+	}
+	t.Fatalf("span %q not found in %#v", name, spans)
+	return nil
 }
 
 type fakeGenerationTool struct {
@@ -2715,6 +2896,7 @@ type fakeGenerationTTSStream struct {
 	audio  []*tts.SynthesizedAudio
 	index  int
 	closed bool
+	err    error
 }
 
 func (f *fakeGenerationTTSStream) PushText(string) error { return nil }
@@ -2729,6 +2911,11 @@ func (f *fakeGenerationTTSStream) Close() error {
 
 func (f *fakeGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if f.index >= len(f.audio) {
+		if f.err != nil {
+			err := f.err
+			f.err = nil
+			return nil, err
+		}
 		return nil, io.EOF
 	}
 	audio := f.audio[f.index]
