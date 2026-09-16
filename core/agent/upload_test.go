@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -510,6 +511,7 @@ func TestUploadSessionReportHeaderIncludesJobID(t *testing.T) {
 	report.RecordingOptions = RecordingOptions{Transcript: true}
 	report.RoomID = "RM_job_header"
 	report.JobID = "AJ_job_header"
+	report.RedactionEnabled = true
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
@@ -519,6 +521,9 @@ func TestUploadSessionReportHeaderIncludesJobID(t *testing.T) {
 	case header := <-headerCh:
 		if header.JobId != "AJ_job_header" {
 			t.Fatalf("header JobId = %q, want AJ_job_header", header.JobId)
+		}
+		if !header.RedactionEnabled {
+			t.Fatal("header RedactionEnabled = false, want true")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UploadSessionReport did not POST recording header")
@@ -1004,7 +1009,7 @@ func TestUploadSessionReportNormalizesCloudHostnameLikeReference(t *testing.T) {
 	}
 }
 
-func TestUploadSessionReportOmitsEmptyAudioPartLikeReference(t *testing.T) {
+func TestUploadSessionReportReportsEmptyAudioAfterUploadingTranscript(t *testing.T) {
 	audioPath := filepath.Join(t.TempDir(), "empty.ogg")
 	if err := os.WriteFile(audioPath, nil, 0o600); err != nil {
 		t.Fatalf("write empty audio file: %v", err)
@@ -1022,8 +1027,9 @@ func TestUploadSessionReportOmitsEmptyAudioPartLikeReference(t *testing.T) {
 	report.AudioRecordingPath = &audioPath
 	report.AudioRecordingStartedAt = &startedAt
 
-	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
-		t.Fatalf("UploadSessionReport() error = %v", err)
+	err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report)
+	if err == nil || !strings.Contains(err.Error(), "audio recording is empty") {
+		t.Fatalf("UploadSessionReport() error = %v, want empty audio error", err)
 	}
 
 	select {
@@ -1036,6 +1042,78 @@ func TestUploadSessionReportOmitsEmptyAudioPartLikeReference(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UploadSessionReport did not POST recording upload")
+	}
+}
+
+func TestUploadSessionReportUploadsExactAudioBytes(t *testing.T) {
+	audioData := []byte("OggS\x00test-audio")
+	audioPath := filepath.Join(t.TempDir(), "recording.ogg")
+	if err := os.WriteFile(audioPath, audioData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := 12.5
+	partsCh := make(chan map[string][]byte, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		partsCh <- multipartPartsFromRequest(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Audio: true, Transcript: true}
+	report.RoomID = "RM_audio"
+	report.JobID = "AJ_audio"
+	report.AudioRecordingPath = &audioPath
+	report.AudioRecordingStartedAt = &startedAt
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatal(err)
+	}
+
+	parts := <-partsCh
+	if !bytes.Equal(parts["audio"], audioData) {
+		t.Fatalf("uploaded audio = %q, want exact bytes %q", parts["audio"], audioData)
+	}
+}
+
+func TestUploadSessionReportReportsMissingAudioMetadataAfterUploadingTranscript(t *testing.T) {
+	var uploaded atomic.Bool
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploaded.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Audio: true, Transcript: true}
+	report.RoomID = "RM_missing_audio"
+	report.JobID = "AJ_missing_audio"
+
+	err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report)
+	if err == nil || !strings.Contains(err.Error(), "audio recording path") {
+		t.Fatalf("UploadSessionReport() error = %v, want missing path error", err)
+	}
+	if !uploaded.Load() {
+		t.Fatal("transcript/header upload was skipped after audio validation failure")
+	}
+}
+
+func TestUploadSessionReportRetriesConnectionFailure(t *testing.T) {
+	useNoopSessionReportTelemetry(t)
+	var attempts atomic.Int32
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatal(err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("upload attempts = %d, want 2", got)
 	}
 }
 

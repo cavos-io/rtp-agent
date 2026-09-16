@@ -25,6 +25,7 @@ type RecordingOptions struct {
 
 type SessionReport struct {
 	RecordingOptions        RecordingOptions        `json:"recording_options"`
+	RedactionEnabled        bool                    `json:"redaction_enabled,omitempty"`
 	JobID                   string                  `json:"job_id"`
 	RoomID                  string                  `json:"room_id"`
 	Room                    string                  `json:"room"`

@@ -1,7 +1,12 @@
 package livekit
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,6 +166,78 @@ func TestRecorderIOStopFlushesAndClosesOutput(t *testing.T) {
 	}
 	if info.Size() == 0 {
 		t.Fatal("recording size after Stop() = 0, want flushed and closed output")
+	}
+}
+
+func TestRecorderIOFinalizedAudioUploadsThroughSessionReport(t *testing.T) {
+	uploadedAudio := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reader, err := r.MultipartReader()
+		if err != nil {
+			t.Errorf("MultipartReader: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Errorf("NextPart: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if part.FormName() != "audio" {
+				continue
+			}
+			data, err := io.ReadAll(part)
+			if err != nil {
+				t.Errorf("ReadAll(audio): %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			uploadedAudio <- data
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	roomIO := &RoomIO{Recorder: recorder}
+	outputPath := filepath.Join(t.TempDir(), "session.ogg")
+	const sampleRate = 48000
+	if err := recorder.Start(outputPath, sampleRate); err != nil {
+		t.Fatal(err)
+	}
+	recorder.RecordInput(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        sampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	})
+	if err := roomIO.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := agent.NewSessionReport()
+	report.RecordingOptions = agent.RecordingOptions{Audio: true}
+	roomIO.PopulateSessionReport(report)
+	if err := agent.UploadSessionRecording("wss://tenant.livekit.cloud", "key", "secret", report); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-uploadedAudio:
+		if !bytes.Equal(got, want) {
+			t.Fatalf("uploaded audio bytes differ: got %d bytes, want %d", len(got), len(want))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recording upload contained no audio part")
 	}
 }
 

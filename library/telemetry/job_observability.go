@@ -49,16 +49,17 @@ type JobObservabilityConfig struct {
 }
 
 type JobObservability struct {
-	tracerProvider *sdktrace.TracerProvider
-	loggerProvider *sdklog.LoggerProvider
-	meterProvider  *sdkmetric.MeterProvider
-	tracer         trace.Tracer
-	chatLogger     otellog.Logger
-	evalLogger     otellog.Logger
-	meter          metric.Meter
-	sessionAttrs   []attribute.KeyValue
-	shutdownOnce   sync.Once
-	shutdownErr    error
+	tracerProvider   *sdktrace.TracerProvider
+	loggerProvider   *sdklog.LoggerProvider
+	meterProvider    *sdkmetric.MeterProvider
+	tracer           trace.Tracer
+	chatLogger       otellog.Logger
+	evalLogger       otellog.Logger
+	meter            metric.Meter
+	sessionAttrs     []attribute.KeyValue
+	redactionEnabled bool
+	shutdownOnce     sync.Once
+	shutdownErr      error
 }
 
 func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*JobObservability, error) {
@@ -142,6 +143,13 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 	}
 
 	traceMetadata := append(append([]attribute.KeyValue(nil), metadata...), config.TraceMetadata...)
+	redactionEnabled := false
+
+	for _, attr := range traceMetadata {
+		if string(attr.Key) == AttrRedactionEnabled && attr.Value.Type() == attribute.BOOL {
+			redactionEnabled = attr.Value.AsBool()
+		}
+	}
 	tracerProvider := config.TracerProvider
 	if tracerProvider == nil {
 		tracerProvider = sdktrace.NewTracerProvider(
@@ -185,6 +193,7 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 			attribute.String(AttrJobID, config.JobID),
 			attribute.String(AttrRoomName, config.RoomName),
 		},
+		redactionEnabled: redactionEnabled,
 	}, nil
 }
 
