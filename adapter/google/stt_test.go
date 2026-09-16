@@ -145,15 +145,34 @@ func TestGoogleSTTRecognizerUsesReferenceProjectFromADCEnv(t *testing.T) {
 }
 
 func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
-	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
-
-	if got := googleSTTEndpoint(provider); got != "europe-west1-speech.googleapis.com" {
-		t.Fatalf("endpoint = %q, want europe-west1-speech.googleapis.com", got)
+	tests := []struct {
+		location string
+		endpoint string
+	}{
+		{location: "us", endpoint: "us-speech.googleapis.com:443"},
+		{location: "eu", endpoint: "eu-speech.googleapis.com:443"},
+		{location: "europe-west1", endpoint: "europe-west1-speech.googleapis.com:443"},
+		{location: "global", endpoint: ""},
 	}
 
-	globalProvider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("global"))
-	if got := googleSTTEndpoint(globalProvider); got != "" {
-		t.Fatalf("global endpoint = %q, want empty default endpoint", got)
+	for _, test := range tests {
+		t.Run(test.location, func(t *testing.T) {
+			provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation(test.location))
+			if got := googleSTTEndpoint(provider); got != test.endpoint {
+				t.Fatalf("endpoint = %q, want %q", got, test.endpoint)
+			}
+		})
+	}
+}
+
+func TestGoogleSTTReportsReferenceMetricsMetadata(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+
+	if got := stt.Model(provider); got != "chirp_3" {
+		t.Fatalf("Model = %q, want chirp_3", got)
+	}
+	if got := stt.Provider(provider); got != "Google Cloud Platform" {
+		t.Fatalf("Provider = %q, want Google Cloud Platform", got)
 	}
 }
 
@@ -185,7 +204,7 @@ func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 		WithGoogleSTTLocation(""),
 	)
 
-	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com:443" {
 		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
 	}
 	if got := googleSTTRecognizer(provider); got != "projects/voice-project/locations//recognizers/_" {
@@ -199,7 +218,7 @@ func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("googleSTTClientOptions returned error: %v", err)
 	}
-	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "europe-west1-speech.googleapis.com") {
+	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "europe-west1-speech.googleapis.com:443") {
 		t.Fatalf("client options = %s, want europe-west1 endpoint", got)
 	}
 
@@ -208,7 +227,7 @@ func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("googleSTTClientOptions after update returned error: %v", err)
 	}
-	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "us-central1-speech.googleapis.com") || strings.Contains(got, "europe-west1-speech.googleapis.com") {
+	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "us-central1-speech.googleapis.com:443") || strings.Contains(got, "europe-west1-speech.googleapis.com:443") {
 		t.Fatalf("client options after location update = %s, want current us-central1 endpoint only", got)
 	}
 }
@@ -222,7 +241,7 @@ func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleSTTLocation(""))
 
-	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com:443" {
 		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
 	}
 	if got := googleSTTRecognizer(provider); got != "projects/voice-project/locations//recognizers/_" {
@@ -2310,6 +2329,40 @@ func TestGoogleSTTStreamV2UsesFirstReferenceResultFinality(t *testing.T) {
 	}
 	if got.StartTime != 0.3 || got.EndTime != 0.6 {
 		t.Fatalf("timing = %v-%v, want later final result timing", got.StartTime, got.EndTime)
+	}
+}
+
+func TestGoogleSTTStreamV2DefaultsUnavailableFinalConfidence(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{
+		responses: []*speechv2pb.StreamingRecognizeResponse{{
+			Results: []*speechv2pb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+					Transcript: "recognized speech",
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithV2Client(&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	if got := event.Alternatives[0].Confidence; got != 1 {
+		t.Fatalf("confidence = %v, want default 1 for non-empty final transcript", got)
 	}
 }
 
