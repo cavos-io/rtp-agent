@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -121,7 +122,6 @@ func TestUploadSessionReportUsesObservabilityWriteGrant(t *testing.T) {
 		authCh <- r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -181,9 +181,6 @@ func TestUploadSessionReportExportsConcurrentJobLocalTelemetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = server.Client()
-	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
 	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 
 	cases := []struct {
@@ -346,9 +343,6 @@ func TestUploadSessionRecordingSkipsOTLPLogs(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = server.Client()
-	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
 	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 
 	report := NewSessionReport()
@@ -372,9 +366,6 @@ func TestUploadSessionReportReturnsOTLPExportError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = server.Client()
-	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
 	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 
 	report := NewSessionReport()
@@ -396,13 +387,12 @@ func TestUploadSessionReportOTLPFailureStillUploadsRecording(t *testing.T) {
 	t.Cleanup(func() { uploadSessionReportTelemetryFn = oldTelemetryUpload })
 
 	recordingUploaded := false
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		recordingUploaded = req.URL.Path == "/observability/recordings/v0"
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -469,7 +459,6 @@ func TestUploadSessionReportTranscriptOnlySetsZeroHeaderStartTime(t *testing.T) 
 		headerCh <- header
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -505,7 +494,6 @@ func TestUploadSessionReportHeaderIncludesJobID(t *testing.T) {
 		headerCh <- header
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -536,7 +524,6 @@ func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
 		requestCh <- r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -566,7 +553,6 @@ func TestUploadSessionReportRetriesRetryableRecordingUpload(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -599,7 +585,6 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -849,7 +834,6 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	chatCtx := llm.NewChatContext()
 	createdAt := time.Unix(1800, 125000000)
@@ -971,41 +955,16 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 }
 
 func TestUploadSessionReportSkipsMalformedCloudURLLikeReference(t *testing.T) {
-	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("UploadSessionReport issued request to %s, want malformed URL skipped", r.URL.String())
-	}))
-
-	report := NewSessionReport()
-	report.RecordingOptions = RecordingOptions{Transcript: true}
-	report.RoomID = "RM_test"
-
-	if err := UploadSessionReport("://bad-url", "key", "secret", "agent-a", report); err != nil {
-		t.Fatalf("UploadSessionReport() error = %v, want nil for malformed non-cloud URL", err)
+	got, err := observabilityURLFromLiveKitURL("://bad-url")
+	if err != nil || got != "" {
+		t.Fatalf("observabilityURLFromLiveKitURL() = %q, %v, want empty URL and nil error", got, err)
 	}
 }
 
 func TestUploadSessionReportNormalizesCloudHostnameLikeReference(t *testing.T) {
-	requestCh := make(chan string, 1)
-	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCh <- r.URL.Host
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	report := NewSessionReport()
-	report.RecordingOptions = RecordingOptions{Transcript: true}
-	report.RoomID = "RM_test"
-
-	if err := UploadSessionReport("wss://Tenant.LiveKit.Cloud:443/project-a", "key", "secret", "agent-a", report); err != nil {
-		t.Fatalf("UploadSessionReport() error = %v", err)
-	}
-
-	select {
-	case host := <-requestCh:
-		if host != "tenant.livekit.cloud" {
-			t.Fatalf("upload host = %q, want reference hostname without port", host)
-		}
-	default:
-		t.Fatal("UploadSessionReport did not POST to normalized cloud observability URL")
+	got, err := observabilityURLFromLiveKitURL("wss://Tenant.LiveKit.Cloud:443/project-a")
+	if err != nil || got != "https://tenant.livekit.cloud" {
+		t.Fatalf("observabilityURLFromLiveKitURL() = %q, %v, want normalized cloud URL", got, err)
 	}
 }
 
@@ -1095,21 +1054,17 @@ func TestUploadSessionReportReportsMissingAudioMetadataAfterUploadingTranscript(
 }
 
 func TestUploadSessionReportRetriesConnectionFailure(t *testing.T) {
-	useNoopSessionReportTelemetry(t)
 	var attempts atomic.Int32
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+	httpDo := func(req *http.Request) (*http.Response, error) {
 		if attempts.Add(1) == 1 {
-			return nil, context.DeadlineExceeded
+			return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: context.DeadlineExceeded}
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { recordingUploadHTTPClient = oldClient })
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
+	}
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
-	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+	if err := uploadSessionRecordingPayload("https://observability.test", "token", report, nil, "multipart/form-data", 0, nil, httpDo); err != nil {
 		t.Fatal(err)
 	}
 	if got := attempts.Load(); got != 2 {
@@ -1117,9 +1072,104 @@ func TestUploadSessionReportRetriesConnectionFailure(t *testing.T) {
 	}
 }
 
+func TestSessionRecordingAudioErrorsAreClassifiable(t *testing.T) {
+	t.Run("missing path", func(t *testing.T) {
+		report := NewSessionReport()
+		report.RecordingOptions.Audio = true
+
+		_, err := sessionRecordingAudio(report)
+		if !errors.Is(err, errAudioRecordingPathMissing) {
+			t.Fatalf("sessionRecordingAudio() error = %v, want missing path", err)
+		}
+	})
+
+	t.Run("missing start timestamp", func(t *testing.T) {
+		audioPath := filepath.Join(t.TempDir(), "recording.ogg")
+		report := NewSessionReport()
+		report.RecordingOptions.Audio = true
+		report.AudioRecordingPath = &audioPath
+
+		_, err := sessionRecordingAudio(report)
+		if !errors.Is(err, errAudioRecordingStartMissing) {
+			t.Fatalf("sessionRecordingAudio() error = %v, want missing start timestamp", err)
+		}
+	})
+
+	t.Run("empty recording", func(t *testing.T) {
+		audioPath := filepath.Join(t.TempDir(), "recording.ogg")
+		if err := os.WriteFile(audioPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		startedAt := 1.0
+		report := NewSessionReport()
+		report.RecordingOptions.Audio = true
+		report.AudioRecordingPath = &audioPath
+		report.AudioRecordingStartedAt = &startedAt
+
+		_, err := sessionRecordingAudio(report)
+		if !errors.Is(err, errAudioRecordingEmpty) {
+			t.Fatalf("sessionRecordingAudio() error = %v, want empty recording", err)
+		}
+	})
+}
+
+func TestUploadSessionRecordingPayloadErrorsAreClassifiable(t *testing.T) {
+	report := NewSessionReport()
+	report.RoomID = "RM_failed_upload"
+	report.JobID = "AJ_failed_upload"
+	audioErr := context.Canceled
+
+	err := uploadSessionRecordingPayload(
+		"https://observability.test",
+		"token",
+		report,
+		[]byte("payload"),
+		"multipart/form-data",
+		0,
+		audioErr,
+		func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Body:       io.NopCloser(strings.NewReader("invalid report")),
+			}, nil
+		},
+	)
+	if !errors.Is(err, errRecordingUploadFailed) {
+		t.Fatalf("uploadSessionRecordingPayload() error = %v, want upload failure", err)
+	}
+	if !errors.Is(err, audioErr) {
+		t.Fatalf("uploadSessionRecordingPayload() error = %v, want audio error preserved", err)
+	}
+}
+
+func TestUploadSessionRecordingPayloadDoesNotRetryPermanentError(t *testing.T) {
+	report := NewSessionReport()
+	var attempts atomic.Int32
+
+	err := uploadSessionRecordingPayload(
+		"https://observability.test",
+		"token",
+		report,
+		nil,
+		"multipart/form-data",
+		0,
+		nil,
+		func(*http.Request) (*http.Response, error) {
+			attempts.Add(1)
+
+			return nil, io.ErrClosedPipe
+		},
+	)
+	if err == nil || !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("uploadSessionRecordingPayload() error = %v, want permanent transport error", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("upload attempts = %d, want 1", attempts.Load())
+	}
+}
+
 func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
 	useNoopSessionReportTelemetry(t)
-	oldClient := recordingUploadHTTPClient
 	oldRecord := recordUploadTelemetryEvent
 	oldRecordAt := recordUploadTelemetryEventAt
 	oldRecordWithOptions := recordUploadTelemetryEventWithOptions
@@ -1134,15 +1184,16 @@ func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
 	recordUploadTelemetryEventWithOptions = func(_ context.Context, eventType string, body string, attrs map[string]interface{}, options telemetry.ChatEventOptions) {
 		events = append(events, uploadTelemetryEvent{eventType: eventType, body: body, attrs: attrs, timestamp: options.Timestamp, severity: options.SeverityText})
 	}
-	recordingUploadHTTPClient = &http.Client{Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		parts := multipartPartsFromRequest(t, req)
 		if err := json.Unmarshal(parts["chat_history"], &uploadedChatHistory); err != nil {
 			t.Fatalf("unmarshal uploaded chat_history: %v", err)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 	defer func() {
-		recordingUploadHTTPClient = oldClient
 		recordUploadTelemetryEvent = oldRecord
 		recordUploadTelemetryEventAt = oldRecordAt
 		recordUploadTelemetryEventWithOptions = oldRecordWithOptions
@@ -1321,21 +1372,9 @@ type uploadTelemetryEvent struct {
 func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
 	t.Helper()
 	useNoopSessionReportTelemetry(t)
-	oldClient := recordingUploadHTTPClient
-	recordingUploadHTTPClient = &http.Client{
-		Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, req)
-			resp := recorder.Result()
-			if resp.Body == nil {
-				resp.Body = io.NopCloser(strings.NewReader(""))
-			}
-			return resp, nil
-		}),
-	}
-	t.Cleanup(func() {
-		recordingUploadHTTPClient = oldClient
-	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
 }
 
 func useNoopSessionReportTelemetry(t *testing.T) {
@@ -1347,10 +1386,4 @@ func useNoopSessionReportTelemetry(t *testing.T) {
 	t.Cleanup(func() {
 		uploadSessionReportTelemetryFn = oldUpload
 	})
-}
-
-type recordingUploadRoundTripper func(*http.Request) (*http.Response, error)
-
-func (f recordingUploadRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
 }

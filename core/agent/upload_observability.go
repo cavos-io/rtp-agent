@@ -48,7 +48,7 @@ func uploadSessionReportTelemetry(
 	exporter, err := otlploghttp.New(ctx,
 		otlploghttp.WithEndpointURL(observabilityURL+"/observability/logs/otlp/v0"),
 		otlploghttp.WithHeaders(map[string]string{"Authorization": "Bearer " + jwt}),
-		otlploghttp.WithHTTPClient(recordingUploadHTTPClient),
+		otlploghttp.WithHTTPClient(newRecordingUploadHTTPClient()),
 		otlploghttp.WithCompression(otlploghttp.GzipCompression),
 	)
 	if err != nil {

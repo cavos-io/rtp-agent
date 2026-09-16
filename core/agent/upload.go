@@ -33,18 +33,34 @@ import (
 )
 
 var (
+	errAudioRecordingEmpty                = errors.New("audio recording is empty")
+	errAudioRecordingPathMissing          = errors.New("audio recording path is missing")
+	errAudioRecordingStartMissing         = errors.New("audio recording start timestamp is missing")
+	errRecordingUploadFailed              = errors.New("upload failed")
 	recordUploadTelemetryEvent            = telemetry.RecordChatEvent
 	recordUploadTelemetryEventAt          = telemetry.RecordChatEventAt
 	recordUploadTelemetryEventWithOptions = telemetry.RecordChatEventWithOptions
 	uploadSessionReportTelemetryFn        = uploadSessionReportTelemetry
-	recordingUploadHTTPClient             = newRecordingUploadHTTPClient()
+)
+
+const (
+	maxRecordingUploadRetries       = 3
+	recordingUploadConnectTimeout   = 30 * time.Second
+	recordingUploadInitialRetryWait = 100 * time.Millisecond
+	recordingUploadMaxRetryWait     = 800 * time.Millisecond
+	recordingUploadTimeout          = 15 * time.Minute
 )
 
 func newRecordingUploadHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = (&net.Dialer{Timeout: 30 * time.Second}).DialContext
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Transport: http.DefaultTransport, Timeout: recordingUploadTimeout}
+	}
 
-	return &http.Client{Transport: transport, Timeout: 15 * time.Minute}
+	clonedTransport := transport.Clone()
+	clonedTransport.DialContext = (&net.Dialer{Timeout: recordingUploadConnectTimeout}).DialContext
+
+	return &http.Client{Transport: clonedTransport, Timeout: recordingUploadTimeout}
 }
 
 func UploadSessionReport(
@@ -135,37 +151,40 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 		)
 	}
 
-	// Prepare multipart writer
+	payload, contentType, err := buildSessionRecordingPayload(report, audioData)
+	if err != nil {
+		return errors.Join(audioErr, err)
+	}
+
+	return uploadSessionRecordingPayload(
+		observabilityURL,
+		jwt,
+		report,
+		payload,
+		contentType,
+		len(audioData),
+		audioErr,
+		newRecordingUploadHTTPClient().Do,
+	)
+}
+
+func buildSessionRecordingPayload(report *SessionReport, audioData []byte) ([]byte, string, error) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 
-	// 1. Header (protobuf)
-	headerMsg := &livekit.MetricsRecordingHeader{
-		RoomId:           report.RoomID,
-		JobId:            report.JobID,
-		RedactionEnabled: report.RedactionEnabled,
-	}
-	startedAtMillis := int64(0)
-	if report.AudioRecordingStartedAt != nil {
-		startedAtMillis = int64(*report.AudioRecordingStartedAt * 1000)
-	}
-	headerMsg.StartTime = timestamppb.New(time.UnixMilli(startedAtMillis))
-
-	headerBytes, err := proto.Marshal(headerMsg)
+	headerBytes, err := sessionRecordingHeaderBytes(report)
 	if err != nil {
-		return fmt.Errorf("failed to marshal header msg: %w", err)
+		return nil, "", err
 	}
 
 	h := make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="header"; filename="header.binpb"`)
 	h.Set("Content-Type", "application/protobuf")
-	part, err := w.CreatePart(h)
-	if err != nil {
-		return fmt.Errorf("failed to create header part: %w", err)
-	}
-	part.Write(headerBytes)
 
-	// 2. Chat history (JSON)
+	if err := writeMultipartPart(w, h, headerBytes); err != nil {
+		return nil, "", fmt.Errorf("write header part: %w", err)
+	}
+
 	if report.RecordingOptions.Transcript {
 		chatJSON, err := json.Marshal(report.ChatHistory.ToDict(llm.ChatContextDictOptions{
 			IncludeImage:     true,
@@ -179,37 +198,83 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 			h.Set("Content-Disposition", `form-data; name="chat_history"; filename="chat_history.json"`)
 			h.Set("Content-Type", "application/json")
 			h.Set("Content-Length", strconv.Itoa(len(chatJSON)))
-			part, err := w.CreatePart(h)
-			if err == nil {
-				part.Write(chatJSON)
+
+			if err := writeMultipartPart(w, h, chatJSON); err != nil {
+				return nil, "", fmt.Errorf("write chat history part: %w", err)
 			}
 		}
 	}
 
-	// 3. Audio (Ogg)
 	if len(audioData) > 0 {
 		h := make(textproto.MIMEHeader)
 		h.Set("Content-Disposition", `form-data; name="audio"; filename="recording.ogg"`)
 		h.Set("Content-Type", "audio/ogg")
 		h.Set("Content-Length", strconv.Itoa(len(audioData)))
 
-		part, err := w.CreatePart(h)
-		if err == nil {
-			part.Write(audioData)
+		if err := writeMultipartPart(w, h, audioData); err != nil {
+			return nil, "", fmt.Errorf("write audio part: %w", err)
 		}
 	}
 
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("failed to close multipart writer: %w", err)
+		return nil, "", fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
+	return b.Bytes(), w.FormDataContentType(), nil
+}
+
+func sessionRecordingHeaderBytes(report *SessionReport) ([]byte, error) {
+	header := &livekit.MetricsRecordingHeader{
+		RoomId:           report.RoomID,
+		JobId:            report.JobID,
+		RedactionEnabled: report.RedactionEnabled,
+	}
+
+	startedAtMillis := int64(0)
+	if report.AudioRecordingStartedAt != nil {
+		startedAtMillis = int64(*report.AudioRecordingStartedAt * float64(time.Second/time.Millisecond))
+	}
+
+	header.StartTime = timestamppb.New(time.UnixMilli(startedAtMillis))
+
+	headerBytes, err := proto.Marshal(header)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal header msg: %w", err)
+	}
+
+	return headerBytes, nil
+}
+
+func writeMultipartPart(w *multipart.Writer, header textproto.MIMEHeader, data []byte) error {
+	part, err := w.CreatePart(header)
+	if err != nil {
+		return fmt.Errorf("create multipart part: %w", err)
+	}
+
+	_, err = part.Write(data)
+	if err != nil {
+		return fmt.Errorf("write multipart part: %w", err)
+	}
+
+	return nil
+}
+
+func uploadSessionRecordingPayload(
+	observabilityURL string,
+	jwt string,
+	report *SessionReport,
+	payload []byte,
+	contentType string,
+	audioBytes int,
+	audioErr error,
+	httpDo func(*http.Request) (*http.Response, error),
+) error {
 	uploadURL := fmt.Sprintf("%s/observability/recordings/v0", observabilityURL)
-	payload := b.Bytes()
 	for attempt := 0; attempt <= maxRecordingUploadRetries; attempt++ {
 		logger.Logger.Debugw("uploading session report to LiveKit Cloud",
 			"roomID", report.RoomID,
 			"jobID", report.JobID,
-			"audioBytes", len(audioData),
+			"audioBytes", audioBytes,
 			"attempt", attempt+1,
 		)
 		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(payload))
@@ -217,9 +282,9 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 			return fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+jwt)
-		req.Header.Set("Content-Type", w.FormDataContentType())
+		req.Header.Set("Content-Type", contentType)
 
-		resp, err := recordingUploadHTTPClient.Do(req)
+		resp, err := httpDo(req)
 		if err != nil {
 			if attempt < maxRecordingUploadRetries && recordingUploadConnectionRetryable(err) {
 				time.Sleep(recordingUploadConnectionRetryDelay(attempt))
@@ -234,7 +299,7 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 			logger.Logger.Debugw("finished uploading session report to LiveKit Cloud",
 				"roomID", report.RoomID,
 				"jobID", report.JobID,
-				"audioBytes", len(audioData),
+				"audioBytes", audioBytes,
 				"status", resp.StatusCode,
 			)
 
@@ -245,7 +310,7 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 		retryDelay, retryable := recordingUploadRetryDelay(resp, bodyBytes)
 		resp.Body.Close()
 		if !retryable || attempt == maxRecordingUploadRetries {
-			return errors.Join(audioErr, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes)))
+			return errors.Join(audioErr, fmt.Errorf("%w with status %d: %s", errRecordingUploadFailed, resp.StatusCode, string(bodyBytes)))
 		}
 		if retryDelay > 0 {
 			time.Sleep(retryDelay)
@@ -255,19 +320,17 @@ func uploadSessionRecording(observabilityURL string, jwt string, report *Session
 	return audioErr
 }
 
-const maxRecordingUploadRetries = 3
-
 func sessionRecordingAudio(report *SessionReport) ([]byte, error) {
 	if report == nil || !report.RecordingOptions.Audio {
 		return nil, nil
 	}
 
 	if report.AudioRecordingPath == nil || strings.TrimSpace(*report.AudioRecordingPath) == "" {
-		return nil, errors.New("audio recording path is missing")
+		return nil, errAudioRecordingPathMissing
 	}
 
 	if report.AudioRecordingStartedAt == nil {
-		return nil, errors.New("audio recording start timestamp is missing")
+		return nil, errAudioRecordingStartMissing
 	}
 
 	audioData, err := os.ReadFile(*report.AudioRecordingPath)
@@ -276,7 +339,7 @@ func sessionRecordingAudio(report *SessionReport) ([]byte, error) {
 	}
 
 	if len(audioData) == 0 {
-		return nil, fmt.Errorf("audio recording is empty: %s", *report.AudioRecordingPath)
+		return nil, fmt.Errorf("%w: %s", errAudioRecordingEmpty, *report.AudioRecordingPath)
 	}
 
 	return audioData, nil
@@ -302,9 +365,9 @@ func recordingUploadConnectionRetryable(err error) bool {
 }
 
 func recordingUploadConnectionRetryDelay(attempt int) time.Duration {
-	delay := 100 * time.Millisecond * time.Duration(1<<attempt)
-	if delay > 800*time.Millisecond {
-		return 800 * time.Millisecond
+	delay := recordingUploadInitialRetryWait * time.Duration(1<<attempt)
+	if delay > recordingUploadMaxRetryWait {
+		return recordingUploadMaxRetryWait
 	}
 
 	return delay

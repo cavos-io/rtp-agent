@@ -12,6 +12,7 @@ import (
 
 var Tracer = otel.Tracer("livekit-agents")
 
+// Trace attribute and event names follow the LiveKit Agent Insights telemetry contract.
 const (
 	AttrSpeechID           = "lk.speech_id"
 	AttrAgentLabel         = "lk.agent_label"
@@ -94,12 +95,14 @@ const (
 	EventGenAIChoice           = "gen_ai.choice"
 )
 
+// RedactionEnabled reports whether observability content must be redacted for the current job.
 func RedactionEnabled(ctx context.Context) bool {
 	observability := JobObservabilityFromContext(ctx)
 
 	return observability != nil && observability.redactionEnabled
 }
 
+// CaptureGenAIContent reports whether GenAI request and response content may be added to traces.
 func CaptureGenAIContent(ctx context.Context) bool {
 	if RedactionEnabled(ctx) {
 		return false
@@ -110,23 +113,6 @@ func CaptureGenAIContent(ctx context.Context) bool {
 		return false
 	default:
 		return true
-	}
-}
-
-type ChatTraceEvent struct {
-	Name       string
-	Attributes []attribute.KeyValue
-}
-
-func AddChatTraceEvents(span trace.Span, events []ChatTraceEvent) {
-	if span == nil {
-		return
-	}
-	for _, event := range events {
-		if event.Name == "" {
-			continue
-		}
-		span.AddEvent(event.Name, trace.WithAttributes(event.Attributes...))
 	}
 }
 
@@ -150,20 +136,6 @@ func TracerFromContext(ctx context.Context) trace.Tracer {
 type SpanContext struct {
 	SpeechID string
 	Span     trace.Span
-}
-
-func NewLLMSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
-	return StartSpan(ctx, "llm_inference", trace.WithAttributes(
-		attribute.String(AttrGenAIRequestModel, model),
-		attribute.String(AttrGenAIProviderName, provider),
-	))
-}
-
-func NewTTSStreamSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
-	return StartSpan(ctx, "tts_stream", trace.WithAttributes(
-		attribute.String(AttrGenAIRequestModel, model),
-		attribute.String(AttrGenAIProviderName, provider),
-	))
 }
 
 func NewTTSNodeSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {

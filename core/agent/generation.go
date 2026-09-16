@@ -26,6 +26,20 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	llmFinishReasonError    = "error"
+	llmFinishReasonStop     = "stop"
+	llmFinishReasonToolCall = "tool_call"
+	traceJSONKeyArguments   = "arguments"
+	traceJSONKeyContent     = "content"
+	traceJSONKeyName        = "name"
+	traceJSONKeyParts       = "parts"
+	traceJSONKeyRole        = "role"
+	traceJSONKeyType        = "type"
+	traceJSONRoleAssistant  = "assistant"
+	traceJSONTypeText       = "text"
+)
+
 type LLMGenerationData struct {
 	TextCh             chan string
 	TextEventCh        chan LLMTextEvent
@@ -161,13 +175,13 @@ func performLLMInference(
 			}
 			nodeSpan.SetAttributes(attrs...)
 
-			finishReason := "stop"
+			finishReason := llmFinishReasonStop
 			if len(data.GeneratedFunctions) > 0 {
-				finishReason = "tool_call"
+				finishReason = llmFinishReasonToolCall
 			}
 
 			if data.StreamErr != nil {
-				finishReason = "error"
+				finishReason = llmFinishReasonError
 
 				recordInferenceSpanError(requestCtx, requestSpan, data.StreamErr)
 				recordInferenceSpanError(runCtx, runSpan, data.StreamErr)
@@ -341,6 +355,26 @@ func normalizeGenAIProvider(provider string) string {
 	value := strings.TrimSpace(provider)
 
 	host := strings.ToLower(value)
+	if normalized := normalizeGenAIProviderHost(host); normalized != "" {
+		return normalized
+	}
+
+	canonical := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return r
+		}
+
+		return -1
+	}, host)
+
+	if normalized := normalizeCanonicalGenAIProvider(canonical); normalized != "" {
+		return normalized
+	}
+
+	return value
+}
+
+func normalizeGenAIProviderHost(host string) string {
 	switch host {
 	case "api.anthropic.com":
 		return "anthropic"
@@ -358,6 +392,13 @@ func normalizeGenAIProvider(provider string) string {
 		return "openai"
 	case "api.perplexity.ai":
 		return "perplexity"
+	default:
+		return normalizeOtherGenAIProviderHost(host)
+	}
+}
+
+func normalizeOtherGenAIProviderHost(host string) string {
+	switch host {
 	case "api.x.ai":
 		return "x_ai"
 	case "generativelanguage.googleapis.com":
@@ -380,13 +421,10 @@ func normalizeGenAIProvider(provider string) string {
 		return "aws.bedrock"
 	}
 
-	canonical := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			return r
-		}
+	return ""
+}
 
-		return -1
-	}, host)
+func normalizeCanonicalGenAIProvider(canonical string) string {
 	switch canonical {
 	case "openai":
 		return "openai"
@@ -403,12 +441,12 @@ func normalizeGenAIProvider(provider string) string {
 	case "xai":
 		return "x_ai"
 	default:
-		return value
+		return ""
 	}
 }
 
 func llmRequestContentAttributes(chatCtx *llm.ChatContext, tools []llm.Tool) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 3)
+	var attrs []attribute.KeyValue
 	if payload := llmSystemInstructionsJSON(chatCtx); payload != "" {
 		attrs = append(attrs, attribute.String(telemetry.AttrGenAISystemInstructions, payload))
 	}
@@ -423,7 +461,7 @@ func llmRequestContentAttributes(chatCtx *llm.ChatContext, tools []llm.Tool) []a
 			continue
 		}
 
-		definition := map[string]any{"type": "function", "name": tool.Name()}
+		definition := map[string]any{traceJSONKeyType: "function", traceJSONKeyName: tool.Name()}
 		if description := tool.Description(); description != "" {
 			definition["description"] = description
 		}
@@ -452,7 +490,7 @@ func llmSystemInstructionsJSON(chatCtx *llm.ChatContext) string {
 		}
 
 		if text := message.TextContent(); text != "" {
-			parts = append(parts, map[string]any{"type": "text", "content": text})
+			parts = append(parts, map[string]any{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text})
 		}
 	}
 
@@ -466,60 +504,72 @@ func llmInputMessagesJSON(chatCtx *llm.ChatContext) string {
 
 	messages := make([]map[string]any, 0, len(chatCtx.Items))
 	for _, item := range chatCtx.Items {
-		var (
-			role  string
-			parts []map[string]any
-		)
-
-		switch value := item.(type) {
-		case *llm.ChatMessage:
-			if value.Role == llm.ChatRoleSystem || value.Role == llm.ChatRoleDeveloper {
-				continue
-			}
-
-			role = string(value.Role)
-			if text := value.TextContent(); text != "" {
-				parts = []map[string]any{{"type": "text", "content": text}}
-			}
-		case *llm.FunctionCall:
-			role = "assistant"
-			parts = []map[string]any{{"type": "tool_call", "id": value.CallID, "name": value.Name, "arguments": traceJSONValue(value.Arguments)}}
-		case *llm.FunctionCallOutput:
-			role = "tool"
-			parts = []map[string]any{{"type": "tool_call_response", "id": value.CallID, "response": traceJSONValue(value.Output)}}
-		}
-
+		role, parts := llmInputMessageParts(item)
 		if role == "" || len(parts) == 0 {
 			continue
 		}
 
-		if _, ok := item.(*llm.FunctionCall); ok && len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
-			messages[len(messages)-1]["parts"] = append(messages[len(messages)-1]["parts"].([]map[string]any), parts...)
-
+		if appendLLMInputMessageParts(messages, item, parts) {
 			continue
 		}
 
-		messages = append(messages, map[string]any{"role": role, "parts": parts})
+		messages = append(messages, map[string]any{traceJSONKeyRole: role, traceJSONKeyParts: parts})
 	}
 
 	return marshalTraceJSON(messages)
 }
 
+func llmInputMessageParts(item llm.ChatItem) (string, []map[string]any) {
+	switch value := item.(type) {
+	case *llm.ChatMessage:
+		if value.Role == llm.ChatRoleSystem || value.Role == llm.ChatRoleDeveloper {
+			return "", nil
+		}
+
+		if text := value.TextContent(); text != "" {
+			return string(value.Role), []map[string]any{{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text}}
+		}
+	case *llm.FunctionCall:
+		return traceJSONRoleAssistant, []map[string]any{{traceJSONKeyType: llmFinishReasonToolCall, "id": value.CallID, traceJSONKeyName: value.Name, traceJSONKeyArguments: traceJSONValue(value.Arguments)}}
+	case *llm.FunctionCallOutput:
+		return "tool", []map[string]any{{traceJSONKeyType: "tool_call_response", "id": value.CallID, "response": traceJSONValue(value.Output)}}
+	}
+
+	return "", nil
+}
+
+func appendLLMInputMessageParts(messages []map[string]any, item llm.ChatItem, parts []map[string]any) bool {
+	if _, ok := item.(*llm.FunctionCall); !ok || len(messages) == 0 {
+		return false
+	}
+
+	previous := messages[len(messages)-1]
+
+	previousParts, ok := previous[traceJSONKeyParts].([]map[string]any)
+	if previous[traceJSONKeyRole] != traceJSONRoleAssistant || !ok {
+		return false
+	}
+
+	previous[traceJSONKeyParts] = append(previousParts, parts...)
+
+	return true
+}
+
 func llmOutputMessagesJSON(text string, calls []llm.FunctionToolCall, finishReason string) string {
 	parts := make([]map[string]any, 0, len(calls)+1)
 	if text != "" {
-		parts = append(parts, map[string]any{"type": "text", "content": text})
+		parts = append(parts, map[string]any{traceJSONKeyType: traceJSONTypeText, traceJSONKeyContent: text})
 	}
 
 	for _, call := range calls {
-		parts = append(parts, map[string]any{"type": "tool_call", "id": call.CallID, "name": call.Name, "arguments": traceJSONValue(call.Arguments)})
+		parts = append(parts, map[string]any{traceJSONKeyType: llmFinishReasonToolCall, "id": call.CallID, traceJSONKeyName: call.Name, traceJSONKeyArguments: traceJSONValue(call.Arguments)})
 	}
 
 	if len(parts) == 0 {
 		return ""
 	}
 
-	return marshalTraceJSON([]map[string]any{{"role": "assistant", "parts": parts, "finish_reason": finishReason}})
+	return marshalTraceJSON([]map[string]any{{traceJSONKeyRole: traceJSONRoleAssistant, traceJSONKeyParts: parts, "finish_reason": finishReason}})
 }
 
 func traceJSONValue(raw string) any {
