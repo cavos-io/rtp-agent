@@ -188,7 +188,7 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 	ctx := va.ctx
 	va.mu.Unlock()
 	if oldStream != nil {
-		if err := oldStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+		if err := oldStream.Close(); err != nil && !isSpeechStreamShutdownError(va.session, err) {
 			va.session.Logger().Warnw("failed to close old STT stream while clearing input transcription", err)
 		}
 	}
@@ -271,7 +271,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	if va.vad != nil {
 		stream, err := va.vad.Stream(ctx)
 		if err != nil {
-			if !isSpeechStreamShutdownError(err) {
+			if !isSpeechStreamShutdownError(va.session, err) {
 				va.logVADError("failed to start VAD stream", err, va.vad, "vad_stream_start")
 				va.emitError(err, va.vad)
 			}
@@ -283,7 +283,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		va.vadSpeechStarted = false
 		va.mu.Unlock()
 		defer func() {
-			if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+			if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(va.session, err) {
 				va.logVADError("failed to close VAD stream", err, va.vad, "vad_stream_close")
 				va.emitError(err, va.vad)
 			}
@@ -301,7 +301,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	if va.stt != nil {
 		sttObj, err := streamableSTT(va.stt, va.vad)
 		if err != nil {
-			if !isSpeechStreamShutdownError(err) {
+			if !isSpeechStreamShutdownError(va.session, err) {
 				va.logSTTError("failed to prepare STT stream", err, va.stt, "stt_stream_prepare")
 				label := "stt"
 				if va.stt != nil {
@@ -313,7 +313,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		}
 		stream, err := sttObj.Stream(ctx, "")
 		if err != nil {
-			if !isSpeechStreamShutdownError(err) {
+			if !isSpeechStreamShutdownError(va.session, err) {
 				va.logSTTError("failed to start STT stream", err, va.stt, "stt_stream_start")
 				label := "stt"
 				if va.stt != nil {
@@ -345,14 +345,14 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			}
 			if vadStream != nil {
 				if err := vadStream.PushFrame(frame); err != nil {
-					if !isSpeechStreamShutdownError(err) {
+					if !isSpeechStreamShutdownError(va.session, err) {
 						va.logVADError("VAD push frame failed", err, va.vad, "vad_push_frame")
 						va.emitError(err, va.vad)
 					}
 				}
 			}
 			if err := va.pushSTTFrame(frame); err != nil {
-				if !isSpeechStreamShutdownError(err) {
+				if !isSpeechStreamShutdownError(va.session, err) {
 					va.logSTTError("STT push frame failed", err, va.stt, "stt_push_frame")
 					label := "stt"
 					if va.stt != nil {
@@ -396,7 +396,13 @@ func (va *PipelineAgent) pushSTTFrame(frame *model.AudioFrame) error {
 		ParticipantID:     sttFrame.ParticipantID,
 	}
 	va.mu.Unlock()
-	return sttStream.PushFrame(sttFrame)
+
+	err := sttStream.PushFrame(sttFrame)
+	if err != nil && va.retireSTTStream(sttStream) {
+		return fmt.Errorf("push STT frame: %w", err)
+	}
+
+	return nil
 }
 
 func (va *PipelineAgent) closeInputTranscriptionStream() {
@@ -409,7 +415,8 @@ func (va *PipelineAgent) closeInputTranscriptionStream() {
 	if stream == nil {
 		return
 	}
-	if err := stream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
+
+	if err := stream.Close(); err != nil && !isSpeechStreamShutdownError(va.session, err) {
 		va.logSTTError("failed to close STT stream", err, sttObj, "stt_stream_close")
 		label := "stt"
 		if sttObj != nil {
@@ -424,7 +431,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if !isSpeechStreamShutdownError(err) {
+			if !isSpeechStreamShutdownError(va.session, err) {
 				va.logVADError("VAD stream error", err, va.vad, "vad_stream")
 				va.emitError(err, va.vad)
 			}
@@ -489,7 +496,8 @@ func (va *PipelineAgent) finalizeActiveSTTStream(silenceDuration time.Duration) 
 	} else {
 		err = stream.Flush()
 	}
-	if err != nil && !isSpeechStreamShutdownError(err) {
+
+	if err != nil && !isSpeechStreamShutdownError(va.session, err) {
 		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
 		label := "stt"
 		if sttObj != nil {
@@ -555,7 +563,8 @@ func (va *PipelineAgent) onVADStall() {
 		} else {
 			err = stream.Flush()
 		}
-		if err != nil && !isSpeechStreamShutdownError(err) {
+
+		if err != nil && !isSpeechStreamShutdownError(va.session, err) {
 			va.session.Logger().Warnw("failed to flush VAD stream after synthetic end-of-speech", err)
 			va.emitError(err, va.vad)
 		}
@@ -574,7 +583,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if !isSpeechStreamShutdownError(err) {
+			if va.retireSTTStream(stream) && !isSpeechStreamShutdownError(va.session, err) {
 				va.logSTTError("STT stream error", err, va.stt, "stt_stream")
 				label := "stt"
 				if va.stt != nil {
@@ -706,14 +715,20 @@ func (va *PipelineAgent) flushActiveVADSegment() {
 	if stream == nil || !started {
 		return
 	}
-	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(err) {
+
+	if err := stream.Flush(); err != nil && !isSpeechStreamShutdownError(va.session, err) {
 		va.session.Logger().Warnw("failed to flush VAD stream after STT end-of-speech", err)
 		va.emitError(err, va.vad)
 	}
 }
 
-func isSpeechStreamShutdownError(err error) bool {
-	return err == io.EOF || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled)
+func isSpeechStreamShutdownError(session *AgentSession, err error) bool {
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	return session != nil && session.isTearingDown() &&
+		(errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled))
 }
 
 func (va *PipelineAgent) emitSTTMetrics(ev *stt.SpeechEvent) {
@@ -805,7 +820,8 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	genData, err := va.precomputeLLMGeneration(precomputeCtx, session, va.speechOptions(speech))
 	if err != nil {
 		cancel()
-		if !suppressContextCanceledError(precomputeCtx, speech, err) {
+
+		if !suppressContextCanceledError(precomputeCtx, session, speech, err) {
 			va.logLLMError("preemptive LLM inference failed", err, "llm_inference")
 			va.emitLLMError(session, err)
 		}
@@ -824,7 +840,8 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 		ttsGen, err := va.startTTSGeneration(precomputeCtx, session, genData.TextCh)
 		if err != nil {
 			cancel()
-			if !suppressContextCanceledError(precomputeCtx, speech, err) {
+
+			if !suppressContextCanceledError(precomputeCtx, session, speech, err) {
 				va.logTTSError("preemptive TTS inference failed", err)
 				va.emitTTSError(session, err)
 			}
@@ -1107,7 +1124,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			var err error
 			genData, err = PerformLLMInferenceWithTextEvents(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
-				if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
+				if !suppressContextCanceledError(ctx, session, opts.SpeechHandle, err) {
 					va.logLLMError("LLM inference failed", err, "llm_inference")
 					if opts.SpeechHandle != nil {
 						opts.SpeechHandle.SetRunFinalOutput(err)
@@ -1149,7 +1166,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 		}
 		if err != nil {
-			if suppressReplyContextCanceledError(ctx, opts.SpeechHandle, err) {
+			if suppressReplyContextCanceledError(ctx, session, opts.SpeechHandle, err) {
 				waitForLLMGenerationDone(genData)
 				if genData.StreamErr == nil {
 					va.emitLLMMetrics(session, genData)
@@ -1159,7 +1176,8 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				session.UpdateAgentState(AgentStateListening)
 				return
 			}
-			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
+
+			if !suppressContextCanceledError(ctx, session, opts.SpeechHandle, err) {
 				va.logTTSError("TTS inference failed", err)
 				va.emitTTSError(session, err)
 				closeReplyDone()
@@ -1169,7 +1187,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		}
 		waitForLLMGenerationDone(genData)
 		if genData.StreamErr != nil {
-			if !suppressContextCanceledError(ctx, opts.SpeechHandle, genData.StreamErr) {
+			if !suppressContextCanceledError(ctx, session, opts.SpeechHandle, genData.StreamErr) {
 				va.logLLMError("LLM stream failed", genData.StreamErr, "llm_stream")
 				if opts.SpeechHandle != nil {
 					opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
@@ -1736,7 +1754,7 @@ func (va *PipelineAgent) waitForAssistantPlayout(ctx context.Context, session *A
 		return true
 	}
 	if _, err := playback.WaitForPlayout(ctx); err != nil {
-		if suppressContextCanceledError(ctx, speech, err) {
+		if suppressContextCanceledError(ctx, session, speech, err) {
 			return false
 		}
 
@@ -1753,21 +1771,26 @@ func suppressInterruptedCanceledError(speech *SpeechHandle, err error) bool {
 	return speech != nil && speech.IsInterrupted() && errors.Is(err, context.Canceled)
 }
 
-func suppressContextCanceledError(ctx context.Context, speech *SpeechHandle, err error) bool {
+func suppressContextCanceledError(ctx context.Context, session *AgentSession, speech *SpeechHandle, err error) bool {
 	if !errors.Is(err, context.Canceled) {
 		return false
 	}
 	if suppressInterruptedCanceledError(speech, err) {
 		return true
 	}
+
+	if session != nil && session.isTearingDown() {
+		return true
+	}
 	return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
 }
 
-func suppressReplyContextCanceledError(ctx context.Context, speech *SpeechHandle, err error) bool {
-	return errors.Is(err, context.Canceled) &&
-		ctx != nil &&
-		errors.Is(ctx.Err(), context.Canceled) &&
-		(speech == nil || !speech.IsInterrupted())
+func suppressReplyContextCanceledError(ctx context.Context, session *AgentSession, speech *SpeechHandle, err error) bool {
+	if !errors.Is(err, context.Canceled) || (speech != nil && speech.IsInterrupted()) {
+		return false
+	}
+
+	return session != nil && session.isTearingDown() || ctx != nil && errors.Is(ctx.Err(), context.Canceled)
 }
 
 func (va *PipelineAgent) flushAssistantPlayback(session *AgentSession) {
@@ -1937,10 +1960,6 @@ func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
 		label = va.tts.Label()
 	}
 	ttsErr := tts.TTSError{Label: label, Err: err, Recoverable: false}
-	if session.activity != nil {
-		session.activity.OnError(ttsErr, va.tts)
-		return
-	}
 	session.EmitError(ErrorEvent{Error: ttsErr, Source: va.tts})
 }
 
@@ -1965,14 +1984,18 @@ func (va *PipelineAgent) logVADError(message string, err error, source vad.VAD, 
 }
 
 func (va *PipelineAgent) logProviderError(message string, err error, source any, provider string, stage string) {
-	if err == nil {
+	logAgentProviderError(va.session, message, err, source, provider, stage)
+}
+
+func logAgentProviderError(session *AgentSession, message string, err error, source any, provider string, stage string) {
+	if session == nil || err == nil {
 		return
 	}
 	if provider == "" {
 		provider = "unknown"
 	}
 
-	va.session.Logger().Errorw(
+	session.Logger().Errorw(
 		message,
 		err,
 		"error", err.Error(),
@@ -1981,6 +2004,23 @@ func (va *PipelineAgent) logProviderError(message string, err error, source any,
 		"provider", provider,
 		"stage", stage,
 	)
+}
+
+func providerErrorLogDetails(source any) (string, string, string) {
+	switch typed := source.(type) {
+	case tts.TTS:
+		return "TTS provider error", tts.Provider(typed), "tts_event"
+	case stt.STT:
+		return "STT provider error", stt.Provider(typed), "stt_event"
+	case llm.LLM:
+		return "LLM provider error", llm.Provider(typed), "llm_event"
+	case llm.RealtimeModel:
+		return "Realtime provider error", llm.RealtimeProvider(typed), "realtime_event"
+	case vad.VAD:
+		return "VAD provider error", typed.Provider(), "vad_event"
+	default:
+		return "Provider error", "unknown", "provider_event"
+	}
 }
 
 func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
@@ -2447,4 +2487,25 @@ func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFra
 	case va.audioInCh <- frame:
 	default:
 	}
+}
+
+func (va *PipelineAgent) retireSTTStream(stream stt.RecognizeStream) bool {
+	if va == nil || stream == nil {
+		return false
+	}
+
+	va.mu.Lock()
+	if va.sttStream != stream {
+		va.mu.Unlock()
+
+		return false
+	}
+
+	va.sttStream = nil
+	va.lastSTTFrame = nil
+	va.mu.Unlock()
+
+	_ = stream.Close()
+
+	return true
 }

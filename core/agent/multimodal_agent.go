@@ -714,18 +714,17 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		})
 
 	case llm.RealtimeEventTypeError:
-		if ev.Error != io.EOF {
-			ma.session.Logger().Errorw("Realtime stream error", ev.Error)
-			if ma.session != nil && ev.Error != nil {
-				err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
-				if ma.session.activity != nil {
-					ma.session.activity.OnError(err, ma.model)
-				} else {
-					ma.session.EmitError(ErrorEvent{
-						Error:  err,
-						Source: ma.model,
-					})
-				}
+		if !errors.Is(ev.Error, io.EOF) && ma.session != nil && ev.Error != nil {
+			err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
+			if ma.session.activity != nil {
+				ma.session.activity.OnError(err, ma.model)
+			} else {
+				message, provider, stage := providerErrorLogDetails(ma.model)
+				logAgentProviderError(ma.session, message, err, ma.model, provider, stage)
+				ma.session.EmitError(ErrorEvent{
+					Error:  err,
+					Source: ma.model,
+				})
 			}
 		}
 	}

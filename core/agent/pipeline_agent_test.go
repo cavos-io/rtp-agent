@@ -3050,6 +3050,7 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	agent.session = session
 	agent.ctx = context.Background()
 	stream := &fakePipelineRecognizeStream{err: cause}
+	agent.sttStream = stream
 
 	agent.sttLoop(stream)
 
@@ -3087,19 +3088,24 @@ func TestPipelineAgentLogsSTTErrorWithStructuredFields(t *testing.T) {
 	source := &fakePipelineSTT{provider: "test-stt-provider"}
 	agent := NewPipelineAgent(nil, source, nil, nil, llm.NewChatContext())
 	agent.session = session
+	stream := &fakePipelineRecognizeStream{err: cause}
+	agent.sttStream = stream
 
-	agent.sttLoop(&fakePipelineRecognizeStream{err: cause})
+	agent.sttLoop(stream)
 
 	assertStructuredErrorLog(t, recorder, "STT stream error", cause, "*agent.fakePipelineSTT", "test-stt-provider", "stt_stream")
 }
 
 func TestPipelineAgentIgnoresCanceledSTTStreamOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	agent := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
 	agent.session = session
+	stream := &fakePipelineRecognizeStream{err: context.Canceled}
+	agent.sttStream = stream
 
-	agent.sttLoop(&fakePipelineRecognizeStream{err: context.Canceled})
+	agent.sttLoop(stream)
 
 	select {
 	case ev := <-errorEvents:
@@ -3137,8 +3143,27 @@ func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentStopsWritingAfterTerminalSTTPushFrameError(t *testing.T) {
+	cause := errors.New("stt transport failed")
+	stream := &fakePipelineRecognizeStream{pushErr: cause}
+	agent := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, llm.NewChatContext())
+	agent.sttStream = stream
+	frame := &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+
+	if err := agent.pushSTTFrame(frame); !errors.Is(err, cause) {
+		t.Fatalf("first PushFrame error = %v, want %v", err, cause)
+	}
+	if err := agent.pushSTTFrame(frame); err != nil {
+		t.Fatalf("second PushFrame error = %v, want nil after terminal stream retirement", err)
+	}
+	if got := len(stream.frames); got != 1 {
+		t.Fatalf("provider PushFrame calls = %d, want 1", got)
+	}
+}
+
 func TestPipelineAgentIgnoresCanceledSTTPushFrameOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	pushed := make(chan *model.AudioFrame, 1)
 	source := &fakePipelineSTT{
@@ -3165,6 +3190,7 @@ func TestPipelineAgentIgnoresCanceledSTTPushFrameOnShutdown(t *testing.T) {
 
 func TestPipelineAgentIgnoresClosedPipeSTTPushFrameOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	pushed := make(chan *model.AudioFrame, 1)
 	source := &fakePipelineSTT{
@@ -3264,12 +3290,16 @@ func TestPipelineAgentStartsWithoutSTT(t *testing.T) {
 }
 
 func TestPipelineAgentStartWrapsNonStreamingSTTWithVAD(t *testing.T) {
+	releaseVAD := make(chan struct{})
 	sttObj := &nonStreamingPipelineSTT{
 		streamErr: errors.New("direct STT stream should not be used"),
 	}
-	agent := NewPipelineAgent(&fakePipelineVAD{}, sttObj, nil, nil, llm.NewChatContext())
+	agent := NewPipelineAgent(&fakePipelineVAD{stream: &fakePipelineVADStream{nextBlock: releaseVAD}}, sttObj, nil, nil, llm.NewChatContext())
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer func() {
+		close(releaseVAD)
+		cancel()
+	}()
 	go agent.run(ctx)
 
 	deadline := time.After(time.Second)
@@ -3359,6 +3389,7 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
 
 func TestPipelineAgentIgnoresCanceledSTTStreamStartOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	agent := NewPipelineAgent(&fakePipelineVAD{}, &fakePipelineSTT{streamErr: context.Canceled}, nil, nil, llm.NewChatContext())
 	agent.session = session
@@ -3559,6 +3590,7 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 
 func TestPipelineAgentIgnoresCanceledVADStreamStartOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	agent := NewPipelineAgent(&fakePipelineVAD{streamErr: context.Canceled}, &fakePipelineSTT{}, nil, nil, nil)
 	agent.session = session
@@ -3613,6 +3645,7 @@ func assertStructuredErrorLog(t *testing.T, recorder *recordingLogger, message s
 
 func TestPipelineAgentIgnoresCanceledVADStreamOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	agent := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
 	agent.session = session
@@ -3628,6 +3661,7 @@ func TestPipelineAgentIgnoresCanceledVADStreamOnShutdown(t *testing.T) {
 
 func TestPipelineAgentIgnoresCanceledVADPushFrameOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
 	errorEvents := session.ErrorEvents()
 	pushed := make(chan *model.AudioFrame, 1)
 	source := &fakePipelineVAD{
@@ -3981,6 +4015,42 @@ func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive LLM stream error")
+	}
+}
+
+func TestPipelineAgentReportsUnexpectedCanceledLLMStream(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{err: fmt.Errorf("stream read: %w", context.Canceled)}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, context.Canceled) {
+			t.Fatalf("Error = %v, want context.Canceled", ev.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive unexpected LLM stream cancellation")
+	}
+}
+
+func TestPipelineAgentSuppressesCanceledLLMStreamDuringSessionTeardown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.signalTeardown()
+	l := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{err: fmt.Errorf("stream read: %w", context.Canceled)}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("ErrorEvents received teardown cancellation: %v", ev.Error)
+	default:
 	}
 }
 
@@ -7329,6 +7399,7 @@ type fakePipelineVADStream struct {
 	frames     []*model.AudioFrame
 	pushedCh   chan *model.AudioFrame
 	closedCh   chan struct{}
+	nextBlock  <-chan struct{}
 	closeOnce  sync.Once
 	flushCount int
 }
@@ -7356,6 +7427,9 @@ func (f *fakePipelineVADStream) Close() error {
 }
 
 func (f *fakePipelineVADStream) Next() (*vad.VADEvent, error) {
+	if f.nextBlock != nil {
+		<-f.nextBlock
+	}
 	if f.index < len(f.events) {
 		ev := f.events[f.index]
 		f.index++

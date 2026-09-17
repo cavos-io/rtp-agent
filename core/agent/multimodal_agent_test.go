@@ -1845,6 +1845,8 @@ func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
 func TestMultimodalAgentRoutesRealtimeErrorThroughActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	log := &recordingLogger{}
+	session.SetLogger(log)
 	session.activity = NewAgentActivity(agent, session)
 	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
 	cause := errors.New("realtime failed")
@@ -1875,6 +1877,9 @@ func TestMultimodalAgentRoutesRealtimeErrorThroughActivity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive routed realtime error")
+	}
+	if got := len(log.errorMessages); got != 1 {
+		t.Fatalf("provider error logs = %d, want one canonical log", got)
 	}
 }
 

@@ -138,3 +138,46 @@ func TestJobContextStartSessionBindsJobLogContext(t *testing.T) {
 		}
 	}
 }
+
+func TestJobContextShutdownLifecycleLogsUseJobLogContext(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job-shutdown-logger", Room: &livekit.Room{Name: "room-shutdown-logger"}},
+		"",
+		"",
+		"",
+	)
+	t.Cleanup(func() { _ = ctx.onCleanUp() })
+	ctx.LogContextFields()["call_logs_id"] = "call-shutdown-logger"
+	ctx.LogContextFields()["worker_id"] = "worker-shutdown-logger"
+	recorder.withValues = nil
+	if err := ctx.AddShutdownCallback(func() { panic("boom") }); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+
+	ctx.Shutdown("test")
+
+	got := make(map[string]any)
+	for _, values := range recorder.withValues {
+		for i := 0; i+1 < len(values); i += 2 {
+			key, ok := values[i].(string)
+			if ok {
+				got[key] = values[i+1]
+			}
+		}
+	}
+	for key, want := range map[string]any{
+		"job_id":       "job-shutdown-logger",
+		"call_logs_id": "call-shutdown-logger",
+		"room":         "room-shutdown-logger",
+		"worker_id":    "worker-shutdown-logger",
+	} {
+		if got[key] != want {
+			t.Errorf("shutdown logger %s = %#v, want %#v", key, got[key], want)
+		}
+	}
+}
