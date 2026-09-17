@@ -1607,7 +1607,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		trackID = publication.SID()
 	}
 	rio.setAudioOutputTrack(track, trackID, publication)
-	return rio.waitForAudioSubscription(ctx)
+	return nil
 }
 
 func (rio *RoomIO) StartRecorder(outputPath string, sampleRate int) error {
@@ -2879,34 +2879,6 @@ func (rio *RoomIO) userAwayTimerBlocked() bool {
 		return false
 	default:
 		return true
-	}
-}
-
-func (rio *RoomIO) waitForAudioSubscription(ctx context.Context) error {
-	if rio == nil {
-		return nil
-	}
-	rio.mu.Lock()
-	ch := rio.audioSubscribed
-	rio.mu.Unlock()
-	if ch == nil {
-		return nil
-	}
-	timeout := rio.audioSubscriptionTimeout()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-ch:
-		return nil
-	case <-timer.C:
-		rio.logger().Infow("room audio output subscription wait timed out", "timeout", timeout)
-		rio.releaseAudioSubscriptionFallback(ch)
-		if rio.AgentSession != nil {
-			rio.AgentSession.RefreshUserAwayTimer()
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 

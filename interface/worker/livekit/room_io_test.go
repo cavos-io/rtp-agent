@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -663,6 +664,24 @@ func TestRoomIOStartSkipsTrackWhenAudioOutputDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOStartDoesNotWaitForAudioSubscription(t *testing.T) {
+	source, err := os.ReadFile("room_io.go")
+	if err != nil {
+		t.Fatalf("ReadFile(room_io.go) error = %v", err)
+	}
+	start := strings.Index(string(source), "func (rio *RoomIO) Start(")
+	if start < 0 {
+		t.Fatal("RoomIO.Start not found")
+	}
+	end := strings.Index(string(source[start:]), "\nfunc ")
+	if end < 0 {
+		t.Fatal("end of RoomIO.Start not found")
+	}
+	if strings.Contains(string(source[start:start+end]), "waitForAudioSubscription") {
+		t.Fatal("RoomIO.Start waits for a remote subscription after publishing the audio track")
+	}
+}
+
 func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
 	track := newRoomIOTestAudioTrack(t)
 	pub := lksdk.NewLocalTrackPublication(lksdk.TrackKindAudio, track, lksdk.TrackPublicationOptions{}, nil, nil)
@@ -671,16 +690,14 @@ func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
 		audioSubscribed:  make(chan struct{}),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- rio.waitForAudioSubscription(ctx)
+		done <- rio.waitForAudioSubscriptionReady(context.Background())
 	}()
 
 	select {
 	case err := <-done:
-		t.Fatalf("waitForAudioSubscription returned before subscription: %v", err)
+		t.Fatalf("subscription wait returned early: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 
@@ -689,10 +706,10 @@ func TestRoomIOLocalTrackSubscriptionReleasesAudioOutput(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("waitForAudioSubscription error = %v", err)
+			t.Fatalf("subscription wait error = %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("waitForAudioSubscription did not return after local track subscription")
+		t.Fatal("subscription wait did not return after local track subscription")
 	}
 }
 
@@ -735,7 +752,7 @@ func TestRoomIOBlocksUserAwayBeforeAudioOutputStarts(t *testing.T) {
 	}
 }
 
-func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
+func TestRoomIOAudioSubscriptionReadyTimeoutReleasesUserAwayGate(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{UserAwayTimeout: 0.01})
 	rio := NewRoomIO(nil, session, RoomOptions{AudioSubscriptionTimeout: 20 * time.Millisecond})
 	rio.audioSubscribed = make(chan struct{})
@@ -749,8 +766,8 @@ func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
 	case <-time.After(15 * time.Millisecond):
 	}
 
-	if err := rio.waitForAudioSubscription(context.Background()); err != nil {
-		t.Fatalf("waitForAudioSubscription error = %v", err)
+	if err := rio.waitForAudioSubscriptionReady(context.Background()); err != nil {
+		t.Fatalf("waitForAudioSubscriptionReady error = %v", err)
 	}
 
 	select {
@@ -763,7 +780,7 @@ func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
 	}
 }
 
-func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+func TestRoomIOAudioSubscriptionReadyWaitFallsBackAfterTimeout(t *testing.T) {
 	recorder := &roomIORecordingLogger{}
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	if err := session.SetLogger(recorder); err != nil {
@@ -778,25 +795,25 @@ func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 
 	started := time.Now()
-	if err := rio.waitForAudioSubscription(context.Background()); err != nil {
-		t.Fatalf("waitForAudioSubscription error = %v, want nil fallback after timeout", err)
+	if err := rio.waitForAudioSubscriptionReady(context.Background()); err != nil {
+		t.Fatalf("waitForAudioSubscriptionReady error = %v, want nil fallback after timeout", err)
 	}
 	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
-		t.Fatalf("waitForAudioSubscription returned after %v, want timeout wait", elapsed)
+		t.Fatalf("waitForAudioSubscriptionReady returned after %v, want timeout wait", elapsed)
 	}
-	if !stringSliceContains(recorder.infoMessages, "room audio output subscription wait timed out") {
+	if !stringSliceContains(recorder.infoMessages, "room audio output publish subscription wait timed out") {
 		t.Fatalf("info messages = %#v, want subscription fallback diagnostic", recorder.infoMessages)
 	}
-	if stringSliceContains(recorder.warnMessages, "room audio output subscription wait timed out") {
+	if stringSliceContains(recorder.warnMessages, "room audio output publish subscription wait timed out") {
 		t.Fatalf("warn messages = %#v, fallback must not be a production warning", recorder.warnMessages)
 	}
 }
 
-func TestRoomIOAudioSubscriptionDefaultTimeoutKeepsStartupGateLongEnough(t *testing.T) {
+func TestRoomIOAudioSubscriptionDefaultTimeoutKeepsPublishGateLongEnough(t *testing.T) {
 	rio := &RoomIO{}
 
 	if got := rio.audioSubscriptionTimeout(); got != 10*time.Second {
-		t.Fatalf("audioSubscriptionTimeout() = %v, want 10s default startup gate", got)
+		t.Fatalf("audioSubscriptionTimeout() = %v, want 10s default publish gate", got)
 	}
 }
 
@@ -1042,8 +1059,14 @@ func TestRoomIOPublishAudioWaitForSubscriptionHonorsContext(t *testing.T) {
 }
 
 func TestRoomIOPublishAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	if err := session.SetLogger(recorder); err != nil {
+		t.Fatalf("SetLogger() error = %v", err)
+	}
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
+		AgentSession: session,
 		Options: RoomOptions{
 			AudioSubscriptionTimeout: 20 * time.Millisecond,
 		},
@@ -1067,6 +1090,12 @@ func TestRoomIOPublishAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 	if len(encoder.calls) == 0 {
 		t.Fatal("encoder was not called after subscription timeout fallback")
+	}
+	if !stringSliceContains(recorder.infoMessages, "room audio output publish subscription wait timed out") {
+		t.Fatalf("info messages = %#v, want publish fallback diagnostic", recorder.infoMessages)
+	}
+	if stringSliceContains(recorder.warnMessages, "room audio output publish subscription wait timed out") {
+		t.Fatalf("warn messages = %#v, fallback must not be a production warning", recorder.warnMessages)
 	}
 }
 
@@ -1112,7 +1141,7 @@ func TestRoomIOAudioSubscriptionTimeoutReleasesConcurrentPublishWaiters(t *testi
 
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- rio.waitForAudioSubscription(context.Background())
+		waitDone <- rio.waitForAudioSubscriptionReady(context.Background())
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -1131,10 +1160,10 @@ func TestRoomIOAudioSubscriptionTimeoutReleasesConcurrentPublishWaiters(t *testi
 	select {
 	case err := <-waitDone:
 		if err != nil {
-			t.Fatalf("waitForAudioSubscription error = %v", err)
+			t.Fatalf("waitForAudioSubscriptionReady error = %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("waitForAudioSubscription did not return after timeout fallback")
+		t.Fatal("waitForAudioSubscriptionReady did not return after timeout fallback")
 	}
 
 	select {
