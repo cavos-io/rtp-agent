@@ -764,7 +764,13 @@ func TestRoomIOAudioSubscriptionTimeoutReleasesUserAwayGate(t *testing.T) {
 }
 
 func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
+	recorder := &roomIORecordingLogger{}
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	if err := session.SetLogger(recorder); err != nil {
+		t.Fatalf("SetLogger() error = %v", err)
+	}
 	rio := &RoomIO{
+		AgentSession: session,
 		Options: RoomOptions{
 			AudioSubscriptionTimeout: 20 * time.Millisecond,
 		},
@@ -777,6 +783,12 @@ func TestRoomIOAudioSubscriptionWaitFallsBackAfterTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
 		t.Fatalf("waitForAudioSubscription returned after %v, want timeout wait", elapsed)
+	}
+	if !stringSliceContains(recorder.infoMessages, "room audio output subscription wait timed out") {
+		t.Fatalf("info messages = %#v, want subscription fallback diagnostic", recorder.infoMessages)
+	}
+	if stringSliceContains(recorder.warnMessages, "room audio output subscription wait timed out") {
+		t.Fatalf("warn messages = %#v, fallback must not be a production warning", recorder.warnMessages)
 	}
 }
 
@@ -4492,11 +4504,14 @@ func waitForRoomDeleteIdle(t *testing.T, rio *RoomIO) {
 }
 
 type roomIORecordingLogger struct {
+	infoMessages []string
 	warnMessages []string
 }
 
 func (l *roomIORecordingLogger) Debugw(string, ...any) {}
-func (l *roomIORecordingLogger) Infow(string, ...any)  {}
+func (l *roomIORecordingLogger) Infow(msg string, keysAndValues ...any) {
+	l.infoMessages = append(l.infoMessages, msg)
+}
 func (l *roomIORecordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 	l.warnMessages = append(l.warnMessages, msg)
 }

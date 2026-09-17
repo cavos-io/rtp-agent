@@ -667,6 +667,25 @@ func (s *AgentSession) isClosing() bool {
 	return s.closing
 }
 
+func (s *AgentSession) isTearingDown() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	closing := s.closing
+	done := s.teardownCh
+	s.mu.Unlock()
+	if closing {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

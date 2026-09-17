@@ -1070,6 +1070,7 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 		roomIO := c.primaryRoomIO
 		session := c.primarySession
 		c.shutdownMu.Unlock()
+		jobLogger := c.Logger()
 
 		defer close(done)
 
@@ -1103,14 +1104,14 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 					}
 
 					if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-						logger.Logger.Warnw("failed to close RoomIO during job shutdown", err, "job_id", c.JobID())
+						jobLogger.Warnw("failed to close RoomIO during job shutdown", err)
 					}
 				}()
 			}
 
 			if session != nil {
 				if err := session.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-					logger.Logger.Warnw("failed to stop agent session during job shutdown", err, "job_id", c.JobID())
+					jobLogger.Warnw("failed to stop agent session during job shutdown", err)
 				}
 			}
 		}
@@ -1120,6 +1121,7 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 			Callbacks:      callbacks,
 			Disconnect:     disconnect,
 			Timeout:        timeout,
+			Logger:         jobLogger,
 		}, c.JobID())
 		c.shutdownMu.Lock()
 		c.shutdownSettled = settled
@@ -1139,16 +1141,21 @@ type jobContextShutdownPlan struct {
 	Callbacks      []func(string)
 	Disconnect     func()
 	Timeout        time.Duration
+	Logger         ProtoLogger
 }
 
 func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) <-chan struct{} {
 	ctx, cancel := context.WithTimeout(context.Background(), plan.Timeout)
 	defer cancel()
+	jobLogger := plan.Logger
+	if jobLogger == nil {
+		jobLogger = logger.Logger.WithValues("job_id", jobID)
+	}
 
 	var consumers sync.WaitGroup
 
 	disconnect := sync.OnceFunc(func() {
-		callJobShutdownStep("room disconnect", jobID, func() {
+		callJobShutdownStep(jobLogger, "room disconnect", jobID, func() {
 			if plan.Disconnect != nil {
 				plan.Disconnect()
 			}
@@ -1166,18 +1173,18 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 			defer close(drainDone)
 			defer consumers.Done()
 
-			callJobShutdownStep("pre-disconnect drain", jobID, func() { plan.Drain(ctx) })
+			callJobShutdownStep(jobLogger, "pre-disconnect drain", jobID, func() { plan.Drain(ctx) })
 		}()
 
 		select {
 		case <-drainDone:
 			drainComplete = true
 		case <-ctx.Done():
-			logger.Logger.Warnw("pre-disconnect shutdown drain timed out", ctx.Err(), "job_id", jobID)
+			jobLogger.Warnw("pre-disconnect shutdown drain timed out", ctx.Err())
 		}
 	}
 
-	callJobShutdownStep("publication gate", jobID, plan.StopPublishing)
+	callJobShutdownStep(jobLogger, "publication gate", jobID, plan.StopPublishing)
 	disconnect()
 
 	var wg sync.WaitGroup
@@ -1192,7 +1199,7 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 			defer wg.Done()
 			defer consumers.Done()
 
-			callJobShutdownStep("callback", jobID, func() { callback(reason) })
+			callJobShutdownStep(jobLogger, "callback", jobID, func() { callback(reason) })
 		}(callback)
 	}
 
@@ -1208,7 +1215,7 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 	case <-callbacksDone:
 		callbacksComplete = true
 	case <-ctx.Done():
-		logger.Logger.Warnw("shutdown callbacks timed out", ctx.Err(), "job_id", jobID)
+		jobLogger.Warnw("shutdown callbacks timed out", ctx.Err())
 	}
 
 	settled := make(chan struct{})
@@ -1224,14 +1231,14 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 	return settled
 }
 
-func callJobShutdownStep(name string, jobID string, step func()) {
+func callJobShutdownStep(jobLogger ProtoLogger, name string, jobID string, step func()) {
 	if step == nil {
 		return
 	}
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Logger.Errorw("Shutdown step panicked", errShutdownStepPanic, "step", name, "job_id", jobID, "panic", recovered)
+			jobLogger.Errorw("Shutdown step panicked", errShutdownStepPanic, "step", name, "job_id", jobID, "panic", recovered)
 		}
 	}()
 

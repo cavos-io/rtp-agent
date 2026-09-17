@@ -1664,9 +1664,11 @@ func (a *AgentActivity) OnError(err error, source any) {
 	if a == nil || a.Session == nil || err == nil {
 		return
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) && a.Session.isTearingDown() {
 		return
 	}
+	message, provider, stage := providerErrorLogDetails(source)
+	logAgentProviderError(a.Session, message, err, source, provider, stage)
 	a.Session.EmitError(ErrorEvent{Error: err, Source: source})
 }
 

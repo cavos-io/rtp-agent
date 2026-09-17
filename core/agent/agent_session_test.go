@@ -5833,7 +5833,7 @@ func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
 	}
 }
 
-func TestAgentSessionStartSuppressesCanceledTTSErrorsThroughActivity(t *testing.T) {
+func TestAgentSessionStartForwardsUnexpectedCanceledTTSErrorsThroughActivity(t *testing.T) {
 	ttsSource := &fakePipelineTTS{}
 	agent := NewAgent("test")
 	agent.TTS = ttsSource
@@ -5842,6 +5842,10 @@ func TestAgentSessionStartSuppressesCanceledTTSErrorsThroughActivity(t *testing.
 	agent.VAD = &fakePipelineVAD{}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.Assistant = &fakeSessionAssistant{}
+	recorder := &recordingLogger{}
+	if err := session.SetLogger(recorder); err != nil {
+		t.Fatalf("SetLogger() error = %v", err)
+	}
 
 	if err := session.Start(context.Background()); err != nil {
 		t.Fatalf("Start error = %v, want nil", err)
@@ -5852,8 +5856,14 @@ func TestAgentSessionStartSuppressesCanceledTTSErrorsThroughActivity(t *testing.
 
 	select {
 	case ev := <-session.ErrorEvents():
-		t.Fatalf("ErrorEvents received %#v, want canceled TTS provider error suppressed", ev)
-	case <-time.After(25 * time.Millisecond):
+		if !errors.Is(ev.Error, context.Canceled) {
+			t.Fatalf("Error = %v, want context.Canceled", ev.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive active-session TTS cancellation")
+	}
+	if !recorder.hasError("TTS provider error") {
+		t.Fatalf("error messages = %#v, want active-session cancellation at error level", recorder.errorMessages)
 	}
 }
 
@@ -5891,7 +5901,7 @@ func TestAgentSessionStartForwardsLLMErrorsThroughActivity(t *testing.T) {
 	}
 }
 
-func TestAgentSessionStartSuppressesCanceledLLMErrorsThroughActivity(t *testing.T) {
+func TestAgentSessionStartForwardsUnexpectedCanceledLLMErrorsThroughActivity(t *testing.T) {
 	llmSource := &fakeGenerationLLM{}
 	agent := NewAgent("test")
 	agent.LLM = llmSource
@@ -5910,8 +5920,11 @@ func TestAgentSessionStartSuppressesCanceledLLMErrorsThroughActivity(t *testing.
 
 	select {
 	case ev := <-session.ErrorEvents():
-		t.Fatalf("ErrorEvents received %#v, want canceled LLM provider error suppressed", ev)
-	case <-time.After(25 * time.Millisecond):
+		if !errors.Is(ev.Error, context.Canceled) {
+			t.Fatalf("Error = %v, want context.Canceled", ev.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive active-session LLM cancellation")
 	}
 }
 
@@ -5949,7 +5962,7 @@ func TestAgentSessionStartForwardsSTTErrorsThroughActivity(t *testing.T) {
 	}
 }
 
-func TestAgentSessionStartSuppressesCanceledSTTErrorsThroughActivity(t *testing.T) {
+func TestAgentSessionStartForwardsUnexpectedCanceledSTTErrorsThroughActivity(t *testing.T) {
 	sttSource := &fakePipelineSTT{}
 	agent := NewAgent("test")
 	agent.STT = sttSource
@@ -5968,8 +5981,33 @@ func TestAgentSessionStartSuppressesCanceledSTTErrorsThroughActivity(t *testing.
 
 	select {
 	case ev := <-session.ErrorEvents():
-		t.Fatalf("ErrorEvents received %#v, want canceled STT provider error suppressed", ev)
-	case <-time.After(25 * time.Millisecond):
+		if !errors.Is(ev.Error, context.Canceled) {
+			t.Fatalf("Error = %v, want context.Canceled", ev.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive active-session STT cancellation")
+	}
+}
+
+func TestAgentActivitySuppressesCanceledProviderErrorDuringSessionTeardown(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	recorder := &recordingLogger{}
+	if err := session.SetLogger(recorder); err != nil {
+		t.Fatalf("SetLogger() error = %v", err)
+	}
+	activity := NewAgentActivity(NewAgent("test"), session)
+	errorEvents := session.ErrorEvents()
+	session.signalTeardown()
+
+	activity.OnError(fmt.Errorf("provider request: %w", context.Canceled), &fakePipelineTTS{})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v during teardown", ev)
+	default:
+	}
+	if len(recorder.errorMessages) != 0 {
+		t.Fatalf("error messages = %#v, want none during teardown", recorder.errorMessages)
 	}
 }
 
