@@ -714,7 +714,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		})
 
 	case llm.RealtimeEventTypeError:
-		if ev.Error != io.EOF && ma.session != nil && ev.Error != nil {
+		if !errors.Is(ev.Error, io.EOF) && ma.session != nil && ev.Error != nil {
 			err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
 			if ma.session.activity != nil {
 				ma.session.activity.OnError(err, ma.model)

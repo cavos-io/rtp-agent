@@ -1607,6 +1607,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		trackID = publication.SID()
 	}
 	rio.setAudioOutputTrack(track, trackID, publication)
+
 	return nil
 }
 

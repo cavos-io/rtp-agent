@@ -1147,6 +1147,7 @@ type jobContextShutdownPlan struct {
 func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) <-chan struct{} {
 	ctx, cancel := context.WithTimeout(context.Background(), plan.Timeout)
 	defer cancel()
+
 	jobLogger := plan.Logger
 	if jobLogger == nil {
 		jobLogger = logger.Logger.WithValues("job_id", jobID)
