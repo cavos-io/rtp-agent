@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +31,11 @@ const agentInstructionsMessageID = "lk.agent_task.instructions"
 const audioTurnDetectorWindowSeconds = 8.0
 
 const smartTurnPredictTimeout = 5 * time.Second
+
+const (
+	modelNameMetricKey     = "model_name"
+	modelProviderMetricKey = "model_provider"
+)
 
 type instructionUpdatingAssistant interface {
 	UpdateInstructions(context.Context, string) error
@@ -96,6 +102,7 @@ type EndOfTurnInfo struct {
 	FromInterimFallback bool
 
 	endpointingNotBefore time.Time
+	sttRequestIDs        []string
 }
 
 // AgentActivity handles the internal event loops, I/O processing, and
@@ -164,6 +171,7 @@ type AgentActivity struct {
 	pendingStoppedSpeakingAt         *float64
 	pendingTranscriptionDelay        float64
 	pendingTranscriptionDelaySet     bool
+	pendingSTTRequestIDs             []string
 	syntheticEOU                     bool
 	syntheticEOUNotBefore            time.Time
 	userTurnLimitStartedAt           time.Time
@@ -2974,6 +2982,8 @@ collect:
 	stoppedSpeakingAt := a.pendingStoppedSpeakingAt
 	transcriptionDelay := a.pendingTranscriptionDelay
 	transcriptionDelaySet := a.pendingTranscriptionDelaySet
+
+	sttRequestIDs := append([]string(nil), a.pendingSTTRequestIDs...)
 	if started, stopped, delay, ok := a.finalTranscriptTiming(a.lastFinalTranscriptTime); ok {
 		if startedSpeakingAt == nil {
 			startedSpeakingAt = started
@@ -3030,6 +3040,7 @@ collect:
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
 	a.pendingTranscriptionDelaySet = false
+	a.pendingSTTRequestIDs = nil
 	a.syntheticEOU = false
 	a.syntheticEOUNotBefore = time.Time{}
 	a.pendingInterimTranscript = ""
@@ -3071,6 +3082,7 @@ collect:
 		StartedSpeakingAt:      startedSpeakingAt,
 		StoppedSpeakingAt:      stoppedSpeakingAt,
 		AudioFrames:            a.userAudioSnapshot(),
+		sttRequestIDs:          sttRequestIDs,
 	}); err != nil {
 		return transcript, err
 	}
@@ -3137,6 +3149,13 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 			timeToUnixSeconds(time.Now()),
 		)
 	}
+
+	if len(info.sttRequestIDs) == 0 {
+		a.userTurnMu.Lock()
+		info.sttRequestIDs = append([]string(nil), a.pendingSTTRequestIDs...)
+		a.pendingSTTRequestIDs = nil
+		a.userTurnMu.Unlock()
+	}
 	if a.Session != nil {
 		userTurnSpan := a.Session.ensureUserTurnSpan(ctx)
 		sttProvider := a.Session.STT
@@ -3147,6 +3166,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		}
 		if info.TranscriptionDelaySet || info.TranscriptionDelay != 0 {
 			attrs = append(attrs, attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay))
+		}
+
+		if len(info.sttRequestIDs) > 0 {
+			attrs = append(attrs, attribute.StringSlice(telemetry.AttrProviderRequestIDs, info.sttRequestIDs))
 		}
 		if sttProvider != nil {
 			attrs = append(attrs,
@@ -3202,7 +3225,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		a.cancelPreemptiveGeneration()
 		a.Session.Logger().Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		if a.Session != nil && a.Session.isClosing() {
-			newMsg.Metrics = metricsReportFromEndOfTurn(info, 0)
+			newMsg.Metrics = metricsReportFromEndOfTurn(info, 0, a.Session.STT)
 			a.commitUserMessage(newMsg)
 		} else if a.Session != nil && a.Session.Options.RecordUncommittedTranscript {
 			a.recordTranscriptOnlyUserMessage(info.NewTranscript, info.TranscriptConfidence)
@@ -3252,7 +3275,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 	hookDelay := time.Since(hookStart).Seconds()
-	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
+	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay, a.Session.STT)
 	a.commitUserMessage(newMsg)
 	if info.ReplyAlreadyGenerated {
 		a.cancelPreemptiveGeneration()
@@ -3681,8 +3704,14 @@ func (a *AgentActivity) currentToolChoice() llm.ToolChoice {
 	return a.Session.Options.ToolChoice
 }
 
-func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64) map[string]any {
+func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64, sttProvider stt.STT) map[string]any {
 	metrics := make(map[string]any)
+	if sttProvider != nil {
+		metrics["stt_metadata"] = map[string]any{
+			modelNameMetricKey:     stt.Model(sttProvider),
+			modelProviderMetricKey: stt.Provider(sttProvider),
+		}
+	}
 	if info.StartedSpeakingAt != nil {
 		metrics["started_speaking_at"] = *info.StartedSpeakingAt
 	}
@@ -3752,6 +3781,7 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingStoppedSpeakingAt = nil
 	a.pendingTranscriptionDelay = 0
 	a.pendingTranscriptionDelaySet = false
+	a.pendingSTTRequestIDs = nil
 	a.syntheticEOU = false
 	a.syntheticEOUNotBefore = time.Time{}
 	a.pendingInterimTranscript = ""
@@ -3829,6 +3859,8 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		return EndOfTurnInfo{}
 	}
 	info.endpointingNotBefore = a.syntheticEOUNotBefore
+
+	info.sttRequestIDs = append([]string(nil), a.pendingSTTRequestIDs...)
 	if info.StartedSpeakingAt == nil && (!a.userTurnStartedAt.IsZero() || !a.userSpeechStartedAt.IsZero()) {
 		startedAt := a.userSpeechStartedAt
 		if !a.userTurnStartedAt.IsZero() {
@@ -3850,6 +3882,19 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		info.TranscriptionDelaySet = true
 	}
 	return info
+}
+
+func (a *AgentActivity) noteSTTRequestID(requestID string) {
+	if a == nil || requestID == "" {
+		return
+	}
+
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+
+	if !slices.Contains(a.pendingSTTRequestIDs, requestID) {
+		a.pendingSTTRequestIDs = append(a.pendingSTTRequestIDs, requestID)
+	}
 }
 
 func (a *AgentActivity) pendingFinalTranscriptPresent() bool {
@@ -4115,6 +4160,12 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			// Reset on the next onStartOfSpeech (new epoch).
 			a.setInterimCommittedTurn(true)
 		}
+
+		a.userTurnMu.Lock()
+		if len(a.pendingSTTRequestIDs) > 0 {
+			info.sttRequestIDs = append([]string(nil), a.pendingSTTRequestIDs...)
+		}
+		a.userTurnMu.Unlock()
 		a.clearPendingUserTurn()
 		if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 			a.Session.Logger().Errorw("user turn completion failed", err)

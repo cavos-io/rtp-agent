@@ -337,10 +337,23 @@ func googleSTTEndpoint(s *STT) string {
 	if s.location == "global" {
 		return ""
 	}
-	return s.location + "-speech.googleapis.com"
+
+	return s.location + "-speech.googleapis.com:443"
 }
 
-func (s *STT) Label() string           { return "google.STT" }
+// Label returns the provider-specific STT label.
+func (s *STT) Label() string { return "google.STT" }
+
+// Model returns the configured Google STT model.
+func (s *STT) Model() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.model
+}
+
+// Provider returns the Google STT provider name.
+func (s *STT) Provider() string        { return "Google Cloud Platform" }
 func (s *STT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *STT) Capabilities() stt.STTCapabilities {
 	alignedTranscript := ""
@@ -2286,10 +2299,15 @@ func googleFinalSpeechDataFromStreamingResultsV2(results []*speechv2pb.Streaming
 		if alt.GetTranscript() == "" {
 			return stt.SpeechData{}, true, false
 		}
+
+		confidence := float64(alt.GetConfidence())
+		if confidence == 0 {
+			confidence = stt.DefaultTranscriptConfidence(alt.GetTranscript())
+		}
 		data := stt.SpeechData{
 			Language:   googleStreamingResultLanguageV2(result),
 			Text:       alt.GetTranscript(),
-			Confidence: float64(alt.GetConfidence()),
+			Confidence: confidence,
 			Words:      googleTimedStringsOffsetV2(words, startTimeOffset),
 		}
 		googleApplySpeechDataTimingV2(&data, words, startTimeOffset)

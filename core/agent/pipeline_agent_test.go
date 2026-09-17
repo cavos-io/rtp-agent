@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -3416,6 +3417,119 @@ func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("MetricsCollectedEvents did not receive STT metrics")
 	}
+}
+
+func TestPipelineAgentAddsDeduplicatedSTTRequestIDsToEachUserTurnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	baseAgent := NewAgent("test")
+	baseAgent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	defer activity.Stop()
+	session.activity = activity
+	source := &fakePipelineSTT{model: "chirp_3", provider: "Google Cloud Platform"}
+	session.STT = source
+	pipeline := NewPipelineAgent(nil, source, nil, nil, llm.NewChatContext())
+	pipeline.session = session
+
+	completeTurn := func(requestIDs ...string) {
+		activity.OnStartOfSpeech(nil)
+		activity.OnFinalTranscript(&stt.SpeechEvent{
+			Type:         stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{Text: "test turn", Confidence: 1}},
+		})
+		events := make([]*stt.SpeechEvent, 0, len(requestIDs))
+		for _, requestID := range requestIDs {
+			events = append(events, &stt.SpeechEvent{
+				Type:             stt.SpeechEventRecognitionUsage,
+				RequestID:        requestID,
+				RecognitionUsage: &stt.RecognitionUsage{AudioDuration: 0.5},
+			})
+		}
+		pipeline.sttLoop(&fakePipelineRecognizeStream{events: events})
+		activity.OnEndOfSpeech(nil)
+		if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	completeTurn("request-1", "request-1", "")
+	completeTurn("request-2")
+
+	var userTurns []sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "user_turn" {
+			userTurns = append(userTurns, span)
+		}
+	}
+	if len(userTurns) != 2 {
+		t.Fatalf("user turn spans = %d, want 2", len(userTurns))
+	}
+	for index, want := range [][]string{{"request-1"}, {"request-2"}} {
+		attrs := spanAttributeValues(userTurns[index].Attributes())
+		if got := attrs[telemetry.AttrProviderRequestIDs].AsStringSlice(); !slices.Equal(got, want) {
+			t.Fatalf("turn %d provider request IDs = %v, want %v", index+1, got, want)
+		}
+	}
+}
+
+func TestPipelineAgentIncludesSTTRequestIDReceivedAfterEOUStarts(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	baseAgent.TurnDetection = TurnDetectionModeVAD
+	baseAgent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.01,
+	})
+	activity := NewAgentActivity(baseAgent, session)
+	defer activity.Stop()
+	session.activity = activity
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Timestamp: 1})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "test turn", Confidence: 1}},
+	})
+	activity.OnEndOfSpeech(&vad.VADEvent{Timestamp: 1.5})
+	activity.noteSTTRequestID("late-request")
+
+	select {
+	case <-baseAgent.turns:
+	case <-time.After(time.Second):
+		t.Fatal("user turn did not complete")
+	}
+	if done, ok := activity.pendingEOUDetection(); ok {
+		<-done
+	}
+
+	for _, span := range recorder.Ended() {
+		if span.Name() != "user_turn" {
+			continue
+		}
+		attrs := spanAttributeValues(span.Attributes())
+		if got := attrs[telemetry.AttrProviderRequestIDs].AsStringSlice(); !slices.Equal(got, []string{"late-request"}) {
+			t.Fatalf("provider request IDs = %v, want [late-request]", got)
+		}
+		return
+	}
+	t.Fatal("user_turn span missing")
 }
 
 func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {

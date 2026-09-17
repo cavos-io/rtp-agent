@@ -3102,7 +3102,7 @@ func TestAgentActivitySyntheticEndPreservesLastVADInferenceTime(t *testing.T) {
 }
 
 func TestMetricsReportFromEndOfTurnOmitsUnknownTranscriptionDelay(t *testing.T) {
-	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0)
+	metrics := metricsReportFromEndOfTurn(EndOfTurnInfo{}, 0, nil)
 	if _, ok := metrics["transcription_delay"]; ok {
 		t.Fatalf("transcription_delay = %#v, want omitted without valid timing anchors", metrics["transcription_delay"])
 	}
@@ -5985,6 +5985,7 @@ func TestAgentActivityCompleteUserTurnAddsMetricsToGeneratedUserMessage(t *testi
 	agent.TurnDetection = TurnDetectionModeManual
 	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.STT = &fakePipelineSTT{model: "chirp_3", provider: "Google Cloud Platform"}
 	activity := NewAgentActivity(agent, session)
 	agent.activity = activity
 	session.activity = activity
@@ -6020,6 +6021,13 @@ func TestAgentActivityCompleteUserTurnAddsMetricsToGeneratedUserMessage(t *testi
 		}
 		if msg.Metrics["transcription_delay"] != 0.34 {
 			t.Fatalf("user message transcription_delay = %#v, want 0.34", msg.Metrics["transcription_delay"])
+		}
+		metadata, ok := msg.Metrics["stt_metadata"].(map[string]any)
+		if !ok {
+			t.Fatalf("user message stt_metadata = %#v, want metadata map", msg.Metrics["stt_metadata"])
+		}
+		if metadata["model_name"] != "chirp_3" || metadata["model_provider"] != "Google Cloud Platform" {
+			t.Fatalf("user message stt_metadata = %#v, want Google chirp_3", metadata)
 		}
 		hookDelay, ok := msg.Metrics["on_user_turn_completed_delay"].(float64)
 		if !ok || hookDelay < 0 {

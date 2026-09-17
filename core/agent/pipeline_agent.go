@@ -585,6 +585,16 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			return
 		}
 
+		if ev.RequestID != "" {
+			va.mu.Lock()
+			session := va.session
+			va.mu.Unlock()
+
+			if session != nil && session.activity != nil {
+				session.activity.noteSTTRequestID(ev.RequestID)
+			}
+		}
+
 		if ev.Type == stt.SpeechEventRecognitionUsage {
 			va.emitSTTMetrics(ev)
 			continue
@@ -1201,12 +1211,12 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 			metrics := map[string]any{
 				"llm_metadata": map[string]any{
-					"model_name":     llm.Model(va.LLM),
-					"model_provider": llm.Provider(va.LLM),
+					modelNameMetricKey:     llm.Model(va.LLM),
+					modelProviderMetricKey: llm.Provider(va.LLM),
 				},
 				"tts_metadata": map[string]any{
-					"model_name":     tts.Model(va.tts),
-					"model_provider": tts.Provider(va.tts),
+					modelNameMetricKey:     tts.Model(va.tts),
+					modelProviderMetricKey: tts.Provider(va.tts),
 				},
 			}
 			if genData.TTFT > 0 {
