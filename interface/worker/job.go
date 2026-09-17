@@ -240,6 +240,7 @@ type JobContext struct {
 	shutdownTimeout        time.Duration
 	shutdownOnce           sync.Once
 	shutdownDone           chan struct{}
+	shutdownSettled        <-chan struct{}
 	entrypointStarted      atomic.Bool
 	entrypointDone         chan struct{}
 	entrypointDoneOnce     sync.Once
@@ -1046,6 +1047,17 @@ func (c *JobContext) Shutdown(reasons ...string) {
 	if len(reasons) > 0 {
 		reason = reasons[0]
 	}
+
+	c.startShutdown(reason)
+}
+
+func (c *JobContext) startShutdown(reason string) <-chan struct{} {
+	if c == nil {
+		settled := make(chan struct{})
+		close(settled)
+
+		return settled
+	}
 	c.shutdownOnce.Do(func() {
 		c.shutdownMu.Lock()
 		if c.shutdownDone == nil {
@@ -1102,14 +1114,23 @@ func (c *JobContext) Shutdown(reasons ...string) {
 				}
 			}
 		}
-		livekitJobContextRunShutdown(reason, jobContextShutdownPlan{
+		settled := livekitJobContextRunShutdown(reason, jobContextShutdownPlan{
 			Drain:          drain,
 			StopPublishing: stopPublishing,
 			Callbacks:      callbacks,
 			Disconnect:     disconnect,
 			Timeout:        timeout,
 		}, c.JobID())
+		c.shutdownMu.Lock()
+		c.shutdownSettled = settled
+		c.shutdownMu.Unlock()
 	})
+
+	c.shutdownMu.Lock()
+	settled := c.shutdownSettled
+	c.shutdownMu.Unlock()
+
+	return settled
 }
 
 type jobContextShutdownPlan struct {
@@ -1120,9 +1141,11 @@ type jobContextShutdownPlan struct {
 	Timeout        time.Duration
 }
 
-func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) {
+func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) <-chan struct{} {
 	ctx, cancel := context.WithTimeout(context.Background(), plan.Timeout)
 	defer cancel()
+
+	var consumers sync.WaitGroup
 
 	disconnect := sync.OnceFunc(func() {
 		callJobShutdownStep("room disconnect", jobID, func() {
@@ -1133,16 +1156,22 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 	})
 	defer disconnect()
 
+	drainComplete := true
 	if plan.Drain != nil {
+		drainComplete = false
 		drainDone := make(chan struct{})
+
+		consumers.Add(1)
 		go func() {
 			defer close(drainDone)
+			defer consumers.Done()
 
 			callJobShutdownStep("pre-disconnect drain", jobID, func() { plan.Drain(ctx) })
 		}()
 
 		select {
 		case <-drainDone:
+			drainComplete = true
 		case <-ctx.Done():
 			logger.Logger.Warnw("pre-disconnect shutdown drain timed out", ctx.Err(), "job_id", jobID)
 		}
@@ -1158,8 +1187,10 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 			continue
 		}
 		wg.Add(1)
+		consumers.Add(1)
 		go func(callback func(string)) {
 			defer wg.Done()
+			defer consumers.Done()
 
 			callJobShutdownStep("callback", jobID, func() { callback(reason) })
 		}(callback)
@@ -1172,11 +1203,25 @@ func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jo
 		close(callbacksDone)
 	}()
 
+	callbacksComplete := false
 	select {
 	case <-callbacksDone:
+		callbacksComplete = true
 	case <-ctx.Done():
 		logger.Logger.Warnw("shutdown callbacks timed out", ctx.Err(), "job_id", jobID)
 	}
+
+	settled := make(chan struct{})
+	if drainComplete && callbacksComplete {
+		close(settled)
+	} else {
+		go func() {
+			consumers.Wait()
+			close(settled)
+		}()
+	}
+
+	return settled
 }
 
 func callJobShutdownStep(name string, jobID string, step func()) {

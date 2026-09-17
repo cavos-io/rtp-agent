@@ -292,8 +292,9 @@ func TestJobContextShutdownDrainTimeoutStillDisconnects(t *testing.T) {
 	gateClosed := make(chan struct{})
 	disconnected := make(chan struct{})
 	done := make(chan struct{})
+	settledCh := make(chan (<-chan struct{}), 1)
 	go func() {
-		livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+		settledCh <- livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
 			Drain:          func(context.Context) { <-release },
 			StopPublishing: func() { close(gateClosed) },
 			Disconnect:     func() { close(disconnected) },
@@ -313,7 +314,51 @@ func TestJobContextShutdownDrainTimeoutStillDisconnects(t *testing.T) {
 			t.Fatalf("%s did not complete after drain deadline", result.name)
 		}
 	}
+	settled := <-settledCh
+	select {
+	case <-settled:
+		close(release)
+		t.Fatal("timed-out drain relinquished ownership before returning")
+	default:
+	}
 	close(release)
+	select {
+	case <-settled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown ownership did not settle after drain returned")
+	}
+}
+
+func TestJobContextShutdownContextAwareDrainSettlesAtDeadline(t *testing.T) {
+	drainErr := make(chan error, 1)
+	disconnected := make(chan struct{})
+	settled := livekitJobContextRunShutdown("job done", jobContextShutdownPlan{
+		Drain: func(ctx context.Context) {
+			<-ctx.Done()
+			drainErr <- ctx.Err()
+		},
+		Disconnect: func() { close(disconnected) },
+		Timeout:    10 * time.Millisecond,
+	}, "job_shutdown_context_aware")
+
+	select {
+	case err := <-drainErr:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("drain context error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("context-aware drain did not observe deadline")
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("room was not disconnected after context-aware drain returned")
+	}
+	select {
+	case <-settled:
+	case <-time.After(time.Second):
+		t.Fatal("context-aware drain did not settle")
+	}
 }
 
 func TestJobContextShutdownDrainPanicStillDisconnects(t *testing.T) {

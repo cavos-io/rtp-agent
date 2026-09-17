@@ -185,6 +185,7 @@ type AgentServer struct {
 	sessionEndFnc func(*JobContext) error
 
 	activeJobs             map[string]*JobContext
+	finishingJobs          map[string]*JobContext
 	pendingAccepts         map[string]JobAcceptArguments
 	pendingTimers          map[string]*time.Timer
 	reservedSlots          int
@@ -211,6 +212,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 	return &AgentServer{
 		Options:        opts,
 		activeJobs:     make(map[string]*JobContext),
+		finishingJobs:  make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
 		workerID:       "unregistered",
@@ -1185,7 +1187,8 @@ func (s *AgentServer) drain(ctx context.Context) error {
 func (s *AgentServer) inflightJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.activeJobs) + len(s.pendingAccepts) + s.reservedSlots
+
+	return len(s.activeJobs) + len(s.finishingJobs) + len(s.pendingAccepts) + s.reservedSlots
 }
 
 func (s *AgentServer) activeJobCount() int {
@@ -1828,6 +1831,7 @@ func (s *AgentServer) handleTermination(req *JobTermination) {
 	jobCtx, exists := s.activeJobs[jobID]
 	if exists {
 		delete(s.activeJobs, jobID)
+		s.finishingJobs[jobID] = jobCtx
 	}
 	s.mu.Unlock()
 
@@ -2001,21 +2005,76 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 		return false
 	}
 
-	s.mu.Lock()
-	delete(s.activeJobs, plan.JobID)
-	s.mu.Unlock()
+	s.trackFinishingJob(jobCtx)
 
-	jobCtx.Shutdown("")
-	s.runSessionEnd(jobCtx)
+	foregroundDone := make(chan struct{})
+	go s.finishJobLifecycle(jobCtx, plan.JobID, foregroundDone)
+
+	<-foregroundDone
+
+	return true
+}
+
+func (s *AgentServer) finishJobLifecycle(jobCtx *JobContext, jobID string, foregroundDone chan struct{}) {
+	releaseForeground := sync.OnceFunc(func() { close(foregroundDone) })
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Errorw("job teardown panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobID)...)
+		}
+
+		if err := jobCtx.onCleanUp(); err != nil {
+			logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", jobID)...)
+		}
+
+		s.untrackFinishingJob(jobCtx)
+		releaseForeground()
+	}()
+
+	shutdownSettled := jobCtx.startShutdown("")
+	select {
+	case <-shutdownSettled:
+	default:
+		releaseForeground()
+		<-shutdownSettled
+	}
+
+	sessionEndDone, sessionEndTimedOut := s.runSessionEnd(jobCtx)
+	if sessionEndTimedOut {
+		releaseForeground()
+		<-sessionEndDone
+	}
+
 	s.uploadJobSessionReport(jobCtx)
 	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
-		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", jobID)...)
 	}
-	err := jobCtx.onCleanUp()
-	if err != nil {
-		logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+}
+
+func (s *AgentServer) trackFinishingJob(jobCtx *JobContext) {
+	jobID := jobCtx.JobID()
+
+	s.mu.Lock()
+	if current := s.activeJobs[jobID]; current == jobCtx {
+		delete(s.activeJobs, jobID)
 	}
-	return true
+
+	if s.finishingJobs == nil {
+		s.finishingJobs = make(map[string]*JobContext)
+	}
+
+	s.finishingJobs[jobID] = jobCtx
+	s.mu.Unlock()
+}
+
+func (s *AgentServer) untrackFinishingJob(jobCtx *JobContext) {
+	jobID := jobCtx.JobID()
+
+	s.mu.Lock()
+	if current := s.finishingJobs[jobID]; current == jobCtx {
+		delete(s.finishingJobs, jobID)
+	}
+	s.mu.Unlock()
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
@@ -2075,34 +2134,46 @@ func jobSessionReportUploadPlan(jobCtx *JobContext, opts WorkerOptions) JobSessi
 	})
 }
 
-func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
+func (s *AgentServer) runSessionEnd(jobCtx *JobContext) (<-chan struct{}, bool) {
+	done := make(chan struct{})
 	if s.sessionEndFnc == nil {
-		return
+		close(done)
+
+		return done, false
 	}
 
 	plan := livekitServerJobSessionEndPlan(JobSessionEndPlanOptions{
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
-	doneCh := make(chan error, 1)
 	go func() {
-		doneCh <- s.sessionEndFnc(jobCtx)
+		defer close(done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Session end callback panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", plan.JobID)...)
+			}
+		}()
+
+		if err := s.sessionEndFnc(jobCtx); err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
+		}
 	}()
 
 	if plan.Timeout <= 0 {
-		if err := <-doneCh; err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-		}
-		return
+		<-done
+
+		return done, false
 	}
 
+	timer := time.NewTimer(plan.Timeout)
+	defer timer.Stop()
 	select {
-	case err := <-doneCh:
-		if err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
-		}
-	case <-time.After(plan.Timeout):
+	case <-done:
+		return done, false
+	case <-timer.C:
 		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", plan.JobID, "timeout", plan.Timeout)...)
+
+		return done, true
 	}
 }
 
