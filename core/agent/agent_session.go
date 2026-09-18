@@ -455,14 +455,21 @@ func (s *AgentSession) OnVideoFrame(ctx context.Context, frame *images.VideoFram
 }
 
 func (s *AgentSession) CurrentSpeech() *SpeechHandle {
-	s.mu.Lock()
-	activity := s.activity
-	s.mu.Unlock()
+	activity := s.currentActivity()
 	if activity == nil {
 		return nil
 	}
 
 	return activity.CurrentSpeech()
+}
+
+func (s *AgentSession) currentActivity() *AgentActivity {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activity
 }
 
 func (s *AgentSession) Userdata() (any, error) {
