@@ -3919,6 +3919,9 @@ func (a *AgentActivity) vadBasedTurnDetection() bool {
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
+	if a == nil {
+		return ""
+	}
 	mode := ""
 	if a.Agent.TurnDetection != "" {
 		mode = string(a.Agent.TurnDetection)

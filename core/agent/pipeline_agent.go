@@ -599,8 +599,9 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			session := va.session
 			va.mu.Unlock()
 
-			if session != nil && session.activity != nil {
-				session.activity.noteSTTRequestID(ev.RequestID)
+			activity := session.currentActivity()
+			if activity != nil {
+				activity.noteSTTRequestID(ev.RequestID)
 			}
 		}
 
@@ -612,16 +613,17 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			va.mu.Lock()
 			session := va.session
 			va.mu.Unlock()
-			if session != nil && session.activity != nil {
-				if session.activity.holdSTTEventWhileAgentSpeaking(ev) {
+			activity := session.currentActivity()
+			if activity != nil {
+				if activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
 				}
-				if session.activity.turnDetectionMode() == TurnDetectionModeSTT {
+				if activity.turnDetectionMode() == TurnDetectionModeSTT {
 					if ev.Type == stt.SpeechEventStartOfSpeech {
-						session.activity.OnSTTStartOfSpeech(ev)
+						activity.OnSTTStartOfSpeech(ev)
 					} else {
 						va.flushActiveVADSegment()
-						session.activity.OnEndOfSpeech(nil)
+						activity.OnEndOfSpeech(nil)
 					}
 				}
 			}
@@ -640,17 +642,18 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		session := va.session
 		ctx := va.ctx
 		va.mu.Unlock()
-		if session != nil && session.activity != nil {
+		activity := session.currentActivity()
+		if activity != nil {
 			if ev.Type == stt.SpeechEventInterimTranscript || ev.Type == stt.SpeechEventPreflightTranscript {
-				session.activity.OnInterimTranscript(ev)
+				activity.OnInterimTranscript(ev)
 				continue
 			}
-			session.activity.OnFinalTranscript(ev)
-			if session.activity.turnDetectionMode() != TurnDetectionModeSTT && !session.activity.vadBasedTurnDetection() {
+			activity.OnFinalTranscript(ev)
+			if activity.turnDetectionMode() != TurnDetectionModeSTT && !activity.vadBasedTurnDetection() {
 				if ctx == nil {
 					ctx = context.Background()
 				}
-				if _, err := session.activity.CommitUserTurn(ctx, CommitUserTurnOptions{}); err != nil {
+				if _, err := activity.CommitUserTurn(ctx, CommitUserTurnOptions{}); err != nil {
 					va.emitError(err, va)
 				}
 			}

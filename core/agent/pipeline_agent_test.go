@@ -2507,6 +2507,32 @@ func TestPipelineAgentRoutesPreflightTranscriptAsInterim(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentFinalTranscriptKeepsActivityWhenCallbackDetachesSessionActivity(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	session.Once("user_input_transcribed", func(Event) {
+		session.mu.Lock()
+		session.activity = nil
+		session.mu.Unlock()
+	})
+	pipeline := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, baseAgent.ChatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type:         stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{Text: "final transcript", Confidence: 0.9}},
+		}},
+	})
+}
+
 func TestPipelineAgentVADTurnDetectionWaitsForEndOfSpeechBeforeCommit(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeVAD

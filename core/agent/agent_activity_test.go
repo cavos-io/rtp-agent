@@ -2207,6 +2207,13 @@ func TestAgentActivityRealtimeLLMTurnDetectionRequiresRealtimeModel(t *testing.T
 	}
 }
 
+func TestAgentActivityTurnDetectionModeNilActivityReturnsDefault(t *testing.T) {
+	var activity *AgentActivity
+	if got := activity.turnDetectionMode(); got != "" {
+		t.Fatalf("turnDetectionMode() = %q, want empty mode for nil activity", got)
+	}
+}
+
 func TestAgentActivityRealtimeLLMTurnDetectionUsesRealtimeCapabilities(t *testing.T) {
 	t.Run("server turn detection", func(t *testing.T) {
 		agent := NewAgent("test")
