@@ -13,18 +13,22 @@ func TestFFmpegRecordingWriterCreatesFastStartMP4AAC(t *testing.T) {
 	if RecordingFileName != "audio.mp4" {
 		t.Fatalf("RecordingFileName = %q, want audio.mp4", RecordingFileName)
 	}
+	if RecordingSampleRate != 24000 {
+		t.Fatalf("RecordingSampleRate = %d, want 24000", RecordingSampleRate)
+	}
 	path := filepath.Join(t.TempDir(), RecordingFileName)
-	writer, err := newRecordingWriter(path, 48000)
+	writer, err := newRecordingWriter(path, RecordingSampleRate)
 	if err != nil {
 		t.Fatalf("newRecordingWriter() error = %v", err)
 	}
-	pcm := make([]int16, 48000*2)
-	for i := 0; i < 48000; i++ {
-		pcm[i*2] = int16(i % 2048)
+	const durationSeconds = 10
+	pcm := make([]int16, RecordingSampleRate*durationSeconds*2)
+	for i := 0; i < RecordingSampleRate*durationSeconds; i++ {
+		pcm[i*2] = int16((i*997)%65536 - 32768)
 		pcm[i*2+1] = -pcm[i*2]
 	}
-	if written, err := writer.WritePCM(pcm); err != nil || written != 48000 {
-		t.Fatalf("WritePCM() = (%d, %v), want (48000, nil)", written, err)
+	if written, err := writer.WritePCM(pcm); err != nil || written != RecordingSampleRate*durationSeconds {
+		t.Fatalf("WritePCM() = (%d, %v), want (%d, nil)", written, err, RecordingSampleRate*durationSeconds)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -46,4 +50,8 @@ func TestFFmpegRecordingWriterCreatesFastStartMP4AAC(t *testing.T) {
 	if !bytes.Contains(data, []byte("mp4a")) {
 		t.Fatal("MP4 does not contain an AAC mp4a sample entry")
 	}
+	if len(data) >= 110000 {
+		t.Fatalf("10-second 64 kbps AAC recording size = %d bytes, want less than 110000", len(data))
+	}
+	t.Logf("10-second 24 kHz/64 kbps AAC recording size: %d bytes", len(data))
 }

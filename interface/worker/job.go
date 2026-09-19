@@ -806,7 +806,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			roomIO.ReconcileParticipants()
 		}
 		if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
-			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), RecordingSampleRate); err != nil {
 				return err
 			}
 		}

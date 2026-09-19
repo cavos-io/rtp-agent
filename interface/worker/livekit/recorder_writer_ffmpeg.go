@@ -4,7 +4,10 @@ package livekit
 
 import "github.com/cavos-io/rtp-agent/interface/worker/livekit/internal/ffmpegrecorder"
 
-const RecordingFileName = "audio.mp4"
+const (
+	RecordingFileName   = "audio.mp4"
+	RecordingSampleRate = 24000
+)
 
 func newRecordingWriter(outputPath string, sampleRate int) (recordingWriter, error) {
 	return ffmpegrecorder.New(outputPath, sampleRate)

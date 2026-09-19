@@ -106,7 +106,10 @@ type RoomOptions = workerlivekit.RoomOptions
 
 type RoomIO = workerlivekit.RoomIO
 
-const RecordingFileName = workerlivekit.RecordingFileName
+const (
+	RecordingFileName   = workerlivekit.RecordingFileName
+	RecordingSampleRate = workerlivekit.RecordingSampleRate
+)
 
 type Job = workerlivekit.Job
 

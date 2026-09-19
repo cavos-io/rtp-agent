@@ -80,7 +80,7 @@ int rtp_mp4_open(const char *path, int sample_rate, rtp_mp4_writer **out) {
 
 	writer->codec->sample_fmt = AV_SAMPLE_FMT_FLTP;
 	writer->codec->sample_rate = sample_rate;
-	writer->codec->bit_rate = 128000;
+	writer->codec->bit_rate = 64000;
 	writer->codec->time_base = (AVRational){1, sample_rate};
 	AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
 	if ((result = av_channel_layout_copy(&writer->codec->ch_layout, &stereo)) < 0) goto fail;

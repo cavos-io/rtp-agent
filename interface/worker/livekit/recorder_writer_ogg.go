@@ -10,7 +10,10 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
-const RecordingFileName = "audio.ogg"
+const (
+	RecordingFileName   = "audio.ogg"
+	RecordingSampleRate = 48000
+)
 
 type oggRecordingWriter struct {
 	writer         *oggwriter.OggWriter
