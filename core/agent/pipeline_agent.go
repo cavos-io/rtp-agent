@@ -1414,6 +1414,18 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				break
 			}
 		}
+		if err := session.WaitForInactive(ctx); err != nil {
+			closePendingToolUpdateReplyDone()
+			if !errors.Is(err, context.Canceled) {
+				session.UpdateAgentState(AgentStateListening)
+			}
+			break
+		}
+		if opts.SpeechHandle != nil && opts.SpeechHandle.IsInterrupted() {
+			closePendingToolUpdateReplyDone()
+			session.UpdateAgentState(AgentStateListening)
+			break
+		}
 		if opts.SpeechHandle != nil {
 			opts.SpeechHandle.IncrementStep()
 			opts.SpeechHandle.AuthorizeGeneration()
