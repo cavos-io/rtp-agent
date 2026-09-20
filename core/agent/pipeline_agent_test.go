@@ -5401,6 +5401,185 @@ func TestPipelineAgentScheduledReplyIncrementsSpeechStepForToolReply(t *testing.
 	}
 }
 
+func TestPipelineAgentToolReplyWaitsForFillerPlayout(t *testing.T) {
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	var releaseOnce sync.Once
+	playback := &fakePipelinePlaybackController{
+		waitStarted: waitStarted,
+		releaseWait: releaseWait,
+	}
+	tool := &fillerPipelineTool{
+		fillerScheduled: make(chan *SpeechHandle, 1),
+	}
+	model, handle, cleanup := startFillerToolReplyTest(t, tool, playback)
+	defer cleanup()
+	defer releaseOnce.Do(func() { close(releaseWait) })
+
+	var filler *SpeechHandle
+	select {
+	case filler = <-tool.fillerScheduled:
+	case <-time.After(time.Second):
+		t.Fatal("filler was not scheduled")
+	}
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("filler playout did not start")
+	}
+
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-filler.doneCh:
+		t.Fatal("filler finished before the controlled playout was released")
+	}
+	if got := len(model.calls); got != 1 {
+		t.Fatalf("LLM Chat calls while filler is playing = %d, want 1", got)
+	}
+
+	releaseOnce.Do(func() { close(releaseWait) })
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("tool reply did not finish after filler playout: %v", err)
+	}
+	if got := len(model.calls); got != 2 {
+		t.Fatalf("LLM Chat calls after filler playout = %d, want 2", got)
+	}
+}
+
+func TestPipelineAgentInterruptedWhileWaitingForFillerSuppressesToolReply(t *testing.T) {
+	waitStarted := make(chan struct{})
+	releaseWait := make(chan struct{})
+	var releaseOnce sync.Once
+	playback := &fakePipelinePlaybackController{
+		waitStarted:    waitStarted,
+		releaseWait:    releaseWait,
+		respectContext: true,
+	}
+	tool := &fillerPipelineTool{
+		fillerScheduled: make(chan *SpeechHandle, 1),
+	}
+	model, handle, cleanup := startFillerToolReplyTest(t, tool, playback)
+	defer cleanup()
+	defer releaseOnce.Do(func() { close(releaseWait) })
+
+	select {
+	case <-tool.fillerScheduled:
+	case <-time.After(time.Second):
+		t.Fatal("filler was not scheduled")
+	}
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("filler playout did not start")
+	}
+	if err := handle.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	releaseOnce.Do(func() { close(releaseWait) })
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("interrupted tool turn did not settle: %v", err)
+	}
+	if got := len(model.calls); got != 1 {
+		t.Fatalf("LLM Chat calls after interruption = %d, want no stale tool reply", got)
+	}
+}
+
+func TestPipelineAgentToolReplyContinuesAfterFillerPlayoutFailure(t *testing.T) {
+	playback := &fakePipelinePlaybackController{err: errors.New("playout failed")}
+	tool := &fillerPipelineTool{
+		fillerScheduled: make(chan *SpeechHandle, 1),
+	}
+	model, handle, cleanup := startFillerToolReplyTest(t, tool, playback)
+	defer cleanup()
+
+	select {
+	case <-tool.fillerScheduled:
+	case <-time.After(time.Second):
+		t.Fatal("filler was not scheduled")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("tool reply deadlocked after filler playout failure: %v", err)
+	}
+	if got := len(model.calls); got != 2 {
+		t.Fatalf("LLM Chat calls after filler playout failure = %d, want 2", got)
+	}
+}
+
+func TestPipelineAgentToolReplyWaitsForAllQueuedSpeech(t *testing.T) {
+	firstRelease := make(chan struct{})
+	secondRelease := make(chan struct{})
+	playback := &sequencePipelinePlaybackController{
+		started: []chan struct{}{make(chan struct{}), make(chan struct{})},
+		release: []chan struct{}{firstRelease, secondRelease},
+	}
+	tool := &queuedSpeechPipelineTool{
+		speeches: make(chan *SpeechHandle, 2),
+		playback: playback,
+	}
+	llmModel := toolCallThenReplyLLM()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	pipeline := NewPipelineAgent(nil, nil, llmModel, &fakePipelineTTS{
+		streams: []*fakePipelineTTSStream{
+			{},
+			pipelineAudioStream(),
+			pipelineAudioStream(),
+			pipelineAudioStream(),
+		},
+	}, llm.NewChatContext())
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	pipeline.PublishAudio = func(context.Context, *model.AudioFrame) error { return nil }
+	session.Assistant = pipeline
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "search the knowledge base")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-tool.speeches:
+		case <-time.After(time.Second):
+			t.Fatalf("queued speech %d was not scheduled", i+1)
+		}
+	}
+	select {
+	case <-playback.started[0]:
+	case <-time.After(time.Second):
+		t.Fatal("first queued speech playout did not start")
+	}
+	close(firstRelease)
+	select {
+	case <-playback.started[1]:
+	case <-time.After(time.Second):
+		t.Fatal("second queued speech playout did not start")
+	}
+	if got := len(llmModel.calls); got != 1 {
+		t.Fatalf("LLM Chat calls while second queued speech is playing = %d, want 1", got)
+	}
+	close(secondRelease)
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("tool reply did not finish after queued speech: %v", err)
+	}
+	if got := len(llmModel.calls); got != 2 {
+		t.Fatalf("LLM Chat calls after queued speech = %d, want 2", got)
+	}
+}
+
 func TestPipelineAgentScheduledReplyIncludesUserMessageInInferenceContext(t *testing.T) {
 	pipelineCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -7216,6 +7395,107 @@ type fakePipelinePlaybackController struct {
 	respectContext bool
 }
 
+type sequencePipelinePlaybackController struct {
+	mu      sync.Mutex
+	started []chan struct{}
+	release []chan struct{}
+	calls   int
+}
+
+func (f *sequencePipelinePlaybackController) ClearBuffer() {}
+
+func (f *sequencePipelinePlaybackController) Flush() {}
+
+func (f *sequencePipelinePlaybackController) WaitForPlayout(ctx context.Context) (AudioPlaybackResult, error) {
+	f.mu.Lock()
+	index := f.calls
+	f.calls++
+	var started chan struct{}
+	var release chan struct{}
+	if index < len(f.started) {
+		started = f.started[index]
+	}
+	if index < len(f.release) {
+		release = f.release[index]
+	}
+	f.mu.Unlock()
+
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return AudioPlaybackResult{}, ctx.Err()
+		}
+	}
+	return AudioPlaybackResult{}, nil
+}
+
+func toolCallThenReplyLLM() *fakeGenerationLLM {
+	return &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{
+				ToolCalls: []llm.FunctionToolCall{{
+					Type:      "function",
+					Name:      "lookup",
+					CallID:    "call_lookup",
+					Arguments: `{}`,
+				}},
+			}}}},
+			&fakeGenerationLLMStream{chunks: []*llm.ChatChunk{{
+				Delta: &llm.ChoiceDelta{Content: "final knowledge answer"},
+			}}},
+		},
+	}
+}
+
+func pipelineAudioStream() *fakePipelineTTSStream {
+	return &fakePipelineTTSStream{frames: []*model.AudioFrame{{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}}
+}
+
+func startFillerToolReplyTest(
+	t *testing.T,
+	tool *fillerPipelineTool,
+	playback *fakePipelinePlaybackController,
+) (*fakeGenerationLLM, *SpeechHandle, func()) {
+	t.Helper()
+
+	llmModel := toolCallThenReplyLLM()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	tool.playback = playback
+
+	pipeline := NewPipelineAgent(nil, nil, llmModel, &fakePipelineTTS{
+		streams: []*fakePipelineTTSStream{
+			&fakePipelineTTSStream{},
+			pipelineAudioStream(),
+			pipelineAudioStream(),
+		},
+	}, llm.NewChatContext())
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	pipeline.PublishAudio = func(context.Context, *model.AudioFrame) error { return nil }
+	session.Assistant = pipeline
+
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+
+	handle, err := session.GenerateReply(context.Background(), "search the knowledge base")
+	if err != nil {
+		activity.Stop()
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	return llmModel, handle, activity.Stop
+}
+
 func (f *fakePipelinePlaybackController) ClearBuffer() {
 	f.clearCalls++
 }
@@ -7502,6 +7782,81 @@ type blockingPipelineTool struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type fillerPipelineTool struct {
+	fillerScheduled chan *SpeechHandle
+	playback        AudioPlaybackController
+}
+
+type queuedSpeechPipelineTool struct {
+	speeches chan *SpeechHandle
+	playback AudioPlaybackController
+}
+
+func (q *queuedSpeechPipelineTool) ID() string { return "lookup" }
+
+func (q *queuedSpeechPipelineTool) Name() string { return "lookup" }
+
+func (q *queuedSpeechPipelineTool) Description() string { return "" }
+
+func (q *queuedSpeechPipelineTool) Parameters() map[string]any { return nil }
+
+func (q *queuedSpeechPipelineTool) Execute(ctx context.Context, _ string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil {
+		return "", errors.New("missing run context")
+	}
+	runCtx.Session.SetAudioPlaybackController(q.playback)
+	for _, text := range []string{"first queued speech", "second queued speech"} {
+		handle, err := runCtx.Session.Say(ctx, text)
+		if err != nil {
+			return "", err
+		}
+		q.speeches <- handle
+	}
+	return "knowledge result", nil
+}
+
+func (f *fillerPipelineTool) ID() string { return "lookup" }
+
+func (f *fillerPipelineTool) Name() string { return "lookup" }
+
+func (f *fillerPipelineTool) Description() string { return "" }
+
+func (f *fillerPipelineTool) Parameters() map[string]any { return nil }
+
+func (f *fillerPipelineTool) Execute(ctx context.Context, _ string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil {
+		return "", errors.New("missing run context")
+	}
+
+	scheduled := make(chan struct{})
+	err := runCtx.WithFiller(ctx, FillerOptions{
+		SpeechSource: func(int) (*SpeechHandle, bool) {
+			runCtx.Session.SetAudioPlaybackController(f.playback)
+			handle, err := runCtx.Session.Say(ctx, "Filler is still playing.")
+			if err != nil {
+				return nil, false
+			}
+			f.fillerScheduled <- handle
+			close(scheduled)
+			return handle, true
+		},
+		Delay: 0,
+	}, func(ctx context.Context) error {
+		select {
+		case <-scheduled:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	return "knowledge result", nil
 }
 
 type countingPipelineTool struct {

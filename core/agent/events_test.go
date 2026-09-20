@@ -317,6 +317,32 @@ func TestRunContextWithFillerSaysAfterIdleDwell(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerCancelsPendingFireWhenWorkFinishes(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	speechEvents := session.SpeechCreatedEvents()
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	started := time.Now()
+	if err := runCtx.WithFiller(context.Background(), FillerOptions{
+		Text:  "should not be spoken",
+		Delay: time.Second,
+	}, func(context.Context) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("WithFiller error = %v, want nil", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 250*time.Millisecond {
+		t.Fatalf("WithFiller elapsed = %v, want prompt return before filler delay", elapsed)
+	}
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("fast tool created filler speech: %#v", ev)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
 func TestRunContextWithFillerResetsDwellWhenUserStartsSpeaking(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
