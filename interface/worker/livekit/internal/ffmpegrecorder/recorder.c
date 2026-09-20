@@ -54,7 +54,7 @@ static int rtp_mp4_mux_packets(rtp_mp4_writer *writer) {
 	return result == AVERROR(EAGAIN) || result == AVERROR_EOF ? 0 : result;
 }
 
-int rtp_mp4_open(const char *path, int sample_rate, rtp_mp4_writer **out) {
+int rtp_mp4_open(const char *path, int sample_rate, int bit_rate, rtp_mp4_writer **out) {
 	int result;
 	rtp_mp4_writer *writer = calloc(1, sizeof(*writer));
 	if (!writer) return AVERROR(ENOMEM);
@@ -80,7 +80,7 @@ int rtp_mp4_open(const char *path, int sample_rate, rtp_mp4_writer **out) {
 
 	writer->codec->sample_fmt = AV_SAMPLE_FMT_FLTP;
 	writer->codec->sample_rate = sample_rate;
-	writer->codec->bit_rate = 64000;
+	writer->codec->bit_rate = bit_rate;
 	writer->codec->time_base = (AVRational){1, sample_rate};
 	AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
 	if ((result = av_channel_layout_copy(&writer->codec->ch_layout, &stereo)) < 0) goto fail;

@@ -24,7 +24,7 @@ type Writer struct {
 	closed    bool
 }
 
-func New(outputPath string, sampleRate int) (*Writer, error) {
+func New(outputPath string, sampleRate, bitRate int) (*Writer, error) {
 	configureLoggingOnce.Do(func() {
 		C.rtp_mp4_configure_logging()
 	})
@@ -33,7 +33,7 @@ func New(outputPath string, sampleRate int) (*Writer, error) {
 	defer C.free(unsafe.Pointer(path))
 
 	var writer *C.rtp_mp4_writer
-	frameSize := C.rtp_mp4_open(path, C.int(sampleRate), &writer)
+	frameSize := C.rtp_mp4_open(path, C.int(sampleRate), C.int(bitRate), &writer)
 	if frameSize < 0 {
 		return nil, ffmpegError("create MP4/AAC writer", frameSize)
 	}

@@ -10,5 +10,5 @@ const (
 )
 
 func newRecordingWriter(outputPath string, sampleRate int) (recordingWriter, error) {
-	return ffmpegrecorder.New(outputPath, sampleRate)
+	return ffmpegrecorder.New(outputPath, sampleRate, 64000)
 }
