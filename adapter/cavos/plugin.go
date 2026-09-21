@@ -2,6 +2,6 @@ package cavos
 
 const (
 	PluginTitle   = "rtp-agent.plugins.cavos"
-	PluginVersion = "v0.8.5"
+	PluginVersion = "v0.8.6"
 	PluginPackage = "rtp-agent.plugins.cavos"
 )
