@@ -343,6 +343,38 @@ func TestRunContextWithFillerCancelsPendingFireWhenWorkFinishes(t *testing.T) {
 	}
 }
 
+func TestRunContextWithFillerUnsubscribesStateEventsWhenWorkFinishes(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	runCtx := NewRunContext(session, NewSpeechHandle(true, DefaultInputDetails()), &llm.FunctionCall{Name: "lookup"})
+
+	session.mu.Lock()
+	agentSubsBefore, userSubsBefore := len(session.agentStateSubs), len(session.userStateSubs)
+	session.mu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		if err := runCtx.WithFiller(context.Background(), FillerOptions{
+			Text:  "should not be spoken",
+			Delay: time.Second,
+		}, func(context.Context) error {
+			return nil
+		}); err != nil {
+			t.Fatalf("WithFiller error = %v, want nil", err)
+		}
+	}
+
+	session.mu.Lock()
+	agentSubsAfter, userSubsAfter := len(session.agentStateSubs), len(session.userStateSubs)
+	session.mu.Unlock()
+	if agentSubsAfter != agentSubsBefore {
+		t.Fatalf("agent state subscribers = %d after three fillers, want %d", agentSubsAfter, agentSubsBefore)
+	}
+	if userSubsAfter != userSubsBefore {
+		t.Fatalf("user state subscribers = %d after three fillers, want %d", userSubsAfter, userSubsBefore)
+	}
+}
+
 func TestRunContextWithFillerResetsDwellWhenUserStartsSpeaking(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

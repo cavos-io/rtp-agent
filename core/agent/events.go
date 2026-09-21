@@ -657,8 +657,10 @@ func (s *runContextFillerScheduler) run(ctx context.Context) {
 	if s == nil || s.runCtx == nil || s.runCtx.Session == nil {
 		return
 	}
-	agentEvents := s.runCtx.Session.AgentStateChangedEvents()
-	userEvents := s.runCtx.Session.UserStateChangedEvents()
+	agentEvents, unsubscribeAgent := s.runCtx.Session.SubscribeAgentStateChangedEvents()
+	defer unsubscribeAgent()
+	userEvents, unsubscribeUser := s.runCtx.Session.SubscribeUserStateChangedEvents()
+	defer unsubscribeUser()
 	created := 0
 	for {
 		if err := s.runCtx.Session.WaitForInactive(ctx); err != nil {
