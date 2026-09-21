@@ -2,6 +2,6 @@ package anthropic
 
 const (
 	PluginTitle   = "rtp-agent.plugins.anthropic"
-	PluginVersion = "v0.8.5"
+	PluginVersion = "v0.8.6"
 	PluginPackage = "rtp-agent.plugins.anthropic"
 )
