@@ -2,6 +2,6 @@ package nvidia
 
 const (
 	PluginTitle   = "rtp-agent.plugins.nvidia"
-	PluginVersion = "v0.8.6"
+	PluginVersion = "v0.8.7"
 	PluginPackage = "rtp-agent.plugins.nvidia"
 )
