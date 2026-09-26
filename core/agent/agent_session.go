@@ -2495,8 +2495,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 
 	assistant := s.ensureAssistantLocked()
+
+	startupTTS := s.TTS
 	if pipeline, ok := assistant.(*PipelineAgent); ok {
 		pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
+		startupTTS = pipeline.tts
 	}
 	agent := s.Agent
 	avatar := agent.GetAgent().Avatar
@@ -2529,6 +2532,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}()
 
 	s.UpdateAgentState(AgentStateInitializing)
+	tts.Prewarm(startupTTS)
 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {

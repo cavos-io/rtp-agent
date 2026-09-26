@@ -1627,6 +1627,61 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartPrewarmsEffectivePipelineTTS(t *testing.T) {
+	sessionTTS := newPrewarmTrackingTTS()
+	pipelineTTS := newPrewarmTrackingTTS()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = sessionTTS
+	session.Assistant = NewPipelineAgent(nil, nil, nil, pipelineTTS, nil)
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Stop(context.Background()) })
+
+	if got := pipelineTTS.prewarmCallCount(); got != 1 {
+		t.Fatalf("pipeline TTS Prewarm calls = %d, want 1", got)
+	}
+	if got := sessionTTS.prewarmCallCount(); got != 0 {
+		t.Fatalf("session TTS Prewarm calls = %d, want 0", got)
+	}
+}
+
+func TestAgentSessionStartPrewarmsTTSBeforeAssistantStart(t *testing.T) {
+	provider := newPrewarmTrackingTTS()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = provider
+	session.Assistant = &startupTTSRequestAssistant{provider: provider}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Stop(context.Background()) })
+
+	if provider.requestedBeforePrewarm() {
+		t.Fatal("assistant requested TTS before Prewarm")
+	}
+}
+
+func TestAgentSessionRepeatedStartDoesNotPrewarmTTSAgain(t *testing.T) {
+	provider := newPrewarmTrackingTTS()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.TTS = provider
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("first Start error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Stop(context.Background()) })
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("second Start error = %v", err)
+	}
+
+	if got := provider.prewarmCallCount(); got != 1 {
+		t.Fatalf("Prewarm calls = %d, want 1", got)
+	}
+}
+
 func TestAgentSessionStartRecordsInitialAgentHandoffBeforeConfiguration(t *testing.T) {
 	agent := NewAgent("be helpful")
 	agent.ID = "assistant"
@@ -2026,6 +2081,58 @@ func (f *fakeSessionAssistant) Start(context.Context, *AgentSession) error { ret
 func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 func (f *fakeSessionAssistant) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
+}
+
+type prewarmTrackingTTS struct {
+	*fakePipelineTTS
+
+	mu                   sync.Mutex
+	prewarmCalls         int
+	requestBeforePrewarm bool
+}
+
+func newPrewarmTrackingTTS() *prewarmTrackingTTS {
+	return &prewarmTrackingTTS{fakePipelineTTS: &fakePipelineTTS{}}
+}
+
+func (t *prewarmTrackingTTS) Prewarm() {
+	t.mu.Lock()
+	t.prewarmCalls++
+	t.mu.Unlock()
+}
+
+func (t *prewarmTrackingTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	t.mu.Lock()
+	if t.prewarmCalls == 0 {
+		t.requestBeforePrewarm = true
+	}
+	t.mu.Unlock()
+	return t.fakePipelineTTS.Stream(ctx)
+}
+
+func (t *prewarmTrackingTTS) prewarmCallCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.prewarmCalls
+}
+
+func (t *prewarmTrackingTTS) requestedBeforePrewarm() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.requestBeforePrewarm
+}
+
+type startupTTSRequestAssistant struct {
+	fakeSessionAssistant
+	provider tts.TTS
+}
+
+func (a *startupTTSRequestAssistant) Start(ctx context.Context, _ *AgentSession) error {
+	stream, err := a.provider.Stream(ctx)
+	if stream != nil {
+		_ = stream.Close()
+	}
+	return err
 }
 
 type blockingStartSessionAssistant struct {

@@ -82,6 +82,76 @@ func TestTTSPrewarmDefaultNoop(t *testing.T) {
 	Prewarm(provider)
 }
 
+func TestTTSPrewarmFollowsWrappers(t *testing.T) {
+	tests := []struct {
+		name string
+		wrap func(TTS) TTS
+	}{
+		{
+			name: "single wrapper",
+			wrap: func(provider TTS) TTS {
+				return &metadataWrapperTTS{TTS: provider}
+			},
+		},
+		{
+			name: "nested wrappers",
+			wrap: func(provider TTS) TTS {
+				return &metadataWrapperTTS{TTS: &metadataWrapperTTS{TTS: provider}}
+			},
+		},
+		{
+			name: "non-comparable value wrapper",
+			wrap: func(provider TTS) TTS {
+				return nonComparableMetadataWrapperTTS{TTS: provider, values: []string{"wrapped"}}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &prewarmMetadataTTS{}
+
+			Prewarm(test.wrap(provider))
+
+			if provider.prewarmCalls != 1 {
+				t.Fatalf("Prewarm calls = %d, want 1", provider.prewarmCalls)
+			}
+		})
+	}
+}
+
+func TestTTSPrewarmStopsAtFirstCapableWrapper(t *testing.T) {
+	provider := &prewarmMetadataTTS{}
+	wrapper := &prewarmMetadataWrapperTTS{TTS: provider}
+
+	Prewarm(wrapper)
+
+	if wrapper.prewarmCalls != 1 {
+		t.Fatalf("wrapper Prewarm calls = %d, want 1", wrapper.prewarmCalls)
+	}
+	if provider.prewarmCalls != 0 {
+		t.Fatalf("inner Prewarm calls = %d, want 0", provider.prewarmCalls)
+	}
+}
+
+func TestTTSPrewarmStopsAtWrapperCycle(t *testing.T) {
+	first := &metadataWrapperTTS{}
+	second := &metadataWrapperTTS{TTS: first}
+	first.TTS = second
+	done := make(chan struct{})
+
+	go func() {
+		Prewarm(first)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Prewarm did not stop at wrapper cycle")
+	}
+}
+
 func TestTTSCloseDefaultNoop(t *testing.T) {
 	provider := &metadataDefaultsTTS{}
 
@@ -799,6 +869,13 @@ type metadataWrapperTTS struct {
 
 func (m *metadataWrapperTTS) Unwrap() TTS { return m.TTS }
 
+type nonComparableMetadataWrapperTTS struct {
+	TTS
+	values []string
+}
+
+func (m nonComparableMetadataWrapperTTS) Unwrap() TTS { return m.TTS }
+
 type metadataOverrideWrapperTTS struct {
 	TTS
 	model    string
@@ -810,6 +887,22 @@ func (m *metadataOverrideWrapperTTS) Model() string { return m.model }
 func (m *metadataOverrideWrapperTTS) Provider() string { return m.provider }
 
 func (m *metadataOverrideWrapperTTS) Unwrap() TTS { return m.TTS }
+
+type prewarmMetadataTTS struct {
+	metadataDefaultsTTS
+	prewarmCalls int
+}
+
+func (m *prewarmMetadataTTS) Prewarm() { m.prewarmCalls++ }
+
+type prewarmMetadataWrapperTTS struct {
+	TTS
+	prewarmCalls int
+}
+
+func (m *prewarmMetadataWrapperTTS) Prewarm() { m.prewarmCalls++ }
+
+func (m *prewarmMetadataWrapperTTS) Unwrap() TTS { return m.TTS }
 
 type closableMetadataTTS struct {
 	metadataDefaultsTTS

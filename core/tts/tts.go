@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -183,8 +184,32 @@ func Provider(t TTS) string {
 }
 
 func Prewarm(t TTS) {
-	if provider, ok := t.(prewarmProviderTTS); ok {
-		provider.Prewarm()
+	// ponytail: bounds non-comparable wrapper cycles; raise if real chains approach this depth.
+	const maxUnwrapDepth = 100
+
+	visited := make(map[TTS]struct{})
+
+	for depth := 0; t != nil && depth < maxUnwrapDepth; depth++ {
+		if reflect.TypeOf(t).Comparable() {
+			if _, ok := visited[t]; ok {
+				return
+			}
+
+			visited[t] = struct{}{}
+		}
+
+		if provider, ok := t.(prewarmProviderTTS); ok {
+			provider.Prewarm()
+
+			return
+		}
+
+		wrapper, ok := t.(unwrapProviderTTS)
+		if !ok {
+			return
+		}
+
+		t = wrapper.Unwrap()
 	}
 }
 
