@@ -2065,7 +2065,14 @@ func TestAzureSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse websocket URL: %v", err)
 	}
-	conn, _, err := websocket.NewClient(clientConn, wsURL, http.Header{}, 1024, 1024)
+	d := websocket.Dialer{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		NetDial: func(net, addr string) (net.Conn, error) {
+			return clientConn, nil
+		},
+	}
+	conn, _, err := d.Dial(wsURL.String(), http.Header{})
 	if err != nil {
 		t.Fatalf("NewClient error = %v", err)
 	}
@@ -3194,27 +3201,39 @@ func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
 	}
 }
 
-func TestAzureTTSRequestEscapesTextForReferenceSSML(t *testing.T) {
-	provider, err := NewAzureTTS("key", "eastus", "en-US-AvaNeural")
-	if err != nil {
-		t.Fatalf("NewAzureTTS error = %v", err)
+func TestAzureTTSRequestPassesInputThrough(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+		opts  []AzureTTSOption
+	}{
+		{name: "plain", input: "one < two & three", want: "one < two & three"},
+		{
+			name:  "prosody",
+			input: `<phoneme alphabet="ipa" ph="wɜːd">word</phoneme>`,
+			want:  `<prosody rate="fast"><phoneme alphabet="ipa" ph="wɜːd">word</phoneme></prosody>`,
+			opts:  []AzureTTSOption{WithAzureTTSProsody(AzureTTSProsody{Rate: "fast"})},
+		},
 	}
-
-	req, err := buildAzureTTSRequest(context.Background(), provider, "one < two & three")
-	if err != nil {
-		t.Fatalf("buildAzureTTSRequest error = %v", err)
-	}
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	bodyText := string(body)
-
-	if strings.Contains(bodyText, "one < two & three") {
-		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
-	}
-	if !strings.Contains(bodyText, "one &lt; two &amp; three") {
-		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider, err := NewAzureTTSWithOptions("key", "eastus", "en-US-AvaNeural", test.opts...)
+			if err != nil {
+				t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+			}
+			req, err := buildAzureTTSRequest(context.Background(), provider, test.input)
+			if err != nil {
+				t.Fatalf("buildAzureTTSRequest error = %v", err)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if !strings.Contains(string(body), test.want) {
+				t.Fatalf("SSML body = %s, want input %q", body, test.want)
+			}
+		})
 	}
 }
 
