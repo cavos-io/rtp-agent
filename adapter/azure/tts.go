@@ -3,7 +3,6 @@ package azure
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -413,7 +412,6 @@ func azureTTSAllowed(value string, allowed ...string) bool {
 
 func buildAzureTTSSSML(t *TTS, language string, text string) string {
 	var b strings.Builder
-	escapedText := azureTTSEscapeText(text)
 	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
 	b.WriteString(fmt.Sprintf(`<voice name="%s">`, t.voice))
 	if t.lexiconURISet {
@@ -438,23 +436,15 @@ func buildAzureTTSSSML(t *TTS, language string, text string) string {
 			b.WriteString(fmt.Sprintf(` pitch="%s"`, t.prosody.Pitch))
 		}
 		b.WriteString(">")
-		b.WriteString(escapedText)
+		b.WriteString(text)
 		b.WriteString("</prosody>")
 	} else {
-		b.WriteString(escapedText)
+		b.WriteString(text)
 	}
 	if t.styleSet {
 		b.WriteString("</mstts:express-as>")
 	}
 	b.WriteString("</voice></speak>")
-	return b.String()
-}
-
-func azureTTSEscapeText(text string) string {
-	var b strings.Builder
-	if err := xml.EscapeText(&b, []byte(text)); err != nil {
-		return text
-	}
 	return b.String()
 }
 
