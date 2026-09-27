@@ -2,6 +2,6 @@ package ultravox
 
 const (
 	PluginTitle   = "rtp-agent.plugins.ultravox"
-	PluginVersion = "v0.8.7"
+	PluginVersion = "v0.8.8"
 	PluginPackage = "rtp-agent.plugins.ultravox"
 )
