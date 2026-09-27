@@ -1083,11 +1083,15 @@ func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
 		return
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if s.state == nil {
 		s.state = &openAIRealtimeSTTMessageState{}
 	}
 	s.state.language = language
-	if s.closed || s.conn == nil || s.owner == nil {
+	if s.conn == nil || s.owner == nil {
 		s.mu.Unlock()
 		return
 	}
@@ -1158,6 +1162,13 @@ func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
 	case s.errCh <- err:
 	default:
 	}
+}
+
+func (s *openAIRealtimeSTTStream) terminateWithError(err error) {
+	s.mu.Lock()
+	s.closeAfterTerminalFailureLocked()
+	s.sendErrorLocked(err)
+	s.mu.Unlock()
 }
 
 func (s *openAIRealtimeSTTStream) sendEvent(event *stt.SpeechEvent) bool {
@@ -1263,6 +1274,11 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 		closed := s.closed
 		s.mu.Unlock()
 		if closed {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+			}
 			return nil, io.EOF
 		}
 		return nil, s.ctx.Err()
@@ -1291,7 +1307,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				if s.isClosed() || s.ctx.Err() != nil {
 					return
 				}
-				s.errCh <- reconnectErr
+				s.terminateWithError(reconnectErr)
 				return
 			}
 			connectedAt = time.Now()
@@ -1309,17 +1325,17 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 					if s.isClosed() || s.ctx.Err() != nil {
 						return
 					}
-					s.errCh <- reconnectErr
+					s.terminateWithError(reconnectErr)
 					return
 				}
 				connectedAt = time.Now()
 				continue
 			}
 			if errors.As(err, &apiErr) && s.owner != nil && s.owner.connect.MaxRetry > 0 {
-				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", providerErrorRetries))
+				s.terminateWithError(llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", providerErrorRetries)))
 				return
 			}
-			s.errCh <- err
+			s.terminateWithError(err)
 			return
 		}
 		for _, event := range events {
@@ -1333,7 +1349,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				if s.isClosed() || s.ctx.Err() != nil {
 					return
 				}
-				s.errCh <- reconnectErr
+				s.terminateWithError(reconnectErr)
 				return
 			}
 			connectedAt = time.Now()

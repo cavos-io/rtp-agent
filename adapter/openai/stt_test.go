@@ -1215,9 +1215,16 @@ func TestOpenAISTTStreamReturnsAPIConnectionErrorWhenReconnectFails(t *testing.T
 	if connectionErr.Message != "redial refused" {
 		t.Fatalf("APIConnectionError message = %q, want redial refused", connectionErr.Message)
 	}
+	realtimeStream := stream.(*openAIRealtimeSTTStream)
+	realtimeStream.mu.Lock()
+	closed := realtimeStream.closed
+	realtimeStream.mu.Unlock()
+	if !closed {
+		t.Fatal("stream remained open after terminal reconnect failure")
+	}
 
 	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
-	if got := stream.(*openAIRealtimeSTTStream).state.language; got != "en" {
+	if got := realtimeStream.state.language; got != "en" {
 		t.Fatalf("closed stream language = %q, want unchanged after provider update", got)
 	}
 }
