@@ -41,12 +41,18 @@ const (
 )
 
 type STT struct {
+	migrationMu            sync.Mutex
+	updateMu               sync.Mutex
 	mu                     sync.Mutex
+	reconnects             sync.WaitGroup
 	streams                map[*googleSTTStream]struct{}
 	client                 googleSpeechClient
 	clientV2               googleSpeechV2Client
-	newClient              func(context.Context) (googleSpeechClient, error)
-	newClientV2            func(context.Context) (googleSpeechV2Client, error)
+	newClient              func(context.Context, string) (googleSpeechClient, error)
+	newClientV2            func(context.Context, string) (googleSpeechV2Client, error)
+	clientGeneration       uint64
+	retirements            map[*googleSTTClientRetirement]struct{}
+	retirementErrors       []error
 	closed                 bool
 	model                  string
 	language               string
@@ -79,11 +85,38 @@ type STT struct {
 type googleSpeechClient interface {
 	StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error)
 	Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error)
+	Close() error
 }
 
 type googleSpeechV2Client interface {
 	StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error)
 	Recognize(ctx context.Context, req *speechv2pb.RecognizeRequest, opts ...gax.CallOption) (*speechv2pb.RecognizeResponse, error)
+	Close() error
+}
+
+type googleSTTClientRetirement struct {
+	once     sync.Once
+	client   googleSpeechClient
+	clientV2 googleSpeechV2Client
+	err      error
+	reported bool
+}
+
+func (r *googleSTTClientRetirement) close() error {
+	if r == nil {
+		return nil
+	}
+	r.once.Do(func() {
+		var clientErr, clientV2Err error
+		if r.client != nil {
+			clientErr = r.client.Close()
+		}
+		if r.clientV2 != nil {
+			clientV2Err = r.clientV2.Close()
+		}
+		r.err = errors.Join(clientErr, clientV2Err)
+	})
+	return r.err
 }
 
 type STTOption func(*STT)
@@ -250,15 +283,15 @@ func NewSTT(credentialsFile string, providerOpts ...STTOption) (*STT, error) {
 		}
 		provider.project = project
 	}
-	provider.newClient = func(ctx context.Context) (googleSpeechClient, error) {
-		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+	provider.newClient = func(ctx context.Context, location string) (googleSpeechClient, error) {
+		clientOpts, err := googleSTTClientOptionsForLocation(credentialsFile, location)
 		if err != nil {
 			return nil, err
 		}
 		return speech.NewClient(ctx, clientOpts...)
 	}
-	provider.newClientV2 = func(ctx context.Context) (googleSpeechV2Client, error) {
-		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+	provider.newClientV2 = func(ctx context.Context, location string) (googleSpeechV2Client, error) {
+		clientOpts, err := googleSTTClientOptionsForLocation(credentialsFile, location)
 		if err != nil {
 			return nil, err
 		}
@@ -282,11 +315,15 @@ func (s *STT) initializeClient(ctx context.Context) error {
 }
 
 func googleSTTClientOptions(credentialsFile string, provider *STT) ([]option.ClientOption, error) {
+	return googleSTTClientOptionsForLocation(credentialsFile, provider.location)
+}
+
+func googleSTTClientOptionsForLocation(credentialsFile, location string) ([]option.ClientOption, error) {
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err
 	}
-	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
+	if endpoint := googleSTTEndpointForLocation(location); endpoint != "" {
 		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
 	}
 	return clientOpts, nil
@@ -334,11 +371,15 @@ func newGoogleSTTWithV2Client(client googleSpeechV2Client, opts ...STTOption) *S
 }
 
 func googleSTTEndpoint(s *STT) string {
-	if s.location == "global" {
+	return googleSTTEndpointForLocation(s.location)
+}
+
+func googleSTTEndpointForLocation(location string) string {
+	if location == "global" {
 		return ""
 	}
 
-	return s.location + "-speech.googleapis.com:443"
+	return location + "-speech.googleapis.com:443"
 }
 
 // Label returns the provider-specific STT label.
@@ -367,7 +408,15 @@ func (s *STT) UpdateOptions(opts ...STTOption) error {
 	if len(opts) == 0 {
 		return nil
 	}
+	s.migrationMu.Lock()
+	s.updateMu.Lock()
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.updateMu.Unlock()
+		s.migrationMu.Unlock()
+		return io.ErrClosedPipe
+	}
 	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language
 	oldDetectLanguage := s.detectLanguage
@@ -380,6 +429,8 @@ func (s *STT) UpdateOptions(opts ...STTOption) error {
 	if err := googleSTTValidateAdaptation(s); err != nil {
 		previous.restore(s)
 		s.mu.Unlock()
+		s.updateMu.Unlock()
+		s.migrationMu.Unlock()
 		return err
 	}
 	minConfidence := s.minConfidence
@@ -389,11 +440,16 @@ func (s *STT) UpdateOptions(opts ...STTOption) error {
 	alternativeLanguagesChanged := !googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages)
 	includeAlternativeLanguages := false
 	includeAlternativeLanguagesSet := false
+	var retiredClient googleSpeechClient
+	var retiredClientV2 googleSpeechV2Client
 	if oldLocation != s.location {
+		s.clientGeneration++
 		if s.newClient != nil {
+			retiredClient = s.client
 			s.client = nil
 		}
 		if s.newClientV2 != nil {
+			retiredClientV2 = s.clientV2
 			s.clientV2 = nil
 		}
 	}
@@ -410,17 +466,57 @@ func (s *STT) UpdateOptions(opts ...STTOption) error {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	var retirement *googleSTTClientRetirement
+	if retiredClient != nil || retiredClientV2 != nil {
+		retirement = &googleSTTClientRetirement{client: retiredClient, clientV2: retiredClientV2}
+		if s.retirements == nil {
+			s.retirements = make(map[*googleSTTClientRetirement]struct{})
+		}
+		s.retirements[retirement] = struct{}{}
+	}
 	s.mu.Unlock()
 
+	var reconnects sync.WaitGroup
 	for _, stream := range streams {
 		stream.updateConfig(minConfidence, language, languageChanged, includeAlternativeLanguages, includeAlternativeLanguagesSet)
+		reconnects.Add(1)
+		s.reconnects.Add(1)
 		go func(stream *googleSTTStream) {
+			defer reconnects.Done()
+			defer s.reconnects.Done()
 			if err := stream.reconnectForUpdatedConfig(); err != nil {
 				stream.failWithError(err)
 			}
 		}(stream)
 	}
+	s.updateMu.Unlock()
+	if len(streams) == 0 {
+		if retirement != nil {
+			_ = s.closeRetirement(retirement)
+		}
+		s.migrationMu.Unlock()
+		return nil
+	}
+	go func() {
+		reconnects.Wait()
+		if retirement != nil {
+			_ = s.closeRetirement(retirement)
+		}
+		s.migrationMu.Unlock()
+	}()
 	return nil
+}
+
+func (s *STT) closeRetirement(retirement *googleSTTClientRetirement) error {
+	err := retirement.close()
+	s.mu.Lock()
+	delete(s.retirements, retirement)
+	if err != nil && !retirement.reported {
+		retirement.reported = true
+		s.retirementErrors = append(s.retirementErrors, err)
+	}
+	s.mu.Unlock()
+	return err
 }
 
 type googleSTTConfigState struct {
@@ -510,8 +606,14 @@ func (c googleSTTConfigState) restore(s *STT) {
 }
 
 func (s *STT) Close() error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
 	s.mu.Lock()
 	s.closed = true
+	client := s.client
+	clientV2 := s.clientV2
+	s.client = nil
+	s.clientV2 = nil
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -522,7 +624,30 @@ func (s *STT) Close() error {
 	for _, stream := range streams {
 		_ = stream.Close()
 	}
-	return nil
+	s.reconnects.Wait()
+	s.mu.Lock()
+	retirements := make([]*googleSTTClientRetirement, 0, len(s.retirements))
+	for retirement := range s.retirements {
+		retirements = append(retirements, retirement)
+	}
+	s.mu.Unlock()
+	var clientErr, clientV2Err error
+	if client != nil {
+		clientErr = client.Close()
+	}
+	if clientV2 != nil {
+		clientV2Err = clientV2.Close()
+	}
+	retirementErrs := make([]error, 0, len(retirements)+2)
+	retirementErrs = append(retirementErrs, clientErr, clientV2Err)
+	for _, retirement := range retirements {
+		_ = s.closeRetirement(retirement)
+	}
+	s.mu.Lock()
+	retirementErrs = append(retirementErrs, s.retirementErrors...)
+	s.retirementErrors = nil
+	s.mu.Unlock()
+	return errors.Join(retirementErrs...)
 }
 
 func (s *STT) isClosed() bool {
@@ -630,29 +755,60 @@ func (s *STT) newStreamingRecognizeStream(ctx context.Context, language string, 
 }
 
 func (s *STT) ensureClient(ctx context.Context) (googleSpeechClient, error) {
-	s.mu.Lock()
-	client := s.client
-	newClient := s.newClient
-	s.mu.Unlock()
-	if client != nil {
-		return client, nil
+	for {
+		s.mu.Lock()
+		client := s.client
+		newClient := s.newClient
+		closed := s.closed
+		generation := s.clientGeneration
+		location := s.location
+		s.mu.Unlock()
+		if closed {
+			return nil, io.ErrClosedPipe
+		}
+		if client != nil {
+			return client, nil
+		}
+		if newClient == nil {
+			return nil, errors.New("google STT v1 client is not configured")
+		}
+		clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+		client, err := newClient(clientCtx, location)
+		cancel()
+		if err != nil {
+			s.mu.Lock()
+			stale := generation != s.clientGeneration
+			closed = s.closed
+			s.mu.Unlock()
+			if closed {
+				return nil, io.ErrClosedPipe
+			}
+			if stale {
+				continue
+			}
+			return nil, err
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = client.Close()
+			return nil, io.ErrClosedPipe
+		}
+		if generation != s.clientGeneration {
+			s.mu.Unlock()
+			_ = client.Close()
+			continue
+		}
+		if s.client == nil {
+			s.client = client
+			s.mu.Unlock()
+			return client, nil
+		}
+		existing := s.client
+		s.mu.Unlock()
+		_ = client.Close()
+		return existing, nil
 	}
-	if newClient == nil {
-		return nil, errors.New("google STT v1 client is not configured")
-	}
-	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
-	defer cancel()
-	client, err := newClient(clientCtx)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	if s.client == nil {
-		s.client = client
-	}
-	client = s.client
-	s.mu.Unlock()
-	return client, nil
 }
 
 func (s *STT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
@@ -735,29 +891,60 @@ func (s *STT) setupTimeout() time.Duration {
 }
 
 func (s *STT) ensureClientV2(ctx context.Context) (googleSpeechV2Client, error) {
-	s.mu.Lock()
-	clientV2 := s.clientV2
-	newClientV2 := s.newClientV2
-	s.mu.Unlock()
-	if clientV2 != nil {
-		return clientV2, nil
+	for {
+		s.mu.Lock()
+		clientV2 := s.clientV2
+		newClientV2 := s.newClientV2
+		closed := s.closed
+		generation := s.clientGeneration
+		location := s.location
+		s.mu.Unlock()
+		if closed {
+			return nil, io.ErrClosedPipe
+		}
+		if clientV2 != nil {
+			return clientV2, nil
+		}
+		if newClientV2 == nil {
+			return nil, errors.New("google STT v2 client is not configured")
+		}
+		clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+		clientV2, err := newClientV2(clientCtx, location)
+		cancel()
+		if err != nil {
+			s.mu.Lock()
+			stale := generation != s.clientGeneration
+			closed = s.closed
+			s.mu.Unlock()
+			if closed {
+				return nil, io.ErrClosedPipe
+			}
+			if stale {
+				continue
+			}
+			return nil, err
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = clientV2.Close()
+			return nil, io.ErrClosedPipe
+		}
+		if generation != s.clientGeneration {
+			s.mu.Unlock()
+			_ = clientV2.Close()
+			continue
+		}
+		if s.clientV2 == nil {
+			s.clientV2 = clientV2
+			s.mu.Unlock()
+			return clientV2, nil
+		}
+		existing := s.clientV2
+		s.mu.Unlock()
+		_ = clientV2.Close()
+		return existing, nil
 	}
-	if newClientV2 == nil {
-		return nil, errors.New("google STT v2 client is not configured")
-	}
-	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
-	defer cancel()
-	clientV2, err := newClientV2(clientCtx)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	if s.clientV2 == nil {
-		s.clientV2 = clientV2
-	}
-	clientV2 = s.clientV2
-	s.mu.Unlock()
-	return clientV2, nil
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

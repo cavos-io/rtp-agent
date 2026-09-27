@@ -179,10 +179,10 @@ func TestGoogleSTTReportsReferenceMetricsMetadata(t *testing.T) {
 func TestGoogleSTTInitializeClientSkipsV1ForV2Model(t *testing.T) {
 	v2Client := &fakeGoogleV2SpeechClient{}
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
-	provider.newClient = func(context.Context) (googleSpeechClient, error) {
+	provider.newClient = func(context.Context, string) (googleSpeechClient, error) {
 		return nil, errors.New("v2 initialization must not create a v1 client")
 	}
-	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+	provider.newClientV2 = func(context.Context, string) (googleSpeechV2Client, error) {
 		return v2Client, nil
 	}
 
@@ -195,6 +195,226 @@ func TestGoogleSTTInitializeClientSkipsV1ForV2Model(t *testing.T) {
 	if provider.clientV2 != v2Client {
 		t.Fatal("v2 client was not initialized")
 	}
+}
+
+func TestGoogleSTTEnsureClientV2ClosesClientCreatedDuringShutdown(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil)
+	client := &fakeGoogleV2SpeechClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider.newClientV2 = func(context.Context, string) (googleSpeechV2Client, error) {
+		close(started)
+		<-release
+		return client, nil
+	}
+	type result struct {
+		client googleSpeechV2Client
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		got, err := provider.ensureClientV2(context.Background())
+		resultCh <- result{client: got, err: err}
+	}()
+
+	<-started
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(release)
+	got := <-resultCh
+
+	if got.client != nil {
+		t.Fatalf("client created during shutdown = %#v, want nil", got.client)
+	}
+	if !errors.Is(got.err, io.ErrClosedPipe) {
+		t.Fatalf("client creation error = %v, want io.ErrClosedPipe", got.err)
+	}
+	if client.closeCalls != 1 {
+		t.Fatalf("client close calls = %d, want 1", client.closeCalls)
+	}
+}
+
+func TestGoogleSTTEnsureClientClosesClientCreatedDuringShutdown(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil)
+	client := &fakeGoogleSpeechClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider.newClient = func(context.Context, string) (googleSpeechClient, error) {
+		close(started)
+		<-release
+		return client, nil
+	}
+	type result struct {
+		client googleSpeechClient
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		got, err := provider.ensureClient(context.Background())
+		resultCh <- result{client: got, err: err}
+	}()
+
+	<-started
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(release)
+	got := <-resultCh
+
+	if got.client != nil {
+		t.Fatalf("client created during shutdown = %#v, want nil", got.client)
+	}
+	if !errors.Is(got.err, io.ErrClosedPipe) {
+		t.Fatalf("client creation error = %v, want io.ErrClosedPipe", got.err)
+	}
+	if client.closeCalls != 1 {
+		t.Fatalf("client close calls = %d, want 1", client.closeCalls)
+	}
+}
+
+func TestGoogleSTTEnsureClientRejectsClientFromStaleLocation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil)
+	staleClient := &fakeGoogleSpeechClient{}
+	freshClient := &fakeGoogleSpeechClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var locations []string
+	provider.newClient = func(_ context.Context, location string) (googleSpeechClient, error) {
+		locations = append(locations, location)
+		if len(locations) == 1 {
+			close(started)
+			<-release
+			return staleClient, nil
+		}
+		return freshClient, nil
+	}
+	resultCh := make(chan googleSpeechClient, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		client, err := provider.ensureClient(context.Background())
+		resultCh <- client
+		errCh <- err
+	}()
+
+	<-started
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("europe-west1")); err != nil {
+		t.Fatalf("second UpdateOptions returned error: %v", err)
+	}
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("ensureClient returned error: %v", err)
+	}
+	if got := <-resultCh; got != freshClient {
+		t.Fatalf("ensureClient returned %#v, want fresh client", got)
+	}
+	if len(locations) != 2 || locations[0] != "global" || locations[1] != "europe-west1" {
+		t.Fatalf("client creation locations = %v, want [global europe-west1]", locations)
+	}
+	if staleClient.closeCalls != 1 {
+		t.Fatalf("stale client close calls = %d, want 1", staleClient.closeCalls)
+	}
+	if freshClient.closeCalls != 0 {
+		t.Fatalf("fresh client close calls = %d, want 0", freshClient.closeCalls)
+	}
+}
+
+func TestGoogleSTTEnsureClientV2RejectsClientFromStaleLocation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil)
+	staleClient := &fakeGoogleV2SpeechClient{}
+	freshClient := &fakeGoogleV2SpeechClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var locations []string
+	provider.newClientV2 = func(_ context.Context, location string) (googleSpeechV2Client, error) {
+		locations = append(locations, location)
+		if len(locations) == 1 {
+			close(started)
+			<-release
+			return staleClient, nil
+		}
+		return freshClient, nil
+	}
+	resultCh := make(chan googleSpeechV2Client, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		client, err := provider.ensureClientV2(context.Background())
+		resultCh <- client
+		errCh <- err
+	}()
+
+	<-started
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("europe-west1")); err != nil {
+		t.Fatalf("second UpdateOptions returned error: %v", err)
+	}
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("ensureClientV2 returned error: %v", err)
+	}
+	if got := <-resultCh; got != freshClient {
+		t.Fatalf("ensureClientV2 returned %#v, want fresh client", got)
+	}
+	if len(locations) != 2 || locations[0] != "global" || locations[1] != "europe-west1" {
+		t.Fatalf("client creation locations = %v, want [global europe-west1]", locations)
+	}
+	if staleClient.closeCalls != 1 {
+		t.Fatalf("stale client close calls = %d, want 1", staleClient.closeCalls)
+	}
+	if freshClient.closeCalls != 0 {
+		t.Fatalf("fresh client close calls = %d, want 0", freshClient.closeCalls)
+	}
+}
+
+func TestGoogleSTTCloseWaitsForLocationReconnectCleanup(t *testing.T) {
+	firstRelease := make(chan struct{})
+	oldClient := &fakeGoogleSpeechClient{
+		stream:       &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease},
+		streamCallCh: make(chan int, 1),
+	}
+	newClient := &fakeGoogleSpeechClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := newGoogleSTTWithClient(oldClient)
+	provider.newClient = func(context.Context, string) (googleSpeechClient, error) {
+		close(started)
+		<-release
+		return newClient, nil
+	}
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	<-started
+
+	closeCh := make(chan error, 1)
+	go func() { closeCh <- provider.Close() }()
+	select {
+	case err := <-closeCh:
+		t.Fatalf("Close returned before reconnect cleanup completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closeCh; err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if oldClient.closeCalls != 1 {
+		t.Fatalf("retired client close calls = %d, want 1", oldClient.closeCalls)
+	}
+	if newClient.closeCalls != 1 {
+		t.Fatalf("client created during shutdown close calls = %d, want 1", newClient.closeCalls)
+	}
+	close(firstRelease)
 }
 
 func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
@@ -763,7 +983,7 @@ func TestGoogleSTTRecognizeAppliesReferenceClientTimeout(t *testing.T) {
 	}
 	var clientCtx context.Context
 	provider := newGoogleSTTWithClient(nil)
-	provider.newClient = func(ctx context.Context) (googleSpeechClient, error) {
+	provider.newClient = func(ctx context.Context, _ string) (googleSpeechClient, error) {
 		clientCtx = ctx
 		return client, nil
 	}
@@ -890,7 +1110,7 @@ func TestGoogleSTTStreamV2AppliesReferenceClientTimeout(t *testing.T) {
 	client := &fakeGoogleV2SpeechClient{stream: streamClient}
 	var clientCtx context.Context
 	provider := newGoogleSTTWithV2Client(nil, WithGoogleSTTProject("voice-project"), WithGoogleSTTModel("chirp_3"))
-	provider.newClientV2 = func(ctx context.Context) (googleSpeechV2Client, error) {
+	provider.newClientV2 = func(ctx context.Context, _ string) (googleSpeechV2Client, error) {
 		clientCtx = ctx
 		return client, nil
 	}
@@ -3416,7 +3636,7 @@ func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testin
 		WithGoogleSTTModel("latest_long"),
 	)
 	var createCalls int
-	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+	provider.newClientV2 = func(context.Context, string) (googleSpeechV2Client, error) {
 		createCalls++
 		return v2Client, nil
 	}
@@ -3458,12 +3678,14 @@ func TestGoogleSTTUpdateOptionsRecreatesReferenceV2ClientOnLocationChange(t *tes
 	oldClient := &fakeGoogleV2SpeechClient{
 		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, oldExtraStream},
 		streamCallCh: make(chan int, 2),
+		closeCh:      make(chan struct{}, 1),
 	}
 	secondRelease := make(chan struct{})
 	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
 	newClient := &fakeGoogleV2SpeechClient{
 		stream:       secondStream,
 		streamCallCh: make(chan int, 1),
+		closeCh:      make(chan struct{}, 1),
 	}
 	provider := newGoogleSTTWithV2Client(
 		oldClient,
@@ -3471,7 +3693,7 @@ func TestGoogleSTTUpdateOptionsRecreatesReferenceV2ClientOnLocationChange(t *tes
 		WithGoogleSTTModel("chirp_3"),
 	)
 	createCalls := 0
-	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+	provider.newClientV2 = func(context.Context, string) (googleSpeechV2Client, error) {
 		createCalls++
 		return newClient, nil
 	}
@@ -3501,11 +3723,217 @@ func TestGoogleSTTUpdateOptionsRecreatesReferenceV2ClientOnLocationChange(t *tes
 	if oldClient.streamCalls != 1 {
 		t.Fatalf("old client stream calls = %d, want no reconnect on stale client", oldClient.streamCalls)
 	}
+	select {
+	case <-oldClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("old v2 client was not closed after location reconnect")
+	}
 	if got := secondStream.sent[0].GetRecognizer(); got != "projects/voice-project/locations/us-central1/recognizers/_" {
 		t.Fatalf("reconnected recognizer = %q, want updated location", got)
 	}
+	if oldClient.closeCalls != 1 {
+		t.Fatalf("old v2 client close calls = %d, want 1", oldClient.closeCalls)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close returned error: %v", err)
+	}
+	select {
+	case <-newClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("new v2 client was not closed during provider teardown")
+	}
+	if newClient.closeCalls != 1 {
+		t.Fatalf("new v2 client close calls = %d, want 1", newClient.closeCalls)
+	}
 	close(firstRelease)
 	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateOptionsRecreatesReferenceV1ClientOnLocationChange(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	oldClient := &fakeGoogleSpeechClient{
+		stream:       firstStream,
+		streamCallCh: make(chan int, 1),
+		closeCh:      make(chan struct{}, 1),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	newClient := &fakeGoogleSpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+		closeCh:      make(chan struct{}, 1),
+	}
+	provider := newGoogleSTTWithClient(oldClient)
+	provider.newClient = func(context.Context, string) (googleSpeechClient, error) {
+		return newClient, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	select {
+	case calls := <-newClient.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("new v1 client stream calls = %d, want 1", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for new v1 client reconnect after location update")
+	}
+	select {
+	case <-oldClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("old v1 client was not closed after location reconnect")
+	}
+	if oldClient.closeCalls != 1 {
+		t.Fatalf("old v1 client close calls = %d, want 1", oldClient.closeCalls)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close returned error: %v", err)
+	}
+	select {
+	case <-newClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("new v1 client was not closed during provider teardown")
+	}
+	if newClient.closeCalls != 1 {
+		t.Fatalf("new v1 client close calls = %d, want 1", newClient.closeCalls)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateOptionsSerializesActiveV1LocationMigrations(t *testing.T) {
+	oldRecvRelease := make(chan struct{})
+	oldClient := &fakeGoogleSpeechClient{stream: &fakeGoogleStreamingRecognizeClient{recvBlock: oldRecvRelease}, streamCallCh: make(chan int, 1), closeCh: make(chan struct{}, 1)}
+	firstRecvRelease := make(chan struct{})
+	firstBlock := make(chan struct{})
+	firstRelease := make(chan struct{})
+	firstClient := &fakeGoogleSpeechClient{stream: &fakeGoogleStreamingRecognizeClient{recvBlock: firstRecvRelease}, streamCallCh: make(chan int, 1), streamBlock: firstBlock, streamRelease: firstRelease, closeCh: make(chan struct{}, 1)}
+	secondRecvRelease := make(chan struct{})
+	secondClient := &fakeGoogleSpeechClient{stream: &fakeGoogleStreamingRecognizeClient{recvBlock: secondRecvRelease}, streamCallCh: make(chan int, 1)}
+	provider := newGoogleSTTWithClient(oldClient)
+	provider.newClient = func(_ context.Context, location string) (googleSpeechClient, error) {
+		switch location {
+		case "us-central1":
+			return firstClient, nil
+		case "europe-west1":
+			return secondClient, nil
+		default:
+			return nil, fmt.Errorf("unexpected location %q", location)
+		}
+	}
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("first UpdateOptions returned error: %v", err)
+	}
+	<-firstBlock
+	secondUpdate := make(chan error, 1)
+	go func() { secondUpdate <- provider.UpdateOptions(WithGoogleSTTLocation("europe-west1")) }()
+	select {
+	case err := <-secondUpdate:
+		t.Fatalf("second UpdateOptions returned before first reconnect completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(firstRelease)
+	if err := <-secondUpdate; err != nil {
+		t.Fatalf("second UpdateOptions returned error: %v", err)
+	}
+	select {
+	case <-secondClient.streamCallCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for second location reconnect")
+	}
+	select {
+	case <-firstClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first location client was not retired after second reconnect")
+	}
+	if oldClient.closeCalls != 1 || firstClient.closeCalls != 1 {
+		t.Fatalf("retired client close calls = old:%d first:%d, want 1 each", oldClient.closeCalls, firstClient.closeCalls)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(oldRecvRelease)
+	close(firstRecvRelease)
+	close(secondRecvRelease)
+}
+
+func TestGoogleSTTUpdateOptionsSerializesActiveV2LocationMigrations(t *testing.T) {
+	oldRecvRelease := make(chan struct{})
+	oldClient := &fakeGoogleV2SpeechClient{stream: &fakeGoogleV2StreamingRecognizeClient{recvBlock: oldRecvRelease}, streamCallCh: make(chan int, 1), closeCh: make(chan struct{}, 1)}
+	firstRecvRelease := make(chan struct{})
+	firstBlock := make(chan struct{})
+	firstRelease := make(chan struct{})
+	firstClient := &fakeGoogleV2SpeechClient{stream: &fakeGoogleV2StreamingRecognizeClient{recvBlock: firstRecvRelease}, streamCallCh: make(chan int, 1), streamBlock: firstBlock, streamRelease: firstRelease, closeCh: make(chan struct{}, 1)}
+	secondRecvRelease := make(chan struct{})
+	secondClient := &fakeGoogleV2SpeechClient{stream: &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRecvRelease}, streamCallCh: make(chan int, 1)}
+	provider := newGoogleSTTWithV2Client(oldClient, WithGoogleSTTModel("chirp_2"), WithGoogleSTTProject("voice-project"))
+	provider.newClientV2 = func(_ context.Context, location string) (googleSpeechV2Client, error) {
+		switch location {
+		case "us-central1":
+			return firstClient, nil
+		case "europe-west1":
+			return secondClient, nil
+		default:
+			return nil, fmt.Errorf("unexpected location %q", location)
+		}
+	}
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("first UpdateOptions returned error: %v", err)
+	}
+	<-firstBlock
+	secondUpdate := make(chan error, 1)
+	go func() { secondUpdate <- provider.UpdateOptions(WithGoogleSTTLocation("europe-west1")) }()
+	select {
+	case err := <-secondUpdate:
+		t.Fatalf("second UpdateOptions returned before first reconnect completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(firstRelease)
+	if err := <-secondUpdate; err != nil {
+		t.Fatalf("second UpdateOptions returned error: %v", err)
+	}
+	select {
+	case <-secondClient.streamCallCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for second location reconnect")
+	}
+	select {
+	case <-firstClient.closeCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first location client was not retired after second reconnect")
+	}
+	if oldClient.closeCalls != 1 || firstClient.closeCalls != 1 {
+		t.Fatalf("retired client close calls = old:%d first:%d, want 1 each", oldClient.closeCalls, firstClient.closeCalls)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(oldRecvRelease)
+	close(firstRecvRelease)
+	close(secondRecvRelease)
 }
 
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
@@ -4502,6 +4930,26 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTProviderCloseClosesClientsOnce(t *testing.T) {
+	v1Client := &fakeGoogleSpeechClient{}
+	v2Client := &fakeGoogleV2SpeechClient{}
+	provider := newGoogleSTTWithClient(v1Client)
+	provider.clientV2 = v2Client
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+	if v1Client.closeCalls != 1 {
+		t.Fatalf("v1 client close calls = %d, want 1", v1Client.closeCalls)
+	}
+	if v2Client.closeCalls != 1 {
+		t.Fatalf("v2 client close calls = %d, want 1", v2Client.closeCalls)
+	}
+}
+
 func TestGoogleSTTStreamCloseSuppressesProviderCloseError(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{closeErr: errors.New("close failed")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
@@ -5355,6 +5803,8 @@ type fakeGoogleSpeechClient struct {
 	streamErr         error
 	streamErrs        []error
 	streamCallCh      chan int
+	streamBlock       chan struct{}
+	streamRelease     chan struct{}
 	streamCalls       int
 	streamingOpts     []gax.CallOption
 	recognizeRequest  *speechpb.RecognizeRequest
@@ -5362,6 +5812,8 @@ type fakeGoogleSpeechClient struct {
 	recognizeOpts     []gax.CallOption
 	recognizeResponse *speechpb.RecognizeResponse
 	recognizeErr      error
+	closeCalls        int
+	closeCh           chan struct{}
 }
 
 func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error) {
@@ -5369,6 +5821,10 @@ func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ..
 	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
+	}
+	if c.streamBlock != nil {
+		close(c.streamBlock)
+		<-c.streamRelease
 	}
 	err := c.streamErr
 	if len(c.streamErrs) > 0 {
@@ -5390,10 +5846,23 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 	return c.recognizeResponse, c.recognizeErr
 }
 
+func (c *fakeGoogleSpeechClient) Close() error {
+	c.closeCalls++
+	if c.closeCh != nil {
+		select {
+		case c.closeCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
 type fakeGoogleV2SpeechClient struct {
 	streams              []speechv2pb.Speech_StreamingRecognizeClient
 	stream               speechv2pb.Speech_StreamingRecognizeClient
 	streamCallCh         chan int
+	streamBlock          chan struct{}
+	streamRelease        chan struct{}
 	blockedStreamCtxDone chan error
 	streamCalls          int
 	streamErr            error
@@ -5403,6 +5872,8 @@ type fakeGoogleV2SpeechClient struct {
 	recognizeOpts        []gax.CallOption
 	recognizeResponse    *speechv2pb.RecognizeResponse
 	recognizeErr         error
+	closeCalls           int
+	closeCh              chan struct{}
 }
 
 func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error) {
@@ -5410,6 +5881,10 @@ func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts 
 	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
+	}
+	if c.streamBlock != nil {
+		close(c.streamBlock)
+		<-c.streamRelease
 	}
 	if c.blockedStreamCtxDone != nil {
 		<-ctx.Done()
@@ -5429,6 +5904,17 @@ func (c *fakeGoogleV2SpeechClient) Recognize(ctx context.Context, req *speechv2p
 	c.recognizeRequest = req
 	c.recognizeOpts = append([]gax.CallOption(nil), opts...)
 	return c.recognizeResponse, c.recognizeErr
+}
+
+func (c *fakeGoogleV2SpeechClient) Close() error {
+	c.closeCalls++
+	if c.closeCh != nil {
+		select {
+		case c.closeCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil
 }
 
 func googleSTTCallOptionTimeout(opts []gax.CallOption) time.Duration {
