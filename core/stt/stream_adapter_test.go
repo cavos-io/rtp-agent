@@ -438,6 +438,145 @@ func TestStreamAdapterCloseClosesVADStream(t *testing.T) {
 	}
 }
 
+type closableStreamAdapterVAD struct {
+	*fakeStreamAdapterVAD
+	closes  int
+	onClose func() error
+}
+
+func (v *closableStreamAdapterVAD) Close() error {
+	v.closes++
+	if v.onClose != nil {
+		return v.onClose()
+	}
+	return nil
+}
+
+func TestStreamAdapterVADOwnership(t *testing.T) {
+	v := &closableStreamAdapterVAD{fakeStreamAdapterVAD: &fakeStreamAdapterVAD{}}
+	if err := NewStreamAdapter(&fakeStreamAdapterSTT{}, v).Close(); err != nil {
+		t.Fatal(err)
+	}
+	if v.closes != 0 {
+		t.Fatalf("default adapter closed shared VAD %d times", v.closes)
+	}
+
+	owned := NewStreamAdapter(&fakeStreamAdapterSTT{}, v, WithOwnedVAD())
+	if err := owned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if v.closes != 1 {
+		t.Fatalf("owning adapter closed VAD %d times, want 1", v.closes)
+	}
+}
+
+func TestStreamAdapterOwnedVADClosesAfterStreamsStop(t *testing.T) {
+	started := make(chan struct{}, 1)
+	streamDone := make(chan struct{})
+	v := &closableStreamAdapterVAD{fakeStreamAdapterVAD: &fakeStreamAdapterVAD{
+		startedCh: started,
+		stream:    &fakeStreamAdapterVADStream{done: streamDone},
+	}}
+	adapter := NewStreamAdapter(&fakeStreamAdapterSTT{}, v, WithOwnedVAD())
+	stream, err := adapter.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream did not start")
+	}
+	v.onClose = func() error {
+		select {
+		case <-streamDone:
+		default:
+			return errors.New("VAD closed before its stream")
+		}
+		select {
+		case <-stream.(*streamAdapterWrapper).runDone:
+			return nil
+		default:
+			return errors.New("VAD closed before STT stream stopped")
+		}
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if v.closes != 1 {
+		t.Fatalf("VAD Close calls = %d, want 1", v.closes)
+	}
+	if _, err := adapter.Stream(context.Background(), ""); err == nil {
+		t.Fatal("owning adapter allowed Stream after Close")
+	}
+}
+
+func TestStreamAdapterOwnedVADWaitsForInputToStop(t *testing.T) {
+	started := make(chan struct{}, 1)
+	pushStarted := make(chan struct{}, 1)
+	releasePush := make(chan struct{})
+	v := &closableStreamAdapterVAD{fakeStreamAdapterVAD: &fakeStreamAdapterVAD{
+		startedCh: started,
+		stream: &fakeStreamAdapterVADStream{
+			pushStartedCh: pushStarted,
+			releasePushCh: releasePush,
+			done:          make(chan struct{}),
+		},
+	}}
+	v.onClose = func() error {
+		select {
+		case <-releasePush:
+			return nil
+		default:
+			return errors.New("VAD closed while input was still running")
+		}
+	}
+	adapter := NewStreamAdapter(&fakeStreamAdapterSTT{}, v, WithOwnedVAD())
+	stream, err := adapter.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream did not start")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-pushStarted:
+	case <-time.After(time.Second):
+		t.Fatal("input did not start")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- adapter.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned while input was blocked: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releasePush)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after input stopped")
+	}
+}
+
+func TestStreamAdapterOwnedVADMustBeClosable(t *testing.T) {
+	adapter := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{}, WithOwnedVAD())
+	if err := adapter.Close(); err == nil || !strings.Contains(err.Error(), "does not implement Close") {
+		t.Fatalf("Close error = %v, want non-closable VAD error", err)
+	}
+}
+
 func TestStreamAdapterReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
 		stream: &fakeStreamAdapterVADStream{done: make(chan struct{})},

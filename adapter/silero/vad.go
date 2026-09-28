@@ -2,6 +2,7 @@ package silero
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -54,6 +55,11 @@ type VAD struct {
 	scaleThreshold bool
 	mu             sync.RWMutex
 	handlers       []vad.VADMetricsHandler
+	sessionMu      *sync.Mutex
+	destroySession func() error
+	streams        map[*sileroStream]struct{}
+	closeDone      chan struct{}
+	closeErr       error
 }
 
 type VADOption func(*VADOptions)
@@ -184,13 +190,15 @@ func buildVADOptions(opts ...VADOption) VADOptions {
 	return options
 }
 
-type sileroProbabilityEstimatorFactory func(VADOptions) (vad.ProbabilityEstimatorFactory, error)
+type sileroProbabilityEstimatorFactory func(VADOptions, *sync.Mutex) (factory vad.ProbabilityEstimatorFactory, destroySession func() error, err error)
 
 var newSileroProbabilityEstimatorFactory sileroProbabilityEstimatorFactory = newSileroONNXProbabilityEstimatorFactory
 
 func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*VAD, error) {
 	if options.UseONNXRuntime {
-		factory, err := newSileroProbabilityEstimatorFactory(options)
+		sessionMu := &sync.Mutex{}
+
+		factory, destroy, err := newSileroProbabilityEstimatorFactory(options, sessionMu)
 		if err != nil {
 			if requireONNX {
 				return nil, err
@@ -200,7 +208,11 @@ func newSileroVADWithResolvedOptions(options VADOptions, requireONNX bool) (*VAD
 		}
 		simpleOptions := simpleOptionsFromSileroONNX(options)
 		simpleOptions.ProbabilityEstimator = factory
-		return newSileroVADFromSimpleOptions(simpleOptions, options, false), nil
+		detector := newSileroVADFromSimpleOptions(simpleOptions, options, false)
+		detector.sessionMu = sessionMu
+		detector.destroySession = destroy
+
+		return detector, nil
 	}
 	return newSileroVADFallback(options), nil
 }
@@ -226,6 +238,7 @@ func newSileroVADFromSimpleOptions(simpleOptions vad.SimpleVADOptions, options V
 		options:        options,
 		inner:          inner,
 		scaleThreshold: scaleThreshold,
+		streams:        make(map[*sileroStream]struct{}),
 	}
 	inner.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
 		metrics.Label = detector.Label()
@@ -319,13 +332,118 @@ func (v *VAD) UpdateOptionsWith(opts ...VADOption) {
 }
 
 func (v *VAD) Stream(ctx context.Context) (vad.VADStream, error) {
-	v.mu.RLock()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.closeDone != nil {
+		return nil, errors.New("silero VAD closed")
+	}
 	options := v.options
-	v.mu.RUnlock()
 	if err := validateVADOptions(options); err != nil {
 		return nil, err
 	}
-	return v.inner.Stream(ctx)
+
+	inner, err := v.inner.Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	stream := &sileroStream{VADStream: inner, owner: v}
+	v.streams[stream] = struct{}{}
+
+	return stream, nil
+}
+
+// Close stops all streams before releasing the native ONNX session.
+func (v *VAD) Close() error {
+	v.mu.Lock()
+	if v.closeDone != nil {
+		done := v.closeDone
+		v.mu.Unlock()
+		<-done
+
+		return v.closeErr
+	}
+
+	v.closeDone = make(chan struct{})
+
+	streams := make([]*sileroStream, 0, len(v.streams))
+	for stream := range v.streams {
+		streams = append(streams, stream)
+	}
+	v.mu.Unlock()
+
+	var errs []error
+
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if v.destroySession != nil {
+		v.sessionMu.Lock()
+		if err := v.destroySession(); err != nil {
+			errs = append(errs, fmt.Errorf("destroy silero ONNX session: %w", err))
+		}
+		v.sessionMu.Unlock()
+	}
+
+	v.mu.Lock()
+	v.closeErr = errors.Join(errs...)
+	close(v.closeDone)
+	v.mu.Unlock()
+
+	return v.closeErr
+}
+
+type sileroStream struct {
+	vad.VADStream
+
+	owner     *VAD
+	mu        sync.Mutex
+	closeDone chan struct{}
+	closeErr  error
+}
+
+func (s *sileroStream) Close() error {
+	s.mu.Lock()
+	if s.closeDone != nil {
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+
+		return s.closeErr
+	}
+
+	s.closeDone = make(chan struct{})
+	s.mu.Unlock()
+
+	err := s.VADStream.Close()
+	s.owner.mu.Lock()
+	delete(s.owner.streams, s)
+	s.owner.mu.Unlock()
+	s.mu.Lock()
+	s.closeErr = err
+	close(s.closeDone)
+	s.mu.Unlock()
+
+	return err
+}
+
+func (s *sileroStream) EndInput() error {
+	err := s.VADStream.EndInput()
+	if err == nil {
+		s.owner.mu.Lock()
+		delete(s.owner.streams, s)
+		s.owner.mu.Unlock()
+	}
+
+	return err
+}
+
+func (s *sileroStream) DiscardSegment() error {
+	return s.VADStream.(vad.SegmentDiscarder).DiscardSegment()
 }
 
 func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {

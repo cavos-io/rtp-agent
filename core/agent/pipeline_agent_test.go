@@ -1868,7 +1868,7 @@ func TestPipelineAgentGenerateReplyErrorReturnsToListeningWithoutIdle(t *testing
 
 func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AECWarmupDuration: 0.05})
 	session.UpdateAgentState(AgentStateSpeaking)
 	agent := NewPipelineAgent(
@@ -1913,7 +1913,7 @@ func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
 
 func TestPipelineAgentSendsSilenceToSTTDuringUninterruptibleSpeech(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{DiscardAudioIfUninterruptible: true})
 	activity := NewAgentActivity(NewAgent("test"), session)
 	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
@@ -1955,7 +1955,7 @@ func TestPipelineAgentSendsSilenceToSTTDuringUninterruptibleSpeech(t *testing.T)
 
 func TestPipelineAgentAudioInputHookTransformsFramesBeforeVADAndSTT(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	agent := NewPipelineAgent(
 		&fakePipelineVAD{stream: vadStream},
 		&fakePipelineSTT{stream: sttStream},
@@ -2005,7 +2005,7 @@ func TestPipelineAgentAudioInputHookTransformsFramesBeforeVADAndSTT(t *testing.T
 
 func TestPipelineAgentAudioInputHookCanDropFrames(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	agent := NewPipelineAgent(
 		&fakePipelineVAD{stream: vadStream},
 		&fakePipelineSTT{stream: sttStream},
@@ -2039,7 +2039,7 @@ func TestPipelineAgentAudioInputHookCanDropFrames(t *testing.T) {
 
 func TestAgentSessionAudioInputHookConfiguresPipelineAssistant(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	baseAgent := NewAgent("test")
 	baseAgent.VAD = &fakePipelineVAD{stream: vadStream}
 	baseAgent.STT = &fakePipelineSTT{stream: sttStream}
@@ -2082,7 +2082,7 @@ func TestAgentSessionAudioInputHookConfiguresPipelineAssistant(t *testing.T) {
 }
 
 func TestPipelineAgentResamplesToSTTInputSampleRate(t *testing.T) {
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	stt := &fakePipelineSTTWithSampleRate{
 		fakePipelineSTT: fakePipelineSTT{stream: sttStream},
 		inputSampleRate: 16000,
@@ -2123,7 +2123,7 @@ func TestPipelineAgentResamplesToSTTInputSampleRate(t *testing.T) {
 
 func TestAgentSessionAudioInputHookConfiguresReplacementPipelineAssistant(t *testing.T) {
 	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
-	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1), closedCh: make(chan struct{})}
 	baseAgent := NewAgent("test")
 	baseAgent.VAD = &fakePipelineVAD{stream: vadStream}
 	baseAgent.STT = &fakePipelineSTT{stream: sttStream}
@@ -8046,6 +8046,9 @@ func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
 			err := f.err
 			f.err = nil
 			return nil, err
+		}
+		if f.closedCh != nil {
+			<-f.closedCh
 		}
 		return nil, io.EOF
 	}

@@ -3,9 +3,13 @@ package silero
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,8 +105,8 @@ func TestSileroVADONNXFallbackLogsWarning(t *testing.T) {
 	originalFactory := newSileroProbabilityEstimatorFactory
 	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
 
-	newSileroProbabilityEstimatorFactory = func(options VADOptions) (vad.ProbabilityEstimatorFactory, error) {
-		return nil, fmt.Errorf("onnx initialization failed")
+	newSileroProbabilityEstimatorFactory = func(options VADOptions, _ *sync.Mutex) (vad.ProbabilityEstimatorFactory, func() error, error) {
+		return nil, nil, fmt.Errorf("onnx initialization failed")
 	}
 
 	detector := NewVAD(WithONNXRuntime())
@@ -116,12 +120,150 @@ func TestSileroVADONNXFallbackLogsWarning(t *testing.T) {
 	}
 }
 
+func TestSileroVADCloseStopsStreams(t *testing.T) {
+	detector := NewVAD()
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stream.(vad.SegmentDiscarder); !ok {
+		t.Fatal("Silero stream lost segment discard support")
+	}
+	if err := detector.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := detector.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after VAD Close = %v, want EOF", err)
+	}
+	if _, err := detector.Stream(context.Background()); err == nil {
+		t.Fatal("Stream after VAD Close succeeded")
+	}
+}
+
+func TestSileroVADCloseWaitsForInferenceAndDestroysOnce(t *testing.T) {
+	originalFactory := newSileroProbabilityEstimatorFactory
+	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseInference := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseInference()
+	var active, destroys atomic.Int32
+	destroyErr := errors.New("destroy failed")
+	newSileroProbabilityEstimatorFactory = func(_ VADOptions, _ *sync.Mutex) (vad.ProbabilityEstimatorFactory, func() error, error) {
+		return func() vad.ProbabilityEstimator {
+				return func(*model.AudioFrame) (float64, error) {
+					active.Store(1)
+					started <- struct{}{}
+					<-release
+					active.Store(0)
+					return 0, nil
+				}
+			}, func() error {
+				if active.Load() != 0 {
+					t.Error("destroy called during inference")
+				}
+				destroys.Add(1)
+				return destroyErr
+			}, nil
+	}
+
+	detector, err := NewVADWithOptions(WithONNXRuntime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushDone := make(chan error, 1)
+	go func() { pushDone <- stream.PushFrame(testAudioFrame(16000, 512, 0)) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("inference did not start")
+	}
+	closeDone := make(chan error, 2)
+	go func() { closeDone <- detector.Close() }()
+	go func() { closeDone <- detector.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before inference stopped: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseInference()
+	select {
+	case err := <-pushDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("inference did not finish")
+	}
+	for range 2 {
+		select {
+		case err := <-closeDone:
+			if !errors.Is(err, destroyErr) {
+				t.Fatalf("Close error = %v, want destroy error", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close did not finish after inference stopped")
+		}
+	}
+	if got := destroys.Load(); got != 1 {
+		t.Fatalf("Destroy calls = %d, want 1", got)
+	}
+	for _, stream := range []vad.VADStream{stream, other} {
+		if _, err := stream.Next(); err != io.EOF {
+			t.Fatalf("Next after Close = %v, want EOF", err)
+		}
+	}
+	if _, err := detector.Stream(context.Background()); err == nil {
+		t.Fatal("Stream after Close succeeded")
+	}
+}
+
+func TestSileroVADConcurrentStreamAndClose(t *testing.T) {
+	detector := NewVAD()
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for range 20 {
+				stream, err := detector.Stream(context.Background())
+				if err != nil {
+					return
+				}
+				if err := stream.Close(); err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	if err := detector.Close(); err != nil {
+		t.Fatal(err)
+	}
+	workers.Wait()
+	if _, err := detector.Stream(context.Background()); err == nil {
+		t.Fatal("Stream after Close succeeded")
+	}
+}
+
 func TestSileroVADWithONNXRuntimeUsesModelProbability(t *testing.T) {
 	originalFactory := newSileroProbabilityEstimatorFactory
 	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
 
 	var created int
-	newSileroProbabilityEstimatorFactory = func(options VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+	newSileroProbabilityEstimatorFactory = func(options VADOptions, _ *sync.Mutex) (vad.ProbabilityEstimatorFactory, func() error, error) {
 		created++
 		if options.ONNXFilePath != "model.onnx" {
 			t.Fatalf("ONNXFilePath = %q, want model.onnx", options.ONNXFilePath)
@@ -138,7 +280,7 @@ func TestSileroVADWithONNXRuntimeUsesModelProbability(t *testing.T) {
 				used = true
 				return 0.9, nil
 			}
-		}, nil
+		}, nil, nil
 	}
 
 	detector, err := NewSileroVADWithOptions(
@@ -172,12 +314,12 @@ func TestSileroVADONNXUpdateOptionsKeepsReferenceProbabilityThreshold(t *testing
 	originalFactory := newSileroProbabilityEstimatorFactory
 	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
 
-	newSileroProbabilityEstimatorFactory = func(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+	newSileroProbabilityEstimatorFactory = func(VADOptions, *sync.Mutex) (vad.ProbabilityEstimatorFactory, func() error, error) {
 		return func() vad.ProbabilityEstimator {
 			return func(*model.AudioFrame) (float64, error) {
 				return 0.5, nil
 			}
-		}, nil
+		}, nil, nil
 	}
 
 	detector, err := NewSileroVADWithOptions(
@@ -208,7 +350,7 @@ func TestSileroVADFlushKeepsONNXEstimatorWarm(t *testing.T) {
 	defer func() { newSileroProbabilityEstimatorFactory = originalFactory }()
 
 	var created int
-	newSileroProbabilityEstimatorFactory = func(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+	newSileroProbabilityEstimatorFactory = func(VADOptions, *sync.Mutex) (vad.ProbabilityEstimatorFactory, func() error, error) {
 		return func() vad.ProbabilityEstimator {
 			created++
 			used := false
@@ -219,7 +361,7 @@ func TestSileroVADFlushKeepsONNXEstimatorWarm(t *testing.T) {
 				used = true
 				return 0.9, nil
 			}
-		}, nil
+		}, nil, nil
 	}
 
 	detector, err := NewSileroVADWithOptions(
