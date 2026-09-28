@@ -24,13 +24,37 @@ type StreamAdapter struct {
 	stt                 STT
 	vad                 vad.VAD
 	metricsUnsubscribes []func()
+	ownsVAD             bool
+	streams             map[*streamAdapterWrapper]struct{}
+	closeDone           chan struct{}
+	closeErr            error
 }
 
-func NewStreamAdapter(stt STT, vad vad.VAD) *StreamAdapter {
-	return &StreamAdapter{
+type StreamAdapterOption func(*StreamAdapter)
+
+// WithOwnedVAD makes the adapter close the VAD when the adapter closes.
+// Use it only when the VAD is not shared with another consumer.
+func WithOwnedVAD() StreamAdapterOption {
+	return func(a *StreamAdapter) { a.ownsVAD = true }
+}
+
+func NewStreamAdapter(stt STT, vad vad.VAD, opts ...StreamAdapterOption) *StreamAdapter {
+	a := &StreamAdapter{
 		stt: stt,
 		vad: vad,
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(a)
+		}
+	}
+
+	if a.ownsVAD {
+		a.streams = make(map[*streamAdapterWrapper]struct{})
+	}
+
+	return a
 }
 
 func (a *StreamAdapter) Label() string {
@@ -58,14 +82,62 @@ func (a *StreamAdapter) Prewarm() {
 
 func (a *StreamAdapter) Close() error {
 	a.mu.Lock()
+	if a.ownsVAD && a.closeDone != nil {
+		done := a.closeDone
+		a.mu.Unlock()
+		<-done
+
+		return a.closeErr
+	}
+
+	if a.ownsVAD {
+		a.closeDone = make(chan struct{})
+	}
 	unsubscribes := append([]func(){}, a.metricsUnsubscribes...)
 	a.metricsUnsubscribes = nil
+
+	streams := make([]*streamAdapterWrapper, 0, len(a.streams))
+	for stream := range a.streams {
+		streams = append(streams, stream)
+	}
 	a.mu.Unlock()
 
 	for _, unsubscribe := range unsubscribes {
 		unsubscribe()
 	}
-	return nil
+
+	if !a.ownsVAD {
+		return nil
+	}
+
+	var errs []error
+
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil {
+			errs = append(errs, err)
+		}
+
+		<-stream.runDone
+
+		if stream.inputDone != nil {
+			<-stream.inputDone
+		}
+	}
+
+	if closer, ok := a.vad.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		errs = append(errs, fmt.Errorf("owned VAD %T does not implement Close() error", a.vad))
+	}
+
+	a.mu.Lock()
+	a.closeErr = errors.Join(errs...)
+	close(a.closeDone)
+	a.mu.Unlock()
+
+	return a.closeErr
 }
 
 func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
@@ -103,10 +175,12 @@ type streamAdapterWrapper struct {
 	cancel   context.CancelFunc
 	language string
 
-	eventCh chan *SpeechEvent
-	errCh   chan error
-	inputCh chan streamAdapterInput
-	doneCh  chan struct{}
+	eventCh   chan *SpeechEvent
+	errCh     chan error
+	inputCh   chan streamAdapterInput
+	doneCh    chan struct{}
+	runDone   chan struct{}
+	inputDone chan struct{}
 
 	mu          sync.Mutex
 	closed      bool
@@ -142,10 +216,24 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
 		doneCh:    make(chan struct{}),
+		runDone:   make(chan struct{}),
 		startTime: streamStartTimeNow(),
 		span:      span,
 	}
 
+	if a.ownsVAD {
+		a.mu.Lock()
+		if a.closeDone != nil {
+			a.mu.Unlock()
+			cancel()
+			span.End()
+
+			return nil, errors.New("STT stream adapter closed")
+		}
+
+		a.streams[w] = struct{}{}
+		a.mu.Unlock()
+	}
 	go w.run()
 	return w, nil
 }
@@ -155,7 +243,19 @@ func (w *streamAdapterWrapper) run() {
 		w.span.End()
 		w.markClosedFromRun()
 		close(w.eventCh)
+
+		if w.adapter.ownsVAD {
+			w.adapter.mu.Lock()
+			delete(w.adapter.streams, w)
+			w.adapter.mu.Unlock()
+		}
+
+		close(w.runDone)
 	}()
+
+	if w.ctx.Err() != nil {
+		return
+	}
 
 	vadStream, err := w.adapter.vad.Stream(w.ctx)
 	if err != nil {
@@ -170,12 +270,21 @@ func (w *streamAdapterWrapper) run() {
 		return
 	}
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+
+		_ = vadStream.Close()
+
+		return
+	}
 	w.vadStream = vadStream
 	w.mu.Unlock()
 	defer w.closeVADStream()
 
 	// Goroutine to push frames to VAD and buffer them
+	w.inputDone = make(chan struct{})
 	go func() {
+		defer close(w.inputDone)
 		for {
 			select {
 			case <-w.ctx.Done():

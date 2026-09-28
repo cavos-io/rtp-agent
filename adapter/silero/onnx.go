@@ -25,24 +25,24 @@ var sileroONNXRuntime = struct {
 	initialized bool
 }{}
 
-func newSileroONNXProbabilityEstimatorFactory(options VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+func newSileroONNXProbabilityEstimatorFactory(options VADOptions, sessionMu *sync.Mutex) (factory vad.ProbabilityEstimatorFactory, destroySession func() error, err error) {
 	if err := initializeSileroONNXRuntime(options.ONNXRuntimeLibPath); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	modelPath := options.ONNXFilePath
 	if modelPath == "" {
 		var err error
 		modelPath, err = sileroModelPath()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	info, err := os.Stat(modelPath)
 	if err != nil {
-		return nil, fmt.Errorf("silero ONNX model file not available at %s: %w", modelPath, err)
+		return nil, nil, fmt.Errorf("silero ONNX model file not available at %s: %w", modelPath, err)
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("silero ONNX model path is a directory: %s", modelPath)
+		return nil, nil, fmt.Errorf("silero ONNX model path is a directory: %s", modelPath)
 	}
 
 	session, err := ort.NewDynamicAdvancedSession(
@@ -52,12 +52,12 @@ func newSileroONNXProbabilityEstimatorFactory(options VADOptions) (vad.Probabili
 		nil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create silero ONNX session: %w", err)
+		return nil, nil, fmt.Errorf("create silero ONNX session: %w", err)
 	}
 
 	return func() vad.ProbabilityEstimator {
-		return newSileroONNXEstimator(session, options.SampleRate)
-	}, nil
+		return newSileroONNXEstimator(session, sessionMu, options.SampleRate)
+	}, session.Destroy, nil
 }
 
 func initializeSileroONNXRuntime(configuredPath string) error {
@@ -110,19 +110,16 @@ type sileroONNXEstimator struct {
 	sr          []int64
 }
 
-var sileroONNXSessions sync.Map
-
-func newSileroONNXEstimator(session *ort.DynamicAdvancedSession, sampleRate int) vad.ProbabilityEstimator {
+func newSileroONNXEstimator(session *ort.DynamicAdvancedSession, sessionMu *sync.Mutex, sampleRate int) vad.ProbabilityEstimator {
 	windowSize := 512
 	contextSize := 64
 	if sampleRate == 8000 {
 		windowSize = 256
 		contextSize = 32
 	}
-	mu, _ := sileroONNXSessions.LoadOrStore(session, &sync.Mutex{})
 	estimator := &sileroONNXEstimator{
 		session:     session,
-		sessionMu:   mu.(*sync.Mutex),
+		sessionMu:   sessionMu,
 		sampleRate:  sampleRate,
 		windowSize:  windowSize,
 		contextSize: contextSize,
