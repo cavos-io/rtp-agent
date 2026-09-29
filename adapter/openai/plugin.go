@@ -2,6 +2,6 @@ package openai
 
 const (
 	PluginTitle   = "rtp-agent.plugins.openai"
-	PluginVersion = "v0.8.8"
+	PluginVersion = "v0.8.9"
 	PluginPackage = "rtp-agent.plugins.openai"
 )

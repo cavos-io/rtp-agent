@@ -2,6 +2,6 @@ package aws
 
 const (
 	PluginTitle   = "rtp-agent.plugins.aws"
-	PluginVersion = "v0.8.8"
+	PluginVersion = "v0.8.9"
 	PluginPackage = "rtp-agent.plugins.aws"
 )
