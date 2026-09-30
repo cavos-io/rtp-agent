@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	respeecherAPIVersion      = "v0.8.9"
+	respeecherAPIVersion      = "v0.8.10"
 	defaultRespeecherBaseURL  = "https://api.respeecher.com/v1"
 	defaultRespeecherModel    = "/public/tts/en-rt"
 	defaultRespeecherEncoding = "pcm_s16le"
