@@ -45,11 +45,25 @@ func newSileroONNXProbabilityEstimatorFactory(options VADOptions, sessionMu *syn
 		return nil, nil, fmt.Errorf("silero ONNX model path is a directory: %s", modelPath)
 	}
 
+	sessionOptions, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create silero ONNX session options: %w", err)
+	}
+	defer sessionOptions.Destroy()
+
+	if err := sessionOptions.SetIntraOpNumThreads(1); err != nil {
+		return nil, nil, fmt.Errorf("set silero ONNX intra-op threads: %w", err)
+	}
+
+	if err := sessionOptions.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); err != nil {
+		return nil, nil, fmt.Errorf("disable silero ONNX thread spinning: %w", err)
+	}
+
 	session, err := ort.NewDynamicAdvancedSession(
 		modelPath,
 		[]string{sileroONNXInputName, sileroONNXStateName, sileroONNXSampleRate},
 		[]string{sileroONNXOutputName, sileroONNXStateOutput},
-		nil,
+		sessionOptions,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create silero ONNX session: %w", err)
