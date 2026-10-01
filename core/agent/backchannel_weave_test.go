@@ -27,11 +27,11 @@ func TestWeaveBackchannelsEmptyUtteranceReturnsUserOnlyParts(t *testing.T) {
 	}
 }
 
-func TestWeaveBackchannelsSplitsAtIntFloorBoundary(t *testing.T) {
-	// 10 words, checkpoint at ratio 0.55 → int(10*0.55) = 5.
+func TestWeaveBackchannelsSplitsAtSpokenChars(t *testing.T) {
+	// "w1 w2 w3 w4 w5" is 14 chars of published caption → boundary after 5 words.
 	utterance := "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10"
 	parts := weaveBackchannels(utterance, 100, 110, []backchannelCheckpoint{
-		{Text: "iya", At: 105.5, Confidence: 0.9},
+		{Text: "iya", At: 105.5, Confidence: 0.9, SpokenChars: 14},
 	})
 	want := []struct {
 		role llm.ChatRole
@@ -70,10 +70,10 @@ func TestWeaveBackchannelsClampsRatioBelowZero(t *testing.T) {
 	}
 }
 
-func TestWeaveBackchannelsClampsRatioAboveOne(t *testing.T) {
-	// Checkpoint after endedAt → boundary len(words) → full text, then user.
+func TestWeaveBackchannelsSpokenCharsBeyondTextTakesWholeUtterance(t *testing.T) {
+	// The whole utterance had been published → nothing left to split off.
 	parts := weaveBackchannels("a b c", 100, 110, []backchannelCheckpoint{
-		{Text: "iya", At: 999, Confidence: 1},
+		{Text: "iya", At: 999, Confidence: 1, SpokenChars: 999},
 	})
 	if len(parts) != 2 {
 		t.Fatalf("parts = %d, want 2: %+v", len(parts), parts)
@@ -90,8 +90,8 @@ func TestWeaveBackchannelsSortsOutOfOrderCheckpointsMonotonically(t *testing.T) 
 	// Given out of order; later checkpoint maps to earlier boundary must not backtrack.
 	utterance := "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10"
 	parts := weaveBackchannels(utterance, 100, 110, []backchannelCheckpoint{
-		{Text: "second", At: 108, Confidence: 1}, // ratio .8 → 8
-		{Text: "first", At: 103, Confidence: 1},  // ratio .3 → 3
+		{Text: "second", At: 108, Confidence: 1, SpokenChars: 23}, // → 8 words
+		{Text: "first", At: 103, Confidence: 1, SpokenChars: 8},   // → 3 words
 	})
 	want := []struct {
 		role llm.ChatRole
@@ -117,8 +117,8 @@ func TestWeaveBackchannelsSameBoundarySkipsEmptyFragment(t *testing.T) {
 	// Two checkpoints in the same word gap → no empty assistant fragment between them.
 	utterance := "w1 w2 w3 w4"
 	parts := weaveBackchannels(utterance, 100, 110, []backchannelCheckpoint{
-		{Text: "iya", At: 105, Confidence: 1},  // ratio .5 → 2
-		{Text: "oke", At: 105.4, Confidence: 1}, // ratio .54 → 2
+		{Text: "iya", At: 105, Confidence: 1, SpokenChars: 5},   // → 2 words
+		{Text: "oke", At: 105.4, Confidence: 1, SpokenChars: 5}, // → 2 words
 	})
 	want := []struct {
 		role llm.ChatRole
@@ -156,9 +156,9 @@ func TestWeaveBackchannelsNormalizesWhitespace(t *testing.T) {
 func TestWeaveBackchannelsPartTimesStrictlyIncrease(t *testing.T) {
 	utterance := "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10"
 	parts := weaveBackchannels(utterance, 100, 110, []backchannelCheckpoint{
-		{Text: "a", At: 105, Confidence: 1},
-		{Text: "b", At: 105.01, Confidence: 1},
-		{Text: "c", At: 90, Confidence: 1}, // clamped to boundary 0
+		{Text: "a", At: 105, Confidence: 1, SpokenChars: 14},
+		{Text: "b", At: 105.01, Confidence: 1, SpokenChars: 14},
+		{Text: "c", At: 90, Confidence: 1}, // nothing published yet → boundary 0
 	})
 	for i := 1; i < len(parts); i++ {
 		if parts[i].At <= parts[i-1].At {
@@ -266,11 +266,14 @@ func TestAgentActivityWeaveFallsBackToTranscriptOnlyWithoutCurrentSpeech(t *test
 	case <-time.After(20 * time.Millisecond):
 	}
 	if agent.ChatCtx == nil || len(agent.ChatCtx.Items) != 1 {
-		t.Fatalf("no current speech: want TranscriptOnly fallback item, got %v", agent.ChatCtx)
+		t.Fatalf("no current speech: want one fallback item, got %v", agent.ChatCtx)
 	}
+	// The utterance already committed, so nothing is split and the backchannel stands on
+	// its own — LLM-visible, matching the live caption, which never rewrites a finalized
+	// segment.
 	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
-	if !ok || !msg.TranscriptOnly || msg.TextContent() != "oke" {
-		t.Fatalf("fallback item = %#v, want TranscriptOnly user message oke", agent.ChatCtx.Items[0])
+	if !ok || msg.TranscriptOnly || msg.TextContent() != "oke" {
+		t.Fatalf("fallback item = %#v, want LLM-visible user message oke", agent.ChatCtx.Items[0])
 	}
 }
 
@@ -284,7 +287,7 @@ func speechWithCheckpoints(cps ...backchannelCheckpoint) *SpeechHandle {
 
 func TestCommitAssistantWithWeaveInterleavesInWindowCheckpoints(t *testing.T) {
 	chatCtx := llm.NewChatContext()
-	speech := speechWithCheckpoints(backchannelCheckpoint{Text: "iya", At: 105.5, Confidence: 0.9})
+	speech := speechWithCheckpoints(backchannelCheckpoint{Text: "iya", At: 105.5, Confidence: 0.9, SpokenChars: 14})
 	args := llm.ChatMessageArgs{
 		ID:          "item_first",
 		Role:        llm.ChatRoleAssistant,
@@ -391,7 +394,7 @@ func TestCommitAssistantWithWeaveInvalidWindowFallsBackAll(t *testing.T) {
 
 func TestCommitAssistantWithWeaveMutatesExistingSayMessageAsFirstFragment(t *testing.T) {
 	chatCtx := llm.NewChatContext()
-	speech := speechWithCheckpoints(backchannelCheckpoint{Text: "iya", At: 105, Confidence: 1})
+	speech := speechWithCheckpoints(backchannelCheckpoint{Text: "iya", At: 105, Confidence: 1, SpokenChars: 5})
 	existing := &llm.ChatMessage{
 		ID:        "say_msg",
 		Role:      llm.ChatRoleAssistant,
@@ -465,139 +468,105 @@ func TestApplicableCheckpointsSplitsByWindow(t *testing.T) {
 	}
 }
 
-func TestBuildAssistantCommitWindowSingleFragment(t *testing.T) {
-	chatCtx := llm.NewChatContext()
-	msg := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo selamat pagi"})
-	w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 100.0, 106.0)
-	if w == nil || len(w.fragments) != 1 {
-		t.Fatalf("window = %+v, want 1 fragment", w)
-	}
-	f := w.fragments[0]
-	if f.msg != msg || f.winStart != 100.0 || f.winEnd != 106.0 {
-		t.Fatalf("fragment = %+v, want full window on the committed message", f)
-	}
-}
+func TestWeaveUsesSpokenCharsWhenKnown(t *testing.T) {
+	utt := "Baik, apakah Bapak senang dan ingin dihubungi kembali untuk update status pesanan lainnya?"
+	spoken := "Baik, apakah Bapak senang dan ingin dihubungi kembali"
 
-func TestBuildAssistantCommitWindowSkipsInvalid(t *testing.T) {
-	chatCtx := llm.NewChatContext()
-	msg := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo"})
-	if w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 0, 0); w != nil {
-		t.Fatal("no audio window: want nil")
-	}
-	user := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "ya"})
-	if w := buildAssistantCommitWindow([]llm.ChatItem{user}, 100, 106); w != nil {
-		t.Fatal("no assistant items: want nil")
-	}
-}
-
-func TestBuildAssistantCommitWindowWovenFragments(t *testing.T) {
-	// A woven commit: assistant / user / assistant. Sub-windows come from the
-	// second fragment's CreatedAt.
-	chatCtx := llm.NewChatContext()
-	first := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo selamat", CreatedAt: unixSecondsToTime(100.0)})
-	userMsg := insertCheckpointUserMessage(chatCtx, "ya", 103.0, 0.9, false)
-	second := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "pagi semua", CreatedAt: unixSecondsToTime(103.5)})
-	w := buildAssistantCommitWindow([]llm.ChatItem{first, userMsg, second}, 100.0, 106.0)
-	if w == nil || len(w.fragments) != 2 {
-		t.Fatalf("window = %+v, want 2 assistant fragments", w)
-	}
-	if w.fragments[0].winStart != 100.0 || w.fragments[0].winEnd != 103.5 {
-		t.Fatalf("fragment[0] window = [%v,%v], want [100,103.5]", w.fragments[0].winStart, w.fragments[0].winEnd)
-	}
-	if w.fragments[1].winStart != 103.5 || w.fragments[1].winEnd != 106.0 {
-		t.Fatalf("fragment[1] window = [%v,%v], want [103.5,106]", w.fragments[1].winStart, w.fragments[1].winEnd)
-	}
-}
-
-func spliceTestWindow(t *testing.T) (*llm.ChatContext, *assistantCommitWindow) {
-	t.Helper()
-	chatCtx := llm.NewChatContext()
-	msg := chatCtx.AddMessage(llm.ChatMessageArgs{
-		Role:      llm.ChatRoleAssistant,
-		Text:      "satu dua tiga empat lima enam", // 6 words over 6 seconds: 1 word/s
-		CreatedAt: unixSecondsToTime(100.0),
+	parts := weaveBackchannels(utt, 100, 110, []backchannelCheckpoint{
+		// Onset time alone would cut near the start; SpokenChars says otherwise.
+		{Text: "Ya", At: 101, Confidence: 0.9, SpokenChars: len(spoken)},
 	})
-	w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 100.0, 106.0)
-	if w == nil {
-		t.Fatal("window build failed")
+	if len(parts) != 3 {
+		t.Fatalf("parts = %d, want 3", len(parts))
 	}
-	return chatCtx, w
+	if parts[0].Text != spoken {
+		t.Fatalf("left = %q, want the words actually spoken %q", parts[0].Text, spoken)
+	}
+	if parts[2].Text != "untuk update status pesanan lainnya?" {
+		t.Fatalf("right = %q, want the remainder", parts[2].Text)
+	}
 }
 
-func TestSpliceMidUtterance(t *testing.T) {
-	chatCtx, w := spliceTestWindow(t)
-	items := w.splice(chatCtx, "iya", 103.0, 0.9)
-	if len(items) != 2 {
-		t.Fatalf("items = %d, want 2 (user + tail fragment)", len(items))
+func TestCheckpointCapturesSpokenCharsFromSession(t *testing.T) {
+	agentObj := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agentObj.TurnDetection = TurnDetectionModeSTT
+	agentObj.STT = &fakePipelineSTT{}
+	agentObj.AudioTurnDetector = &recordingAudioTurnDetector{probability: 0.9}
+	session := NewAgentSession(agentObj, nil, AgentSessionOptions{
+		BargeInDecider:         fakeIgnoreBargeInDecider{},
+		WeaveSuppressedBargeIn: true,
+	})
+	activity := NewAgentActivity(agentObj, session)
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	onset := time.Now().Add(-300 * time.Millisecond)
+	activity.userSpeechStartedAt = onset
+	activity.appendSpeechEpoch(onset, true)
+	defer activity.Stop()
+
+	// The agent has published this much caption text when the backchannel is gated.
+	const spoken = "Baik, apakah Bapak senang"
+	session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{Transcript: spoken})
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "oke", Confidence: 0.9}},
+	})
+
+	cps := current.takeBackchannelCheckpoints()
+	if len(cps) != 1 {
+		t.Fatalf("checkpoints = %d, want 1", len(cps))
 	}
+	if cps[0].SpokenChars != len(spoken) {
+		t.Fatalf("SpokenChars = %d, want %d (the caption text published so far)", cps[0].SpokenChars, len(spoken))
+	}
+}
+
+// Part 3: when the assistant utterance has already committed there is nothing to split —
+// the live caption never rewrites a finalized segment, so ChatContext must not either.
+// The backchannel is recorded as its own LLM-visible message after it.
+func TestRefusedCheckpointRecordsPlainUserMessage(t *testing.T) {
+	agentObj := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agentObj.TurnDetection = TurnDetectionModeSTT
+	agentObj.STT = &fakePipelineSTT{}
+	agentObj.AudioTurnDetector = &recordingAudioTurnDetector{probability: 0.9}
+	session := NewAgentSession(agentObj, nil, AgentSessionOptions{
+		BargeInDecider:         fakeIgnoreBargeInDecider{},
+		WeaveSuppressedBargeIn: true,
+	})
+	activity := NewAgentActivity(agentObj, session)
+	session.activity = activity
+	defer activity.Stop()
+
+	chatCtx := llm.NewChatContext()
+	greeting := chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role: llm.ChatRoleAssistant,
+		Text: "Halo Selamat Pagi! Benar saya berbicara dengan bapak/ibu rafi",
+	})
+	agentObj.ChatCtx = chatCtx
+
+	// Overlap at onset, but the speech is already done → checkpoint refuses.
+	onset := time.Now().Add(-300 * time.Millisecond)
+	activity.userSpeechStartedAt = onset
+	activity.appendSpeechEpoch(onset, true)
+	activity.currentSpeech = nil
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "Ya", Confidence: 0.9}},
+	})
+
 	msgs := chatCtx.Messages()
-	if len(msgs) != 3 {
-		t.Fatalf("chat messages = %d, want 3 (assistant/user/assistant)", len(msgs))
-	}
-	if got := msgs[0].TextContent(); got != "satu dua tiga" {
-		t.Fatalf("left fragment = %q, want %q", got, "satu dua tiga")
-	}
-	if msgs[1].Role != llm.ChatRoleUser || msgs[1].TextContent() != "iya" || msgs[1].TranscriptOnly {
-		t.Fatalf("middle = %+v, want LLM-visible user 'iya'", msgs[1])
-	}
-	if got := msgs[2].TextContent(); got != "empat lima enam" {
-		t.Fatalf("tail fragment = %q, want %q", got, "empat lima enam")
-	}
-}
-
-func TestSpliceAtFragmentEdges(t *testing.T) {
-	// Ratio 0: user message sorts before the fragment, fragment untouched.
-	chatCtx, w := spliceTestWindow(t)
-	items := w.splice(chatCtx, "ya", 100.0, 0.9)
-	if len(items) != 1 {
-		t.Fatalf("edge splice items = %d, want 1 (no empty fragment)", len(items))
-	}
-	msgs := chatCtx.Messages()
-	if len(msgs) != 2 || msgs[0].Role != llm.ChatRoleUser {
-		t.Fatalf("messages = %d first=%v, want user sorted before untouched fragment", len(msgs), msgs[0].Role)
-	}
-	if msgs[1].TextContent() != "satu dua tiga empat lima enam" {
-		t.Fatalf("fragment mutated at edge: %q", msgs[1].TextContent())
-	}
-}
-
-func TestSpliceOutsideWindowRefused(t *testing.T) {
-	chatCtx, w := spliceTestWindow(t)
-	if items := w.splice(chatCtx, "iya", 99.0, 0.9); items != nil {
-		t.Fatalf("before window: got %d items, want nil", len(items))
-	}
-	if items := w.splice(chatCtx, "iya", 107.0, 0.9); items != nil {
-		t.Fatalf("after window: got %d items, want nil", len(items))
-	}
-}
-
-func TestSpliceIncrementalTwoCheckpoints(t *testing.T) {
-	chatCtx, w := spliceTestWindow(t)
-	if items := w.splice(chatCtx, "iya", 102.0, 0.9); len(items) != 2 {
-		t.Fatalf("first splice items = %d, want 2", len(items))
-	}
-	// Second backchannel lands inside the TAIL fragment produced by the first.
-	if items := w.splice(chatCtx, "oke", 104.0, 0.9); len(items) != 2 {
-		t.Fatalf("second splice items = %d, want 2", len(items))
-	}
-	msgs := chatCtx.Messages()
-	var texts []string
-	for _, m := range msgs {
-		texts = append(texts, string(m.Role)+":"+m.TextContent())
-	}
-	want := []string{
-		"assistant:satu dua",
-		"user:iya",
-		"assistant:tiga empat",
-		"user:oke",
-		"assistant:lima enam",
-	}
-	if len(texts) != len(want) {
-		t.Fatalf("order = %v, want %v", texts, want)
-	}
-	for i := range want {
-		if texts[i] != want[i] {
-			t.Fatalf("order[%d] = %q, want %q (full: %v)", i, texts[i], want[i], texts)
+	if len(msgs) != 2 {
+		var got []string
+		for _, m := range msgs {
+			got = append(got, string(m.Role)+":"+m.TextContent())
 		}
+		t.Fatalf("messages = %v, want assistant then user (no split)", got)
+	}
+	if msgs[0] != greeting || msgs[0].TextContent() != "Halo Selamat Pagi! Benar saya berbicara dengan bapak/ibu rafi" {
+		t.Fatalf("assistant message was altered: %q", msgs[0].TextContent())
+	}
+	if msgs[1].Role != llm.ChatRoleUser || msgs[1].TextContent() != "Ya" || msgs[1].TranscriptOnly {
+		t.Fatalf("second message = %+v, want LLM-visible user %q", msgs[1], "Ya")
 	}
 }
