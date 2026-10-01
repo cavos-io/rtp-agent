@@ -2986,10 +2986,6 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStream(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("old STT stream was not closed")
 	}
-	if pipeline.sttStream != second {
-		t.Fatalf("pipeline sttStream = %#v, want replacement stream", pipeline.sttStream)
-	}
-
 	frame := &model.AudioFrame{
 		Data:              []byte{0x01, 0x00},
 		SampleRate:        16000,
@@ -3026,9 +3022,6 @@ func TestPipelineAgentClearInputTranscriptionReplacesSTTStreamWhenOldCloseFails(
 	case <-first.closedCh:
 	case <-time.After(time.Second):
 		t.Fatal("old STT stream close was not attempted")
-	}
-	if pipeline.sttStream != second {
-		t.Fatalf("pipeline sttStream = %#v, want replacement stream", pipeline.sttStream)
 	}
 	if len(sttObj.streams) != 0 {
 		t.Fatalf("queued streams = %d, want replacement stream consumed", len(sttObj.streams))
@@ -3320,6 +3313,16 @@ func TestPipelineAgentStartsWithoutVAD(t *testing.T) {
 	receivePipelineFrame(t, sttPushed)
 	cancel()
 	receivePipelineClosed(t, sttClosed, "STT")
+}
+
+func TestStreamableSTTWrapsStreamingProviderWithTurnSplitting(t *testing.T) {
+	wrapped, err := streamableSTT(&fakePipelineSTT{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wrapped.(*stt.TurnSplittingSTT); !ok {
+		t.Fatalf("streamableSTT returned %T, want *stt.TurnSplittingSTT", wrapped)
+	}
 }
 
 func TestPipelineAgentSeedsSTTStreamTimingOnStart(t *testing.T) {

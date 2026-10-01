@@ -90,6 +90,30 @@ func TestTurnSplittingSTTLateRetiredFinalDoesNotCancelCurrentSplit(t *testing.T)
 	waitForSplitStreams(t, provider, 3)
 }
 
+func TestTurnSplittingSTTPreservesTimingOnReplacement(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	timing := logical.(StreamTiming)
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(10.5)
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSplitStreams(t, provider, 2)
+	replacement := provider.stream(1)
+	deadline := time.Now().Add(time.Second)
+	for (replacement.StartTimeOffset() != 2.5 || replacement.StartTime() != 10.5) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if replacement.StartTimeOffset() != 2.5 || replacement.StartTime() != 10.5 {
+		t.Fatalf("replacement timing = (%v, %v), want (2.5, 10.5)", replacement.StartTimeOffset(), replacement.StartTime())
+	}
+}
+
 func TestTurnSplittingSTTCloseCancelsReplacementOpen(t *testing.T) {
 	provider := &blockingSplitSTT{splitTestSTT: splitTestSTT{}, started: make(chan struct{})}
 	logical, err := NewTurnSplittingSTT(provider, time.Millisecond).Stream(context.Background(), "en")
@@ -165,12 +189,14 @@ func (s *splitTestSTT) stream(i int) *splitTestStream {
 }
 
 type splitTestStream struct {
-	mu        sync.Mutex
-	events    chan *SpeechEvent
-	closed    chan struct{}
-	ended     bool
-	pushes    int
-	closeOnce sync.Once
+	mu              sync.Mutex
+	events          chan *SpeechEvent
+	closed          chan struct{}
+	ended           bool
+	pushes          int
+	startTimeOffset float64
+	startTime       float64
+	closeOnce       sync.Once
 }
 
 func (s *splitTestStream) PushFrame(*model.AudioFrame) error {
@@ -192,3 +218,23 @@ func (s *splitTestStream) Next() (*SpeechEvent, error) {
 }
 func (s *splitTestStream) isEnded() bool  { s.mu.Lock(); defer s.mu.Unlock(); return s.ended }
 func (s *splitTestStream) pushCount() int { s.mu.Lock(); defer s.mu.Unlock(); return s.pushes }
+func (s *splitTestStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+func (s *splitTestStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	s.startTimeOffset = offset
+	s.mu.Unlock()
+}
+func (s *splitTestStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+func (s *splitTestStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	s.startTime = startTime
+	s.mu.Unlock()
+}

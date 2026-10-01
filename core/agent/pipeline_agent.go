@@ -230,12 +230,12 @@ func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
 		return nil, nil
 	}
 	if sttObj.Capabilities().Streaming {
-		return sttObj, nil
+		return stt.NewTurnSplittingSTT(sttObj, 0), nil
 	}
 	if vadObj == nil {
 		return nil, fmt.Errorf("the STT (%s) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming. Or manually wrap your STT in a stt.StreamAdapter", sttObj.Label())
 	}
-	return stt.NewStreamAdapter(sttObj, vadObj), nil
+	return stt.NewTurnSplittingSTT(stt.NewStreamAdapter(sttObj, vadObj), 0), nil
 }
 
 func seedSTTStreamTiming(stream stt.RecognizeStream) {

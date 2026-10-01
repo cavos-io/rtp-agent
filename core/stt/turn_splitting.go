@@ -58,6 +58,10 @@ func (s *TurnSplittingSTT) Stream(ctx context.Context, language string) (Recogni
 		streams:  map[RecognizeStream]struct{}{stream: {}},
 		events:   make(chan *SpeechEvent),
 	}
+	if timing, ok := stream.(StreamTiming); ok {
+		w.startTimeOffset = timing.StartTimeOffset()
+		w.startTime = timing.StartTime()
+	}
 	w.pump(stream)
 	return w, nil
 }
@@ -69,16 +73,59 @@ type turnSplittingStream struct {
 	language string
 	delay    time.Duration
 
-	mu            sync.Mutex
-	active        RecognizeStream
-	streams       map[RecognizeStream]struct{}
-	timer         *time.Timer
-	pendingFinals uint64
-	finals        uint64
-	splitting     bool
-	closed        bool
-	closeOnce     sync.Once
-	events        chan *SpeechEvent
+	mu              sync.Mutex
+	active          RecognizeStream
+	streams         map[RecognizeStream]struct{}
+	timer           *time.Timer
+	pendingFinals   uint64
+	finals          uint64
+	splitting       bool
+	closed          bool
+	closeOnce       sync.Once
+	events          chan *SpeechEvent
+	startTimeOffset float64
+	startTime       float64
+}
+
+func (s *turnSplittingStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *turnSplittingStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+	s.applyTiming(s.active)
+}
+
+func (s *turnSplittingStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *turnSplittingStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
+	s.applyTiming(s.active)
+}
+
+func (s *turnSplittingStream) applyTiming(stream RecognizeStream) {
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		return
+	}
+	SetStreamStartTimeOffset(timing, s.startTimeOffset)
+	SetStreamStartTime(timing, s.startTime)
 }
 
 func (s *turnSplittingStream) PushFrame(frame *model.AudioFrame) error {
@@ -165,6 +212,7 @@ func (s *turnSplittingStream) split(snapshot uint64) {
 		return
 	}
 	old := s.active
+	s.applyTiming(replacement)
 	s.active = replacement
 	s.streams[replacement] = struct{}{}
 	s.pendingFinals++
