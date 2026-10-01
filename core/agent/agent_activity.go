@@ -147,6 +147,13 @@ type AgentActivity struct {
 	// flush replays overwriting global state. Guarded by userTurnMu.
 	speechEpochs []speechEpoch
 
+	// pendingTurnOverlap/OnsetAt/StoppedAt freeze the FIRST correlated epoch of the
+	// pending user turn — "first onset wins" across accumulated finals. Guarded by
+	// userTurnMu; reset by clearPendingUserTurn.
+	pendingTurnOverlap   bool
+	pendingTurnOnsetAt   time.Time
+	pendingTurnStoppedAt time.Time
+
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
 
@@ -2145,6 +2152,21 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
 
 	a.userTurnMu.Lock()
+	if !a.pendingUserTranscriptPresent {
+		if ep, ok := a.consumeEpochForFinalLocked(); ok {
+			a.pendingTurnOverlap = ep.overlap
+			a.pendingTurnOnsetAt = ep.startedAt
+			a.pendingTurnStoppedAt = ep.stoppedAt
+		} else {
+			a.pendingTurnOverlap = false
+			a.pendingTurnOnsetAt = time.Time{}
+			a.pendingTurnStoppedAt = time.Time{}
+		}
+	} else {
+		// Accumulated final of the same pending turn: consume its epoch so the ring
+		// stays aligned, but keep the first onset's facts.
+		a.consumeEpochForFinalLocked()
+	}
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
 	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
 	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
@@ -2195,8 +2217,12 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			a.clearPendingUserTurn()
 			return
 		case BargeInContinue:
-			// needs more speech: keep the buffer, do not interrupt or commit yet.
-			return
+			if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+				// needs more speech while the agent keeps talking: wait.
+				return
+			}
+			// Agent already stopped: nothing further resolves this turn against live
+			// speech — fall through to the normal interrupt/EOU path below.
 		case BargeInInterrupt:
 			// fall through to the existing interrupt + EOU path.
 		}
@@ -3518,20 +3544,36 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 		return 0, "", false
 	}
 	a.falseInterruptionMu.Lock()
-	spokeAtOnset := a.agentSpokeAtUserOnset
 	stPresent := a.latestSmartTurnPresent
 	stComplete := a.latestSmartTurnComplete
 	stProb := a.latestSmartTurnProbability
 	a.falseInterruptionMu.Unlock()
-	if !spokeAtOnset {
+	a.userTurnMu.Lock()
+	overlap := a.pendingTurnOverlap
+	onsetAt := a.pendingTurnOnsetAt
+	stoppedAt := a.pendingTurnStoppedAt
+	if !a.pendingUserTranscriptPresent {
+		// No final yet (audio-activity path): the pending stamp is empty, so read
+		// the live utterance's onset facts from the newest unconsumed epoch.
+		for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+			if e := a.speechEpochs[i]; !e.consumed {
+				overlap, onsetAt, stoppedAt = e.overlap, e.startedAt, e.stoppedAt
+				break
+			}
+		}
+	}
+	a.userTurnMu.Unlock()
+	if !overlap {
 		return 0, "", false
 	}
 	speechMs := 0
-	a.userTurnMu.Lock()
-	if !a.userSpeechStartedAt.IsZero() {
-		speechMs = int(time.Since(a.userSpeechStartedAt).Milliseconds())
+	if !onsetAt.IsZero() {
+		end := stoppedAt
+		if end.IsZero() {
+			end = time.Now()
+		}
+		speechMs = int(end.Sub(onsetAt).Milliseconds())
 	}
-	a.userTurnMu.Unlock()
 	input := BargeInInput{
 		Transcript:           transcript,
 		SpeechMs:             speechMs,
@@ -3904,7 +3946,12 @@ func (a *AgentActivity) checkpointSuppressedBackchannel(transcript string, confi
 		}
 		return false
 	}
-	at := a.userSpeechStartedAt
+	a.userTurnMu.Lock()
+	at := a.pendingTurnOnsetAt
+	a.userTurnMu.Unlock()
+	if at.IsZero() {
+		at = a.userSpeechStartedAt
+	}
 	if at.IsZero() {
 		at = time.Now()
 	}
@@ -3965,6 +4012,9 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingPreflightTranscript = ""
 	a.pendingPreflightConfidence = 0
 	a.userTurnStartedAt = time.Time{}
+	a.pendingTurnOverlap = false
+	a.pendingTurnOnsetAt = time.Time{}
+	a.pendingTurnStoppedAt = time.Time{}
 }
 
 func (a *AgentActivity) notifyUserTurnUpdated() {

@@ -9056,6 +9056,96 @@ func TestOnStartOfSpeechRecordsEpoch(t *testing.T) {
 	}
 }
 
+// The greeting race from stg call 110253: onset overlaps agent speech, agent stops,
+// user re-onsets, THEN the first utterance's final arrives. The old global latch was
+// re-latched false; the epoch must keep the gate reachable.
+func TestGateGovernedLateFinalAfterReOnsetStillSuppressed(t *testing.T) {
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech}) // onset #1, agent speaking
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	activity.Session.agentState = AgentStateListening // agent finishes its sentence
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech}) // onset #2, agent silent
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "Iya", Confidence: 0.9}},
+	})
+
+	if decider.calls == 0 {
+		t.Fatal("gate never consulted: late final lost its onset overlap (latch race)")
+	}
+	activity.userTurnMu.Lock()
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if pending != "" {
+		t.Fatalf("pending transcript = %q, want cleared (Ignore suppressed the turn)", pending)
+	}
+}
+
+func TestEvaluateBargeInNoEpochUnchanged(t *testing.T) {
+	// Realtime/manual paths never record epochs: gate must stay off and the final
+	// must follow the normal path, exactly as before this change.
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+	activity.Session.agentState = AgentStateListening
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo", Confidence: 0.9}},
+	})
+	if decider.calls != 0 {
+		t.Fatalf("decider calls = %d, want 0 (no onset epoch, gate must not fire)", decider.calls)
+	}
+}
+
+func TestGateContinueAfterAgentStoppedFallsThrough(t *testing.T) {
+	// Continue used to mean "wait while the agent keeps talking". Once the agent has
+	// stopped nothing else will resolve the turn — the final must fall through to the
+	// normal path instead of stalling.
+	decider := &countingBargeInDecider{decision: BargeInContinue, reason: "needs_more_speech"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.Session.agentState = AgentStateListening
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "saya mau", Confidence: 0.9}},
+	})
+	if decider.calls == 0 {
+		t.Fatal("gate never consulted")
+	}
+	activity.userTurnMu.Lock()
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if pending == "" {
+		t.Fatal("pending transcript cleared: Continue-after-stop must keep the turn alive")
+	}
+}
+
+func TestClearPendingUserTurnResetsOverlap(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	activity.userTurnMu.Lock()
+	activity.pendingTurnOverlap = true
+	activity.pendingTurnOnsetAt = time.Now()
+	activity.pendingTurnStoppedAt = time.Now()
+	activity.userTurnMu.Unlock()
+	activity.clearPendingUserTurn()
+	activity.userTurnMu.Lock()
+	defer activity.userTurnMu.Unlock()
+	if activity.pendingTurnOverlap || !activity.pendingTurnOnsetAt.IsZero() || !activity.pendingTurnStoppedAt.IsZero() {
+		t.Fatal("clearPendingUserTurn did not reset pending-turn overlap state")
+	}
+}
+
 func TestArmBackchannelBoundaryStampsSpeakingSince(t *testing.T) {
 	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
 	defer current.MarkDone()
