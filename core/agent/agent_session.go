@@ -122,10 +122,8 @@ type AgentSessionOptions struct {
 
 	RecordSuppressedBargeInTranscript bool
 
-	// WeaveSuppressedBargeIn parks suppressed barge-in transcripts on the speech
-	// they overlapped and weaves them into the assistant message at commit time
-	// (assistant fragment / user text / assistant fragment), LLM-visible. Falls
-	// back to RecordSuppressedBargeInTranscript when no speech is in flight.
+	// WeaveSuppressedBargeIn weaves suppressed barge-in transcripts into the assistant message at
+	// commit time, LLM-visible. Falls back to RecordSuppressedBargeInTranscript.
 	WeaveSuppressedBargeIn bool
 
 	CommitOnInterimWhenNoFinal bool
@@ -282,12 +280,6 @@ type realtimeOptionsUpdatingAssistant interface {
 type AgentSession struct {
 	Options AgentSessionOptions
 
-	// lastAssistantCommit retains the newest committed assistant utterance's audio
-	// window so a late suppressed backchannel can be spliced into it (see
-	// spliceCommittedBackchannel). Guarded by lastAssistantCommitMu.
-	lastAssistantCommitMu sync.Mutex
-	lastAssistantCommit   *assistantCommitWindow
-
 	Timeline *EventTimeline
 
 	ChatCtx       *llm.ChatContext
@@ -354,12 +346,15 @@ type AgentSession struct {
 	toolExecutionRegistry   activeToolRegistry
 
 	// Event channels
-	AgentStateChangedCh  chan AgentStateChangedEvent
-	UserStateChangedCh   chan UserStateChangedEvent
-	agentStateSubs       []chan AgentStateChangedEvent
-	userStateSubs        []chan UserStateChangedEvent
-	userInputSubs        []chan UserInputTranscribedEvent
-	agentOutputSubs      []chan AgentOutputTranscribedEvent
+	AgentStateChangedCh chan AgentStateChangedEvent
+	UserStateChangedCh  chan UserStateChangedEvent
+	agentStateSubs      []chan AgentStateChangedEvent
+	userStateSubs       []chan UserStateChangedEvent
+	userInputSubs       []chan UserInputTranscribedEvent
+	agentOutputSubs     []chan AgentOutputTranscribedEvent
+	// agentSpokenChars is the length of the current utterance's caption text published so
+	// far; reset when that utterance finalizes.
+	agentSpokenChars     int
 	agentReasoningSubs   []chan AgentReasoningTranscribedEvent
 	speechCreatedCh      chan SpeechCreatedEvent
 	speechCreatedSubd    bool
@@ -473,27 +468,6 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	}
 
 	return activity.CurrentSpeech()
-}
-
-// setLastAssistantCommit retains (or clears) the splice target for late suppressed
-// backchannels. Every assistant commit overwrites it: only the newest utterance is
-// ever spliced.
-func (s *AgentSession) setLastAssistantCommit(w *assistantCommitWindow) {
-	if s == nil {
-		return
-	}
-	s.lastAssistantCommitMu.Lock()
-	s.lastAssistantCommit = w
-	s.lastAssistantCommitMu.Unlock()
-}
-
-func (s *AgentSession) lastAssistantCommitWindow() *assistantCommitWindow {
-	if s == nil {
-		return nil
-	}
-	s.lastAssistantCommitMu.Lock()
-	defer s.lastAssistantCommitMu.Unlock()
-	return s.lastAssistantCommit
 }
 
 func (s *AgentSession) currentActivity() *AgentActivity {
@@ -1517,6 +1491,15 @@ func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	// Track how much of this utterance has been published as caption text, so a suppressed
+	// backchannel weaves at the same position the live caption is cut.
+	s.mu.Lock()
+	if ev.IsFinal {
+		s.agentSpokenChars = 0
+	} else {
+		s.agentSpokenChars += len(ev.Transcript)
+	}
+	s.mu.Unlock()
 	s.recordEvent(&ev)
 	subscribers, done := s.agentOutputTranscribedSubscribers()
 	for _, ch := range subscribers {
@@ -1547,6 +1530,17 @@ func (s *AgentSession) agentOutputTranscribedSubscribers() ([]chan AgentOutputTr
 	defer s.mu.Unlock()
 
 	return append([]chan AgentOutputTranscribedEvent(nil), s.agentOutputSubs...), s.teardownCh
+}
+
+// agentSpokenCharCount is how much of the in-flight utterance has been published as
+// caption text. Zero once the utterance finalizes, or when none is in flight.
+func (s *AgentSession) agentSpokenCharCount() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentSpokenChars
 }
 
 func (s *AgentSession) AgentReasoningTranscribedEvents() <-chan AgentReasoningTranscribedEvent {
