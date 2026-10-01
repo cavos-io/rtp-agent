@@ -8974,6 +8974,88 @@ func TestAgentWasSpeakingAtBoundary(t *testing.T) {
 	}
 }
 
+func TestSpeechEpochRingCorrelation(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now().Add(-5 * time.Second)
+	t1 := time.Now().Add(-1 * time.Second)
+
+	activity.appendSpeechEpoch(t0, true) // utterance 1: overlapped agent speech
+	activity.stampEpochStopped(t0.Add(2 * time.Second))
+	activity.appendSpeechEpoch(t1, false) // utterance 2: agent silent
+	activity.stampEpochStopped(t1.Add(500 * time.Millisecond))
+
+	// Finals arrive FIFO: first final belongs to the FIRST stopped epoch.
+	activity.userTurnMu.Lock()
+	ep1, ok1 := activity.consumeEpochForFinalLocked()
+	ep2, ok2 := activity.consumeEpochForFinalLocked()
+	_, ok3 := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if !ok1 || !ep1.overlap || !ep1.startedAt.Equal(t0) {
+		t.Fatalf("first final: got %+v ok=%v, want overlap epoch at t0", ep1, ok1)
+	}
+	if !ok2 || ep2.overlap || !ep2.startedAt.Equal(t1) {
+		t.Fatalf("second final: got %+v ok=%v, want non-overlap epoch at t1", ep2, ok2)
+	}
+	if ok3 {
+		t.Fatal("third consume: want no epoch left")
+	}
+}
+
+func TestSpeechEpochActiveFallback(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now()
+	activity.appendSpeechEpoch(t0, true) // still speaking, no EOS yet
+	activity.userTurnMu.Lock()
+	ep, ok := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if !ok || !ep.overlap || !ep.startedAt.Equal(t0) {
+		t.Fatalf("active-epoch fallback: got %+v ok=%v", ep, ok)
+	}
+}
+
+func TestSpeechEpochReplayReusesEpoch(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now().Add(-4 * time.Second)
+	activity.appendSpeechEpoch(t0, true)
+	activity.stampEpochStopped(t0.Add(3 * time.Second))
+	// Flush-replayed start-of-speech carries the ORIGINAL timestamp: must reuse, not
+	// mint a fresh non-overlap epoch.
+	activity.appendSpeechEpoch(t0.Add(time.Second), false)
+	activity.userTurnMu.Lock()
+	n := len(activity.speechEpochs)
+	ep, _ := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if n != 1 {
+		t.Fatalf("epochs = %d, want 1 (replay reused)", n)
+	}
+	if !ep.overlap {
+		t.Fatal("replay poisoned the epoch: overlap lost")
+	}
+}
+
+func TestOnStartOfSpeechRecordsEpoch(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.userTurnMu.Lock()
+	n := len(activity.speechEpochs)
+	overlap := n > 0 && activity.speechEpochs[0].overlap
+	activity.userTurnMu.Unlock()
+	if n != 1 || !overlap {
+		t.Fatalf("epochs=%d overlap=%v, want 1 overlap epoch (agent is speaking)", n, overlap)
+	}
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.userTurnMu.Lock()
+	stopped := !activity.speechEpochs[0].stoppedAt.IsZero()
+	activity.userTurnMu.Unlock()
+	if !stopped {
+		t.Fatal("EOS did not stamp epoch stoppedAt")
+	}
+}
+
 func TestArmBackchannelBoundaryStampsSpeakingSince(t *testing.T) {
 	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
 	defer current.MarkDone()

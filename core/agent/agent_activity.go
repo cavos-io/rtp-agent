@@ -141,6 +141,12 @@ type AgentActivity struct {
 
 	interimCommittedTurn bool
 
+	// speechEpochs is a short ring of recent user-speech onsets with the agent-overlap
+	// fact frozen at onset time. STT finals are correlated to epochs FIFO so a late
+	// final still sees ITS onset's overlap, immune to later onsets and to held-STT
+	// flush replays overwriting global state. Guarded by userTurnMu.
+	speechEpochs []speechEpoch
+
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
 
@@ -1747,6 +1753,78 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 }
 
 // Event callbacks from the active audio pipeline.
+const maxSpeechEpochs = 8
+
+// speechEpoch freezes one user utterance's onset facts. overlap is decided once, at
+// onset, from the agent-speaking window — the Python reference's SpeechEpoch, minus ids.
+type speechEpoch struct {
+	startedAt time.Time
+	stoppedAt time.Time
+	overlap   bool
+	consumed  bool
+}
+
+// appendSpeechEpoch records an onset. A replayed onset (held-STT flush re-delivers
+// start-of-speech with its original timestamp) that falls inside an existing epoch's
+// span reuses that epoch instead of minting a non-overlap duplicate.
+func (a *AgentActivity) appendSpeechEpoch(startedAt time.Time, overlap bool) {
+	if a == nil || startedAt.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	for i := range a.speechEpochs {
+		e := &a.speechEpochs[i]
+		if e.consumed || startedAt.Before(e.startedAt) {
+			continue
+		}
+		if e.stoppedAt.IsZero() || !startedAt.After(e.stoppedAt) {
+			return // inside an existing epoch: reuse
+		}
+	}
+	a.speechEpochs = append(a.speechEpochs, speechEpoch{startedAt: startedAt, overlap: overlap})
+	if len(a.speechEpochs) > maxSpeechEpochs {
+		a.speechEpochs = a.speechEpochs[len(a.speechEpochs)-maxSpeechEpochs:]
+	}
+}
+
+// stampEpochStopped closes the newest still-open epoch at EOS time.
+func (a *AgentActivity) stampEpochStopped(stoppedAt time.Time) {
+	if a == nil || stoppedAt.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+		e := &a.speechEpochs[i]
+		if !e.consumed && e.stoppedAt.IsZero() {
+			e.stoppedAt = stoppedAt
+			return
+		}
+	}
+}
+
+// consumeEpochForFinalLocked correlates an arriving STT final to its epoch: finals
+// follow their EOS in order, so the oldest unconsumed CLOSED epoch wins; with none
+// closed, the newest open (active) epoch. Caller holds userTurnMu.
+func (a *AgentActivity) consumeEpochForFinalLocked() (speechEpoch, bool) {
+	for i := range a.speechEpochs {
+		e := &a.speechEpochs[i]
+		if !e.consumed && !e.stoppedAt.IsZero() {
+			e.consumed = true
+			return *e, true
+		}
+	}
+	for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+		e := &a.speechEpochs[i]
+		if !e.consumed {
+			e.consumed = true
+			return *e, true
+		}
+	}
+	return speechEpoch{}, false
+}
+
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.onStartOfSpeech(ev, nil)
 }
@@ -1788,6 +1866,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 			startedAt = time.Now()
 		}
 		a.userSpeechStartedAt = startedAt
+		a.appendSpeechEpoch(startedAt, a.agentWasSpeakingAt(startedAt))
 		if a.userTurnStartedAt.IsZero() {
 			a.userTurnStartedAt = startedAt
 		}
@@ -1851,6 +1930,7 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		stoppedAt = a.userSpeechStoppedAt
 	}
 	a.userSpeechStoppedAt = stoppedAt
+	a.stampEpochStopped(stoppedAt)
 	a.userTurnMu.Lock()
 	a.syntheticEOU = synthetic
 	if synthetic {
