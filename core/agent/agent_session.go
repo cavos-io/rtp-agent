@@ -122,6 +122,12 @@ type AgentSessionOptions struct {
 
 	RecordSuppressedBargeInTranscript bool
 
+	// WeaveSuppressedBargeIn parks suppressed barge-in transcripts on the speech
+	// they overlapped and weaves them into the assistant message at commit time
+	// (assistant fragment / user text / assistant fragment), LLM-visible. Falls
+	// back to RecordSuppressedBargeInTranscript when no speech is in flight.
+	WeaveSuppressedBargeIn bool
+
 	CommitOnInterimWhenNoFinal bool
 
 	RecordUncommittedTranscript bool
@@ -275,6 +281,12 @@ type realtimeOptionsUpdatingAssistant interface {
 
 type AgentSession struct {
 	Options AgentSessionOptions
+
+	// lastAssistantCommit retains the newest committed assistant utterance's audio
+	// window so a late suppressed backchannel can be spliced into it (see
+	// spliceCommittedBackchannel). Guarded by lastAssistantCommitMu.
+	lastAssistantCommitMu sync.Mutex
+	lastAssistantCommit   *assistantCommitWindow
 
 	Timeline *EventTimeline
 
@@ -461,6 +473,27 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	}
 
 	return activity.CurrentSpeech()
+}
+
+// setLastAssistantCommit retains (or clears) the splice target for late suppressed
+// backchannels. Every assistant commit overwrites it: only the newest utterance is
+// ever spliced.
+func (s *AgentSession) setLastAssistantCommit(w *assistantCommitWindow) {
+	if s == nil {
+		return
+	}
+	s.lastAssistantCommitMu.Lock()
+	s.lastAssistantCommit = w
+	s.lastAssistantCommitMu.Unlock()
+}
+
+func (s *AgentSession) lastAssistantCommitWindow() *assistantCommitWindow {
+	if s == nil {
+		return nil
+	}
+	s.lastAssistantCommitMu.Lock()
+	defer s.lastAssistantCommitMu.Unlock()
+	return s.lastAssistantCommit
 }
 
 func (s *AgentSession) currentActivity() *AgentActivity {

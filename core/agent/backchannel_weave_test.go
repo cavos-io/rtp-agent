@@ -464,3 +464,47 @@ func TestApplicableCheckpointsSplitsByWindow(t *testing.T) {
 		t.Fatalf("out = %+v, want early,late", out)
 	}
 }
+
+func TestBuildAssistantCommitWindowSingleFragment(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	msg := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo selamat pagi"})
+	w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 100.0, 106.0)
+	if w == nil || len(w.fragments) != 1 {
+		t.Fatalf("window = %+v, want 1 fragment", w)
+	}
+	f := w.fragments[0]
+	if f.msg != msg || f.winStart != 100.0 || f.winEnd != 106.0 {
+		t.Fatalf("fragment = %+v, want full window on the committed message", f)
+	}
+}
+
+func TestBuildAssistantCommitWindowSkipsInvalid(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	msg := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo"})
+	if w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 0, 0); w != nil {
+		t.Fatal("no audio window: want nil")
+	}
+	user := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "ya"})
+	if w := buildAssistantCommitWindow([]llm.ChatItem{user}, 100, 106); w != nil {
+		t.Fatal("no assistant items: want nil")
+	}
+}
+
+func TestBuildAssistantCommitWindowWovenFragments(t *testing.T) {
+	// A woven commit: assistant / user / assistant. Sub-windows come from the
+	// second fragment's CreatedAt.
+	chatCtx := llm.NewChatContext()
+	first := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "halo selamat", CreatedAt: unixSecondsToTime(100.0)})
+	userMsg := insertCheckpointUserMessage(chatCtx, "ya", 103.0, 0.9, false)
+	second := chatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "pagi semua", CreatedAt: unixSecondsToTime(103.5)})
+	w := buildAssistantCommitWindow([]llm.ChatItem{first, userMsg, second}, 100.0, 106.0)
+	if w == nil || len(w.fragments) != 2 {
+		t.Fatalf("window = %+v, want 2 assistant fragments", w)
+	}
+	if w.fragments[0].winStart != 100.0 || w.fragments[0].winEnd != 103.5 {
+		t.Fatalf("fragment[0] window = [%v,%v], want [100,103.5]", w.fragments[0].winStart, w.fragments[0].winEnd)
+	}
+	if w.fragments[1].winStart != 103.5 || w.fragments[1].winEnd != 106.0 {
+		t.Fatalf("fragment[1] window = [%v,%v], want [103.5,106]", w.fragments[1].winStart, w.fragments[1].winEnd)
+	}
+}

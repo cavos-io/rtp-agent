@@ -121,9 +121,17 @@ func (va *PipelineAgent) resetGenerationCtxLocked() {
 }
 
 func (va *PipelineAgent) resetGenerationCtxUnlessPaused() {
-	if va.session != nil && va.session.activity != nil &&
-		va.session.activity.hasActiveFalseInterruptionPause() {
-		return
+	if va.session != nil && va.session.activity != nil {
+		activity := va.session.activity
+		if activity.hasActiveFalseInterruptionPause() {
+			return
+		}
+		// Gate-governed overlap: the sentence keeps playing and only the gate may kill
+		// it (via SpeechHandle.Interrupt, which does not need this ctx). Resetting here
+		// would abort the in-flight generation on every user speech onset.
+		if activity.bargeInGateGoverns() && va.session.AgentStateValue() == AgentStateSpeaking {
+			return
+		}
 	}
 	va.mu.Lock()
 	va.resetGenerationCtxLocked()
@@ -900,15 +908,36 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			}
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
-				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
+				started, stopped := 0.0, 0.0
+				if ttsGen != nil {
+					started, stopped = ttsGen.StartedSpeakingAt, ttsGen.StoppedSpeakingAt
+				}
 				chatCtx, chatMu := va.chatContext()
 				chatMu.Lock()
-				insertChatItemIfMissing(chatCtx, speech.Generation.AssistantMessage)
+				committed := commitAssistantWithWeave(chatCtx, speech, started, stopped,
+					llm.ChatMessageArgs{Text: forwardedText, Interrupted: speech.IsInterrupted()},
+					speech.Generation.AssistantMessage)
 				chatMu.Unlock()
-				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
-				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
+				logWovenCommit(session, committed, started, stopped)
+				session.setLastAssistantCommit(buildAssistantCommitWindow(committed, started, stopped))
+				for _, item := range committed {
+					if m, ok := item.(*llm.ChatMessage); ok && m.TranscriptOnly {
+						continue // fallback record: no live emit, matches recordTranscriptOnlyUserMessage
+					}
+					addSpeechChatItemIfMissing(speech, item)
+					session.EmitConversationItemAdded(item)
+				}
 			}
+		}
+		if cps := speech.takeBackchannelCheckpoints(); len(cps) > 0 {
+			// Speech ended without a weavable commit: record the parked
+			// backchannels transcript-only so they aren't lost.
+			chatCtx, chatMu := va.chatContext()
+			chatMu.Lock()
+			insertTranscriptOnlyCheckpoints(chatCtx, cps)
+			chatMu.Unlock()
+			session.Logger().Infow("backchannel_weave.stranded_fallback", "count", len(cps))
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
@@ -1251,16 +1280,39 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			}
 			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
+			started, stopped := 0.0, 0.0
+			if ttsGen != nil {
+				started, stopped = ttsGen.StartedSpeakingAt, ttsGen.StoppedSpeakingAt
+			}
 			activeChatMu.Lock()
-			msg := activeChatCtx.AddMessage(args)
+			committed := commitAssistantWithWeave(activeChatCtx, opts.SpeechHandle, started, stopped, args, nil)
 			activeChatMu.Unlock()
-			session.EmitConversationItemAdded(msg)
-			if opts.SpeechHandle != nil {
-				opts.SpeechHandle.AddChatItems(msg)
+			logWovenCommit(session, committed, started, stopped)
+			session.setLastAssistantCommit(buildAssistantCommitWindow(committed, started, stopped))
+			for _, item := range committed {
+				if m, ok := item.(*llm.ChatMessage); ok && m.TranscriptOnly {
+					// fallback backchannel record: transcript-only, no live emit —
+					// same contract as recordTranscriptOnlyUserMessage.
+					continue
+				}
+				session.EmitConversationItemAdded(item)
+				if opts.SpeechHandle != nil {
+					opts.SpeechHandle.AddChatItems(item)
+				}
 			}
 		}
 
 		if opts.SpeechHandle != nil {
+			// Drain any checkpoint that could not be woven — nothing committed, or it
+			// was parked in the race window between the commit's drain and here (the
+			// suppression path refuses once MarkGenerationDone flips IsDone). Record
+			// transcript-only so it is never silently lost.
+			if cps := opts.SpeechHandle.takeBackchannelCheckpoints(); len(cps) > 0 {
+				activeChatMu.Lock()
+				insertTranscriptOnlyCheckpoints(activeChatCtx, cps)
+				activeChatMu.Unlock()
+				session.Logger().Infow("backchannel_weave.stranded_fallback", "count", len(cps))
+			}
 			_ = opts.SpeechHandle.MarkGenerationDone()
 		}
 		closeReplyDone()
