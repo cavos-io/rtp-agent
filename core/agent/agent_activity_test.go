@@ -7528,7 +7528,7 @@ func TestAgentActivityRecordSuppressedBargeInTranscriptDisabledByDefault(t *test
 	})
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
-	activity.agentSpokeAtUserOnset = true
+	activity.appendSpeechEpoch(time.Now().Add(-300*time.Millisecond), true)
 	defer activity.Stop()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
@@ -7556,7 +7556,7 @@ func TestAgentActivityRecordSuppressedBargeInTranscriptWhenEnabled(t *testing.T)
 	})
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
-	activity.agentSpokeAtUserOnset = true
+	activity.appendSpeechEpoch(time.Now().Add(-300*time.Millisecond), true)
 	defer activity.Stop()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
@@ -8792,4 +8792,822 @@ func TestAgentActivityInterimTranscriptsDoNotPauseAlreadyPausedSpeechAgain(t *te
 		t.Fatal("current speech interrupted instead of remaining paused")
 	}
 	current.MarkDone()
+}
+
+// fakeInterruptBargeInDecider always confirms the barge-in, as a worker's policy would
+// for a clear interrupt intent.
+type fakeInterruptBargeInDecider struct{}
+
+func (fakeInterruptBargeInDecider) DecideBargeIn(BargeInInput) (BargeInDecision, string) {
+	return BargeInInterrupt, "test_interrupt"
+}
+
+// newGateGovernedSpeakingActivity builds an activity where the barge-in gate governs
+// (BargeInDecider + AudioTurnDetector) and the agent is mid-sentence.
+func newGateGovernedSpeakingActivity(t *testing.T, decider BargeInDecider) (*AgentActivity, *recordingAudioOutputController, *SpeechHandle) {
+	t.Helper()
+	agent := NewAgent("test")
+	agent.AudioTurnDetector = &recordingAudioTurnDetector{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		BargeInDecider:              decider,
+		FalseInterruptionTimeout:    0.5,
+		FalseInterruptionTimeoutSet: true,
+		ResumeFalseInterruption:     true,
+		ResumeFalseInterruptionSet:  true,
+	})
+	audioOutput := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(audioOutput)
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.agentState = AgentStateSpeaking
+	return activity, audioOutput, current
+}
+
+func TestAgentActivityOnStartOfSpeechKeepsSpeakingWhenGateGoverns(t *testing.T) {
+	activity, audioOutput, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 0 (gate governs: keep speaking)", audioOutput.pauseCount)
+	}
+	if activity.pausedSpeech != nil {
+		t.Fatal("pausedSpeech set, want nil when the gate governs")
+	}
+	if got := activity.Session.AgentStateValue(); got != AgentStateSpeaking {
+		t.Fatalf("agent state = %v, want Speaking (no pause-driven Listening flip)", got)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted on onset, want untouched")
+	}
+	activity.userTurnMu.Lock()
+	watermark := activity.ignoreUserTranscriptUntil
+	activity.userTurnMu.Unlock()
+	if watermark.IsZero() {
+		t.Fatal("echo-tail watermark not armed on gate-governed onset")
+	}
+	current.MarkDone()
+}
+
+func TestAgentActivityGateVetoLeavesAudioUntouched(t *testing.T) {
+	activity, audioOutput, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	activity.interruptByAudioActivity("test", "k", "v", time.Time{})
+
+	if current.IsInterrupted() {
+		t.Fatal("gate veto: current speech interrupted, want still playing")
+	}
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("gate veto: PauseAudioOutput calls = %d, want 0", audioOutput.pauseCount)
+	}
+	if activity.pausedSpeech != nil {
+		t.Fatal("gate veto: pausedSpeech set, want nil")
+	}
+	current.MarkDone()
+}
+
+func TestAgentActivityGateInterruptKillsWithoutPause(t *testing.T) {
+	activity, audioOutput, current := newGateGovernedSpeakingActivity(t, fakeInterruptBargeInDecider{})
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+
+	activity.interruptByAudioActivity("test", "k", "v", time.Time{})
+
+	if !current.IsInterrupted() {
+		t.Fatal("gate interrupt: current speech not interrupted, want hard kill")
+	}
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("gate interrupt: PauseAudioOutput calls = %d, want 0 (kill, not pause-and-resume)", audioOutput.pauseCount)
+	}
+	if activity.pausedSpeech != nil {
+		t.Fatal("gate interrupt: pausedSpeech set, want nil")
+	}
+}
+
+func TestAgentActivityGateGovernedFinalTranscriptReachesDecider(t *testing.T) {
+	// The pause used to flip the state to Listening; without it the agent stays Speaking
+	// through the whole overlap. The barge-in final must still reach the decider instead
+	// of being parked in heldSTTEvents.
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "test_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	activity.holdSTTWhileAgentSpeaking = true // as armed at agent speech start
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "iya", Confidence: 0.9}},
+	})
+
+	if decider.calls == 0 {
+		t.Fatal("decider never called: barge-in final was parked instead of gated")
+	}
+	activity.userTurnMu.Lock()
+	held := len(activity.heldSTTEvents)
+	activity.userTurnMu.Unlock()
+	if held != 0 {
+		t.Fatalf("heldSTTEvents = %d, want 0 (onset drain must disarm the hold)", held)
+	}
+	current.MarkDone()
+}
+
+type countingBargeInDecider struct {
+	decision BargeInDecision
+	reason   string
+	calls    int
+}
+
+func (d *countingBargeInDecider) DecideBargeIn(BargeInInput) (BargeInDecision, string) {
+	d.calls++
+	return d.decision, d.reason
+}
+
+// classifyingBargeInDecider mirrors the worker's Gate: a verdict about the agent's audio,
+// plus the orthogonal backchannel classifier that alone decides whether the turn is dropped.
+type classifyingBargeInDecider struct {
+	decision     BargeInDecision
+	reason       string
+	backchannels map[string]bool
+}
+
+func (d *classifyingBargeInDecider) DecideBargeIn(BargeInInput) (BargeInDecision, string) {
+	return d.decision, d.reason
+}
+
+func (d *classifyingBargeInDecider) IsBackchannelOnly(transcript string) bool {
+	return d.backchannels[transcript]
+}
+
+// newClassifyingGateActivity is newGateGovernedSpeakingActivity plus the weave option, so the
+// drop path parks a checkpoint and the commit path is observable by its absence.
+func newClassifyingGateActivity(t *testing.T, decider BargeInDecider) (*AgentActivity, *recordingAudioOutputController, *SpeechHandle) {
+	t.Helper()
+	activity, audioOutput, current := newGateGovernedSpeakingActivity(t, decider)
+	activity.Session.Options.WeaveSuppressedBargeIn = true
+	return activity, audioOutput, current
+}
+
+// overlappingFinal drives one utterance that starts while the agent is speaking.
+func overlappingFinal(activity *AgentActivity, text string) {
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: text, Confidence: 0.9}},
+	})
+}
+
+// go93.log: "Android" (419ms) got Ignore/speech_too_short and was destroyed, so the caller had
+// to repeat it. It is not a backchannel, so it must reach the LLM while the agent plays on.
+func TestGateIgnoreNonBackchannelCommitsTurnAndSparesAgent(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "speech_too_short",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	defer current.MarkDone()
+
+	overlappingFinal(activity, "Android")
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 0 {
+		t.Fatalf("parked %d checkpoints, want 0: a non-backchannel must not be woven away", len(cps))
+	}
+	if current.IsInterrupted() {
+		t.Fatal("speech interrupted: Ignore must leave the agent's sentence playing")
+	}
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 0", audioOutput.pauseCount)
+	}
+}
+
+// The same verdict on a backchannel keeps the old behaviour: woven in, never sent to the LLM.
+func TestGateIgnoreBackchannelStillDropsTurn(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "speech_too_short",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, _, current := newClassifyingGateActivity(t, decider)
+	defer current.MarkDone()
+
+	overlappingFinal(activity, "Yeah")
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1: a backchannel must be woven, not answered", len(cps))
+	}
+	if current.IsInterrupted() {
+		t.Fatal("speech interrupted: a backchannel must never stop the agent")
+	}
+}
+
+// Continue is the verbatim-ladder default, so it carries most real speech. It must commit too,
+// or every utterance under 1200ms and 4 words would strand exactly as Ignore used to.
+func TestGateContinueNonBackchannelCommitsTurn(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInContinue,
+		reason:       "needs_more_speech",
+		backchannels: map[string]bool{},
+	}
+	activity, _, current := newClassifyingGateActivity(t, decider)
+	defer current.MarkDone()
+
+	overlappingFinal(activity, "Ya sudah sampai")
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 0 {
+		t.Fatalf("parked %d checkpoints, want 0", len(cps))
+	}
+	if action := activity.bargeInTurnAction(BargeInContinue, "Ya sudah sampai"); action != bargeInTurnCommit {
+		t.Fatalf("turn action = %v, want commit", action)
+	}
+}
+
+// A decider that does not implement BackchannelClassifier keeps the pre-parity behaviour, so
+// third-party hosts are unaffected by the split.
+func TestBargeInTurnActionWithoutClassifierKeepsLegacyBehavior(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, &countingBargeInDecider{})
+	defer current.MarkDone()
+
+	cases := []struct {
+		decision BargeInDecision
+		want     bargeInTurnAction
+	}{
+		{BargeInIgnore, bargeInTurnDrop},
+		{BargeInContinue, bargeInTurnHold},
+		{BargeInInterrupt, bargeInTurnCommit},
+	}
+	for _, c := range cases {
+		if got := activity.bargeInTurnAction(c.decision, "apa saja"); got != c.want {
+			t.Errorf("bargeInTurnAction(%v) = %v, want %v", c.decision, got, c.want)
+		}
+	}
+}
+
+func TestAgentWasSpeakingAtWindow(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+
+	// Speaking now: any onset is overlap, window bookkeeping irrelevant.
+	if !activity.agentWasSpeakingAt(time.Now()) {
+		t.Fatal("agent speaking now: want overlap=true")
+	}
+
+	// Closed window [since, ended): onset inside → true, before → false.
+	since := time.Now().Add(-6 * time.Second)
+	ended := time.Now().Add(-2 * time.Second)
+	activity.Session.agentState = AgentStateListening
+	activity.falseInterruptionMu.Lock()
+	activity.agentSpeakingSince = since
+	activity.agentSpeechEndedAt = ended
+	activity.falseInterruptionMu.Unlock()
+	if !activity.agentWasSpeakingAt(since.Add(2 * time.Second)) {
+		t.Fatal("onset inside closed window: want overlap=true")
+	}
+	if activity.agentWasSpeakingAt(since.Add(-time.Second)) {
+		t.Fatal("onset before window: want overlap=false")
+	}
+	if activity.agentWasSpeakingAt(ended.Add(time.Second)) {
+		t.Fatal("onset after window: want overlap=false")
+	}
+}
+
+func TestAgentWasSpeakingAtBoundary(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	activity.Session.agentState = AgentStateListening
+	since := time.Now().Add(-6 * time.Second)
+	ended := time.Now().Add(-2 * time.Second)
+	activity.falseInterruptionMu.Lock()
+	activity.agentSpeakingSince = since
+	activity.agentSpeechEndedAt = ended
+	activity.falseInterruptionMu.Unlock()
+	// Half-open: onset exactly at agent stop is NOT overlap (a real answer).
+	if activity.agentWasSpeakingAt(ended) {
+		t.Fatal("onset == agent stop: want overlap=false (half-open window)")
+	}
+	// No window known and not speaking → false (unchanged legacy behavior).
+	activity.falseInterruptionMu.Lock()
+	activity.agentSpeakingSince = time.Time{}
+	activity.agentSpeechEndedAt = time.Time{}
+	activity.falseInterruptionMu.Unlock()
+	if activity.agentWasSpeakingAt(time.Now()) {
+		t.Fatal("no window, not speaking: want overlap=false")
+	}
+}
+
+func TestSpeechEpochRingCorrelation(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now().Add(-5 * time.Second)
+	t1 := time.Now().Add(-1 * time.Second)
+
+	activity.appendSpeechEpoch(t0, true) // utterance 1: overlapped agent speech
+	activity.stampEpochStopped(t0.Add(2 * time.Second))
+	activity.appendSpeechEpoch(t1, false) // utterance 2: agent silent
+	activity.stampEpochStopped(t1.Add(500 * time.Millisecond))
+
+	// Finals arrive FIFO: first final belongs to the FIRST stopped epoch.
+	activity.userTurnMu.Lock()
+	ep1, ok1 := activity.consumeEpochForFinalLocked()
+	ep2, ok2 := activity.consumeEpochForFinalLocked()
+	_, ok3 := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if !ok1 || !ep1.overlap || !ep1.startedAt.Equal(t0) {
+		t.Fatalf("first final: got %+v ok=%v, want overlap epoch at t0", ep1, ok1)
+	}
+	if !ok2 || ep2.overlap || !ep2.startedAt.Equal(t1) {
+		t.Fatalf("second final: got %+v ok=%v, want non-overlap epoch at t1", ep2, ok2)
+	}
+	if ok3 {
+		t.Fatal("third consume: want no epoch left")
+	}
+}
+
+func TestSpeechEpochActiveFallback(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now()
+	activity.appendSpeechEpoch(t0, true) // still speaking, no EOS yet
+	activity.userTurnMu.Lock()
+	ep, ok := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if !ok || !ep.overlap || !ep.startedAt.Equal(t0) {
+		t.Fatalf("active-epoch fallback: got %+v ok=%v", ep, ok)
+	}
+}
+
+func TestSpeechEpochReplayReusesEpoch(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	t0 := time.Now().Add(-4 * time.Second)
+	activity.appendSpeechEpoch(t0, true)
+	activity.stampEpochStopped(t0.Add(3 * time.Second))
+	// Flush-replayed start-of-speech carries the ORIGINAL timestamp: must reuse, not
+	// mint a fresh non-overlap epoch.
+	activity.appendSpeechEpoch(t0.Add(time.Second), false)
+	activity.userTurnMu.Lock()
+	n := len(activity.speechEpochs)
+	ep, _ := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if n != 1 {
+		t.Fatalf("epochs = %d, want 1 (replay reused)", n)
+	}
+	if !ep.overlap {
+		t.Fatal("replay poisoned the epoch: overlap lost")
+	}
+}
+
+func TestOnStartOfSpeechRecordsEpoch(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.userTurnMu.Lock()
+	n := len(activity.speechEpochs)
+	overlap := n > 0 && activity.speechEpochs[0].overlap
+	activity.userTurnMu.Unlock()
+	if n != 1 || !overlap {
+		t.Fatalf("epochs=%d overlap=%v, want 1 overlap epoch (agent is speaking)", n, overlap)
+	}
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.userTurnMu.Lock()
+	stopped := !activity.speechEpochs[0].stoppedAt.IsZero()
+	activity.userTurnMu.Unlock()
+	if !stopped {
+		t.Fatal("EOS did not stamp epoch stoppedAt")
+	}
+}
+
+// The greeting race from stg call 110253: onset overlaps agent speech, agent stops,
+// user re-onsets, THEN the first utterance's final arrives. The old global latch was
+// re-latched false; the epoch must keep the gate reachable.
+func TestGateGovernedLateFinalAfterReOnsetStillSuppressed(t *testing.T) {
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech}) // onset #1, agent speaking
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	activity.Session.agentState = AgentStateListening // agent finishes its sentence
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech}) // onset #2, agent silent
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "Iya", Confidence: 0.9}},
+	})
+
+	if decider.calls == 0 {
+		t.Fatal("gate never consulted: late final lost its onset overlap (latch race)")
+	}
+	activity.userTurnMu.Lock()
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if pending != "" {
+		t.Fatalf("pending transcript = %q, want cleared (Ignore suppressed the turn)", pending)
+	}
+}
+
+func TestEvaluateBargeInNoEpochUnchanged(t *testing.T) {
+	// Realtime/manual paths never record epochs: gate must stay off and the final
+	// must follow the normal path, exactly as before this change.
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+	activity.Session.agentState = AgentStateListening
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo", Confidence: 0.9}},
+	})
+	if decider.calls != 0 {
+		t.Fatalf("decider calls = %d, want 0 (no onset epoch, gate must not fire)", decider.calls)
+	}
+}
+
+func TestGateContinueAfterAgentStoppedFallsThrough(t *testing.T) {
+	// Continue used to mean "wait while the agent keeps talking". Once the agent has
+	// stopped nothing else will resolve the turn — the final must fall through to the
+	// normal path instead of stalling.
+	decider := &countingBargeInDecider{decision: BargeInContinue, reason: "needs_more_speech"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.Session.agentState = AgentStateListening
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "saya mau", Confidence: 0.9}},
+	})
+	if decider.calls == 0 {
+		t.Fatal("gate never consulted")
+	}
+	activity.userTurnMu.Lock()
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if pending == "" {
+		t.Fatal("pending transcript cleared: Continue-after-stop must keep the turn alive")
+	}
+}
+
+func TestDroppedFinalConsumesItsEpochSoNextTurnIsNotPoisoned(t *testing.T) {
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+
+	// Utterance A: onset over agent speech, then its final is dropped for
+	// zero confidence — the epoch must not survive unconsumed.
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "iya", Confidence: 0}},
+	})
+
+	// Agent finishes. Utterance B is a genuine question, agent silent throughout.
+	activity.Session.agentState = AgentStateListening
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "halo ini siapa", Confidence: 0.9}},
+	})
+
+	if decider.calls != 0 {
+		t.Fatalf("decider calls = %d, want 0: turn B had no overlap but inherited A's stale epoch", decider.calls)
+	}
+	activity.userTurnMu.Lock()
+	overlap := activity.pendingTurnOverlap
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if overlap {
+		t.Fatal("turn B marked as overlapping the agent: stale epoch leaked overlap=true")
+	}
+	if pending == "" {
+		t.Fatal("turn B transcript was suppressed, want it kept for a normal reply")
+	}
+}
+
+// An onset that never yields any final (noise, echo) leaves a closed epoch behind.
+// It must not be handed to a much-later final as that final's onset facts.
+func TestStaleUnconsumedEpochIsNotCorrelatedToAMuchLaterFinal(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+
+	// Ancient overlap epoch whose final never arrived.
+	stale := time.Now().Add(-2 * time.Minute)
+	activity.appendSpeechEpoch(stale, true)
+	activity.stampEpochStopped(stale.Add(300 * time.Millisecond))
+
+	// Fresh, non-overlap utterance.
+	fresh := time.Now().Add(-400 * time.Millisecond)
+	activity.appendSpeechEpoch(fresh, false)
+	activity.stampEpochStopped(time.Now())
+
+	activity.userTurnMu.Lock()
+	ep, ok := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+	if !ok {
+		t.Fatal("no epoch correlated")
+	}
+	if ep.overlap || !ep.startedAt.Equal(fresh) {
+		t.Fatalf("correlated epoch = %+v, want the fresh non-overlap epoch at %v", ep, fresh)
+	}
+}
+
+func TestClearPendingUserTurnResetsOverlap(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	activity.userTurnMu.Lock()
+	activity.pendingTurnOverlap = true
+	activity.pendingTurnOnsetAt = time.Now()
+	activity.pendingTurnStoppedAt = time.Now()
+	activity.userTurnMu.Unlock()
+	activity.clearPendingUserTurn()
+	activity.userTurnMu.Lock()
+	defer activity.userTurnMu.Unlock()
+	if activity.pendingTurnOverlap || !activity.pendingTurnOnsetAt.IsZero() || !activity.pendingTurnStoppedAt.IsZero() {
+		t.Fatal("clearPendingUserTurn did not reset pending-turn overlap state")
+	}
+}
+
+// I1: VAD onsets are retroactive (vadSpeechStartedAt subtracts SpeechDuration +
+// InferenceDuration). If the user started talking BEFORE the agent's next sentence
+// began, that is not an overlap even though the agent is speaking by the time the
+// onset event is delivered.
+func TestAgentWasSpeakingAtRejectsOnsetBeforeCurrentSpeechStarted(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+
+	// Agent is speaking NOW, having started 200ms ago.
+	since := time.Now().Add(-200 * time.Millisecond)
+	activity.falseInterruptionMu.Lock()
+	activity.agentSpeakingSince = since
+	activity.agentSpeechEndedAt = time.Time{}
+	activity.falseInterruptionMu.Unlock()
+
+	if activity.agentWasSpeakingAt(since.Add(-500 * time.Millisecond)) {
+		t.Fatal("onset predates the current agent sentence: want overlap=false (real answer)")
+	}
+	if !activity.agentWasSpeakingAt(since.Add(50 * time.Millisecond)) {
+		t.Fatal("onset inside the current agent sentence: want overlap=true")
+	}
+	// Back-compat: no window recorded but speaking → still true.
+	activity.falseInterruptionMu.Lock()
+	activity.agentSpeakingSince = time.Time{}
+	activity.falseInterruptionMu.Unlock()
+	if !activity.agentWasSpeakingAt(time.Now()) {
+		t.Fatal("speaking with no recorded window: want overlap=true (legacy behavior)")
+	}
+}
+
+// I4: SpeechMs must keep growing across the accumulated finals of one turn, or the
+// gate's strong_barge_in rule (SpeechMs >= 1200) can never fire and a long barge-in
+// with few words never interrupts.
+func TestSpeechMsGrowsAcrossAccumulatedFinals(t *testing.T) {
+	decider := &recordingSpeechMsDecider{decision: BargeInContinue, reason: "needs_more_speech"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+
+	onset := time.Now().Add(-2 * time.Second)
+	activity.appendSpeechEpoch(onset, true)
+	activity.stampEpochStopped(onset.Add(600 * time.Millisecond))
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "tunggu", Confidence: 0.9}},
+	})
+	first := decider.lastSpeechMs
+
+	// The user keeps talking: a second utterance (own onset + EOS) accumulates into
+	// the SAME pending turn, because the gate answered Continue.
+	activity.appendSpeechEpoch(onset.Add(900*time.Millisecond), true)
+	activity.stampEpochStopped(time.Now())
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "sebentar", Confidence: 0.9}},
+	})
+	second := decider.lastSpeechMs
+
+	if second <= first {
+		t.Fatalf("SpeechMs first=%d second=%d, want it to grow across accumulated finals", first, second)
+	}
+	if second < 1500 {
+		t.Fatalf("SpeechMs = %d, want ~2000 (onset to now), not the first epoch's frozen span", second)
+	}
+}
+
+// Part 0's surviving guarantee: epochs that started BEFORE this turn's onset belong to
+// earlier turns and must never stretch its duration. (The companion assertion — that a
+// later OPEN epoch should not extend the turn — was removed deliberately: it is
+// indistinguishable from the caller simply still talking, which go7.log showed must
+// grow. See TestSpeechMsGrowsWhileSecondUtteranceStillOpen.)
+func TestSpeechMsIgnoresEpochsFromEarlierTurns(t *testing.T) {
+	decider := &recordingSpeechMsDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+
+	// An earlier turn's utterance, long finished.
+	old := time.Now().Add(-30 * time.Second)
+	activity.appendSpeechEpoch(old, false)
+	activity.stampEpochStopped(old.Add(4 * time.Second))
+
+	// This turn: one short closed utterance, nothing open.
+	onset := time.Now().Add(-6 * time.Second)
+	stopped := onset.Add(600 * time.Millisecond)
+	activity.appendSpeechEpoch(onset, true)
+	activity.stampEpochStopped(stopped)
+
+	activity.userTurnMu.Lock()
+	activity.pendingTurnOverlap = true
+	activity.pendingTurnOnsetAt = onset
+	activity.pendingTurnStoppedAt = stopped
+	activity.pendingUserTranscriptPresent = true
+	activity.userTurnMu.Unlock()
+
+	if _, _, ok := activity.evaluateBargeIn("iya"); !ok {
+		t.Fatal("gate not consulted")
+	}
+	if decider.lastSpeechMs > 1200 {
+		t.Fatalf("speech_ms = %d, want ~600 (this turn only), not stretched by an earlier turn", decider.lastSpeechMs)
+	}
+}
+
+type recordingSpeechMsDecider struct {
+	decision     BargeInDecision
+	reason       string
+	lastSpeechMs int
+	calls        int
+}
+
+func (d *recordingSpeechMsDecider) DecideBargeIn(in BargeInInput) (BargeInDecision, string) {
+	d.calls++
+	d.lastSpeechMs = in.SpeechMs
+	return d.decision, d.reason
+}
+
+func TestArmBackchannelBoundaryStampsSpeakingSince(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+	now := time.Now()
+	activity.armBackchannelBoundary(now)
+	activity.falseInterruptionMu.Lock()
+	got := activity.agentSpeakingSince
+	activity.falseInterruptionMu.Unlock()
+	if !got.Equal(now) {
+		t.Fatalf("agentSpeakingSince = %v, want %v", got, now)
+	}
+}
+
+// go7.log: the caller started a SECOND utterance inside the same pending turn while the
+// agent kept talking. The gate ran ten times and every one reported 533ms — the first
+// utterance's duration — so a genuine barge-in could never reach strong_barge_in.
+// Any epoch of this turn still open means the caller is still speaking.
+func TestSpeechMsGrowsWhileSecondUtteranceStillOpen(t *testing.T) {
+	decider := &recordingSpeechMsDecider{decision: BargeInContinue, reason: "needs_more_speech"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	defer current.MarkDone()
+
+	onset := time.Now().Add(-5 * time.Second)
+	activity.appendSpeechEpoch(onset, true)
+	activity.stampEpochStopped(onset.Add(500 * time.Millisecond))
+
+	// Caller starts talking again and has NOT stopped.
+	activity.appendSpeechEpoch(time.Now().Add(-1500*time.Millisecond), true)
+
+	activity.userTurnMu.Lock()
+	activity.pendingTurnOverlap = true
+	activity.pendingTurnOnsetAt = onset
+	activity.pendingTurnStoppedAt = onset.Add(500 * time.Millisecond)
+	activity.pendingUserTranscriptPresent = true
+	activity.userTurnMu.Unlock()
+
+	if _, _, ok := activity.evaluateBargeIn("ya sudah sampai"); !ok {
+		t.Fatal("gate not consulted")
+	}
+	if decider.lastSpeechMs < 4000 {
+		t.Fatalf("speech_ms = %d, want ~5000 (measured to now while still speaking), not the first utterance's 500",
+			decider.lastSpeechMs)
+	}
+}
+
+// Part 1 is observability only: the three abstain conditions must still abstain, and a
+// real overlap must still reach the decider. If this drifts, the new logging changed
+// behavior, which it must not.
+func TestEvaluateBargeInAbstainConditionsUnchanged(t *testing.T) {
+	t.Run("no_decider", func(t *testing.T) {
+		agentObj := NewAgent("test")
+		agentObj.AudioTurnDetector = &recordingAudioTurnDetector{}
+		session := NewAgentSession(agentObj, nil, AgentSessionOptions{}) // no BargeInDecider
+		activity := NewAgentActivity(agentObj, session)
+		session.activity = activity
+		if _, _, ok := activity.evaluateBargeIn("halo"); ok {
+			t.Fatal("no decider: want abstain")
+		}
+	})
+
+	t.Run("no_turn_detector", func(t *testing.T) {
+		agentObj := NewAgent("test") // no AudioTurnDetector
+		session := NewAgentSession(agentObj, nil, AgentSessionOptions{
+			BargeInDecider: fakeIgnoreBargeInDecider{},
+		})
+		activity := NewAgentActivity(agentObj, session)
+		session.activity = activity
+		if _, _, ok := activity.evaluateBargeIn("halo"); ok {
+			t.Fatal("no turn detector: want abstain")
+		}
+	})
+
+	t.Run("no_overlap", func(t *testing.T) {
+		decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "x"}
+		activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+		defer current.MarkDone()
+		onset := time.Now().Add(-time.Second)
+		activity.appendSpeechEpoch(onset, false) // agent was NOT speaking at onset
+		activity.userTurnMu.Lock()
+		activity.pendingTurnOverlap = false
+		activity.pendingTurnOnsetAt = onset
+		activity.pendingUserTranscriptPresent = true
+		activity.userTurnMu.Unlock()
+		if _, _, ok := activity.evaluateBargeIn("halo dunia"); ok {
+			t.Fatal("no overlap: want abstain")
+		}
+		if decider.calls != 0 {
+			t.Fatalf("decider called %d times on abstain, want 0", decider.calls)
+		}
+	})
+
+	t.Run("overlap_still_reaches_decider", func(t *testing.T) {
+		decider := &countingBargeInDecider{decision: BargeInInterrupt, reason: "strong_barge_in"}
+		activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+		defer current.MarkDone()
+		onset := time.Now().Add(-time.Second)
+		activity.appendSpeechEpoch(onset, true)
+		activity.stampEpochStopped(time.Now().Add(-200 * time.Millisecond))
+		activity.userTurnMu.Lock()
+		activity.pendingTurnOverlap = true
+		activity.pendingTurnOnsetAt = onset
+		activity.pendingTurnStoppedAt = time.Now().Add(-200 * time.Millisecond)
+		activity.pendingUserTranscriptPresent = true
+		activity.userTurnMu.Unlock()
+		dec, _, ok := activity.evaluateBargeIn("halo dunia")
+		if !ok || dec != BargeInInterrupt {
+			t.Fatalf("overlap: got (%v, ok=%v), want Interrupt", dec, ok)
+		}
+	})
+}
+
+// go9.log: the gate returned interrupt/strong_barge_in 19 times for "Ya saya saya" and
+// the agent talked straight through it. The backchannel boundary latches audio-activity
+// interrupts OFF once BackchannelBoundaryStart (default 1s) elapses, handing authority to
+// OnInterruption — which has no non-test caller, so nothing ever hands it back. When the
+// gate governs, the gate IS that authority and the latch must not apply.
+func TestGateInterruptSurvivesElapsedBackchannelBoundary(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeInterruptBargeInDecider{})
+
+	// Agent has been speaking longer than the boundary, so the latch is armed.
+	activity.armBackchannelBoundary(time.Now().Add(-5 * time.Second))
+	activity.backchannelBoundaryMu.Lock()
+	until := activity.backchannelBoundaryUntil
+	activity.backchannelBoundaryMu.Unlock()
+	if until.IsZero() || until.After(time.Now()) {
+		t.Fatalf("precondition: boundary should be armed and already elapsed, got until=%v", until)
+	}
+
+	onset := time.Now().Add(-2 * time.Second)
+	activity.appendSpeechEpoch(onset, true)
+	activity.userTurnMu.Lock()
+	activity.pendingTurnOverlap = true
+	activity.pendingTurnOnsetAt = onset
+	activity.pendingUserTranscript = "Ya saya saya"
+	activity.pendingUserTranscriptPresent = true
+	activity.userTurnMu.Unlock()
+
+	activity.interruptByAudioActivity("final transcript", "transcript", "Ya saya saya", time.Time{})
+
+	if !current.IsInterrupted() {
+		t.Fatal("gate said interrupt but the agent kept speaking: the boundary latch swallowed it")
+	}
+}
+
+// One utterance produced up to nineteen identical barge_in.decision lines because
+// evaluateBargeIn is re-entered per audio tick from three call sites. Only the first
+// verdict says anything new; the memo resets per turn so a repeated phrase logs again.
+func TestBargeInLogMemoSuppressesRepeats(t *testing.T) {
+	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
+	defer current.MarkDone()
+
+	if !activity.firstBargeInLog("interrupt|strong_barge_in|Ya saya saya") {
+		t.Fatal("first verdict should log")
+	}
+	for i := 0; i < 5; i++ {
+		if activity.firstBargeInLog("interrupt|strong_barge_in|Ya saya saya") {
+			t.Fatalf("repeat %d logged again, want suppressed", i)
+		}
+	}
+	if !activity.firstBargeInLog("ignore|backchannel_suppressed|Oke") {
+		t.Fatal("a different verdict should log")
+	}
+
+	activity.clearPendingUserTurn()
+	if !activity.firstBargeInLog("ignore|backchannel_suppressed|Oke") {
+		t.Fatal("same verdict in a new turn should log again after the reset")
+	}
 }

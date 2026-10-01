@@ -81,6 +81,7 @@ type SpeechHandle struct {
 
 	numSteps               int
 	chatItems              []llm.ChatItem
+	backchannelCheckpoints []backchannelCheckpoint
 	runFinalOutput         any
 	runFinalOutputSet      bool
 	precomputedLLM         *LLMGenerationData
@@ -482,6 +483,23 @@ func (s *SpeechHandle) AddChatItems(items ...llm.ChatItem) {
 		s.chatItems = append(s.chatItems, item)
 		s.mu.Unlock()
 	}
+}
+
+// AddBackchannelCheckpoint parks a suppressed backchannel on this speech so the
+// commit path can weave it into the assistant utterance it overlapped.
+func (s *SpeechHandle) AddBackchannelCheckpoint(cp backchannelCheckpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backchannelCheckpoints = append(s.backchannelCheckpoints, cp)
+}
+
+// takeBackchannelCheckpoints drains the parked checkpoints; a second call returns nil.
+func (s *SpeechHandle) takeBackchannelCheckpoints() []backchannelCheckpoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cps := s.backchannelCheckpoints
+	s.backchannelCheckpoints = nil
+	return cps
 }
 
 func (s *SpeechHandle) ChatItems() []llm.ChatItem {

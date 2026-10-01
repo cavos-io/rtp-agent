@@ -3,11 +3,11 @@ package agent
 // Barge-in gating: an optional, pluggable policy the host application can inject
 // to decide what happens when a user speaks over the agent (a "barge-in").
 //
-// The runtime gathers the signals (transcript, timing, smart-turn result) and
-// executes the verdict (resume the paused agent, drop the utterance, or hard
-// interrupt). It does NOT contain any policy of its own — no word lists, no
-// thresholds. Provide a BargeInDecider via AgentSessionOptions.BargeInDecider to
-// enable gating; leave it nil for the default runtime behavior.
+// The verdict decides one thing only: whether the agent's audio stops. Whether the
+// utterance becomes an LLM turn is a separate question, answered by BackchannelClassifier.
+// The runtime holds no policy of its own — no word lists, no thresholds. Provide a
+// BargeInDecider via AgentSessionOptions.BargeInDecider to enable gating; leave it nil for
+// the default runtime behavior.
 //
 // The decider is consulted only while the agent is speaking AND an
 // AudioTurnDetector (smart turn) is active.
@@ -17,13 +17,13 @@ package agent
 type BargeInDecision int
 
 const (
-	// BargeInInterrupt stops the agent and commits the user turn (the LLM replies).
+	// BargeInInterrupt stops the agent's audio and commits the user turn.
 	BargeInInterrupt BargeInDecision = iota
-	// BargeInIgnore suppresses the utterance: the agent resumes and the speech is
-	// dropped — not committed, never sent to the LLM.
+	// BargeInIgnore leaves the agent's audio playing. The turn still commits, so the reply
+	// queues behind the current sentence — only a BackchannelClassifier match drops a turn.
 	BargeInIgnore
-	// BargeInContinue keeps listening: the agent resumes and the speech is kept
-	// buffered while the runtime waits for more.
+	// BargeInContinue also leaves the audio playing and still commits; it differs from
+	// BargeInIgnore only in the logged reason.
 	BargeInContinue
 )
 
@@ -64,4 +64,13 @@ type BargeInInput struct {
 // for concurrent use and must not block.
 type BargeInDecider interface {
 	DecideBargeIn(BargeInInput) (decision BargeInDecision, reason string)
+}
+
+// BackchannelClassifier optionally lets the decider mark an utterance as a pure
+// acknowledgement. An overlapping backchannel is the ONLY thing dropped from the LLM turn
+// (it is woven into the assistant message instead); every other utterance commits,
+// interrupted or not. A decider that does not implement this keeps the legacy behavior
+// where any non-Interrupt verdict drops the turn.
+type BackchannelClassifier interface {
+	IsBackchannelOnly(transcript string) bool
 }

@@ -141,6 +141,21 @@ type AgentActivity struct {
 
 	interimCommittedTurn bool
 
+	// speechEpochs is a ring of recent user-speech onsets with the agent-overlap fact frozen at
+	// onset. Finals correlate FIFO so a late final sees ITS onset. Guarded by userTurnMu.
+	speechEpochs []speechEpoch
+
+	// bargeInLogMu guards lastBargeInLogKey only. Its own mutex: the reset runs under userTurnMu,
+	// and nesting that under falseInterruptionMu would invert evaluateBargeIn's lock order.
+	bargeInLogMu      sync.Mutex
+	lastBargeInLogKey string
+
+	// Frozen from the FIRST correlated epoch of the pending turn ("first onset wins").
+	// Guarded by userTurnMu; reset by clearPendingUserTurn.
+	pendingTurnOverlap   bool
+	pendingTurnOnsetAt   time.Time
+	pendingTurnStoppedAt time.Time
+
 	providerUnsubscribes []func()
 	registeredTools      []llm.Tool
 
@@ -209,6 +224,7 @@ type AgentActivity struct {
 	pausedSpeech           *pausedSpeechInfo
 	falseInterruptionTimer *time.Timer
 	agentSpeechEndedAt     time.Time
+	agentSpeakingSince     time.Time
 
 	userTurnExceededCancel context.CancelFunc
 	userTurnExceededSeq    uint64
@@ -1746,6 +1762,123 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 }
 
 // Event callbacks from the active audio pipeline.
+const maxSpeechEpochs = 8
+
+// speechEpoch freezes one user utterance's onset facts. overlap is decided once, at
+// onset, from the agent-speaking window — the Python reference's SpeechEpoch, minus ids.
+type speechEpoch struct {
+	startedAt time.Time
+	stoppedAt time.Time
+	overlap   bool
+	consumed  bool
+}
+
+// appendSpeechEpoch records an onset. A replayed onset (held-STT flush) falling inside an
+// existing epoch's span reuses it instead of minting a non-overlap duplicate.
+func (a *AgentActivity) appendSpeechEpoch(startedAt time.Time, overlap bool) {
+	if a == nil || startedAt.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	for i := range a.speechEpochs {
+		e := &a.speechEpochs[i]
+		if e.consumed || startedAt.Before(e.startedAt) {
+			continue
+		}
+		if e.stoppedAt.IsZero() || !startedAt.After(e.stoppedAt) {
+			return // inside an existing epoch: reuse
+		}
+	}
+	a.speechEpochs = append(a.speechEpochs, speechEpoch{startedAt: startedAt, overlap: overlap})
+	if len(a.speechEpochs) > maxSpeechEpochs {
+		a.speechEpochs = a.speechEpochs[len(a.speechEpochs)-maxSpeechEpochs:]
+	}
+}
+
+// stampEpochStopped closes the newest still-open epoch at EOS time.
+func (a *AgentActivity) stampEpochStopped(stoppedAt time.Time) {
+	if a == nil || stoppedAt.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+		e := &a.speechEpochs[i]
+		if !e.consumed && e.stoppedAt.IsZero() {
+			e.stoppedAt = stoppedAt
+			return
+		}
+	}
+}
+
+// maxLateFinalLag bounds how long a closed epoch stays a correlation target; one unclaimed
+// past it had no final (noise/echo). ponytail: fixed ceiling, provider-derived only if needed.
+const maxLateFinalLag = 15 * time.Second
+
+// consumeEpochForFinalLocked correlates a final to its epoch: oldest unconsumed CLOSED epoch,
+// else newest open. Epochs past maxLateFinalLag retire unconsumed. Caller holds userTurnMu.
+func (a *AgentActivity) consumeEpochForFinalLocked() (speechEpoch, bool) {
+	now := time.Now()
+	for i := range a.speechEpochs {
+		e := &a.speechEpochs[i]
+		if !e.consumed && !e.stoppedAt.IsZero() {
+			if now.Sub(e.stoppedAt) > maxLateFinalLag {
+				e.consumed = true // stale: no final ever arrived for this onset
+				continue
+			}
+			e.consumed = true
+			return *e, true
+		}
+	}
+	for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+		e := &a.speechEpochs[i]
+		if !e.consumed {
+			e.consumed = true
+			return *e, true
+		}
+	}
+	return speechEpoch{}, false
+}
+
+// turnSpeechExtent reports the newest end-of-speech among the pending turn's epochs and whether
+// this turn's own utterance is still open. Earlier turns' epochs must not stretch it.
+func (a *AgentActivity) turnSpeechExtent(onsetAt time.Time) (latest time.Time, open bool) {
+	if a == nil || onsetAt.IsZero() {
+		return time.Time{}, false
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	for i := range a.speechEpochs {
+		e := a.speechEpochs[i]
+		if e.startedAt.Before(onsetAt) {
+			continue
+		}
+		if !e.stoppedAt.IsZero() && e.stoppedAt.After(latest) {
+			latest = e.stoppedAt
+		}
+		// ANY open epoch of this turn means the caller is talking now, so duration runs to now.
+		// Restricting to the FIRST epoch froze speech_ms and strong-barge-in could never fire.
+		if e.stoppedAt.IsZero() {
+			open = true
+		}
+	}
+	return latest, open
+}
+
+// discardEpochForDroppedFinal consumes the epoch a dropped final would have claimed (empty text,
+// echo-tail, zero confidence, committed interim) so the next turn can't inherit its overlap.
+func (a *AgentActivity) discardEpochForDroppedFinal() {
+	if a == nil {
+		return
+	}
+	a.userTurnMu.Lock()
+	if !a.pendingUserTranscriptPresent {
+		a.consumeEpochForFinalLocked()
+	}
+	a.userTurnMu.Unlock()
+}
+
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.onStartOfSpeech(ev, nil)
 }
@@ -1787,6 +1920,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 			startedAt = time.Now()
 		}
 		a.userSpeechStartedAt = startedAt
+		a.appendSpeechEpoch(startedAt, a.agentWasSpeakingAt(startedAt))
 		if a.userTurnStartedAt.IsZero() {
 			a.userTurnStartedAt = startedAt
 		}
@@ -1816,9 +1950,15 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.cancelPendingEOUDetection()
 
 	a.cancelFalseInterruptionTimer()
-	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
-	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+		if a.bargeInGateGoverns() {
+			// The gate owns interruption: keep playing and let its verdict decide. Still arm the
+			// echo-tail watermark the pause path set, so the agent's own TTS tail can't reach the gate.
+			a.holdUserTranscriptsUntil(time.Now())
+			return
+		}
+		// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
+		// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 		if a.pauseSpeechForFalseInterruption(time.Time{}) {
 			return
 		}
@@ -1843,6 +1983,7 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		stoppedAt = a.userSpeechStoppedAt
 	}
 	a.userSpeechStoppedAt = stoppedAt
+	a.stampEpochStopped(stoppedAt)
 	a.userTurnMu.Lock()
 	a.syntheticEOU = synthetic
 	if synthetic {
@@ -2025,10 +2166,12 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
 	if transcript == "" {
+		a.discardEpochForDroppedFinal()
 		return
 	}
 	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
 		a.Session.Logger().Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
+		a.discardEpochForDroppedFinal()
 		return
 	}
 	if a.Session != nil {
@@ -2041,6 +2184,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 	if rejectsZeroConfidenceTranscript(transcript, confidence) {
 		a.Session.Logger().Warnw("skipping zero-confidence final transcript", nil, "transcript", transcript)
+		a.discardEpochForDroppedFinal()
 		return
 	}
 	if a.isInterimCommittedTurn() {
@@ -2050,6 +2194,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		// — it must not re-trigger an interrupt or a second reply for an utterance
 		// the agent has already answered.
 		a.Session.Logger().Debugw("dropping late final transcript for already-committed interim turn", "transcript", transcript)
+		a.discardEpochForDroppedFinal()
 		return
 	}
 
@@ -2057,6 +2202,21 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
 
 	a.userTurnMu.Lock()
+	if !a.pendingUserTranscriptPresent {
+		if ep, ok := a.consumeEpochForFinalLocked(); ok {
+			a.pendingTurnOverlap = ep.overlap
+			a.pendingTurnOnsetAt = ep.startedAt
+			a.pendingTurnStoppedAt = ep.stoppedAt
+		} else {
+			a.pendingTurnOverlap = false
+			a.pendingTurnOnsetAt = time.Time{}
+			a.pendingTurnStoppedAt = time.Time{}
+		}
+	} else {
+		// Accumulated final of the same pending turn: consume its epoch so the ring
+		// stays aligned, but keep the first onset's facts.
+		a.consumeEpochForFinalLocked()
+	}
 	pendingTranscript := strings.TrimSpace(strings.Join([]string{a.pendingUserTranscript, transcript}, " "))
 	matchesPreflightTranscript := a.pendingPreflightTranscript != "" && pendingTranscript == a.pendingPreflightTranscript
 	confidenceSum := a.pendingTranscriptConfidenceSum + confidence
@@ -2092,21 +2252,33 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	// utterance while the agent is speaking. Only Interrupt proceeds to the
 	// normal interrupt + commit path below.
 	if decision, _, ok := a.evaluateBargeIn(pendingTranscript); ok {
-		switch decision {
-		case BargeInIgnore:
-			// backchannel / too-short over the agent: drop it so it never commits
-			// and clear the buffer so repeats don't accumulate into a false turn.
-			// The agent resumes via the false-interruption timer.
-			if a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
-				a.recordTranscriptOnlyUserMessage(pendingTranscript, confidenceSum/float64(confidenceCount))
+		switch a.bargeInTurnAction(decision, pendingTranscript) {
+		case bargeInTurnDrop:
+			// A backchannel over the agent: weave it in and never send it to the LLM.
+			confidence := confidenceSum / float64(confidenceCount)
+			recorded := false
+			if a.Session != nil && a.Session.Options.WeaveSuppressedBargeIn {
+				recorded = a.checkpointSuppressedBackchannel(pendingTranscript, confidence)
+				if !recorded {
+					// The utterance already finalized, so it is never split: record the
+					// backchannel as its own message, matching what the panel shows.
+					a.commitUserMessage(suppressedBackchannelMessage(pendingTranscript, confidence))
+					recorded = true
+				}
+			}
+			if !recorded && a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
+				a.recordTranscriptOnlyUserMessage(pendingTranscript, confidence)
 			}
 			a.clearPendingUserTurn()
 			return
-		case BargeInContinue:
-			// needs more speech: keep the buffer, do not interrupt or commit yet.
-			return
-		case BargeInInterrupt:
-			// fall through to the existing interrupt + EOU path.
+		case bargeInTurnHold:
+			if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+				// Legacy hosts only: wait for more speech while the agent keeps talking.
+				return
+			}
+		case bargeInTurnCommit:
+			// Fall through. A non-interrupting verdict spares the agent's audio via
+			// interruptByAudioActivity's own gate check, but the turn still reaches the LLM.
 		}
 	}
 
@@ -2163,6 +2335,9 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 		a.audioActivityDisabled = true
 	}
 	a.backchannelBoundaryMu.Unlock()
+	a.falseInterruptionMu.Lock()
+	a.agentSpeakingSince = startedAt
+	a.falseInterruptionMu.Unlock()
 	a.userTurnMu.Lock()
 	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled()
 	a.userTurnMu.Unlock()
@@ -2192,6 +2367,26 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	a.falseInterruptionMu.Lock()
 	a.agentSpeechEndedAt = endedAt
 	a.falseInterruptionMu.Unlock()
+}
+
+// agentWasSpeakingAt reports whether agent audio played at t, against the last speaking window
+// [since, endedAt) — half-open, so an onset at the stop instant is not an overlap.
+func (a *AgentActivity) agentWasSpeakingAt(t time.Time) bool {
+	if a == nil || t.IsZero() {
+		return false
+	}
+	a.falseInterruptionMu.Lock()
+	since, ended := a.agentSpeakingSince, a.agentSpeechEndedAt
+	a.falseInterruptionMu.Unlock()
+	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+		// Speaking now, so open-ended — but onsets are backdated by speech+inference, so an onset
+		// that predates this sentence is a real answer, not an overlap.
+		return since.IsZero() || !t.Before(since)
+	}
+	if since.IsZero() || ended.IsZero() || ended.Before(since) {
+		return false
+	}
+	return !t.Before(since) && t.Before(ended)
 }
 
 // hasActiveFalseInterruptionPause reports whether a speech is currently paused for a false
@@ -2229,8 +2424,13 @@ func (a *AgentActivity) sttSilencedWhileAgentSpeaking(now time.Time) bool {
 	return false
 }
 
+// audioActivityInterruptionDisabled reports whether the backchannel latch revoked audio activity's
+// interrupt right. Gated sessions bypass it: nothing drives OnInterruption, so they'd go uninterruptible.
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
 	if a == nil || a.Session == nil {
+		return false
+	}
+	if a.bargeInGateGoverns() {
 		return false
 	}
 	a.backchannelBoundaryMu.Lock()
@@ -2546,9 +2746,10 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a == nil {
 		return
 	}
-	if decision, _, ok := a.evaluateBargeIn(a.currentInterruptionTranscript()); ok && decision != BargeInInterrupt {
-		// barge-in gate vetoed the hard interrupt; the agent stays paused
-		// and the false-interruption timer resumes it.
+	decision, _, gateDecided := a.evaluateBargeIn(a.currentInterruptionTranscript())
+	if gateDecided && decision != BargeInInterrupt {
+		// barge-in gate vetoed the hard interrupt: the sentence keeps playing,
+		// nothing was paused, nothing to resume.
 		return
 	}
 	if a.Session != nil && a.Session.aecWarmupActive() {
@@ -2557,7 +2758,9 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a.audioActivityInterruptionDisabled(time.Now()) {
 		return
 	}
-	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
+	// When the gate decided Interrupt, kill immediately — pausing would give the kill
+	// pause-and-resume semantics. Onsets the gate did not judge keep the legacy pause.
+	if !gateDecided && a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
 		return
 	}
 	if _, err := a.interruptHandles(false, false); err != nil {
@@ -3379,6 +3582,48 @@ func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo,
 	})
 }
 
+// bargeInGateGoverns reports whether the injected gate decides interruptions. When it does, audio
+// is never paused on onset — only the gate may stop playout, so a veto leaves the sentence playing.
+func (a *AgentActivity) bargeInGateGoverns() bool {
+	return a != nil && a.Session != nil && a.Session.Options.BargeInDecider != nil &&
+		a.Agent != nil && a.Agent.AudioTurnDetector != nil
+}
+
+type bargeInTurnAction int
+
+const (
+	// bargeInTurnCommit sends the utterance to the LLM. Whether the agent's audio stopped is
+	// a separate question the verdict already answered.
+	bargeInTurnCommit bargeInTurnAction = iota
+	// bargeInTurnDrop withholds it from the LLM (it is woven into the assistant message).
+	bargeInTurnDrop
+	// bargeInTurnHold keeps it buffered while the agent is still speaking.
+	bargeInTurnHold
+)
+
+// bargeInTurnAction decides the fate of the utterance itself. With a BackchannelClassifier
+// only a backchannel is withheld, so a non-interrupting verdict still gets answered; without
+// one the legacy verdict-driven behavior is preserved for existing hosts.
+func (a *AgentActivity) bargeInTurnAction(decision BargeInDecision, transcript string) bargeInTurnAction {
+	if !a.bargeInGateGoverns() {
+		return bargeInTurnCommit
+	}
+	if classifier, ok := a.Session.Options.BargeInDecider.(BackchannelClassifier); ok {
+		if classifier.IsBackchannelOnly(transcript) {
+			return bargeInTurnDrop
+		}
+		return bargeInTurnCommit
+	}
+	switch decision {
+	case BargeInIgnore:
+		return bargeInTurnDrop
+	case BargeInContinue:
+		return bargeInTurnHold
+	default:
+		return bargeInTurnCommit
+	}
+}
+
 func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, string, bool) {
 	if a == nil || a.Session == nil || a.Agent == nil {
 		return 0, "", false
@@ -3387,21 +3632,45 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 	if decider == nil || a.Agent.AudioTurnDetector == nil {
 		return 0, "", false
 	}
+	a.userTurnMu.Lock()
+	overlap := a.pendingTurnOverlap
+	onsetAt := a.pendingTurnOnsetAt
+	stoppedAt := a.pendingTurnStoppedAt
+	if !a.pendingUserTranscriptPresent {
+		// No final yet (audio-activity path): the pending stamp is empty, so read
+		// the live utterance's onset facts from the newest unconsumed epoch.
+		for i := len(a.speechEpochs) - 1; i >= 0; i-- {
+			if e := a.speechEpochs[i]; !e.consumed {
+				overlap, onsetAt, stoppedAt = e.overlap, e.startedAt, e.stoppedAt
+				break
+			}
+		}
+	}
+	a.userTurnMu.Unlock()
+	if !overlap {
+		return 0, "", false
+	}
+	// Read below the overlap check: this runs per audio tick from three call sites, and the
+	// non-overlap path is the common one — it should not take falseInterruptionMu to bail.
 	a.falseInterruptionMu.Lock()
-	spokeAtOnset := a.agentSpokeAtUserOnset
 	stPresent := a.latestSmartTurnPresent
 	stComplete := a.latestSmartTurnComplete
 	stProb := a.latestSmartTurnProbability
 	a.falseInterruptionMu.Unlock()
-	if !spokeAtOnset {
-		return 0, "", false
-	}
+	// Duration spans the turn's FIRST onset to the latest end of speech (or now). Only the onset is
+	// frozen — freezing the end too would stop SpeechMs growing across a turn's accumulated finals.
 	speechMs := 0
-	a.userTurnMu.Lock()
-	if !a.userSpeechStartedAt.IsZero() {
-		speechMs = int(time.Since(a.userSpeechStartedAt).Milliseconds())
+	if !onsetAt.IsZero() {
+		end := stoppedAt
+		latest, turnStillOpen := a.turnSpeechExtent(onsetAt)
+		if latest.After(end) {
+			end = latest
+		}
+		if end.IsZero() || turnStillOpen {
+			end = time.Now()
+		}
+		speechMs = int(end.Sub(onsetAt).Milliseconds())
 	}
-	a.userTurnMu.Unlock()
 	input := BargeInInput{
 		Transcript:           transcript,
 		SpeechMs:             speechMs,
@@ -3412,13 +3681,30 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 		SmartTurnProbability: stProb,
 	}
 	decision, reason := decider.DecideBargeIn(input)
-	a.Session.Logger().Infow("barge_in.decision",
-		"decision", decision.String(),
-		"reason", reason,
-		"text", transcript,
-		"speech_ms", speechMs,
-		"words", input.WordCount)
+	if a.firstBargeInLog(decision.String() + "|" + reason + "|" + transcript) {
+		a.Session.Logger().Infow("barge_in.decision",
+			"decision", decision.String(),
+			"reason", reason,
+			"text", transcript,
+			"speech_ms", speechMs,
+			"words", input.WordCount)
+	}
 	return decision, reason, true
+}
+
+// firstBargeInLog reports whether this verdict is new. evaluateBargeIn re-enters per audio tick
+// from three call sites (up to 19 identical lines); reset per turn by clearPendingUserTurn.
+func (a *AgentActivity) firstBargeInLog(key string) bool {
+	if a == nil {
+		return false
+	}
+	a.bargeInLogMu.Lock()
+	defer a.bargeInLogMu.Unlock()
+	if a.lastBargeInLogKey == key {
+		return false
+	}
+	a.lastBargeInLogKey = key
+	return true
 }
 
 func (a *AgentActivity) bargeInWordCount(transcript string) int {
@@ -3448,8 +3734,9 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	case !a.InterruptionEnabled():
 	case spokeAtOnset && a.Agent != nil && a.Agent.AudioTurnDetector != nil:
 		if decision, _, ok := a.evaluateBargeIn(transcript); ok {
-			// worker gate governs the commit: only Interrupt lets the turn reach the LLM.
-			skip = decision != BargeInInterrupt
+			// Only a backchannel is withheld from the LLM; a non-interrupting verdict still
+			// commits, so the agent finishes its sentence and then answers.
+			skip = a.bargeInTurnAction(decision, transcript) != bargeInTurnCommit
 		} else {
 			switch {
 			case !stPresent:
@@ -3751,6 +4038,56 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	}
 }
 
+// checkpointSuppressedBackchannel parks a suppressed barge-in on the speech it overlapped, at the
+// onset the weave splits at. SpeechHandle.mu serializes park vs drain; false → caller records transcript-only.
+func (a *AgentActivity) checkpointSuppressedBackchannel(transcript string, confidence float64) bool {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return true
+	}
+	speech := a.CurrentSpeech()
+	if speech == nil || speech.IsDone() {
+		if a.Session != nil {
+			a.Session.Logger().Infow("backchannel_weave.checkpoint_refused",
+				"transcript", transcript, "reason", "no_live_speech")
+		}
+		return false
+	}
+	a.userTurnMu.Lock()
+	at := a.pendingTurnOnsetAt
+	a.userTurnMu.Unlock()
+	if at.IsZero() {
+		at = a.userSpeechStartedAt
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	speech.AddBackchannelCheckpoint(backchannelCheckpoint{
+		Text:       transcript,
+		At:         timeToUnixSeconds(at),
+		Confidence: confidence,
+		// Same instant the transport cuts the live caption, so both split alike.
+		SpokenChars: a.Session.agentSpokenCharCount(),
+	})
+	if a.Session != nil {
+		a.Session.Logger().Infow("backchannel_weave.checkpoint_parked",
+			"transcript", transcript, "onset_unix", timeToUnixSeconds(at), "speech", speech.ID)
+	}
+	return true
+}
+
+// suppressedBackchannelMessage builds the message for a backchannel that could not be woven
+// because the utterance already committed. LLM-visible, and simply follows that utterance.
+func suppressedBackchannelMessage(transcript string, confidence float64) *llm.ChatMessage {
+	conf := confidence
+	return &llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: strings.TrimSpace(transcript)}},
+		TranscriptConfidence: &conf,
+		CreatedAt:            time.Now(),
+	}
+}
+
 func (a *AgentActivity) recordTranscriptOnlyUserMessage(transcript string, confidence float64) {
 	transcript = strings.TrimSpace(transcript)
 	if transcript == "" {
@@ -3796,6 +4133,12 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingPreflightTranscript = ""
 	a.pendingPreflightConfidence = 0
 	a.userTurnStartedAt = time.Time{}
+	a.pendingTurnOverlap = false
+	a.pendingTurnOnsetAt = time.Time{}
+	a.pendingTurnStoppedAt = time.Time{}
+	a.bargeInLogMu.Lock()
+	a.lastBargeInLogKey = ""
+	a.bargeInLogMu.Unlock()
 }
 
 func (a *AgentActivity) notifyUserTurnUpdated() {
