@@ -209,6 +209,7 @@ type AgentActivity struct {
 	pausedSpeech           *pausedSpeechInfo
 	falseInterruptionTimer *time.Timer
 	agentSpeechEndedAt     time.Time
+	agentSpeakingSince     time.Time
 
 	userTurnExceededCancel context.CancelFunc
 	userTurnExceededSeq    uint64
@@ -1816,9 +1817,16 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.cancelPendingEOUDetection()
 
 	a.cancelFalseInterruptionTimer()
-	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
-	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+		if a.bargeInGateGoverns() {
+			// The gate owns interruption: keep playing and let its verdict decide.
+			// Still arm the echo-tail watermark the pause path used to set as a
+			// side effect, so the agent's own TTS tail can't reach the gate.
+			a.holdUserTranscriptsUntil(time.Now())
+			return
+		}
+		// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
+		// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 		if a.pauseSpeechForFalseInterruption(time.Time{}) {
 			return
 		}
@@ -2096,8 +2104,12 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		case BargeInIgnore:
 			// backchannel / too-short over the agent: drop it so it never commits
 			// and clear the buffer so repeats don't accumulate into a false turn.
-			// The agent resumes via the false-interruption timer.
-			if a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
+			// The agent was never paused — its sentence keeps playing.
+			recorded := false
+			if a.Session != nil && a.Session.Options.WeaveSuppressedBargeIn {
+				recorded = a.checkpointSuppressedBackchannel(pendingTranscript, confidenceSum/float64(confidenceCount))
+			}
+			if !recorded && a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
 				a.recordTranscriptOnlyUserMessage(pendingTranscript, confidenceSum/float64(confidenceCount))
 			}
 			a.clearPendingUserTurn()
@@ -2163,6 +2175,9 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 		a.audioActivityDisabled = true
 	}
 	a.backchannelBoundaryMu.Unlock()
+	a.falseInterruptionMu.Lock()
+	a.agentSpeakingSince = startedAt
+	a.falseInterruptionMu.Unlock()
 	a.userTurnMu.Lock()
 	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled()
 	a.userTurnMu.Unlock()
@@ -2192,6 +2207,28 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	a.falseInterruptionMu.Lock()
 	a.agentSpeechEndedAt = endedAt
 	a.falseInterruptionMu.Unlock()
+}
+
+// agentWasSpeakingAt reports whether agent audio was playing at time t. While the agent
+// is speaking now the answer is always true; otherwise t is checked against the last
+// closed speaking window [agentSpeakingSince, agentSpeechEndedAt). Half-open on purpose:
+// an onset exactly at the stop instant is a real answer, not an overlap. With no window
+// recorded (sessions that never armed the boundary) this degrades to the legacy
+// state-at-call behavior.
+func (a *AgentActivity) agentWasSpeakingAt(t time.Time) bool {
+	if a == nil || t.IsZero() {
+		return false
+	}
+	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
+		return true
+	}
+	a.falseInterruptionMu.Lock()
+	since, ended := a.agentSpeakingSince, a.agentSpeechEndedAt
+	a.falseInterruptionMu.Unlock()
+	if since.IsZero() || ended.IsZero() || ended.Before(since) {
+		return false
+	}
+	return !t.Before(since) && t.Before(ended)
 }
 
 // hasActiveFalseInterruptionPause reports whether a speech is currently paused for a false
@@ -2546,9 +2583,10 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a == nil {
 		return
 	}
-	if decision, _, ok := a.evaluateBargeIn(a.currentInterruptionTranscript()); ok && decision != BargeInInterrupt {
-		// barge-in gate vetoed the hard interrupt; the agent stays paused
-		// and the false-interruption timer resumes it.
+	decision, _, gateDecided := a.evaluateBargeIn(a.currentInterruptionTranscript())
+	if gateDecided && decision != BargeInInterrupt {
+		// barge-in gate vetoed the hard interrupt: the sentence keeps playing,
+		// nothing was paused, nothing to resume.
 		return
 	}
 	if a.Session != nil && a.Session.aecWarmupActive() {
@@ -2557,7 +2595,10 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a.audioActivityInterruptionDisabled(time.Now()) {
 		return
 	}
-	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
+	// When the gate decided Interrupt, kill immediately — pausing here would give the
+	// kill pause-and-resume semantics. Onsets the gate did not judge (agent was silent
+	// at onset) keep the legacy pause.
+	if !gateDecided && a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
 		return
 	}
 	if _, err := a.interruptHandles(false, false); err != nil {
@@ -3379,6 +3420,15 @@ func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo,
 	})
 }
 
+// bargeInGateGoverns reports whether the injected barge-in gate decides interruptions for
+// this session. When it does, agent audio is never paused on user speech onset: the gate is
+// the only thing that may stop playout, so a vetoed barge-in leaves the sentence playing
+// instead of pausing it and resuming on a timer.
+func (a *AgentActivity) bargeInGateGoverns() bool {
+	return a != nil && a.Session != nil && a.Session.Options.BargeInDecider != nil &&
+		a.Agent != nil && a.Agent.AudioTurnDetector != nil
+}
+
 func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, string, bool) {
 	if a == nil || a.Session == nil || a.Agent == nil {
 		return 0, "", false
@@ -3749,6 +3799,45 @@ func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
 	if a.Session != nil {
 		a.Session.EmitConversationItemAdded(msg)
 	}
+}
+
+// checkpointSuppressedBackchannel parks a suppressed barge-in transcript on the speech
+// it overlapped so the commit path weaves it into the assistant message. Returns false
+// when no live speech can own it; the caller then falls back to the transcript-only
+// record. At is the user's speech onset — the position the weave splits at.
+//
+// Concurrency: runs on the STT/transcript goroutine while the pipeline goroutine may
+// be committing the same speech. SpeechHandle.mu serializes park vs drain; a checkpoint
+// parked after the commit's drain is swept transcript-only by the pre-MarkGenerationDone
+// drain in the pipeline, and once the speech is done this function refuses and the
+// caller records transcript-only itself — a checkpoint is never silently dropped.
+func (a *AgentActivity) checkpointSuppressedBackchannel(transcript string, confidence float64) bool {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return true
+	}
+	speech := a.CurrentSpeech()
+	if speech == nil || speech.IsDone() {
+		if a.Session != nil {
+			a.Session.Logger().Infow("backchannel_weave.checkpoint_refused",
+				"transcript", transcript, "reason", "no_live_speech")
+		}
+		return false
+	}
+	at := a.userSpeechStartedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	speech.AddBackchannelCheckpoint(backchannelCheckpoint{
+		Text:       transcript,
+		At:         timeToUnixSeconds(at),
+		Confidence: confidence,
+	})
+	if a.Session != nil {
+		a.Session.Logger().Infow("backchannel_weave.checkpoint_parked",
+			"transcript", transcript, "onset_unix", timeToUnixSeconds(at), "speech", speech.ID)
+	}
+	return true
 }
 
 func (a *AgentActivity) recordTranscriptOnlyUserMessage(transcript string, confidence float64) {
