@@ -7528,7 +7528,7 @@ func TestAgentActivityRecordSuppressedBargeInTranscriptDisabledByDefault(t *test
 	})
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
-	activity.agentSpokeAtUserOnset = true
+	activity.appendSpeechEpoch(time.Now().Add(-300*time.Millisecond), true)
 	defer activity.Stop()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
@@ -7556,7 +7556,7 @@ func TestAgentActivityRecordSuppressedBargeInTranscriptWhenEnabled(t *testing.T)
 	})
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
-	activity.agentSpokeAtUserOnset = true
+	activity.appendSpeechEpoch(time.Now().Add(-300*time.Millisecond), true)
 	defer activity.Stop()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
