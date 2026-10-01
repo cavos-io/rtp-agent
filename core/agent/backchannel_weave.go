@@ -272,6 +272,73 @@ func buildAssistantCommitWindow(committed []llm.ChatItem, startedAt, stoppedAt f
 	return w
 }
 
+// splice inserts one suppressed backchannel into an already-committed assistant
+// utterance: the fragment narrating the onset instant is word-split at the time ratio
+// (same arithmetic as weaveBackchannels) and the user text lands between the halves,
+// LLM-visible. Ratio-0/1 onsets insert the user message without splitting so no empty
+// fragment is created. Returns the inserted items, nil when at is outside the window.
+// Caller holds the chat-context mutex.
+func (w *assistantCommitWindow) splice(chatCtx *llm.ChatContext, text string, at, confidence float64) []llm.ChatItem {
+	if w == nil || chatCtx == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if at < w.startedAt || at > w.stoppedAt {
+		return nil
+	}
+	idx := -1
+	for i := range w.fragments {
+		if at >= w.fragments[i].winStart && (at < w.fragments[i].winEnd || i == len(w.fragments)-1) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil
+	}
+	frag := &w.fragments[idx]
+	words := strings.Fields(frag.msg.TextContent())
+	span := frag.winEnd - frag.winStart
+	if span < 0.001 {
+		span = 0.001
+	}
+	ratio := (at - frag.winStart) / span
+	if ratio < 0 {
+		ratio = 0
+	} else if ratio > 1 {
+		ratio = 1
+	}
+	boundary := int(float64(len(words)) * ratio)
+	left := strings.Join(words[:boundary], " ")
+	right := strings.Join(words[boundary:], " ")
+	userAt := at
+	if left == "" {
+		// Onset at the fragment's very start: ChatContext inserts timestamp ties AFTER
+		// existing items, so nudge the user message ahead of the untouched fragment to
+		// keep the conversational order user → assistant.
+		userAt = frag.winStart - 0.001
+	}
+	userMsg := insertCheckpointUserMessage(chatCtx, text, userAt, confidence, false)
+	items := []llm.ChatItem{userMsg}
+	if left == "" || right == "" {
+		// Edge onset: no split — an empty fragment must never be created.
+		return items
+	}
+	frag.msg.Content = []llm.ChatContent{{Text: left}}
+	tail := &llm.ChatMessage{
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: right}},
+		CreatedAt: unixSecondsToTime(at + 0.001),
+	}
+	chatCtx.Insert(tail)
+	items = append(items, tail)
+	oldEnd := frag.winEnd
+	frag.winEnd = at
+	w.fragments = append(w.fragments, committedFragment{})
+	copy(w.fragments[idx+2:], w.fragments[idx+1:])
+	w.fragments[idx+1] = committedFragment{msg: tail, winStart: at, winEnd: oldEnd}
+	return items
+}
+
 // applicableCheckpoints splits checkpoints into those inside the [startedAt, stoppedAt]
 // audio window (inclusive — they weave) and the rest (they fall back to a
 // transcript-only append).

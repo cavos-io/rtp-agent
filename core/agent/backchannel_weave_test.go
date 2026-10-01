@@ -508,3 +508,96 @@ func TestBuildAssistantCommitWindowWovenFragments(t *testing.T) {
 		t.Fatalf("fragment[1] window = [%v,%v], want [103.5,106]", w.fragments[1].winStart, w.fragments[1].winEnd)
 	}
 }
+
+func spliceTestWindow(t *testing.T) (*llm.ChatContext, *assistantCommitWindow) {
+	t.Helper()
+	chatCtx := llm.NewChatContext()
+	msg := chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role:      llm.ChatRoleAssistant,
+		Text:      "satu dua tiga empat lima enam", // 6 words over 6 seconds: 1 word/s
+		CreatedAt: unixSecondsToTime(100.0),
+	})
+	w := buildAssistantCommitWindow([]llm.ChatItem{msg}, 100.0, 106.0)
+	if w == nil {
+		t.Fatal("window build failed")
+	}
+	return chatCtx, w
+}
+
+func TestSpliceMidUtterance(t *testing.T) {
+	chatCtx, w := spliceTestWindow(t)
+	items := w.splice(chatCtx, "iya", 103.0, 0.9)
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2 (user + tail fragment)", len(items))
+	}
+	msgs := chatCtx.Messages()
+	if len(msgs) != 3 {
+		t.Fatalf("chat messages = %d, want 3 (assistant/user/assistant)", len(msgs))
+	}
+	if got := msgs[0].TextContent(); got != "satu dua tiga" {
+		t.Fatalf("left fragment = %q, want %q", got, "satu dua tiga")
+	}
+	if msgs[1].Role != llm.ChatRoleUser || msgs[1].TextContent() != "iya" || msgs[1].TranscriptOnly {
+		t.Fatalf("middle = %+v, want LLM-visible user 'iya'", msgs[1])
+	}
+	if got := msgs[2].TextContent(); got != "empat lima enam" {
+		t.Fatalf("tail fragment = %q, want %q", got, "empat lima enam")
+	}
+}
+
+func TestSpliceAtFragmentEdges(t *testing.T) {
+	// Ratio 0: user message sorts before the fragment, fragment untouched.
+	chatCtx, w := spliceTestWindow(t)
+	items := w.splice(chatCtx, "ya", 100.0, 0.9)
+	if len(items) != 1 {
+		t.Fatalf("edge splice items = %d, want 1 (no empty fragment)", len(items))
+	}
+	msgs := chatCtx.Messages()
+	if len(msgs) != 2 || msgs[0].Role != llm.ChatRoleUser {
+		t.Fatalf("messages = %d first=%v, want user sorted before untouched fragment", len(msgs), msgs[0].Role)
+	}
+	if msgs[1].TextContent() != "satu dua tiga empat lima enam" {
+		t.Fatalf("fragment mutated at edge: %q", msgs[1].TextContent())
+	}
+}
+
+func TestSpliceOutsideWindowRefused(t *testing.T) {
+	chatCtx, w := spliceTestWindow(t)
+	if items := w.splice(chatCtx, "iya", 99.0, 0.9); items != nil {
+		t.Fatalf("before window: got %d items, want nil", len(items))
+	}
+	if items := w.splice(chatCtx, "iya", 107.0, 0.9); items != nil {
+		t.Fatalf("after window: got %d items, want nil", len(items))
+	}
+}
+
+func TestSpliceIncrementalTwoCheckpoints(t *testing.T) {
+	chatCtx, w := spliceTestWindow(t)
+	if items := w.splice(chatCtx, "iya", 102.0, 0.9); len(items) != 2 {
+		t.Fatalf("first splice items = %d, want 2", len(items))
+	}
+	// Second backchannel lands inside the TAIL fragment produced by the first.
+	if items := w.splice(chatCtx, "oke", 104.0, 0.9); len(items) != 2 {
+		t.Fatalf("second splice items = %d, want 2", len(items))
+	}
+	msgs := chatCtx.Messages()
+	var texts []string
+	for _, m := range msgs {
+		texts = append(texts, string(m.Role)+":"+m.TextContent())
+	}
+	want := []string{
+		"assistant:satu dua",
+		"user:iya",
+		"assistant:tiga empat",
+		"user:oke",
+		"assistant:lima enam",
+	}
+	if len(texts) != len(want) {
+		t.Fatalf("order = %v, want %v", texts, want)
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Fatalf("order[%d] = %q, want %q (full: %v)", i, texts[i], want[i], texts)
+		}
+	}
+}
