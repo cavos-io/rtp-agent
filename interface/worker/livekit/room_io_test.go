@@ -6233,3 +6233,230 @@ func TestRoomIOShouldRecordAuxTrack(t *testing.T) {
 		})
 	}
 }
+
+func newInterleaveRoomIO(packets chan *livekit.Transcription) *RoomIO {
+	return &RoomIO{
+		// The cut follows the weave switch, so without a session carrying
+		// WeaveSuppressedBargeIn these tests would stop exercising it.
+		AgentSession: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{
+			WeaveSuppressedBargeIn: true,
+		}),
+		audioTrackID:                   "TR_agent_audio",
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher:     func(text string, opts lksdk.StreamTextOptions) {},
+		transcriptionParticipantIdentity: func() string {
+			return "agent-local"
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			packets <- transcription
+			return nil
+		},
+	}
+}
+
+type publishedCaption struct {
+	who   string
+	text  string
+	id    string
+	final bool
+}
+
+func drainCaptions(packets chan *livekit.Transcription) []publishedCaption {
+	var out []publishedCaption
+	for {
+		select {
+		case p := <-packets:
+			for _, s := range p.Segments {
+				who := "agent"
+				if p.TranscribedParticipantIdentity == "caller-a" {
+					who = "caller"
+				}
+				out = append(out, publishedCaption{who: who, text: s.Text, id: s.Id, final: s.Final})
+			}
+		default:
+			return out
+		}
+	}
+}
+
+// The rule: publishing a caller transcript while an agent caption segment is open must
+// close that segment FIRST, so the caller's bubble lands between the agent's halves.
+func TestRoomIOUserTranscriptCutsOpenAgentSegment(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "Tujuan kami menghubungi adalah untuk mengonfirmasi", Language: "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "Iya", IsFinal: true, Language: "id",
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: " status pengiriman pesanan", Language: "id",
+	})
+
+	got := drainCaptions(packets)
+	if len(got) != 4 {
+		t.Fatalf("captions = %+v, want 4 (agent delta, agent cut-final, caller, agent tail)", got)
+	}
+	if got[1].who != "agent" || !got[1].final || got[1].text != "Tujuan kami menghubungi adalah untuk mengonfirmasi" {
+		t.Fatalf("second publish = %+v, want the agent segment finalized at the words spoken so far", got[1])
+	}
+	if got[2].who != "caller" || got[2].text != "Iya" {
+		t.Fatalf("third publish = %+v, want the caller's bubble AFTER the agent cut", got[2])
+	}
+	if got[3].who != "agent" || got[3].id == got[1].id {
+		t.Fatalf("fourth publish = %+v, want the remainder in a NEW agent segment (was %q)", got[3], got[1].id)
+	}
+}
+
+// No open agent segment (its utterance already finalized) → the caller's bubble is
+// published alone; nothing re-opens or re-publishes an agent segment.
+func TestRoomIOUserTranscriptWithNoOpenAgentSegment(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "Halo Selamat Pagi!", IsFinal: true, Language: "id",
+	})
+	drainCaptions(packets)
+
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "Ya", IsFinal: true, Language: "id",
+	})
+
+	got := drainCaptions(packets)
+	if len(got) != 1 || got[0].who != "caller" || got[0].text != "Ya" {
+		t.Fatalf("captions = %+v, want only the caller's bubble", got)
+	}
+}
+
+// Interims of the SAME caller utterance must cut only once — the first time that
+// utterance is shown, not on every update.
+func TestRoomIOUserInterimCutsOnlyOnce(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "Baik, apakah", Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "O", Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "Oke", Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "Oke", IsFinal: true, Language: "id"})
+
+	agentFinals := 0
+	for _, c := range drainCaptions(packets) {
+		if c.who == "agent" && c.final {
+			agentFinals++
+		}
+	}
+	if agentFinals != 1 {
+		t.Fatalf("agent segment finalized %d times, want exactly 1 (only the first caller segment cuts)", agentFinals)
+	}
+}
+
+// The producer's final event repeats the WHOLE utterance. After a cut, only the part not
+// already published may go out, or bubble 2 is rewritten back to the full sentence.
+func TestRoomIOPublishesOnlyRemainderAfterCut(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	const head = "Baik, apakah Bapak senang dan ingin dihubungi kembali"
+	const tail = " untuk update status pesanan lainnya?"
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: head, Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "Ya", IsFinal: true, Language: "id"})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: tail, Language: "id"})
+	drainCaptions(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: head + tail, IsFinal: true, Language: "id",
+	})
+
+	got := drainCaptions(packets)
+	if len(got) != 1 {
+		t.Fatalf("final published %+v, want 1 segment", got)
+	}
+	if want := strings.TrimSpace(tail); got[0].text != want {
+		t.Fatalf("final text = %q, want only the remainder %q", got[0].text, want)
+	}
+}
+
+// Cut landing on the last delta leaves no remainder: the final must not mint a third
+// segment carrying the whole utterance again.
+func TestRoomIOCutAtLastDeltaPublishesNoThirdSegment(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	const whole = "Baik, paketnya sudah Bapak terima."
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: whole, Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "Oke", IsFinal: true, Language: "id"})
+	drainCaptions(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: whole, IsFinal: true, Language: "id",
+	})
+
+	if got := drainCaptions(packets); len(got) != 0 {
+		t.Fatalf("final published %+v, want nothing — the cut already sent it all", got)
+	}
+}
+
+// A prefix that does not actually lead the final transcript must publish the full text:
+// a duplicated bubble is recoverable, a truncated one is not.
+func TestRoomIOFinalWithUnmatchedPrefixPublishesFullText(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "Selamat pagi", Language: "id"})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "Ya", IsFinal: true, Language: "id"})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "sesuatu", Language: "id"})
+	drainCaptions(packets)
+
+	const unrelated = "Teks yang sama sekali berbeda dari yang diucapkan"
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: unrelated, IsFinal: true, Language: "id",
+	})
+
+	got := drainCaptions(packets)
+	if len(got) != 1 || got[0].text != unrelated {
+		t.Fatalf("segments = %+v, want the full unchanged text %q", got, unrelated)
+	}
+}
+
+// With turn_detection = vad the worker never sets WeaveSuppressedBargeIn, so the
+// ChatContext weave does not run. The live caption must not split either, or the panel
+// and the stored transcript disagree — the exact divergence this feature exists to close.
+func TestRoomIOVadModeDoesNotCutAgentSegment(t *testing.T) {
+	packets := make(chan *livekit.Transcription, 16)
+	rio := newInterleaveRoomIO(packets)
+	rio.AgentSession = agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{
+		WeaveSuppressedBargeIn: false, // vad mode
+	})
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "Baik, apakah Bapak senang", Language: "id",
+	})
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "Ya", IsFinal: true, Language: "id",
+	})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: " dan ingin dihubungi kembali", Language: "id",
+	})
+
+	got := drainCaptions(packets)
+	for _, c := range got {
+		if c.who == "agent" && c.final {
+			t.Fatalf("agent segment was finalized in vad mode: %+v (all: %+v)", c, got)
+		}
+	}
+	// One open agent segment throughout: both agent publishes share an id.
+	var agentIDs []string
+	for _, c := range got {
+		if c.who == "agent" {
+			agentIDs = append(agentIDs, c.id)
+		}
+	}
+	if len(agentIDs) != 2 || agentIDs[0] != agentIDs[1] {
+		t.Fatalf("agent segment ids = %v, want one unsplit segment", agentIDs)
+	}
+}
