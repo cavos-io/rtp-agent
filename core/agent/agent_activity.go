@@ -2210,6 +2210,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			recorded := false
 			if a.Session != nil && a.Session.Options.WeaveSuppressedBargeIn {
 				recorded = a.checkpointSuppressedBackchannel(pendingTranscript, confidenceSum/float64(confidenceCount))
+				if !recorded {
+					recorded = a.spliceCommittedBackchannel(pendingTranscript, confidenceSum/float64(confidenceCount))
+				}
 			}
 			if !recorded && a.Session != nil && a.Session.Options.RecordSuppressedBargeInTranscript {
 				a.recordTranscriptOnlyUserMessage(pendingTranscript, confidenceSum/float64(confidenceCount))
@@ -3964,6 +3967,48 @@ func (a *AgentActivity) checkpointSuppressedBackchannel(transcript string, confi
 		a.Session.Logger().Infow("backchannel_weave.checkpoint_parked",
 			"transcript", transcript, "onset_unix", timeToUnixSeconds(at), "speech", speech.ID)
 	}
+	return true
+}
+
+// spliceCommittedBackchannel is the post-commit half of the weave: when the overlapped
+// assistant utterance has already committed (checkpointSuppressedBackchannel refused),
+// split the retained commit at the user's onset instead. Returns false when there is
+// no retained window or the onset lies outside it — the caller then records
+// transcript-only, so a suppressed backchannel is never silently dropped.
+func (a *AgentActivity) spliceCommittedBackchannel(transcript string, confidence float64) bool {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" || a == nil || a.Session == nil || a.Agent == nil {
+		return false
+	}
+	a.userTurnMu.Lock()
+	onsetAt := a.pendingTurnOnsetAt
+	a.userTurnMu.Unlock()
+	if onsetAt.IsZero() {
+		return false
+	}
+	w := a.Session.lastAssistantCommitWindow()
+	if w == nil {
+		return false
+	}
+	at := timeToUnixSeconds(onsetAt)
+	chatCtxMu := a.Agent.chatContextMutex()
+	chatCtxMu.Lock()
+	if a.Agent.ChatCtx == nil {
+		chatCtxMu.Unlock()
+		return false
+	}
+	items := w.splice(a.Agent.ChatCtx, transcript, at, confidence)
+	chatCtxMu.Unlock()
+	if len(items) == 0 {
+		a.Session.Logger().Infow("backchannel_weave.splice_refused",
+			"transcript", transcript, "onset_unix", at, "reason", "outside_window")
+		return false
+	}
+	for _, item := range items {
+		a.Session.EmitConversationItemAdded(item)
+	}
+	a.Session.Logger().Infow("backchannel_weave.splice_commit",
+		"transcript", transcript, "onset_unix", at, "inserted", len(items))
 	return true
 }
 

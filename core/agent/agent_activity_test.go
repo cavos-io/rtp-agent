@@ -9130,6 +9130,90 @@ func TestGateContinueAfterAgentStoppedFallsThrough(t *testing.T) {
 	}
 }
 
+// End-to-end greeting scenario: the whole call 110253 shape. Suppressed late final
+// must SPLIT the already-committed greeting bubble instead of committing a user turn.
+func TestLateSuppressedBackchannelSplicesCommittedGreeting(t *testing.T) {
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	activity.Session.Options.WeaveSuppressedBargeIn = true
+
+	startUnix := timeToUnixSeconds(time.Now().Add(-6 * time.Second))
+
+	// "iya" onset mid-greeting: an explicit STT onset timestamp keeps the split
+	// position deterministic (wall-clock deltas are coarse on some platforms).
+	onsetUnix := timeToUnixSeconds(time.Now().Add(-3 * time.Second))
+	activity.OnSTTStartOfSpeech(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, SpeechStartTime: &onsetUnix})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+
+	// Greeting finishes and commits before the final arrives.
+	stopped := time.Now()
+	activity.Session.agentState = AgentStateListening
+	activity.onAgentSpeechEnded(stopped)
+	current.MarkDone()
+	chatCtx := llm.NewChatContext()
+	greeting := chatCtx.AddMessage(llm.ChatMessageArgs{
+		Role:      llm.ChatRoleAssistant,
+		Text:      "halo selamat pagi benar saya berbicara dengan bapak rafi",
+		CreatedAt: unixSecondsToTime(startUnix),
+	})
+	activity.Agent.ChatCtx = chatCtx
+	activity.Session.setLastAssistantCommit(
+		buildAssistantCommitWindow([]llm.ChatItem{greeting}, startUnix, timeToUnixSeconds(stopped)))
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech}) // onset #2, agent silent
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "Iya", Confidence: 0.9}},
+	})
+
+	if decider.calls == 0 {
+		t.Fatal("gate never consulted for the late final")
+	}
+	msgs := chatCtx.Messages()
+	if len(msgs) != 3 {
+		var got []string
+		for _, m := range msgs {
+			got = append(got, string(m.Role)+":"+m.TextContent())
+		}
+		t.Fatalf("messages = %v, want assistant/user/assistant split", got)
+	}
+	if msgs[1].Role != llm.ChatRoleUser || msgs[1].TranscriptOnly {
+		t.Fatalf("middle message = %+v, want LLM-visible user backchannel", msgs[1])
+	}
+	activity.userTurnMu.Lock()
+	pending := activity.pendingUserTranscript
+	activity.userTurnMu.Unlock()
+	if pending != "" {
+		t.Fatalf("pending transcript = %q, want cleared (no LLM turn)", pending)
+	}
+}
+
+func TestSpliceRefusedFallsBackTranscriptOnly(t *testing.T) {
+	decider := &countingBargeInDecider{decision: BargeInIgnore, reason: "backchannel_suppressed"}
+	activity, _, current := newGateGovernedSpeakingActivity(t, decider)
+	activity.Session.Options.WeaveSuppressedBargeIn = true
+	activity.Session.Options.RecordSuppressedBargeInTranscript = true
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	activity.Session.agentState = AgentStateListening
+	activity.onAgentSpeechEnded(time.Now())
+	current.MarkDone()
+	chatCtx := llm.NewChatContext()
+	activity.Agent.ChatCtx = chatCtx
+	// No retained commit window at all → splice impossible.
+	activity.Session.setLastAssistantCommit(nil)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "Iya", Confidence: 0.9}},
+	})
+
+	msgs := chatCtx.Messages()
+	if len(msgs) != 1 || !msgs[0].TranscriptOnly || msgs[0].Role != llm.ChatRoleUser {
+		t.Fatalf("messages = %+v, want single transcript-only user record", msgs)
+	}
+}
+
 func TestClearPendingUserTurnResetsOverlap(t *testing.T) {
 	activity, _, current := newGateGovernedSpeakingActivity(t, fakeIgnoreBargeInDecider{})
 	defer current.MarkDone()
