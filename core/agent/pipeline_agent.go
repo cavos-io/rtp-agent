@@ -48,6 +48,7 @@ type PipelineAgent struct {
 	vadStallTimer    *time.Timer
 	sttStream        stt.RecognizeStream
 	lastSTTFrame     *model.AudioFrame
+	recovery         *sttRecoveryCoordinator
 
 	rootCtx context.Context
 	ctx     context.Context
@@ -104,6 +105,10 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	}
 	va.resetGenerationCtxLocked()
 	va.mu.Unlock()
+	if s != nil && s.Options.STTRecoveryFactory != nil {
+		va.recovery = newSTTRecoveryCoordinator(ctx, s.Options.STTRecoveryFactory)
+		go va.consumeSTTRecovery(ctx)
+	}
 
 	go va.run(ctx)
 	return nil
@@ -270,6 +275,11 @@ func (va *PipelineAgent) chatContext() (*llm.ChatContext, *sync.Mutex) {
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
+	defer func() {
+		if va.recovery != nil {
+			va.recovery.Close()
+		}
+	}()
 	va.session.Logger().Infow("PipelineAgent started")
 
 	var vadStream vad.VADStream
@@ -465,6 +475,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.finalizeActiveSTTStream(0)
 			if va.session != nil && va.session.activity != nil {
 				va.session.activity.OnEndOfSpeech(ev)
+				va.scheduleSTTRecovery(ev, va.session.activity.speechEpoch())
 			} else if va.session != nil {
 				va.session.UpdateUserState(UserStateListening)
 			}
@@ -649,6 +660,13 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		va.mu.Unlock()
 		activity := session.currentActivity()
 		if activity != nil {
+			if va.recovery != nil && !va.recovery.PrimaryEvidence(activity.speechEpoch()) {
+				session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+					Language: alternative.Language, Transcript: alternative.Text,
+					IsFinal: ev.Type == stt.SpeechEventFinalTranscript, SpeakerID: alternative.SpeakerID,
+				})
+				continue
+			}
 			if ev.Type == stt.SpeechEventInterimTranscript || ev.Type == stt.SpeechEventPreflightTranscript {
 				activity.OnInterimTranscript(ev)
 				continue
@@ -695,6 +713,44 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			}
 
 			go va.generateReply()
+		}
+	}
+}
+
+func (va *PipelineAgent) scheduleSTTRecovery(ev *vad.VADEvent, epoch uint64) {
+	if va.recovery == nil || ev == nil {
+		return
+	}
+	started := vadSpeechStartedAt(ev)
+	va.recovery.Schedule(epoch, ev.Frames, "", started)
+}
+
+func (va *PipelineAgent) onRecoveredSpeech(job sttRecoveryJob, event *stt.SpeechEvent) {
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+	if session == nil || event == nil || len(event.Alternatives) == 0 {
+		return
+	}
+	activity := session.currentActivity()
+	if activity == nil || activity.speechEpoch() != job.epoch {
+		alternative := event.Alternatives[0]
+		session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language: alternative.Language, Transcript: alternative.Text, IsFinal: true,
+			SpeakerID: alternative.SpeakerID, CreatedAt: job.started,
+		})
+		return
+	}
+	activity.OnFinalTranscript(event)
+}
+
+func (va *PipelineAgent) consumeSTTRecovery(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case result := <-va.recovery.results:
+			va.onRecoveredSpeech(result.job, result.event)
 		}
 	}
 }

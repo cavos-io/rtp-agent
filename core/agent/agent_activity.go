@@ -1883,6 +1883,12 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.onStartOfSpeech(ev, nil)
 }
 
+func (a *AgentActivity) speechEpoch() uint64 {
+	a.falseInterruptionMu.Lock()
+	defer a.falseInterruptionMu.Unlock()
+	return a.userTurnSeq
+}
+
 func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 	var startedAt *float64
 	if ev != nil {
