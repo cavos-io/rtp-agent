@@ -9340,13 +9340,13 @@ func TestNvidiaSTTStreamDropsEmptyFramesLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTStreamNextWaitsForInputLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
+	}
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
 	}
 
 	type result struct {
@@ -9379,14 +9379,14 @@ func TestNvidiaSTTStreamNextWaitsForInputLikeReference(t *testing.T) {
 }
 
 func TestNvidiaSTTStreamNextUnblocksOnCancelLikeReference(t *testing.T) {
-	provider, err := NewNvidiaSTT("secret", "")
-	if err != nil {
-		t.Fatalf("NewNvidiaSTT error = %v", err)
-	}
+	provider, server := newLocalNvidiaSTT(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := provider.Stream(ctx, "")
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
+	}
+	if receiveNvidiaRivaRequest(t, server.requests).GetStreamingConfig() == nil {
+		t.Fatal("first Riva request missing config")
 	}
 
 	done := make(chan error, 1)

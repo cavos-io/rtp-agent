@@ -129,6 +129,8 @@ type AgentSessionOptions struct {
 	CommitOnInterimWhenNoFinal bool
 
 	RecordUncommittedTranscript bool
+
+	STTRecoveryFactory STTRecoveryFactory
 }
 
 type AgentSessionUpdateOptions struct {
