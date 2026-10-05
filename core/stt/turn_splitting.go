@@ -88,8 +88,9 @@ type turnSplittingStream struct {
 }
 
 type turnSplittingResult struct {
-	event *SpeechEvent
-	err   error
+	event  *SpeechEvent
+	err    error
+	stream RecognizeStream
 }
 
 func (s *turnSplittingStream) StartTimeOffset() float64 {
@@ -162,17 +163,27 @@ func (s *turnSplittingStream) Flush() error {
 }
 
 func (s *turnSplittingStream) Next() (*SpeechEvent, error) {
-	if s.ctx.Err() != nil {
-		return nil, io.EOF
-	}
-	select {
-	case result := <-s.events:
-		if result.event == nil && result.err == nil {
+	for {
+		if s.ctx.Err() != nil {
 			return nil, io.EOF
 		}
-		return result.event, result.err
-	case <-s.ctx.Done():
-		return nil, io.EOF
+		select {
+		case result := <-s.events:
+			if result.err != nil {
+				s.mu.Lock()
+				active := s.active == result.stream && !s.closed
+				s.mu.Unlock()
+				if !active {
+					continue
+				}
+			}
+			if result.event == nil && result.err == nil {
+				return nil, io.EOF
+			}
+			return result.event, result.err
+		case <-s.ctx.Done():
+			return nil, io.EOF
+		}
 	}
 }
 
@@ -188,6 +199,7 @@ func (s *turnSplittingStream) Close() error {
 		for stream := range s.streams {
 			streams = append(streams, stream)
 		}
+		clear(s.streams)
 		s.mu.Unlock()
 
 		s.cancel()
@@ -229,19 +241,25 @@ func (s *turnSplittingStream) split(snapshot uint64) {
 
 	if ending, ok := old.(InputEnding); ok {
 		_ = ending.EndInput()
-		time.AfterFunc(turnSplitRetireDelay, func() { _ = old.Close() })
+		time.AfterFunc(turnSplitRetireDelay, func() { s.closeProviderStream(old) })
 		return
 	}
-	_ = old.Close()
+	s.closeProviderStream(old)
+}
+
+func (s *turnSplittingStream) closeProviderStream(stream RecognizeStream) {
+	s.mu.Lock()
+	_, owned := s.streams[stream]
+	delete(s.streams, stream)
+	s.mu.Unlock()
+	if owned {
+		_ = stream.Close()
+	}
 }
 
 func (s *turnSplittingStream) pump(stream RecognizeStream) {
 	go func() {
-		defer func() {
-			s.mu.Lock()
-			delete(s.streams, stream)
-			s.mu.Unlock()
-		}()
+		defer s.closeProviderStream(stream)
 		for {
 			event, err := stream.Next()
 			if err != nil {
@@ -250,7 +268,7 @@ func (s *turnSplittingStream) pump(stream RecognizeStream) {
 				s.mu.Unlock()
 				if active && s.ctx.Err() == nil {
 					select {
-					case s.events <- turnSplittingResult{err: err}:
+					case s.events <- turnSplittingResult{err: err, stream: stream}:
 					case <-s.ctx.Done():
 					}
 				}

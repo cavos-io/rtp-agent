@@ -158,6 +158,33 @@ func TestTurnSplittingSTTForwardsActiveError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("active provider error was hidden")
 	}
+	select {
+	case <-provider.stream(0).closed:
+	case <-time.After(time.Second):
+		t.Fatal("failed provider stream was not closed")
+	}
+}
+
+func TestTurnSplittingSTTDiscardsErrorQueuedBeforeRetirement(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	old := provider.stream(0)
+	old.failRead = make(chan struct{})
+	old.fail <- errors.New("old stream failed")
+	<-old.failRead
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSplitStreams(t, provider, 2)
+	provider.stream(1).events <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
+	event, err := logical.Next()
+	if err != nil || event.Type != SpeechEventStartOfSpeech {
+		t.Fatalf("Next = %v, %v", event, err)
+	}
 }
 
 func TestTurnSplittingSTTIgnoresRetiredError(t *testing.T) {
@@ -248,6 +275,7 @@ type splitTestStream struct {
 	mu              sync.Mutex
 	events          chan *SpeechEvent
 	fail            chan error
+	failRead        chan struct{}
 	closed          chan struct{}
 	ended           bool
 	pushes          int
@@ -270,6 +298,9 @@ func (s *splitTestStream) Next() (*SpeechEvent, error) {
 	case event := <-s.events:
 		return event, nil
 	case err := <-s.fail:
+		if s.failRead != nil {
+			close(s.failRead)
+		}
 		return nil, err
 	case <-s.closed:
 		return nil, io.EOF
