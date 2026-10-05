@@ -177,9 +177,6 @@ func (va *PipelineAgent) resetGenerationCtxUnlessPaused() {
 		if activity.hasActiveFalseInterruptionPause() {
 			return
 		}
-		if activity.bargeInGateGoverns() && va.session.AgentStateValue() == AgentStateSpeaking {
-			return
-		}
 	}
 	va.mu.Lock()
 	va.resetGenerationCtxLocked()
@@ -1076,44 +1073,18 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		if canCommit {
 			forwardedText := speech.Generation.Text
 			if speech.IsInterrupted() {
-				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text, ttsGen)
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text)
 			}
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
-				if ttsGen != nil && (ttsGen.TTFBSet || ttsGen.TTFB > 0) {
-					if speech.Generation.AssistantMessage.Metrics == nil {
-						speech.Generation.AssistantMessage.Metrics = make(map[string]any)
-					}
-					speech.Generation.AssistantMessage.Metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
-				}
-				started, stopped := 0.0, 0.0
-				if ttsGen != nil {
-					started, stopped = ttsGen.StartedSpeakingAt, ttsGen.StoppedSpeakingAt
-				}
+				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 				chatCtx, chatMu := va.chatContext()
 				chatMu.Lock()
-				committed := commitAssistantWithWeave(chatCtx, speech, started, stopped,
-					llm.ChatMessageArgs{Text: forwardedText, Interrupted: speech.IsInterrupted()},
-					speech.Generation.AssistantMessage)
+				insertChatItemIfMissing(chatCtx, speech.Generation.AssistantMessage)
 				chatMu.Unlock()
-				logWovenCommit(session, committed, started, stopped)
-				for _, item := range committed {
-					if m, ok := item.(*llm.ChatMessage); ok && m.TranscriptOnly {
-						continue // fallback record: no live emit, matches recordTranscriptOnlyUserMessage
-					}
-					addSpeechChatItemIfMissing(speech, item)
-					session.EmitConversationItemAdded(item)
-				}
+				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
+				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 			}
-		}
-		if cps := speech.takeBackchannelCheckpoints(); len(cps) > 0 {
-			// Speech ended without a weavable commit: record the parked
-			// backchannels transcript-only so they aren't lost.
-			chatCtx, chatMu := va.chatContext()
-			chatMu.Lock()
-			insertTranscriptOnlyCheckpoints(chatCtx, cps)
-			chatMu.Unlock()
-			session.Logger().Infow("backchannel_weave.stranded_fallback", "count", len(cps))
 		}
 		_ = speech.MarkGenerationDone()
 		session.UpdateAgentState(AgentStateListening)
@@ -1468,7 +1439,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 			} else if ttsGen == nil || !ttsGen.ForwardedAudio {
 				forwardedText = ""
 			} else {
-				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText, ttsGen)
+				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, opts.SpeechHandle, genData.GeneratedText)
 			}
 		} else if !playoutOK {
 			forwardedText = ""
@@ -1487,36 +1458,16 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				args.Extra = genData.GeneratedExtra
 			}
 			args.Metrics = metrics
-			started, stopped := 0.0, 0.0
-			if ttsGen != nil {
-				started, stopped = ttsGen.StartedSpeakingAt, ttsGen.StoppedSpeakingAt
-			}
 			activeChatMu.Lock()
-			committed := commitAssistantWithWeave(activeChatCtx, opts.SpeechHandle, started, stopped, args, nil)
+			msg := activeChatCtx.AddMessage(args)
 			activeChatMu.Unlock()
-			logWovenCommit(session, committed, started, stopped)
-			for _, item := range committed {
-				if m, ok := item.(*llm.ChatMessage); ok && m.TranscriptOnly {
-					// fallback backchannel record: transcript-only, no live emit —
-					// same contract as recordTranscriptOnlyUserMessage.
-					continue
-				}
-				session.EmitConversationItemAdded(item)
-				if opts.SpeechHandle != nil {
-					opts.SpeechHandle.AddChatItems(item)
-				}
+			session.EmitConversationItemAdded(msg)
+			if opts.SpeechHandle != nil {
+				opts.SpeechHandle.AddChatItems(msg)
 			}
 		}
 
 		if opts.SpeechHandle != nil {
-			// Drain checkpoints that could not be woven — nothing committed, or parked in the race
-			// window after the commit's drain. Record transcript-only so none is silently lost.
-			if cps := opts.SpeechHandle.takeBackchannelCheckpoints(); len(cps) > 0 {
-				activeChatMu.Lock()
-				insertTranscriptOnlyCheckpoints(activeChatCtx, cps)
-				activeChatMu.Unlock()
-				session.Logger().Infow("backchannel_weave.stranded_fallback", "count", len(cps))
-			}
 			_ = opts.SpeechHandle.MarkGenerationDone()
 		}
 		closeReplyDone()
@@ -1794,7 +1745,6 @@ type precomputedTTSSegment struct {
 	ttsGen            *TTSGenerationData
 	transcriptSync    *TranscriptSynchronizer
 	transcriptionDone <-chan struct{}
-	published         *publishedTranscript
 	err               error
 }
 
@@ -1824,7 +1774,7 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 		current := segment
 		segment = nil
 		current.closeInput()
-		_, err := va.playTTSGenerationWithTranscript(ctx, session, current.ttsGen, current.transcriptSync, current.transcriptionDone, speech, current.published)
+		_, err := va.playTTSGenerationWithTranscript(ctx, session, current.ttsGen, current.transcriptSync, current.transcriptionDone, speech)
 		if firstGen != current.ttsGen && !firstGen.ForwardedAudio && current.ttsGen.ForwardedAudio {
 			finalizeTTSPlaybackTiming(firstGen)
 			firstGen = current.ttsGen
@@ -1884,7 +1834,6 @@ type activeTTSSegment struct {
 	transcriptSync    *TranscriptSynchronizer
 	textForwardDone   <-chan struct{}
 	transcriptionDone <-chan struct{}
-	published         *publishedTranscript
 }
 
 func (s *activeTTSSegment) closeInput() {
@@ -1916,14 +1865,13 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 	input := make(chan string, 100)
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
-	published := &publishedTranscript{}
 	var transcriptionDone <-chan struct{}
 	textForwardDone := closedChannel()
 	ttsTextCh := (<-chan string)(input)
 	if useAlignedTranscript {
 		transcriptionDone = closedChannel()
 	} else {
-		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync, published)
+		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
 		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(ctx, input, transcriptSync)
 	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
@@ -1935,7 +1883,7 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 		return nil, err
 	}
 	if useAlignedTranscript {
-		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh, published)
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
 	return &activeTTSSegment{
 		input:             input,
@@ -1943,7 +1891,6 @@ func (va *PipelineAgent) startActiveTTSSegment(ctx context.Context, session *Age
 		transcriptSync:    transcriptSync,
 		textForwardDone:   textForwardDone,
 		transcriptionDone: transcriptionDone,
-		published:         published,
 	}, nil
 }
 
@@ -1966,7 +1913,6 @@ func (va *PipelineAgent) startSegmentedTTSGeneration(ctx context.Context, sessio
 				ttsGen:            next.ttsGen,
 				transcriptSync:    next.transcriptSync,
 				transcriptionDone: next.transcriptionDone,
-				published:         next.published,
 			}
 			return true
 		}
@@ -2016,7 +1962,7 @@ func (va *PipelineAgent) playPrecomputedTTSSegments(ctx context.Context, session
 		if firstGen == nil {
 			firstGen = segment.ttsGen
 		}
-		if _, err := va.playTTSGenerationWithTranscript(ctx, session, segment.ttsGen, segment.transcriptSync, segment.transcriptionDone, speech, segment.published); err != nil {
+		if _, err := va.playTTSGenerationWithTranscript(ctx, session, segment.ttsGen, segment.transcriptSync, segment.transcriptionDone, speech); err != nil {
 			finalizeTTSPlaybackTiming(segment.ttsGen)
 			return firstGen, err
 		}
@@ -2113,7 +2059,7 @@ func (va *PipelineAgent) clearAssistantPlayback(session *AgentSession) {
 	playback.ClearBuffer()
 }
 
-func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string, ttsGen *TTSGenerationData) string {
+func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Context, session *AgentSession, speech *SpeechHandle, generatedText string) string {
 	if speech == nil || !speech.IsInterrupted() || session == nil {
 		return generatedText
 	}
@@ -2136,11 +2082,6 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	}
 	if ev.HasSynchronizedTranscript || ev.SynchronizedTranscript != "" {
 		return ev.SynchronizedTranscript
-	}
-	// No transport-level sync: commit only the caption text that actually reached the caller.
-	// Without this the killed tail is stored as if spoken, and the LLM believes it said it.
-	if ttsGen != nil && ttsGen.PublishedTranscript != "" {
-		return ttsGen.PublishedTranscript
 	}
 	return generatedText
 }
@@ -2363,7 +2304,6 @@ func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
 func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string, speech *SpeechHandle) (*TTSGenerationData, error) {
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
-	published := &publishedTranscript{}
 	var transcriptionDone <-chan struct{}
 	ttsTextCh := textCh
 	cancelTextForward := func() {}
@@ -2371,7 +2311,7 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	if useAlignedTranscript {
 		transcriptionDone = closedChannel()
 	} else {
-		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync, published)
+		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
 		forwardCtx, cancel := context.WithCancel(ctx)
 		cancelTextForward = cancel
 		ttsTextCh, textForwardDone = va.forwardTextToTranscriptSynchronizer(forwardCtx, textCh, transcriptSync)
@@ -2389,9 +2329,9 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	}
 	defer cleanupTextForward()
 	if useAlignedTranscript {
-		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh, published)
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
-	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech, published)
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech)
 }
 
 func (va *PipelineAgent) startTTSGeneration(ctx context.Context, session *AgentSession, textCh <-chan string) (*TTSGenerationData, error) {
@@ -2403,22 +2343,16 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 		return nil, nil
 	}
 	transcriptSync := NewTranscriptSynchronizer(0)
-	published := &publishedTranscript{}
-	transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync, published)
+	transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
 	if va.useTTSAlignedTranscript(session) {
 		transcriptSync.Close()
 		<-transcriptionDone
-		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh, published)
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
-	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech, published)
+	return va.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, transcriptionDone, speech)
 }
 
-func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle, pub *publishedTranscript) (*TTSGenerationData, error) {
-	// Every return path below drains transcriptionDone first, so the forwarder goroutine has
-	// finished by the time this runs and pub.text is the caption prefix that reached the caller.
-	if pub != nil && ttsGen != nil {
-		defer func() { ttsGen.PublishedTranscript = pub.text }()
-	}
+func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
 	startedSpeaking := false
 	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
 	ttsGen.playbackTiming = playbackTiming
@@ -2594,12 +2528,7 @@ func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context
 	return out, done
 }
 
-// publishedTranscript collects the caption text a transcription forwarder actually emitted.
-// Written only by that goroutine, so it is safe to read once the forwarder's done channel
-// closes — which every playTTSGenerationWithTranscript return path waits for.
-type publishedTranscript struct{ text string }
-
-func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, syncer *TranscriptSynchronizer, pub *publishedTranscript) <-chan struct{} {
+func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, syncer *TranscriptSynchronizer) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -2613,13 +2542,9 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 				Transcript: text,
 			})
 		}
-		text := transcript.String()
-		if pub != nil {
-			pub.text = text
-		}
-		if text != "" {
+		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: text,
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}
@@ -2627,7 +2552,7 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 	return done
 }
 
-func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSession, timedTextCh <-chan tts.TimedString, pub *publishedTranscript) <-chan struct{} {
+func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSession, timedTextCh <-chan tts.TimedString) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -2641,13 +2566,9 @@ func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSe
 				Transcript: timedText.Text,
 			})
 		}
-		text := transcript.String()
-		if pub != nil {
-			pub.text = text
-		}
-		if text != "" {
+		if transcript.Len() > 0 {
 			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
-				Transcript: text,
+				Transcript: transcript.String(),
 				IsFinal:    true,
 			})
 		}
