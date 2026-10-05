@@ -181,47 +181,6 @@ func TestPipelineAgentBargeInResetSkippedWhileFalseInterruptionPaused(t *testing
 	}
 }
 
-func TestPipelineAgentBargeInResetSkippedWhenGateGovernsWhileSpeaking(t *testing.T) {
-	agent := NewPipelineAgent(nil, nil, nil, nil, nil)
-	coreAgent := NewAgent("test")
-	coreAgent.AudioTurnDetector = &recordingAudioTurnDetector{}
-	session := NewAgentSession(coreAgent, nil, AgentSessionOptions{
-		BargeInDecider: fakeIgnoreBargeInDecider{},
-	})
-	session.activity = NewAgentActivity(coreAgent, session)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := agent.Start(ctx, session); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// gate governs + agent speaking -> the in-flight reply's ctx must survive the onset,
-	// since nothing is paused and only the gate may kill the sentence.
-	session.agentState = AgentStateSpeaking
-	agent.mu.Lock()
-	speakingCtx := agent.ctx
-	agent.mu.Unlock()
-	agent.resetGenerationCtxUnlessPaused()
-	if speakingCtx.Err() != nil {
-		t.Fatalf("gate governs while speaking: generation ctx cancelled, want preserved: %v", speakingCtx.Err())
-	}
-	agent.mu.Lock()
-	sameCtx := agent.ctx == speakingCtx
-	agent.mu.Unlock()
-	if !sameCtx {
-		t.Fatal("gate governs while speaking: generation ctx replaced, want kept")
-	}
-
-	// gate governs but the agent is not speaking -> normal turn, reset as before
-	session.agentState = AgentStateListening
-	agent.resetGenerationCtxUnlessPaused()
-	select {
-	case <-speakingCtx.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("gate governs while listening: generation ctx not reset, want legacy reset")
-	}
-}
-
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -1549,7 +1508,7 @@ func TestPipelineAgentMarksSpeakingAfterFirstAudioFrame(t *testing.T) {
 
 	playDone := make(chan error, 1)
 	go func() {
-		_, err := agent.playTTSGenerationWithTranscript(context.Background(), session, ttsGen, transcriptSync, done, nil, nil)
+		_, err := agent.playTTSGenerationWithTranscript(context.Background(), session, ttsGen, transcriptSync, done, nil)
 		playDone <- err
 	}()
 
@@ -1609,7 +1568,7 @@ func TestPipelineAgentSpeakingSpanUsesAgentTurnContext(t *testing.T) {
 	transcriptSync := NewTranscriptSynchronizer(0)
 	defer transcriptSync.Close()
 
-	if _, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, closedChannel(), nil, nil); err != nil {
+	if _, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, closedChannel(), nil); err != nil {
 		t.Fatal(err)
 	}
 	session.UpdateAgentState(AgentStateListening)
@@ -1663,7 +1622,7 @@ func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 		return nil
 	}
 
-	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil, nil)
+	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
@@ -1702,7 +1661,7 @@ func TestPipelineAgentCanceledPublishAudioClearsPlayback(t *testing.T) {
 		return context.Canceled
 	}
 
-	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil, nil)
+	_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
@@ -1733,7 +1692,7 @@ func TestPipelineAgentPlayTTSCancelsWhenNoAudioFrames(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil, nil)
+		_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
 		resultCh <- err
 	}()
 
@@ -6544,7 +6503,7 @@ func TestPipelineAgentInterruptedReplyWaitsForPlaybackAfterReplyContextCanceled(
 	replyCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	forwarded := agent.forwardedAssistantTextAfterInterruption(replyCtx, session, speech, "full answer", nil)
+	forwarded := agent.forwardedAssistantTextAfterInterruption(replyCtx, session, speech, "full answer")
 
 	if playback.clearCalls != 1 {
 		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
@@ -6571,7 +6530,7 @@ func TestPipelineAgentInterruptedReplyUsesEmptySynchronizedTranscript(t *testing
 		t.Fatalf("Interrupt error = %v, want nil", err)
 	}
 
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer", nil)
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer")
 
 	if playback.clearCalls != 1 {
 		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
@@ -6579,118 +6538,6 @@ func TestPipelineAgentInterruptedReplyUsesEmptySynchronizedTranscript(t *testing
 	if forwarded != "" {
 		t.Fatalf("forwarded text = %q, want empty synchronized transcript to suppress full fallback", forwarded)
 	}
-}
-
-// go94.log: a 9.7s utterance killed after ~3s stored the whole sentence, so the caller saw —
-// and the LLM believed it had said — "Mohon sebutkan tanggal, bulan, dan tahunnya." which was
-// never spoken. With no transport-level sync, commit the caption prefix that actually played.
-func TestPipelineAgentInterruptedReplyUsesPublishedTranscript(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	playback := &fakePipelinePlaybackController{
-		result: AudioPlaybackResult{
-			PlaybackPosition: 3 * time.Second,
-			Interrupted:      true,
-		},
-	}
-	session.SetAudioPlaybackController(playback)
-	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
-	speech := NewSpeechHandle(true, DefaultInputDetails())
-	if err := speech.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v, want nil", err)
-	}
-	const spoken = "Tentu, Pak/Bu. Paketnya sampai di tanggal berapa ya Bapak/Ibu?"
-	const generated = spoken + " Mohon sebutkan tanggal, bulan, dan tahunnya."
-	ttsGen := &TTSGenerationData{PublishedTranscript: spoken}
-
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, generated, ttsGen)
-
-	if forwarded != spoken {
-		t.Fatalf("forwarded text = %q, want the published prefix %q", forwarded, spoken)
-	}
-}
-
-// The transport's own synchronized transcript still wins when it has one.
-func TestPipelineAgentInterruptedReplyPrefersSynchronizedOverPublished(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	playback := &fakePipelinePlaybackController{
-		result: AudioPlaybackResult{
-			PlaybackPosition:          time.Second,
-			Interrupted:               true,
-			SynchronizedTranscript:    "aligned prefix",
-			HasSynchronizedTranscript: true,
-		},
-	}
-	session.SetAudioPlaybackController(playback)
-	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
-	speech := NewSpeechHandle(true, DefaultInputDetails())
-	if err := speech.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v, want nil", err)
-	}
-	ttsGen := &TTSGenerationData{PublishedTranscript: "caption prefix"}
-
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer", ttsGen)
-
-	if forwarded != "aligned prefix" {
-		t.Fatalf("forwarded text = %q, want the transport's synchronized transcript", forwarded)
-	}
-}
-
-// Nothing published yet: PlaybackPosition <= 0 already yields "", unchanged by this path.
-func TestPipelineAgentInterruptedReplyPublishedEmptyKeepsNoPlayoutRule(t *testing.T) {
-	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	playback := &fakePipelinePlaybackController{
-		result: AudioPlaybackResult{PlaybackPosition: 0, Interrupted: true},
-	}
-	session.SetAudioPlaybackController(playback)
-	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
-	speech := NewSpeechHandle(true, DefaultInputDetails())
-	if err := speech.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v, want nil", err)
-	}
-	ttsGen := &TTSGenerationData{}
-
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer", ttsGen)
-
-	if forwarded != "" {
-		t.Fatalf("forwarded text = %q, want empty when no audio played", forwarded)
-	}
-}
-
-// The forwarders are the only writers of PublishedTranscript, and on a kill Discard() drops the
-// unspoken tail — so what they record is the spoken prefix. Both shapes must behave alike.
-func TestForwardersRecordPublishedTranscript(t *testing.T) {
-	t.Run("synchronizer", func(t *testing.T) {
-		session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-		agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
-		syncer := NewTranscriptSynchronizer(0)
-		pub := &publishedTranscript{}
-		done := agent.forwardAgentOutputTranscription(session, syncer, pub)
-		syncer.PushText("spoken prefix")
-		syncer.PushAudio(&model.AudioFrame{SampleRate: 16000, SamplesPerChannel: 16000})
-		time.Sleep(150 * time.Millisecond)
-		syncer.Close()
-		<-done
-		if pub.text == "" {
-			t.Fatal("published transcript empty, want the emitted caption text")
-		}
-		if strings.Contains(pub.text, "never spoken") {
-			t.Fatalf("published transcript = %q, want no unspoken text", pub.text)
-		}
-	})
-
-	t.Run("aligned", func(t *testing.T) {
-		session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-		agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
-		timedTextCh := make(chan tts.TimedString, 2)
-		timedTextCh <- tts.TimedString{Text: "spoken "}
-		timedTextCh <- tts.TimedString{Text: "prefix"}
-		close(timedTextCh)
-		pub := &publishedTranscript{}
-		<-agent.forwardAlignedAgentOutputTranscription(session, timedTextCh, pub)
-		if pub.text != "spoken prefix" {
-			t.Fatalf("published transcript = %q, want %q", pub.text, "spoken prefix")
-		}
-	})
 }
 
 func TestPipelineAgentInterruptedReplyFallsBackWhenSynchronizedTranscriptMissing(t *testing.T) {
@@ -6708,7 +6555,7 @@ func TestPipelineAgentInterruptedReplyFallsBackWhenSynchronizedTranscriptMissing
 		t.Fatalf("Interrupt error = %v, want nil", err)
 	}
 
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer", nil)
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full answer")
 
 	if playback.clearCalls != 1 {
 		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
@@ -6735,7 +6582,7 @@ func TestPipelineAgentInterruptedReplyUsesSynchronizedTranscriptWhenGeneratedTex
 		t.Fatalf("Interrupt error = %v, want nil", err)
 	}
 
-	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "", nil)
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "")
 
 	if playback.clearCalls != 1 {
 		t.Fatalf("ClearBuffer calls = %d, want 1", playback.clearCalls)
@@ -7003,7 +6850,7 @@ func TestPipelineAgentAgentOutputTranscriptionFinalPreservesReferenceWhitespace(
 	events := session.AgentOutputTranscribedEvents()
 	syncer := NewTranscriptSynchronizer(0)
 	agent := &PipelineAgent{}
-	done := agent.forwardAgentOutputTranscription(session, syncer, nil)
+	done := agent.forwardAgentOutputTranscription(session, syncer)
 
 	syncer.PushText("  padded answer  ")
 	syncer.Close()
@@ -7035,7 +6882,7 @@ func TestPipelineAgentAlignedAgentOutputTranscriptionFinalPreservesReferenceWhit
 	events := session.AgentOutputTranscribedEvents()
 	timedTextCh := make(chan tts.TimedString, 1)
 	agent := &PipelineAgent{}
-	done := agent.forwardAlignedAgentOutputTranscription(session, timedTextCh, nil)
+	done := agent.forwardAlignedAgentOutputTranscription(session, timedTextCh)
 
 	timedTextCh <- tts.TimedString{Text: "  aligned answer  "}
 	close(timedTextCh)

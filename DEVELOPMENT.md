@@ -56,7 +56,7 @@ These are starting points, not structural equivalence. Select the Go destination
 | --- | --- |
 | `refs/pipecat/src/pipecat/audio`, `turns`, `pipeline`, `processors` | Provider-neutral behavior in `core`, transport behavior in `interface/worker` |
 | `refs/pipecat/src/pipecat/services/*` | Matching `adapter/<provider>` |
-| `refs/smart-turn/*` | `adapter/pipecat` and its provider-neutral integration in `core/agent` |
+| `refs/smart-turn/*` | `adapter/pipecat` |
 | `refs/ten-framework/ai_agents/**/rtm-transport/*` | `interface/worker/agora`, `core/audio`, or `core/agent` according to ownership |
 | `refs/ten-framework/ai_agents/**/ten_packages/extension/*` | Matching provider adapter or transport interface |
 | `refs/ten-vad/*` | `adapter/ten` |
