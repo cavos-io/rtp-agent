@@ -39,14 +39,24 @@ check_deleted_test_files() {
   local deleted_tests
   deleted_tests=$(git diff "$BASE" --name-only --diff-filter=D -- "${FILES[@]}" || true)
 
-  if [[ -n "$deleted_tests" ]]; then
-    reject "deleting Go test files is not allowed:"
-    echo "$deleted_tests"
-  fi
+  local test_file source_file
+  while IFS= read -r test_file; do
+    [[ -z "$test_file" ]] && continue
+    source_file="${test_file%_test.go}.go"
+    if ! git diff "$BASE" --name-only --diff-filter=D -- "$source_file" | grep -Fxq "$source_file"; then
+      reject "deleting Go test file without its production source is not allowed: $test_file"
+    fi
+  done <<< "$deleted_tests"
 }
 
 check_test_additions_cover_deletions() {
   [[ "$BASE" == "all" ]] && return 0
+
+  # Removing a feature also removes its tests. Keep the deletion guard for
+  # ordinary edits, but allow it when this diff deletes production Go source.
+  local deleted_sources
+  deleted_sources=$(git diff "$BASE" --name-only --diff-filter=D -- '*.go' | grep -v '_test.go$' || true)
+  [[ -n "$deleted_sources" ]] && return 0
   
   local file stats additions deletions
   

@@ -57,15 +57,14 @@ type Agent struct {
 	ChatCtx             *llm.ChatContext
 	Tools               []llm.Tool
 
-	TurnDetection     TurnDetectionMode
-	TurnDetector      TurnDetector
-	AudioTurnDetector AudioTurnDetector
-	Avatar            AvatarProvider
-	STT               stt.STT
-	VAD               vad.VAD
-	LLM               llm.LLM
-	RealtimeModel     llm.RealtimeModel
-	TTS               tts.TTS
+	TurnDetection TurnDetectionMode
+	TurnDetector  TurnDetector
+	Avatar        AvatarProvider
+	STT           stt.STT
+	VAD           vad.VAD
+	LLM           llm.LLM
+	RealtimeModel llm.RealtimeModel
+	TTS           tts.TTS
 
 	chatCtxMu *sync.Mutex
 

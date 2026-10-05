@@ -16030,24 +16030,14 @@ func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvConfiguresPipecatAudioTurnDetector(t *testing.T) {
-	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "pipecat")
-	fake := &fakeAppAudioTurnDetector{}
-	oldFactory := appNewPipecatSmartTurn
-	appNewPipecatSmartTurn = func() (agent.AudioTurnDetector, error) {
-		return fake, nil
-	}
-	t.Cleanup(func() { appNewPipecatSmartTurn = oldFactory })
-
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Agent == nil {
-		t.Fatal("Agent is nil")
-	}
-	if app.Agent.AudioTurnDetector != fake {
-		t.Fatalf("AudioTurnDetector = %T, want configured Pipecat detector", app.Agent.AudioTurnDetector)
+func TestConfigureTurnDetectorRejectsRemovedAudioProviders(t *testing.T) {
+	for _, provider := range []string{"pipecat", "cavos"} {
+		t.Run(provider, func(t *testing.T) {
+			err := configureTurnDetector(AppConfig{TurnDetectorProvider: provider}, agent.NewAgent("test"))
+			if err == nil || !strings.Contains(err.Error(), "unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER") {
+				t.Fatalf("configureTurnDetector(%q) error = %v, want unsupported provider", provider, err)
+			}
+		})
 	}
 }
 
@@ -16074,9 +16064,6 @@ func TestDefaultConfigFromEnvConfiguresLiveKitTurnDetector(t *testing.T) {
 	}
 	if got := model.RemoteInferenceURL(); got != "https://turn.example/eot/multi" {
 		t.Fatalf("RemoteInferenceURL() = %q, want configured remote EOT URL", got)
-	}
-	if app.Agent.AudioTurnDetector != nil {
-		t.Fatalf("AudioTurnDetector = %T, want nil for LiveKit text turn detector", app.Agent.AudioTurnDetector)
 	}
 }
 
@@ -17115,34 +17102,6 @@ type fakeAppDtmfPublisher struct{}
 
 func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
 	return nil
-}
-
-type fakeAppAudioTurnDetector struct {
-	closeCalls int
-}
-
-func (f *fakeAppAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (agent.AudioTurnResult, error) {
-	return agent.AudioTurnResult{Probability: 0.9, IsComplete: true}, nil
-}
-
-func (f *fakeAppAudioTurnDetector) Close() error {
-	f.closeCalls++
-	return nil
-}
-
-func TestAppCloseClosesAudioTurnDetectorOnce(t *testing.T) {
-	detector := &fakeAppAudioTurnDetector{}
-	a := &App{Agent: &agent.Agent{AudioTurnDetector: detector}}
-
-	if err := a.Close(context.Background()); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	if err := a.Close(context.Background()); err != nil {
-		t.Fatalf("second Close: %v", err)
-	}
-	if detector.closeCalls != 1 {
-		t.Fatalf("AudioTurnDetector Close calls = %d, want 1", detector.closeCalls)
-	}
 }
 
 func chdirAppTest(t *testing.T, dir string) {

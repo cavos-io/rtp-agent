@@ -538,9 +538,6 @@ var (
 	appInitLoggerProvider     = telemetry.InitLoggerProvider
 	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
 	appNewMCPServerHTTP       = llm.NewMCPServerHTTP
-	appNewPipecatSmartTurn    = func() (agent.AudioTurnDetector, error) {
-		return pipecat.NewLocalSmartTurn()
-	}
 )
 
 const (
@@ -1831,18 +1828,12 @@ func (a *App) Close(ctx context.Context) error {
 	}
 	a.closeOnce.Do(func() {
 		a.closeMCPServers()
-		var detectorErr error
-		if a.Agent != nil {
-			if closer, ok := a.Agent.AudioTurnDetector.(interface{ Close() error }); ok {
-				detectorErr = closer.Close()
-			}
-		}
 		var telemetryErr error
 		if a.telemetryLogs {
 			a.telemetryLogs = false
 			telemetryErr = appShutdownLoggerProvider(ctx)
 		}
-		a.closeErr = errors.Join(detectorErr, telemetryErr)
+		a.closeErr = telemetryErr
 	})
 	return a.closeErr
 }
@@ -2307,7 +2298,6 @@ func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
 	dst.ChatCtx = src.ChatCtx
 	dst.TurnDetection = src.TurnDetection
 	dst.TurnDetector = src.TurnDetector
-	dst.AudioTurnDetector = src.AudioTurnDetector
 	dst.Avatar = src.Avatar
 	dst.STT = src.STT
 	dst.VAD = src.VAD
@@ -2655,24 +2645,6 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 			return fmt.Errorf("RTP_AGENT_TURN_DETECTOR_PROVIDER=llm requires RTP_AGENT_LLM_PROVIDER")
 		}
 		a.TurnDetector = agent.NewLLMTurnDetector(a.LLM)
-		return nil
-	case providerPipecat:
-		detector, err := appNewPipecatSmartTurn()
-		if err != nil {
-			return err
-		}
-		a.AudioTurnDetector = detector
-		return nil
-	case providerCavos:
-		var opts []cavos.SmartTurnOption
-		if addr := os.Getenv("RTP_AGENT_SMART_TURN_GRPC_ADDR"); addr != "" {
-			opts = append(opts, cavos.WithSmartTurnAddr(addr))
-		}
-		detector, err := cavos.NewSmartTurn(opts...)
-		if err != nil {
-			return err
-		}
-		a.AudioTurnDetector = detector
 		return nil
 	case providerLiveKit:
 		if remoteEOTURL := os.Getenv("LIVEKIT_REMOTE_EOT_URL"); remoteEOTURL != "" {

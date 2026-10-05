@@ -9,7 +9,6 @@ import (
 	"maps"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -433,13 +432,10 @@ type RoomIO struct {
 	userStateEvents          <-chan agent.UserStateChangedEvent
 	clientEvents             roomIOClientEvents
 
-	agentTranscriptionCancel    context.CancelFunc
-	speechCreatedEvents         <-chan agent.SpeechCreatedEvent
-	agentTranscriptionEvents    <-chan agent.AgentOutputTranscribedEvent
-	agentTranscriptionSegmentID string
-	// agentTranscriptionCutPrefix is the part of the current utterance a cut already published. The
-	// producer's final carries the whole utterance, so without it the post-cut segment rewinds.
-	agentTranscriptionCutPrefix      string
+	agentTranscriptionCancel         context.CancelFunc
+	speechCreatedEvents              <-chan agent.SpeechCreatedEvent
+	agentTranscriptionEvents         <-chan agent.AgentOutputTranscribedEvent
+	agentTranscriptionSegmentID      string
 	agentTranscriptionText           string
 	agentTranscriptionOrphaned       bool
 	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
@@ -772,7 +768,6 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 			}
 		}
 	})
-
 }
 
 func (rio *RoomIO) startUserTranscriptionListener() {
@@ -881,53 +876,12 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	rio.clientEvents.DispatchUserState(ev.NewState)
 }
 
-// trimPublishedPrefix removes text earlier segments already published, tolerating whitespace drift.
-// False when the prefix doesn't lead — caller publishes full text (a dup beats a truncation).
-func trimPublishedPrefix(transcript, prefix string) (string, bool) {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return transcript, false
-	}
-	if rest := strings.TrimPrefix(transcript, prefix); rest != transcript {
-		return strings.TrimSpace(rest), true
-	}
-	// Fall back to comparing with whitespace collapsed, then cut the original at the
-	// same word count so the remainder keeps its real spacing.
-	prefixWords := strings.Fields(prefix)
-	words := strings.Fields(transcript)
-	if len(prefixWords) == 0 || len(prefixWords) > len(words) {
-		return transcript, false
-	}
-	for i, w := range prefixWords {
-		if words[i] != w {
-			return transcript, false
-		}
-	}
-	return strings.Join(words[len(prefixWords):], " "), true
-}
-
 func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) (string, string, string, bool) {
 	if rio == nil {
 		return roomIOTranscriptionSegmentID(), transcript, transcript, true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
-	if final && rio.agentTranscriptionCutPrefix != "" {
-		// The producer's final event repeats the whole utterance; everything a cut
-		// already published must not be sent again under the new segment.
-		remainder, ok := trimPublishedPrefix(transcript, rio.agentTranscriptionCutPrefix)
-		if ok {
-			transcript = remainder
-		}
-		rio.agentTranscriptionCutPrefix = ""
-		if ok && transcript == "" {
-			// The cut carried the entire utterance: nothing is left to open a segment
-			// for, so don't mint one.
-			rio.agentTranscriptionSegmentID = ""
-			rio.agentTranscriptionText = ""
-			return "", "", "", false
-		}
-	}
 	if final && rio.agentTranscriptionSegmentID == "" {
 
 		if rio.agentTranscriptionOrphaned {
@@ -953,7 +907,6 @@ func (rio *RoomIO) agentOutputTranscriptionState(transcript string, final bool) 
 	if final {
 		rio.agentTranscriptionSegmentID = ""
 		rio.agentTranscriptionText = ""
-		rio.agentTranscriptionCutPrefix = ""
 	}
 	return segmentID, transcript, legacyText, true
 }
@@ -970,27 +923,23 @@ func (rio *RoomIO) forwardAgentTranscriptionNextOutput(text string, final bool) 
 	}
 }
 
-// userInputTranscriptionState returns the caller's segment id, whether this event OPENED it
-// (what triggers the agent caption cut), and whether to publish at all.
-func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (string, bool, bool) {
+func (rio *RoomIO) userInputTranscriptionState(transcript string, final bool) (string, bool) {
 	if rio == nil {
-		return roomIOTranscriptionSegmentID(), true, true
+		return roomIOTranscriptionSegmentID(), true
 	}
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	if final && transcript == "" && rio.userTranscriptionSegmentID == "" {
-		return "", false, false
+		return "", false
 	}
-	opened := false
 	if rio.userTranscriptionSegmentID == "" {
 		rio.userTranscriptionSegmentID = roomIOTranscriptionSegmentID()
-		opened = true
 	}
 	segmentID := rio.userTranscriptionSegmentID
 	if final {
 		rio.userTranscriptionSegmentID = ""
 	}
-	return segmentID, opened, true
+	return segmentID, true
 }
 
 func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
@@ -1002,14 +951,9 @@ func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent
 	if trackID == "" || participantID == "" {
 		return
 	}
-	segmentID, opened, ok := rio.userInputTranscriptionState(ev.Transcript, ev.IsFinal)
+	segmentID, ok := rio.userInputTranscriptionState(ev.Transcript, ev.IsFinal)
 	if !ok {
 		return
-	}
-	if opened && rio.captionInterleaveEnabled() {
-		// Close the agent's open caption at what's published, so the caller's bubble lands between
-		// it and whatever the agent says next. Done before publishing, so ordering is fixed.
-		rio.cutOpenAgentSegment()
 	}
 	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
 		Id:       segmentID,
@@ -3522,38 +3466,6 @@ func (rio *RoomIO) waitForPublications(ctx context.Context) error {
 	}
 }
 
-// captionInterleaveEnabled follows the same switch as the ChatContext weave, so the panel and the
-// stored transcript can't disagree — with turn_detection = vad neither splits.
-func (rio *RoomIO) captionInterleaveEnabled() bool {
-	return rio != nil && rio.AgentSession != nil &&
-		rio.AgentSession.Options.WeaveSuppressedBargeIn
-}
-
-// cutOpenAgentSegment ends the open agent caption at the words already published; the next delta
-// mints a fresh segment. No-op when nothing is open. Called before the caller's bubble publishes.
-func (rio *RoomIO) cutOpenAgentSegment() {
-	if rio == nil {
-		return
-	}
-	rio.mu.Lock()
-	segmentID := rio.agentTranscriptionSegmentID
-	spoken := rio.agentTranscriptionText
-	if segmentID == "" || spoken == "" {
-		rio.mu.Unlock()
-		return
-	}
-	rio.agentTranscriptionSegmentID = ""
-	rio.agentTranscriptionText = ""
-	rio.agentTranscriptionCutPrefix += spoken
-	rio.mu.Unlock()
-
-	rio.publishLegacyAgentTranscription(agent.AgentOutputTranscribedEvent{
-		Transcript: spoken,
-		IsFinal:    true,
-	}, segmentID)
-	rio.closeAgentTextStream()
-}
-
 func (rio *RoomIO) handleSpeechCreatedForTranscription() {
 	if rio == nil || !rio.beginPublication() {
 		return
@@ -3569,8 +3481,6 @@ func (rio *RoomIO) handleSpeechCreatedForTranscription() {
 
 	rio.agentTranscriptionSegmentID = ""
 	rio.agentTranscriptionText = ""
-	// A new speech starts a new utterance: any cut prefix belongs to the old one.
-	rio.agentTranscriptionCutPrefix = ""
 	rio.mu.Unlock()
 	rio.closeAgentTextStream()
 }
