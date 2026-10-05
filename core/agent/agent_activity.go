@@ -1975,14 +1975,14 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 }
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
-	a.onEndOfSpeech(ev, false)
+	a.onEndOfSpeech(ev, false, true)
 }
 
 func (a *AgentActivity) onSyntheticEndOfSpeech() {
-	a.onEndOfSpeech(nil, true)
+	a.onEndOfSpeech(nil, true, true)
 }
 
-func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
+func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic, detectTurn bool) {
 	wasSpeaking := a.setSpeaking(false)
 	stoppedAt := vadSpeechStoppedAt(ev)
 	if ev == nil && !a.userSpeechStoppedAt.IsZero() {
@@ -2017,7 +2017,7 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 	a.Session.Logger().Infow("End of speech detected")
 
 	turnDetection := a.turnDetectionMode()
-	if a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent()) {
+	if detectTurn && (a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent())) {
 		// Trigger EOU detection
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}

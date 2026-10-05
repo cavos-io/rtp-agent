@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -138,6 +139,61 @@ func TestTurnSplittingSTTCloseCancelsReplacementOpen(t *testing.T) {
 	}
 }
 
+func TestTurnSplittingSTTForwardsActiveError(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, time.Second).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	cause := errors.New("provider failed")
+	provider.stream(0).fail <- cause
+	result := make(chan error, 1)
+	go func() { _, err := logical.Next(); result <- err }()
+	select {
+	case err := <-result:
+		if !errors.Is(err, cause) {
+			t.Fatalf("Next error = %v, want %v", err, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active provider error was hidden")
+	}
+}
+
+func TestTurnSplittingSTTIgnoresRetiredError(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSplitStreams(t, provider, 2)
+	provider.stream(0).fail <- errors.New("retired stream ended")
+	provider.stream(1).events <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
+	event, err := logical.Next()
+	if err != nil || event.Type != SpeechEventStartOfSpeech {
+		t.Fatalf("Next = %v, %v", event, err)
+	}
+}
+
+func TestTurnSplittingSTTCancellationReturnsEOF(t *testing.T) {
+	provider := &splitTestSTT{}
+	ctx, cancel := context.WithCancel(context.Background())
+	logical, err := NewTurnSplittingSTT(provider, time.Second).Stream(ctx, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	cancel()
+	_, err = logical.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+}
+
 type splitTestSTT struct {
 	mu      sync.Mutex
 	streams []*splitTestStream
@@ -177,7 +233,7 @@ func (s *splitTestSTT) Recognize(context.Context, []*model.AudioFrame, string) (
 func (s *splitTestSTT) Stream(context.Context, string) (RecognizeStream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	stream := &splitTestStream{events: make(chan *SpeechEvent, 1), closed: make(chan struct{})}
+	stream := &splitTestStream{events: make(chan *SpeechEvent, 1), fail: make(chan error, 1), closed: make(chan struct{})}
 	s.streams = append(s.streams, stream)
 	return stream, nil
 }
@@ -191,6 +247,7 @@ func (s *splitTestSTT) stream(i int) *splitTestStream {
 type splitTestStream struct {
 	mu              sync.Mutex
 	events          chan *SpeechEvent
+	fail            chan error
 	closed          chan struct{}
 	ended           bool
 	pushes          int
@@ -212,6 +269,8 @@ func (s *splitTestStream) Next() (*SpeechEvent, error) {
 	select {
 	case event := <-s.events:
 		return event, nil
+	case err := <-s.fail:
+		return nil, err
 	case <-s.closed:
 		return nil, io.EOF
 	}

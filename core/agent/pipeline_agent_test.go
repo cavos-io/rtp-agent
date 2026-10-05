@@ -3137,6 +3137,64 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSTTFailureResumesPausedReply(t *testing.T) {
+	for _, mode := range []TurnDetectionMode{TurnDetectionModeSTT, TurnDetectionModeVAD} {
+		t.Run(string(mode), func(t *testing.T) {
+			base := NewAgent("test")
+			session := NewAgentSession(base, nil, AgentSessionOptions{
+				TurnDetection: mode, ResumeFalseInterruption: true, ResumeFalseInterruptionSet: true,
+				FalseInterruptionTimeout: 10, FalseInterruptionTimeoutSet: true,
+			})
+			output := &recordingAudioOutputController{canPause: true}
+			session.SetAudioOutputController(output)
+			activity := NewAgentActivity(base, session)
+			session.activity = activity
+			speech := NewSpeechHandle(true, DefaultInputDetails())
+			activity.currentSpeech = speech
+			session.agentState = AgentStateSpeaking
+			if mode == TurnDetectionModeSTT {
+				activity.OnSTTStartOfSpeech(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+			} else {
+				activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+			}
+			if output.pauseCount != 1 || !activity.hasActiveFalseInterruptionPause() {
+				t.Fatal("reply was not paused after speech started")
+			}
+			cause := errors.New("provider failed")
+			provider := &fakePipelineSTT{stream: &fakePipelineRecognizeStream{closedCh: make(chan struct{})}}
+			pipeline := NewPipelineAgent(nil, provider, nil, nil, nil)
+			pipeline.session = session
+			defer pipeline.closeInputTranscriptionStream()
+			stream := &fakePipelineRecognizeStream{err: cause}
+			pipeline.sttStream = stream
+			pipeline.sttLoop(stream)
+			select {
+			case event := <-session.ErrorEvents():
+				if !errors.Is(event.Error, cause) {
+					t.Fatalf("error = %v, want %v", event.Error, cause)
+				}
+			default:
+				t.Fatal("STT failure was not reported")
+			}
+			select {
+			case event := <-session.AgentFalseInterruptionEvents():
+				if !event.Resumed {
+					t.Fatal("reply did not resume")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("paused reply did not resume after STT failure")
+			}
+			if got := session.UserState(); got != UserStateListening {
+				t.Fatalf("user state = %q, want listening", got)
+			}
+			if output.resumeCount != 1 || activity.hasActiveFalseInterruptionPause() {
+				t.Fatal("paused output was not released")
+			}
+			speech.MarkDone()
+		})
+	}
+}
+
 func TestPipelineAgentLogsSTTErrorWithStructuredFields(t *testing.T) {
 	oldLogger := logutil.Logger
 	recorder := &recordingLogger{}

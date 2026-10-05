@@ -601,11 +601,23 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		if err != nil {
 			if va.retireSTTStream(stream) && !isSpeechStreamShutdownError(va.session, err) {
 				va.logSTTError("STT stream error", err, va.stt, "stt_stream")
+				recovered := false
+				if va.session != nil {
+					if activity := va.session.currentActivity(); activity != nil && activity.hasActiveFalseInterruptionPause() && activity.isUserSpeaking() {
+						activity.onEndOfSpeech(nil, true, false)
+						activity.resumeFalseInterruption()
+						if restartErr := va.ClearInputTranscription(); restartErr == nil {
+							recovered = true
+						} else {
+							err = errors.Join(err, fmt.Errorf("restart STT stream: %w", restartErr))
+						}
+					}
+				}
 				label := "stt"
 				if va.stt != nil {
 					label = va.stt.Label()
 				}
-				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+				va.emitError(stt.NewSTTError(label, err, recovered), va.stt)
 			}
 			return
 		}

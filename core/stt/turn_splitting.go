@@ -56,7 +56,7 @@ func (s *TurnSplittingSTT) Stream(ctx context.Context, language string) (Recogni
 		delay:    s.delay,
 		active:   stream,
 		streams:  map[RecognizeStream]struct{}{stream: {}},
-		events:   make(chan *SpeechEvent),
+		events:   make(chan turnSplittingResult),
 	}
 	if timing, ok := stream.(StreamTiming); ok {
 		w.startTimeOffset = timing.StartTimeOffset()
@@ -82,9 +82,14 @@ type turnSplittingStream struct {
 	splitting       bool
 	closed          bool
 	closeOnce       sync.Once
-	events          chan *SpeechEvent
+	events          chan turnSplittingResult
 	startTimeOffset float64
 	startTime       float64
+}
+
+type turnSplittingResult struct {
+	event *SpeechEvent
+	err   error
 }
 
 func (s *turnSplittingStream) StartTimeOffset() float64 {
@@ -157,12 +162,15 @@ func (s *turnSplittingStream) Flush() error {
 }
 
 func (s *turnSplittingStream) Next() (*SpeechEvent, error) {
+	if s.ctx.Err() != nil {
+		return nil, io.EOF
+	}
 	select {
-	case event := <-s.events:
-		if event == nil {
+	case result := <-s.events:
+		if result.event == nil && result.err == nil {
 			return nil, io.EOF
 		}
-		return event, nil
+		return result.event, result.err
 	case <-s.ctx.Done():
 		return nil, io.EOF
 	}
@@ -237,6 +245,15 @@ func (s *turnSplittingStream) pump(stream RecognizeStream) {
 		for {
 			event, err := stream.Next()
 			if err != nil {
+				s.mu.Lock()
+				active := s.active == stream && !s.closed
+				s.mu.Unlock()
+				if active && s.ctx.Err() == nil {
+					select {
+					case s.events <- turnSplittingResult{err: err}:
+					case <-s.ctx.Done():
+					}
+				}
 				return
 			}
 			if event != nil && event.Type == SpeechEventFinalTranscript {
@@ -251,7 +268,7 @@ func (s *turnSplittingStream) pump(stream RecognizeStream) {
 				s.mu.Unlock()
 			}
 			select {
-			case s.events <- event:
+			case s.events <- turnSplittingResult{event: event}:
 			case <-s.ctx.Done():
 				return
 			}
