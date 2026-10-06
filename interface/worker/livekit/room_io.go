@@ -75,6 +75,7 @@ func (d *opusDecoder) Close() error {
 }
 
 type opusEncoder struct {
+	mu      sync.Mutex
 	encoder *opus.Encoder
 	buf     []byte
 }
@@ -97,6 +98,9 @@ func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 		in[i] = int16(pcm[i*2]) | (int16(pcm[i*2+1]) << 8)
 	}
 
+	// Protect native codec state and the output buffer until its copy is complete.
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	n, err := e.encoder.Encode(in, e.buf)
 	if err != nil {
 		return nil, err
