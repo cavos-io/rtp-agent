@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -128,11 +129,17 @@ type AgentActivity struct {
 	speaking       bool
 	speakingMu     sync.RWMutex
 	// Serializes speech boundaries with false-interruption timer resolution.
-	speechBoundaryMu     sync.Mutex
-	interruptionDetected bool
-	overlapSpeechEnded   bool
-	manualTurnCommitted  bool
-	userTurnSeq          uint64
+	speechBoundaryMu             sync.Mutex
+	interruptionDetected         bool
+	adaptiveInterruptionStream   InterruptionStream
+	adaptivePipeline             *PipelineAgent
+	adaptiveInterruptionFailed   atomic.Bool
+	adaptiveOverlapPending       atomic.Bool
+	adaptiveOverlapStartedAt     atomic.Int64
+	adaptiveBackchannelConfirmed atomic.Bool
+	overlapSpeechEnded           bool
+	manualTurnCommitted          bool
+	userTurnSeq                  uint64
 
 	interimCommittedTurn bool
 
@@ -147,6 +154,7 @@ type AgentActivity struct {
 	pendingInterimConfidence         float64
 	pendingPreflightTranscript       string
 	pendingPreflightConfidence       float64
+	deferredEndpointingEnd           *float64
 	userTurnCompletionMu             sync.Mutex
 	userTurnCompletionSeq            uint64
 	commitUserTurnMu                 sync.Mutex
@@ -232,6 +240,11 @@ func newAgentActivity(agentIntf AgentInterface, session *AgentSession, parentCtx
 		cancel:            cancel,
 	}
 	activity.Agent.activity = activity
+	if session != nil && session.Options.InterruptionMode == InterruptionModeAdaptive {
+		if pipeline, ok := session.Assistant.(*PipelineAgent); ok {
+			activity.adaptivePipeline = pipeline
+		}
+	}
 	return activity
 }
 
@@ -1913,6 +1926,20 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.endEOUWait("user_resumed", a.userSpeechStartedAt)
 	a.cancelPendingEOUDetection()
 
+	if a.adaptiveInterruptionActive() && a.Session.AgentStateValue() == AgentStateSpeaking && !a.backchannelBoundaryActive(time.Now()) {
+		if err := a.adaptiveStream().StartOverlap(a.userSpeechStartedAt); err != nil {
+			a.fallbackAdaptiveInterruption()
+		} else {
+			a.userTurnMu.Lock()
+			a.holdSTTWhileAgentSpeaking = true
+			a.userTurnMu.Unlock()
+			a.adaptiveOverlapPending.Store(true)
+			a.adaptiveOverlapStartedAt.Store(a.userSpeechStartedAt.UnixNano())
+			return
+		}
+	}
+	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
+	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
 		if a.pauseSpeechForFalseInterruption(time.Time{}) {
 			return
@@ -1978,6 +2005,9 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		a.sttEOSReceived = true
 	}
 	if a.Session != nil {
+		if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
+			a.Session.markUserSpeakingInterruption(false)
+		}
 		stateAt := a.userSpeechStoppedAt
 		if stateAt.IsZero() {
 			stateAt = time.Now()
@@ -1992,9 +2022,22 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		if ev == nil {
 			endedAt = timeToUnixSeconds(stoppedAt)
 		}
-		endpointing.OnEndOfSpeech(endedAt, shouldIgnore)
+		if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
+			a.userTurnMu.Lock()
+			a.deferredEndpointingEnd = &endedAt
+			a.userTurnMu.Unlock()
+		} else {
+			endpointing.OnEndOfSpeech(endedAt, shouldIgnore)
+		}
 	}
 	a.overlapSpeechEnded = false
+	if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
+		if err := a.adaptiveStream().EndOverlap(stoppedAt, false); err != nil {
+			a.fallbackAdaptiveInterruption()
+		} else {
+			return
+		}
+	}
 	a.Session.Logger().Infow("End of speech detected")
 
 	turnDetection := a.turnDetectionMode()
@@ -2009,12 +2052,26 @@ func (a *AgentActivity) OnOverlapSpeechEnded(ev OverlappingSpeechEvent) {
 	if a == nil || a.Session == nil {
 		return
 	}
+	if ev.AgentEnded {
+		return
+	}
 	if !ev.IsInterruption && a.backchannelBoundaryActive(time.Now()) {
 		return
 	}
+	a.Session.markUserSpeakingInterruption(ev.IsInterruption)
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = ev.IsInterruption
 	a.Session.EmitOverlappingSpeech(ev)
+	a.adaptiveOverlapPending.Store(false)
+	a.adaptiveOverlapStartedAt.Store(0)
+	a.finishDeferredEndpointing(!ev.IsInterruption)
+	if a.adaptiveInterruptionActive() && !ev.IsInterruption {
+		a.adaptiveBackchannelConfirmed.Store(true)
+		a.holdUserTranscriptsUntil(ev.DetectedAt.Add(a.heldTranscriptEndCooldown()))
+		a.userTurnMu.Lock()
+		a.heldSTTEvents = nil
+		a.userTurnMu.Unlock()
+	}
 }
 
 func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
@@ -2028,6 +2085,9 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
 	a.onAgentSpeechEnded(ignoreUntil)
 	a.flushHeldSTTEvents()
+	if a.adaptiveInterruptionActive() && !a.isUserSpeaking() {
+		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
+	}
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
@@ -2301,6 +2361,20 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 	a.userTurnMu.Lock()
 	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled()
 	a.userTurnMu.Unlock()
+	if a.adaptiveInterruptionActive() {
+		if err := a.adaptiveStream().StartAgentSpeech(); err != nil {
+			go a.fallbackAdaptiveInterruption()
+			return
+		}
+	}
+	if a.adaptiveInterruptionActive() && a.isUserSpeaking() && !a.backchannelBoundaryActive(startedAt) {
+		if err := a.adaptiveStream().StartOverlap(a.userSpeechStartedAt); err != nil {
+			go a.fallbackAdaptiveInterruption()
+		} else {
+			a.adaptiveOverlapPending.Store(true)
+			a.adaptiveOverlapStartedAt.Store(a.userSpeechStartedAt.UnixNano())
+		}
+	}
 }
 
 func (a *AgentActivity) cancelBackchannelBoundary() {
@@ -2316,6 +2390,14 @@ func (a *AgentActivity) cancelBackchannelBoundary() {
 func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 	if a == nil {
 		return
+	}
+	if a.adaptiveInterruptionActive() {
+		a.adaptiveOverlapPending.Store(false)
+		a.adaptiveOverlapStartedAt.Store(0)
+		a.finishDeferredEndpointing(false)
+		if err := a.adaptiveStream().EndAgentSpeech(endedAt); err != nil {
+			go a.fallbackAdaptiveInterruption()
+		}
 	}
 	a.cancelBackchannelBoundary()
 	if a.InterruptionEnabled() {
@@ -2367,6 +2449,13 @@ func (a *AgentActivity) sttSilencedWhileAgentSpeaking(now time.Time) bool {
 func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
 	if a == nil || a.Session == nil {
 		return false
+	}
+	if a.Session.Options.InterruptionMode == InterruptionModeAdaptive &&
+		(a.adaptiveInterruptionFailed.Load() || (a.adaptivePipeline != nil && a.adaptivePipeline.adaptiveFailed.Load()) || a.adaptiveStream() == nil) {
+		return false
+	}
+	if a.adaptiveInterruptionActive() && !a.interruptionDetected && a.Session.AgentState() == AgentStateSpeaking && !a.backchannelBoundaryActive(now) {
+		return true
 	}
 	a.backchannelBoundaryMu.Lock()
 	if a.audioActivityDisabled {
@@ -2451,8 +2540,11 @@ func (a *AgentActivity) drainHeldUserTranscriptWindow() {
 	hasHeld := len(a.heldSTTEvents) > 0
 	a.userTurnMu.Unlock()
 	if hasHeld {
-		a.commitHeldBargeIn()
+		if !a.adaptiveBackchannelConfirmed.Load() {
+			a.commitHeldBargeIn()
+		}
 	}
+	a.adaptiveBackchannelConfirmed.Store(false)
 	a.userTurnMu.Lock()
 	a.ignoreUserTranscriptUntil = time.Time{}
 	a.heldSTTEvents = nil

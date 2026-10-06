@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,23 +39,32 @@ type PipelineAgent struct {
 
 	ttsStreamPacer *tts.SentenceStreamPacerOptions
 
-	audioInCh        chan *model.AudioFrame
-	audioInputHook   atomic.Pointer[AudioInputHook]
-	mu               sync.Mutex
-	session          *AgentSession
-	vadStream        vad.VADStream
-	vadSpeechStarted bool
-	vadStallTimeout  time.Duration
-	vadStallTimer    *time.Timer
-	sttStream        stt.RecognizeStream
-	lastSTTFrame     *model.AudioFrame
-	recovery         *sttRecoveryCoordinator
+	audioInCh          chan *model.AudioFrame
+	audioInputHook     atomic.Pointer[AudioInputHook]
+	mu                 sync.Mutex
+	session            *AgentSession
+	vadStream          vad.VADStream
+	vadSpeechStarted   bool
+	vadStallTimeout    time.Duration
+	vadStallTimer      *time.Timer
+	sttStream          stt.RecognizeStream
+	lastSTTFrame       *model.AudioFrame
+	recovery           *sttRecoveryCoordinator
+	interruptionStream atomic.Value
+	adaptiveFailed     atomic.Bool
 
 	rootCtx context.Context
 	ctx     context.Context
 	cancel  context.CancelFunc
 
 	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
+}
+
+func (va *PipelineAgent) getInterruptionStream() InterruptionStream {
+	if stream := va.interruptionStream.Load(); stream != nil {
+		return stream.(InterruptionStream)
+	}
+	return nil
 }
 
 type pipelineReplyOptions struct {
@@ -105,6 +115,19 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	}
 	va.resetGenerationCtxLocked()
 	va.mu.Unlock()
+	if s != nil && s.Options.InterruptionMode == InterruptionModeAdaptive {
+		stream, err := s.Options.InterruptionDetector.Stream(ctx)
+		if err == nil && (stream == nil || (reflect.ValueOf(stream).Kind() == reflect.Ptr && reflect.ValueOf(stream).IsNil())) {
+			err = errors.New("adaptive interruption detector returned nil stream")
+		}
+		if err != nil {
+			s.Logger().Warnw("adaptive interruption unavailable; using VAD", err)
+			va.adaptiveFailed.Store(true)
+		} else {
+			va.interruptionStream.Store(stream)
+			go va.consumeInterruptionStream(ctx, stream)
+		}
+	}
 	if s != nil && s.Options.STTRecoveryFactory != nil {
 		va.recovery = newSTTRecoveryCoordinator(ctx, s.Options.STTRecoveryFactory)
 		go va.consumeSTTRecovery(ctx)
@@ -272,6 +295,11 @@ func (va *PipelineAgent) chatContext() (*llm.ChatContext, *sync.Mutex) {
 
 func (va *PipelineAgent) run(ctx context.Context) {
 	defer func() {
+		if stream := va.getInterruptionStream(); stream != nil {
+			_ = stream.Close()
+		}
+	}()
+	defer func() {
 		if va.recovery != nil {
 			va.recovery.Close()
 		}
@@ -360,6 +388,11 @@ func (va *PipelineAgent) run(ctx context.Context) {
 						va.logVADError("VAD push frame failed", err, va.vad, "vad_push_frame")
 						va.emitError(err, va.vad)
 					}
+				}
+			}
+			if stream := va.getInterruptionStream(); stream != nil && !va.adaptiveFailed.Load() {
+				if err := stream.PushFrame(frame); err != nil {
+					va.fallbackAdaptiveInterruption(err)
 				}
 			}
 			if err := va.pushSTTFrame(frame); err != nil {

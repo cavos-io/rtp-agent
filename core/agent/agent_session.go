@@ -47,6 +47,8 @@ type AgentSessionOptions struct {
 	TurnMetricDimensions                     telemetry.TurnMetricDimensions
 	AllowInterruptions                       bool
 	AllowInterruptionsSet                    bool
+	InterruptionMode                         InterruptionMode
+	InterruptionDetector                     InterruptionDetector
 	DiscardAudioIfUninterruptible            bool
 	DiscardAudioIfUninterruptibleSet         bool
 	MinInterruptionDuration                  float64
@@ -319,6 +321,7 @@ type AgentSession struct {
 	userTurnSpan            trace.Span
 	userSpeakingSpan        trace.Span
 	userSpeakingStartedAt   time.Time
+	userSpeakingInterrupted bool
 	runState                *RunResult
 	onEnterDepth            int
 	userTurnClaims          int
@@ -1256,6 +1259,9 @@ func (s *AgentSession) Logger() protoLogger.Logger {
 }
 
 func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
+	if opts.InterruptionMode == "" {
+		opts.InterruptionMode = InterruptionModeVAD
+	}
 	if !opts.AllowInterruptionsSet {
 		opts.AllowInterruptions = true
 	}
@@ -2541,13 +2547,38 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		s.runState = runState
 	}
 	s.mu.Unlock()
-
-	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
+	rejectStart := func(err error) (*RunResult, error) {
 		s.clearRunStateIfCurrent(runState)
 		s.mu.Lock()
 		s.signalTeardown()
 		s.mu.Unlock()
 		return nil, err
+	}
+
+	if err := s.validateRealtimeTurnDetectionInterruptions(assistant); err != nil {
+		return rejectStart(err)
+	}
+	if s.Options.InterruptionMode == InterruptionModeAdaptive {
+		if !s.defaultAllowInterruptions() {
+			return rejectStart(fmt.Errorf("adaptive interruption requires interruptions enabled"))
+		}
+		mode := s.Options.TurnDetection
+		if agent.GetAgent().TurnDetection != "" {
+			mode = agent.GetAgent().TurnDetection
+		}
+		if mode == TurnDetectionModeManual || mode == TurnDetectionModeRealtimeLLM {
+			return rejectStart(fmt.Errorf("adaptive interruption requires agent-managed VAD or STT turn detection"))
+		}
+	}
+	var pipelineVAD vad.VAD
+	var pipelineSTT stt.STT
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		pipelineVAD, pipelineSTT = pipeline.vad, pipeline.stt
+	} else if s.Options.InterruptionMode == InterruptionModeAdaptive {
+		return rejectStart(fmt.Errorf("adaptive interruption requires an STT pipeline"))
+	}
+	if err := validateAdaptiveInterruption(s.Options, pipelineVAD, pipelineSTT); err != nil {
+		return rejectStart(err)
 	}
 
 	ctx, sessionSpan := telemetry.StartSpan(ctx, "agent_session", trace.WithAttributes(
@@ -2797,6 +2828,15 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	s.updateUserStateAt(state, time.Time{})
 }
 
+func (s *AgentSession) markUserSpeakingInterruption(interrupted bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.userSpeakingSpan != nil {
+		s.userSpeakingInterrupted = s.userSpeakingInterrupted || interrupted
+		s.userSpeakingSpan.SetAttributes(attribute.String(telemetry.AttrIsInterruption, fmt.Sprint(s.userSpeakingInterrupted)))
+	}
+}
+
 func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -2817,6 +2857,7 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 			s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(s.runCtx, "user_turn", trace.WithTimestamp(createdAt))
 		}
 		if s.userSpeakingSpan == nil {
+			s.userSpeakingInterrupted = false
 			_, s.userSpeakingSpan = telemetry.StartSpan(s.userTurnCtx, "user_speaking", trace.WithTimestamp(createdAt))
 			s.userSpeakingStartedAt = createdAt
 		}

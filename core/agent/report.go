@@ -242,7 +242,7 @@ func sessionReportEventToDict(ev any) map[string]any {
 	case *UserTurnExceededEvent:
 		return map[string]any{"type": e.GetType(), "transcript": e.Transcript, "accumulated_transcript": e.AccumulatedTranscript, "accumulated_word_count": e.AccumulatedWordCount, "duration": e.Duration.Seconds(), "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *OverlappingSpeechEvent:
-		return map[string]any{"type": e.GetType(), "is_interruption": e.IsInterruption, "total_duration": e.TotalDuration.Seconds(), "prediction_duration": e.PredictionDuration.Seconds(), "detection_delay": e.DetectionDelay.Seconds(), "probability": e.Probability, "num_requests": e.NumRequests, "created_at": timeToUnixSeconds(e.CreatedAt), "detected_at": timeToUnixSeconds(e.DetectedAt)}
+		return map[string]any{"type": e.GetType(), "is_interruption": e.IsInterruption, "agent_ended": e.AgentEnded, "total_duration": e.TotalDuration.Seconds(), "prediction_duration": e.PredictionDuration.Seconds(), "detection_delay": e.DetectionDelay.Seconds(), "probability": e.Probability, "num_requests": e.NumRequests, "created_at": timeToUnixSeconds(e.CreatedAt), "detected_at": timeToUnixSeconds(e.DetectedAt)}
 	case *MetricsCollectedEvent:
 		return map[string]any{"type": e.GetType(), "metrics": e.Metrics, "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *SessionUsageUpdatedEvent:

@@ -38,6 +38,7 @@ const (
 	AttrUserInput         = "lk.pii.user_input"
 	AttrInstructions      = "lk.pii.instructions"
 	AttrSpeechInterrupted = "lk.interrupted"
+	AttrIsInterruption    = "lk.is_interruption"
 
 	AttrChatCtx               = "lk.pii.chat_ctx"
 	AttrFunctionTools         = "lk.function_tools"

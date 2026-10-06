@@ -125,9 +125,11 @@ func (e *UserTurnExceededEvent) MarshalJSON() ([]byte, error) {
 }
 
 type OverlappingSpeechEvent struct {
-	CreatedAt          time.Time
-	DetectedAt         time.Time
-	IsInterruption     bool
+	CreatedAt      time.Time
+	DetectedAt     time.Time
+	IsInterruption bool
+	// AgentEnded means the agent stopped before a verdict; this is not a backchannel.
+	AgentEnded         bool
 	TotalDuration      time.Duration
 	PredictionDuration time.Duration
 	DetectionDelay     time.Duration
@@ -149,6 +151,7 @@ func (e *OverlappingSpeechEvent) MarshalJSON() ([]byte, error) {
 		"created_at":          timeToUnixSeconds(e.CreatedAt),
 		"detected_at":         timeToUnixSeconds(e.DetectedAt),
 		"is_interruption":     e.IsInterruption,
+		"agent_ended":         e.AgentEnded,
 		"total_duration":      e.TotalDuration.Seconds(),
 		"prediction_duration": e.PredictionDuration.Seconds(),
 		"detection_delay":     e.DetectionDelay.Seconds(),
