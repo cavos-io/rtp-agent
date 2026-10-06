@@ -135,6 +135,46 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 }
 
+func TestOpusEncoderConcurrentEncode(t *testing.T) {
+	enc, err := newOpusEncoder(48000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = enc.Close() })
+	pcm := make([]byte, 960*2)
+	for i := 0; i < 960; i++ {
+		sample := int16((i%96 - 48) * 400)
+		pcm[i*2] = byte(sample)
+		pcm[i*2+1] = byte(sample >> 8)
+	}
+	const workers = 4
+	start := make(chan struct{})
+	results := make(chan error, workers)
+	for range workers {
+		go func() {
+			<-start
+			for i := 0; i < 100; i++ {
+				packet, err := enc.Encode(pcm)
+				if err != nil {
+					results <- fmt.Errorf("frame %d: %w", i, err)
+					return
+				}
+				if len(packet) == 0 {
+					results <- fmt.Errorf("frame %d: empty encoded packet", i)
+					return
+				}
+			}
+			results <- nil
+		}()
+	}
+	close(start)
+	for range workers {
+		if err := <-results; err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func TestRoomIOAudioOutputCodecUsesStandardOpusChannels(t *testing.T) {
 	const standardOpusChannels = 2
 
