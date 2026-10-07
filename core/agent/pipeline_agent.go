@@ -126,8 +126,7 @@ func (va *PipelineAgent) resetGenerationCtxLocked() {
 }
 
 func (va *PipelineAgent) resetGenerationCtxUnlessPaused() {
-	if va.session != nil && va.session.activity != nil {
-		activity := va.session.activity
+	if activity := va.session.currentActivity(); activity != nil {
 		if activity.hasActiveFalseInterruptionPause() {
 			return
 		}
@@ -443,6 +442,9 @@ func (va *PipelineAgent) closeInputTranscriptionStream() {
 
 func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 	defer va.endActiveVADSpeechOnStreamExit()
+	va.mu.Lock()
+	session, ctx := va.session, va.rootCtx
+	va.mu.Unlock()
 	for {
 		ev, err := stream.Next()
 		if err != nil {
@@ -452,6 +454,12 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			}
 			return
 		}
+		// A stream can deliver a buffered event while session shutdown is
+		// detaching its activity. Never dispatch it into a torn-down session.
+		if session == nil || session.isTearingDown() || (ctx != nil && ctx.Err() != nil) {
+			return
+		}
+		activity := session.currentActivity()
 
 		if ev.Type == vad.VADEventStartOfSpeech {
 			va.session.Logger().Infow("User started speaking")
@@ -459,8 +467,8 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.vadSpeechStarted = true
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			if va.session != nil && va.session.activity != nil {
-				va.session.activity.OnStartOfSpeech(ev)
+			if activity != nil {
+				activity.OnStartOfSpeech(ev)
 			} else if va.session != nil {
 				va.session.UpdateUserState(UserStateSpeaking)
 			}
@@ -473,9 +481,11 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
 			va.finalizeActiveSTTStream(0)
-			if va.session != nil && va.session.activity != nil {
-				va.session.activity.OnEndOfSpeech(ev)
-				va.scheduleSTTRecovery(ev, va.session.activity.speechEpoch())
+			if activity != nil {
+				activity.OnEndOfSpeech(ev)
+				if !session.isTearingDown() && (ctx == nil || ctx.Err() == nil) {
+					va.scheduleSTTRecovery(ev, activity.speechEpoch())
+				}
 			} else if va.session != nil {
 				va.session.UpdateUserState(UserStateListening)
 			}
@@ -487,8 +497,8 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Lock()
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			if va.session != nil && va.session.activity != nil {
-				va.session.activity.OnVADInferenceDone(ev)
+			if activity != nil {
+				activity.OnVADInferenceDone(ev)
 			}
 		}
 	}
@@ -529,12 +539,16 @@ func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
 	va.vadSpeechStarted = false
 	va.resetVADStallTimerLocked()
 	session := va.session
+	ctx := va.rootCtx
 	va.mu.Unlock()
 	if !started {
 		return
 	}
-	if session != nil && session.activity != nil {
-		session.activity.OnEndOfSpeech(nil)
+	if session == nil || session.isTearingDown() || (ctx != nil && ctx.Err() != nil) {
+		return
+	}
+	if activity := session.currentActivity(); activity != nil {
+		activity.OnEndOfSpeech(nil)
 		return
 	}
 	if session != nil {
@@ -568,6 +582,9 @@ func (va *PipelineAgent) onVADStall() {
 	stream := va.vadStream
 	session := va.session
 	va.mu.Unlock()
+	if session == nil || session.isTearingDown() {
+		return
+	}
 
 	va.session.Logger().Warnw("VAD input stalled while user speaking; synthesizing end of speech", nil, "timeout", timeout)
 
@@ -586,8 +603,8 @@ func (va *PipelineAgent) onVADStall() {
 		}
 	}
 	va.finalizeActiveSTTStream(2 * time.Second)
-	if session != nil && session.activity != nil {
-		session.activity.onSyntheticEndOfSpeech()
+	if activity := session.currentActivity(); activity != nil && !session.isTearingDown() {
+		activity.onSyntheticEndOfSpeech()
 		return
 	}
 	if session != nil {
