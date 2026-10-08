@@ -1645,7 +1645,7 @@ func newSpeakingStallInference(t *testing.T) (
 	stream := newSpeakingStallProbeChunkedStream(probe)
 	provider := &speakingStallProbeTTS{probe: probe, stream: stream}
 	textCh := make(chan string, 1)
-	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransformsDisabled())
+	data, err := PerformTTSInference(ctx, provider, textCh, WithTTSTextTransforms(nil))
 	if err != nil {
 		cancel()
 		t.Fatalf("PerformTTSInference error = %v", err)
