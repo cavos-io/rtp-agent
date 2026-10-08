@@ -1253,8 +1253,18 @@ func TestJobContextStartSessionConnectsRoomCreatesRoomIOAndStartsSession(t *test
 		},
 	}
 	t.Cleanup(func() { jobContextRoomConnector = oldConnector })
+	var observedRoomIO *RoomIO
+	afterConnectCalled := false
 
 	if err := ctx.StartSession(context.Background(), session, StartSessionOptions{
+		OnRoomIO: func(roomIO *RoomIO) { observedRoomIO = roomIO },
+		AfterConnect: func(context.Context) error {
+			afterConnectCalled = true
+			if joinedRoom == nil || ctx.PrimaryRoomIO() != observedRoomIO {
+				t.Fatal("AfterConnect ran before the room and primary RoomIO were ready")
+			}
+			return nil
+		},
 		RoomOptions: workerlivekit.RoomOptions{
 			DisableAudioInput:  true,
 			DisableAudioOutput: true,
@@ -1281,6 +1291,9 @@ func TestJobContextStartSessionConnectsRoomCreatesRoomIOAndStartsSession(t *test
 	}
 	if ctx.PrimaryRoomIO() == nil {
 		t.Fatal("PrimaryRoomIO() = nil after StartSession, want the session RoomIO")
+	}
+	if !afterConnectCalled || observedRoomIO == nil {
+		t.Fatal("StartSession did not invoke lifecycle hooks")
 	}
 }
 
