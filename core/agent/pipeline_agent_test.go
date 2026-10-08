@@ -1639,7 +1639,7 @@ func TestPipelineAgentTextOutputIgnoresTTSReplacements(t *testing.T) {
 	}}}
 	output := &channelTextOutput{captured: make(chan TextOutputChunk, 1), flushed: make(chan struct{})}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
-		TTSTextReplacements: map[string]string{"LiveKit": "live kit"},
+		TTSTextTransforms: []tts.TextTransform{tts.ReplaceTransform(map[string]string{"LiveKit": "live kit"}, true)},
 	})
 	session.SetTextOutput(output)
 	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: &fakePipelineTTSStream{
