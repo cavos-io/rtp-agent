@@ -26,6 +26,7 @@ require (
 	github.com/hraban/opus v0.0.0-20251117090126-c76ea7e21bf3
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/joho/godotenv v1.5.1
+	github.com/livekit/media-sdk v0.0.0-20260605212526-4c11a51d3c97
 	github.com/livekit/protocol v1.50.4
 	github.com/livekit/server-sdk-go/v2 v2.17.0
 	github.com/neurosnap/sentences v1.1.2

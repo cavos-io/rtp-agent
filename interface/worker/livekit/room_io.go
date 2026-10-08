@@ -22,8 +22,6 @@ import (
 	"github.com/livekit/protocol/livekit"
 	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
-	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -367,6 +365,7 @@ type RoomIO struct {
 	audioInputGeneration      uint64
 	audioInputHandlerRunning  bool
 	audioInputTracks          map[string][]roomIOAudioInputTrack
+	audioBuffers              map[*roomIOAudioBuffer]struct{}
 	audioInputProcessorMu     sync.Mutex
 	audioInputProcessorClosed bool
 
@@ -2011,56 +2010,53 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 		}
 	}
 
-	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
+	buffer := rio.newAudioInputBuffer(generation, track.Codec().ClockRate, inputStream, converter)
+	if !rio.registerAudioBuffer(buffer) {
+		return
+	}
+	defer rio.releaseAudioBuffer(buffer)
 
-	for {
+	for rio.audioInputTrackActive(generation) {
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			buffer.stop(errors.Is(err, io.EOF))
+			return
+		}
+		buffer.Push(pkt)
+	}
+}
+
+func (rio *RoomIO) newAudioInputBuffer(generation uint64, clockRate uint32, inputStream *audio.AudioByteStream, converter *roomIOInputConverter) *roomIOAudioBuffer {
+	return newRoomIOAudioBuffer(func(payload []byte) {
+		// Track handlers and timer callbacks share the room's primary decoder.
+		// Its use and closure must be serialized with track generation changes.
 		rio.mu.Lock()
-		if rio.closed || rio.audioInputGeneration != generation {
+		if rio.closed || rio.audioDisabled || rio.audioInputGeneration != generation {
 			rio.mu.Unlock()
 			return
 		}
-		if rio.audioDisabled {
-			rio.mu.Unlock()
-			return
+		pcm := payload
+		if rio.decoder != nil {
+			if decoded, err := rio.decoder.Decode(payload); err == nil {
+				pcm = decoded
+			}
 		}
 		rio.mu.Unlock()
 
-		pkt, _, err := track.ReadRTP()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if tail := converter.Flush(); tail != nil {
-					rio.forwardRoomInputFrames(context.Background(), inputStream.Push(tail.Data))
-				}
-				rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
-				rio.forwardRoomInputFrame(context.Background(), rio.inputSilenceFlushFrame())
-			} else {
-				// log error
-			}
-			return
-		}
-
-		sb.Push(pkt)
-		for {
-			sample := sb.Pop()
-			if sample == nil {
-				break
-			}
-
-			pcm := sample.Data
-			if rio.decoder != nil {
-				if decoded, err := rio.decoder.Decode(sample.Data); err == nil {
-					pcm = decoded
-				}
-			}
-
-			frame := converter.Convert(roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1))
-			if frame == nil {
-				continue
-			}
-
+		frame := converter.Convert(roomIOInputFrameFromPCM(pcm, clockRate, 1))
+		if frame != nil && rio.audioInputTrackActive(generation) {
 			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
 		}
-	}
+	}, func() {
+		if !rio.audioInputTrackActive(generation) {
+			return
+		}
+		if tail := converter.Flush(); tail != nil {
+			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(tail.Data))
+		}
+		rio.forwardRoomInputFrames(context.Background(), inputStream.Flush())
+		rio.forwardRoomInputFrame(context.Background(), rio.inputSilenceFlushFrame())
+	})
 }
 
 func shouldRecordAuxTrack(options RoomOptions, trackKind webrtc.RTPCodecType, participantKind lksdk.ParticipantKind, attributes map[string]string) bool {
@@ -2084,48 +2080,55 @@ func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
 	}
 	defer dec.Close()
 
+	buffer := rio.newAuxAudioInputBuffer(track.ID(), track.Codec().ClockRate, dec)
+	if !rio.registerAudioBuffer(buffer) {
+		return
+	}
+	defer rio.releaseAudioBuffer(buffer)
+
+	for rio.auxAudioInputActive() {
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			buffer.stop(errors.Is(err, io.EOF))
+			return
+		}
+		buffer.Push(pkt)
+	}
+}
+
+func (rio *RoomIO) auxAudioInputActive() bool {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return !rio.closed && !rio.audioDisabled
+}
+
+func (rio *RoomIO) newAuxAudioInputBuffer(trackID string, clockRate uint32, dec AudioDecoder) *roomIOAudioBuffer {
 	inputStream := newRoomIOAuxAudioStream()
-	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 
 	recordFrames := func(frames []*model.AudioFrame) {
 		if rio.Recorder == nil {
 			return
 		}
 		for _, frame := range frames {
-			rio.Recorder.RecordAux(track.ID(), frame)
+			rio.Recorder.RecordAux(trackID, frame)
 		}
 	}
 
-	for {
-		rio.mu.Lock()
-		closed := rio.closed
-		rio.mu.Unlock()
-		if closed {
+	return newRoomIOAudioBuffer(func(payload []byte) {
+		if !rio.auxAudioInputActive() {
 			return
 		}
-
-		pkt, _, err := track.ReadRTP()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				recordFrames(inputStream.Flush())
-			}
-			return
+		pcm := payload
+		if decoded, decErr := dec.Decode(payload); decErr == nil {
+			pcm = decoded
 		}
-
-		sb.Push(pkt)
-		for {
-			sample := sb.Pop()
-			if sample == nil {
-				break
-			}
-			pcm := sample.Data
-			if decoded, decErr := dec.Decode(sample.Data); decErr == nil {
-				pcm = decoded
-			}
-			frame := roomIOInputFrameFromPCM(pcm, track.Codec().ClockRate, 1)
-			recordFrames(inputStream.Push(frame.Data))
+		frame := roomIOInputFrameFromPCM(pcm, clockRate, 1)
+		recordFrames(inputStream.Push(frame.Data))
+	}, func() {
+		if rio.auxAudioInputActive() {
+			recordFrames(inputStream.Flush())
 		}
-	}
+	})
 }
 
 // newRoomIOAuxAudioStream packs auxiliary recorded tracks at the default room
@@ -3343,6 +3346,7 @@ func (rio *RoomIO) shutdownResources(ctx context.Context) error {
 	rio.agentStatePublishSeq++
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
+	rio.stopAudioBuffers()
 	rio.releaseAudioSubscriptionWaiters()
 	rio.finishPlayback(true, "")
 	rio.closeAudioInputProcessor()
