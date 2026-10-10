@@ -387,3 +387,157 @@ func TestAdaptiveAgentEndedUsageIsNotBackchannel(t *testing.T) {
 		t.Fatal("agent-ended requests were lost")
 	}
 }
+
+// Unlike the pinned Python reference, confirmed backchannels close their provisional turns.
+func TestAdaptiveBackchannelClosesUserTurn(t *testing.T) {
+	activity, recorder := newBackchannelTurnActivity(t)
+	base := time.Now().Add(-30 * time.Second)
+	var starts, ends []time.Time
+	for _, offset := range []time.Duration{15157 * time.Millisecond, 18464 * time.Millisecond} {
+		started := timeToUnixSeconds(base.Add(offset))
+		activity.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &started})
+		starts = append(starts, activity.userSpeechStartedAt)
+		activity.userSpeechStoppedAt = activity.userSpeechStartedAt.Add(300 * time.Millisecond)
+		ends = append(ends, activity.userSpeechStoppedAt)
+		activity.OnEndOfSpeech(nil)
+		activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{OverlapStartedAt: &starts[len(starts)-1], DetectedAt: ends[len(ends)-1]})
+		if activity.Session.userTurnSpan != nil || !activity.userTurnStartedAt.IsZero() {
+			t.Fatal("confirmed backchannel retained its turn span or start timestamp")
+		}
+		activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "uh huh"}}})
+	}
+	started := timeToUnixSeconds(base.Add(21624 * time.Millisecond))
+	activity.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &started})
+	starts = append(starts, activity.userSpeechStartedAt)
+	activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: true, OverlapStartedAt: &starts[2], DetectedAt: starts[2]})
+	activity.userSpeechStoppedAt = base.Add(23378 * time.Millisecond)
+	ends = append(ends, activity.userSpeechStoppedAt)
+	activity.OnEndOfSpeech(nil)
+	activity.userTurnMu.Lock()
+	activity.holdSTTWhileAgentSpeaking = false
+	activity.userTurnMu.Unlock()
+	activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "Okay, I think that's enough.", Confidence: 1}}})
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StartedSpeakingAt == nil || *info.StartedSpeakingAt != started {
+		t.Fatalf("report start = %v, want %v", info.StartedSpeakingAt, started)
+	}
+	if info.NewTranscript != "Okay, I think that's enough." {
+		t.Fatalf("accepted transcript = %q", info.NewTranscript)
+	}
+	activity.Session.finishUserTurnSpan(activity.Session.userTurnSpan)
+	var turns, speaking []sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		switch span.Name() {
+		case "user_turn":
+			turns = append(turns, span)
+		case "user_speaking":
+			speaking = append(speaking, span)
+		}
+	}
+	if len(turns) != 3 || len(speaking) != 3 {
+		t.Fatalf("turns=%d speaking=%d, want three of each", len(turns), len(speaking))
+	}
+	for i := range turns {
+		if !turns[i].StartTime().Equal(starts[i]) || speaking[i].Parent().SpanID() != turns[i].SpanContext().SpanID() {
+			t.Fatalf("turn %d has wrong start or speaking child", i)
+		}
+		if i < 2 && (!turns[i].EndTime().Equal(ends[i]) || spanAttributeValues(speaking[i].Attributes())[telemetry.AttrIsInterruption].AsString() != "false") {
+			t.Fatalf("backchannel %d has wrong end or verdict", i)
+		}
+	}
+}
+
+func TestAdaptiveBackchannelTurnVerdictOrdering(t *testing.T) {
+	for _, scenario := range []string{"early", "stale", "duplicate", "accepted transcript", "agent ended"} {
+		t.Run(scenario, func(t *testing.T) {
+			activity, _ := newBackchannelTurnActivity(t)
+			activity.OnStartOfSpeech(nil)
+			started := activity.userSpeechStartedAt
+			span := activity.Session.userTurnSpan
+			verdict := OverlappingSpeechEvent{OverlapStartedAt: &started, DetectedAt: time.Now()}
+			if scenario == "early" {
+				activity.OnOverlapSpeechEnded(verdict)
+				if activity.Session.userTurnSpan != span {
+					t.Fatal("closed turn while its speaking span was open")
+				}
+				activity.OnEndOfSpeech(nil)
+				if activity.Session.userTurnSpan != nil {
+					t.Fatal("early verdict did not close turn at speech end")
+				}
+				return
+			}
+			activity.OnEndOfSpeech(nil)
+			switch scenario {
+			case "stale", "duplicate":
+				if scenario == "duplicate" {
+					activity.OnOverlapSpeechEnded(verdict)
+				}
+				activity.OnStartOfSpeech(nil)
+				span = activity.Session.userTurnSpan
+			case "accepted transcript":
+				activity.pendingUserTranscript = "keep this"
+				activity.pendingUserTranscriptPresent = true
+			case "agent ended":
+				verdict.AgentEnded = true
+			}
+			anchor := activity.userTurnStartedAt
+			activity.OnOverlapSpeechEnded(verdict)
+			if activity.Session.userTurnSpan != span || !activity.userTurnStartedAt.Equal(anchor) {
+				t.Fatal("verdict reset an unrelated or accepted turn")
+			}
+			if scenario == "accepted transcript" && activity.pendingUserTranscript != "keep this" {
+				t.Fatal("accepted transcript was cleared")
+			}
+		})
+	}
+}
+
+func newBackchannelTurnActivity(t *testing.T) (*AgentActivity, *tracetest.SpanRecorder) {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	observability, err := telemetry.NewJobObservability(context.Background(), telemetry.JobObservabilityConfig{
+		TracerProvider: provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observability.Shutdown(context.Background()) })
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{InterruptionMode: InterruptionModeAdaptive, TurnDetection: TurnDetectionModeManual, DisableUserAwayTimeout: true})
+	session.runCtx = observability.Context(context.Background())
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.adaptiveInterruptionStream = &testInterruptionStream{events: make(chan OverlappingSpeechEvent)}
+	session.agentState = AgentStateSpeaking
+	activity.armBackchannelBoundary(time.Now().Add(-2 * time.Second))
+	return activity, recorder
+}
+
+func TestAdaptiveBackchannelConcurrentNextSpeech(t *testing.T) {
+	activity, _ := newBackchannelTurnActivity(t)
+	activity.OnStartOfSpeech(nil)
+	oldStart := activity.userSpeechStartedAt
+	activity.OnEndOfSpeech(nil)
+	verdict := OverlappingSpeechEvent{OverlapStartedAt: &oldStart, DetectedAt: activity.userSpeechStoppedAt}
+	newStart := timeToUnixSeconds(oldStart.Add(time.Second))
+	ready := make(chan struct{})
+	done := make(chan struct{}, 2)
+	go func() {
+		<-ready
+		activity.OnOverlapSpeechEnded(verdict)
+		done <- struct{}{}
+	}()
+	go func() {
+		<-ready
+		activity.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &newStart})
+		done <- struct{}{}
+	}()
+	close(ready)
+	<-done
+	<-done
+	if activity.Session.userTurnSpan == nil || !activity.isUserSpeaking() || activity.userSpeechStartedAt != unixSecondsToTime(newStart) {
+		t.Fatal("old backchannel verdict cleared newer speech")
+	}
+}

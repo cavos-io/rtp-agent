@@ -128,7 +128,7 @@ type AgentActivity struct {
 	sttEOSReceived bool
 	speaking       bool
 	speakingMu     sync.RWMutex
-	// Serializes speech boundaries with false-interruption timer resolution.
+	// Serializes speech boundaries with false-interruption resolution and adaptive verdicts.
 	speechBoundaryMu             sync.Mutex
 	interruptionDetected         bool
 	adaptiveInterruptionStream   InterruptionStream
@@ -1875,6 +1875,8 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.overlapSpeechEnded = false
 	a.setInterimCommittedTurn(false)
 	if !wasSpeaking {
+		a.adaptiveOverlapPending.Store(false)
+		a.adaptiveBackchannelConfirmed.Store(false)
 		a.falseInterruptionMu.Lock()
 		a.userTurnSeq++
 		a.falseInterruptionMu.Unlock()
@@ -2000,7 +2002,6 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		a.syntheticEOUNotBefore = time.Time{}
 	}
 	a.userTurnMu.Unlock()
-	a.stampEpochStopped(stoppedAt)
 	if ev == nil {
 		a.sttEOSReceived = true
 	}
@@ -2014,8 +2015,6 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		}
 		a.Session.updateUserStateAt(UserStateListening, stateAt)
 	}
-	a.speechBoundaryMu.Unlock()
-	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
 		endedAt := vadSpeechEndTimestamp(ev)
@@ -2031,6 +2030,9 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		}
 	}
 	a.overlapSpeechEnded = false
+	a.finishBackchannelUserTurn()
+	a.speechBoundaryMu.Unlock()
+	a.notifyUserTurnUpdated()
 	if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
 		if err := a.adaptiveStream().EndOverlap(stoppedAt, false); err != nil {
 			a.fallbackAdaptiveInterruption()
@@ -2049,19 +2051,29 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 }
 
 func (a *AgentActivity) OnOverlapSpeechEnded(ev OverlappingSpeechEvent) {
+	a.onOverlapSpeechEnded(ev)
+}
+
+func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 	if a == nil || a.Session == nil {
-		return
+		return false
 	}
 	if ev.AgentEnded {
-		return
+		return false
+	}
+	a.speechBoundaryMu.Lock()
+	if a.adaptiveInterruptionActive() && ev.OverlapStartedAt != nil &&
+		(!a.adaptiveOverlapPending.Load() || !ev.OverlapStartedAt.Equal(a.userSpeechStartedAt)) {
+		a.speechBoundaryMu.Unlock()
+		return false
 	}
 	if !ev.IsInterruption && a.backchannelBoundaryActive(time.Now()) {
-		return
+		a.speechBoundaryMu.Unlock()
+		return false
 	}
 	a.Session.markUserSpeakingInterruption(ev.IsInterruption)
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = ev.IsInterruption
-	a.Session.EmitOverlappingSpeech(ev)
 	a.adaptiveOverlapPending.Store(false)
 	a.adaptiveOverlapStartedAt.Store(0)
 	a.finishDeferredEndpointing(!ev.IsInterruption)
@@ -2071,7 +2083,11 @@ func (a *AgentActivity) OnOverlapSpeechEnded(ev OverlappingSpeechEvent) {
 		a.userTurnMu.Lock()
 		a.heldSTTEvents = nil
 		a.userTurnMu.Unlock()
+		a.finishBackchannelUserTurn()
 	}
+	a.speechBoundaryMu.Unlock()
+	a.Session.EmitOverlappingSpeech(ev)
+	return true
 }
 
 func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {

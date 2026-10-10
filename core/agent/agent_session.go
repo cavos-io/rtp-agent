@@ -2948,6 +2948,22 @@ func (s *AgentSession) finishEmptyUserTurnSpanLocked(candidate trace.Span, ended
 	return true
 }
 
+func (s *AgentSession) finishBackchannelUserTurnSpan(endedAt time.Time) bool {
+	s.mu.Lock()
+	if s.userSpeakingSpan != nil || s.userTurnClaims > 0 {
+		s.mu.Unlock()
+		return false
+	}
+	span := s.userTurnSpan
+	s.userTurnSpan = nil
+	s.userTurnCtx = nil
+	s.mu.Unlock()
+	if span != nil {
+		span.End(trace.WithTimestamp(endedAt))
+	}
+	return true
+}
+
 func (s *AgentSession) updateUserAwayTimer() {
 	s.mu.Lock()
 	if s.userAwayTimer != nil {
