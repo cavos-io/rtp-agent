@@ -106,6 +106,28 @@ func (a *AgentActivity) finishDeferredEndpointing(shouldIgnore bool) {
 	}
 }
 
+// finishBackchannelUserTurn runs under speechBoundaryMu. Speech timestamps stay
+// intact because delayed STT filtering still uses them after the turn is dropped.
+func (a *AgentActivity) finishBackchannelUserTurn() {
+	if !a.adaptiveBackchannelConfirmed.Load() || a.isUserSpeaking() || a.userSpeechStoppedAt.IsZero() {
+		return
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	if !a.userTurnStartedAt.Equal(a.userSpeechStartedAt) || a.pendingUserTranscriptPresent ||
+		a.pendingUserTranscript != "" || a.pendingInterimTranscript != "" || a.pendingPreflightTranscript != "" {
+		return
+	}
+	if !a.Session.finishBackchannelUserTurnSpan(a.userSpeechStoppedAt) {
+		return
+	}
+	a.userTurnStartedAt = time.Time{}
+	a.pendingStartedSpeakingAt = nil
+	a.pendingStoppedSpeakingAt = nil
+	a.pendingTranscriptionDelay = 0
+	a.pendingTranscriptionDelaySet = false
+}
+
 func (va *PipelineAgent) consumeInterruptionStream(ctx context.Context, stream InterruptionStream) {
 	for {
 		ev, err := stream.Next()
@@ -144,7 +166,9 @@ func (va *PipelineAgent) consumeInterruptionStream(ctx context.Context, stream I
 			ev.OverlapStartedAt.UnixNano() != activity.adaptiveOverlapStartedAt.Load() {
 			continue
 		}
-		activity.OnOverlapSpeechEnded(ev)
+		if !activity.onOverlapSpeechEnded(ev) {
+			continue
+		}
 		if ev.IsInterruption {
 			activity.OnInterruption(ev)
 		}
