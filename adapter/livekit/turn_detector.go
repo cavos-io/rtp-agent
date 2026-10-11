@@ -72,3 +72,7 @@ func (m *Model) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) 
 }
 
 var _ agent.TurnDetector = (*Model)(nil)
+
+func (*Model) Capabilities() agent.TurnDetectorCapabilities {
+	return agent.TurnDetectorCapabilities{Input: agent.TurnDetectorInputText}
+}
