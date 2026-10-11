@@ -193,11 +193,11 @@ func TestEOUWaitClosesSupersededPredictions(t *testing.T) {
 	defer a.Stop()
 	stopped := time.Now().Add(-time.Second)
 	anchor := timeToUnixSeconds(stopped)
-	ctx := a.beginEOUWait(context.Background(), EndOfTurnInfo{StoppedSpeakingAt: &anchor})
-	_, first := a.startEOUPrediction(ctx)
-	ctx = a.beginEOUWait(context.Background(), EndOfTurnInfo{StoppedSpeakingAt: &anchor})
-	_, second := a.startEOUPrediction(ctx)
-	a.endEOUWait("user_resumed", stopped.Add(time.Millisecond))
+	attempt := a.beginEOUTrace(context.Background(), EndOfTurnInfo{NewTranscript: "hello", StoppedSpeakingAt: &anchor}, "stt")
+	_, first := a.turnTelemetry.startDetection(context.Background(), attempt)
+	attempt = a.beginEOUTrace(context.Background(), EndOfTurnInfo{NewTranscript: "hello", StoppedSpeakingAt: &anchor}, "stt")
+	_, second := a.turnTelemetry.startDetection(context.Background(), attempt)
+	a.turnTelemetry.finishCurrent("user_resumed", stopped.Add(time.Millisecond))
 	if first.IsRecording() || second.IsRecording() {
 		t.Fatal("superseded prediction still open")
 	}
@@ -269,9 +269,9 @@ func TestEOUTraceDoesNotReopenEndedWait(t *testing.T) {
 	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	a := NewAgentActivity(s.Agent, s)
 	defer a.Stop()
-	ctx := a.beginEOUWait(context.Background(), EndOfTurnInfo{})
-	a.endEOUWait("dropped", time.Time{})
-	_, prediction := a.startEOUPrediction(ctx)
+	attempt := a.beginEOUTrace(context.Background(), EndOfTurnInfo{}, "manual")
+	a.turnTelemetry.finishCurrent("dropped", time.Time{})
+	_, prediction := a.turnTelemetry.startDetection(context.Background(), attempt)
 	prediction.End()
 	for _, span := range r.Ended() {
 		if span.Name() == "eou_detection" {
