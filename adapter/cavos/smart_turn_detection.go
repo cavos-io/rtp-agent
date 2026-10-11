@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -41,6 +42,7 @@ type SmartTurn struct {
 	maxAudioSecs int
 	extractor    *pipecat.WhisperFeatureExtractor
 	mu           sync.Mutex
+	closed       bool
 }
 
 type SmartTurnOption func(*SmartTurn)
@@ -81,6 +83,9 @@ func NewSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
 			opt(s)
 		}
 	}
+	if s.sampleRate != defaultSmartTurnSampleRate {
+		return nil, fmt.Errorf("cavos smart turn v3.2 requires %d Hz audio", defaultSmartTurnSampleRate)
+	}
 	conn, err := grpc.NewClient(s.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("cavos smart turn: dial %s: %w", s.addr, err)
@@ -92,11 +97,7 @@ func NewSmartTurn(opts ...SmartTurnOption) (*SmartTurn, error) {
 	return s, nil
 }
 
-func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.AudioFrame) (agent.AudioTurnResult, error) {
-	samples, err := framesToMono(frames, s.sampleRate)
-	if err != nil {
-		return agent.AudioTurnResult{}, fmt.Errorf("cavos smart turn decode: %w", err)
-	}
+func (s *SmartTurn) predict(ctx context.Context, samples []float32) (agent.AudioTurnResult, error) {
 	if len(samples) == 0 {
 		return agent.AudioTurnResult{}, nil
 	}
@@ -116,7 +117,7 @@ func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.A
 		TimeSteps: smartTurnTimeSteps,
 	})
 	if err != nil {
-		logger.Logger.Errorw("smart_turn.grpc_failed falling back to not-complete", err, "addr", s.addr)
+		logger.Logger.Errorw("smart_turn.grpc_failed", err, "addr", s.addr)
 		return agent.AudioTurnResult{}, fmt.Errorf("cavos smart turn predict: %w", err)
 	}
 	result := agent.AudioTurnResult{
@@ -132,10 +133,20 @@ func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.A
 }
 
 func (s *SmartTurn) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	if s.conn != nil {
 		return s.conn.Close()
 	}
 	return nil
+}
+
+func (*SmartTurn) Capabilities() agent.TurnDetectorCapabilities {
+	return agent.TurnDetectorCapabilities{Input: agent.TurnDetectorInputAudio, MinSilenceDuration: 200 * time.Millisecond}
 }
 
 // framesToMono resamples each PCM16 frame to sampleRate and downmixes to mono,
