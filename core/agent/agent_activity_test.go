@@ -1098,6 +1098,34 @@ func TestAgentUpdateTurnDetectionWhileRunningCancelsPendingEOU(t *testing.T) {
 	}
 }
 
+func TestAgentActivityDuplicateStartOfSpeechKeepsActiveAudioFrames(t *testing.T) {
+	activity, _, stream := setupTurnStream(t)
+	event := &vad.VADEvent{Type: vad.VADEventStartOfSpeech}
+	activity.Session.turnStream.vadEvent(activity, event, 0)
+	activity.OnStartOfSpeech(event)
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := activity.Session.turnStream.push(frame); err != nil {
+		t.Fatal(err)
+	}
+
+	activity.Session.turnStream.vadEvent(activity, event, 0)
+	activity.OnStartOfSpeech(event)
+
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if string(stream.frames) != string(frame.Data) {
+		t.Fatalf("user audio after duplicate start = %v, want %v", stream.frames, frame.Data)
+	}
+	if len(stream.resets) != 0 || len(stream.discards) != 0 || stream.closes != 0 {
+		t.Fatalf("duplicate start changed stream lifecycle: resets=%v, discards=%v, closes=%d", stream.resets, stream.discards, stream.closes)
+	}
+}
+
 func TestAgentActivityOverlapSpeechEndedEmitsAndMarksInterruption(t *testing.T) {
 	endpointing := &recordingActivityEndpointing{}
 	agent := NewAgent("test")
@@ -8410,4 +8438,11 @@ func TestAgentActivitySyntheticEndLateFinalDoesNotRestartEndpointing(t *testing.
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("late final restarted endpointing despite speech ending over 250ms ago")
 	}
+}
+
+func (turnDetectorFunc) Capabilities() TurnDetectorCapabilities {
+	return TurnDetectorCapabilities{Input: TurnDetectorInputText}
+}
+func (thresholdTurnDetector) Capabilities() TurnDetectorCapabilities {
+	return TurnDetectorCapabilities{Input: TurnDetectorInputText}
 }

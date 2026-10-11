@@ -84,6 +84,9 @@ type ttsErrorCollector interface {
 }
 
 type EndOfTurnInfo struct {
+	eouSource              string
+	eouTrace               *eouTraceAttempt
+	detectorCommitted      bool
 	SkipReply              bool
 	ReplyAlreadyGenerated  bool
 	GenerateReplyAfterHook bool
@@ -185,10 +188,10 @@ type AgentActivity struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	eouMu     sync.Mutex
-	eouCancel context.CancelFunc
-	eouDone   chan struct{}
-	eouTrace  *eouWaitTrace
+	turnTelemetry turnTelemetry
+	eouMu         sync.Mutex
+	eouCancel     context.CancelFunc
+	eouDone       chan struct{}
 
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
@@ -288,6 +291,8 @@ type preemptiveGeneration struct {
 func (a *AgentActivity) Start() { a.startWithContext(a.ctx) }
 
 func (a *AgentActivity) startWithContext(ctx context.Context) {
+	a.applyDetectorEndpointingDefaults()
+	a.Session.turnStream.activate(a)
 	startCtx, startSpan := telemetry.StartSpan(ctx, "start_agent_activity", trace.WithAttributes(
 		attribute.String(telemetry.AttrAgentLabel, a.Agent.Label()),
 	))
@@ -418,14 +423,15 @@ func (a *AgentActivity) startWithContext(ctx context.Context) {
 func (a *AgentActivity) Stop() { a.stopWithContext(a.ctx) }
 
 func (a *AgentActivity) stopWithContext(ctx context.Context) {
-	a.endEOUWait("dropped", time.Time{})
+	a.turnTelemetry.finishCurrent("dropped", time.Time{})
 	ctx, drainSpan := telemetry.StartSpan(ctx, "drain_agent_activity", trace.WithAttributes(attribute.String(telemetry.AttrAgentLabel, a.Agent.Label())))
 	defer drainSpan.End()
 	a.stopActivity(ctx)
 }
 
 func (a *AgentActivity) stopActivity(ctx context.Context) {
-	a.endEOUWait("dropped", time.Time{})
+	a.turnTelemetry.finishCurrent("dropped", time.Time{})
+	a.Session.turnStream.deactivate(a)
 	func() {
 		_, span := telemetry.StartSpan(ctx, "on_exit", trace.WithAttributes(
 			attribute.String(telemetry.AttrAgentLabel, a.Agent.Label()),
@@ -1131,8 +1137,10 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if a == nil || a.Session == nil {
 		return nil
 	}
-	if opts.TurnDetection != nil && *opts.TurnDetection == TurnDetectionModeManual {
+	if opts.TurnDetection != nil {
+		a.turnTelemetry.finishCurrent("dropped", time.Time{})
 		a.cancelPendingEOUDetection()
+		a.Session.turnStream.invalidate(a)
 	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
@@ -1160,7 +1168,7 @@ func (a *AgentActivity) cancelPendingEOUDetection() {
 		a.eouCancel = nil
 	}
 	a.eouMu.Unlock()
-	a.endEOUWait("dropped", time.Time{})
+	a.turnTelemetry.finishCurrent("dropped", time.Time{})
 	a.manualTurnCommitted = false
 	a.notifyUserTurnUpdated()
 }
@@ -1616,7 +1624,7 @@ func (a *AgentActivity) onInputSpeechStartedAt(at *float64) {
 			startedAt = time.Now()
 		}
 	}
-	a.endEOUWait("user_resumed", startedAt)
+	a.turnTelemetry.finishCurrent("user_resumed", startedAt)
 	a.Session.ensureUserTurnSpan(a.ctx, startedAt)
 	if !a.hasVADModel() {
 		a.userTurnMu.Lock()
@@ -1652,7 +1660,7 @@ func (a *AgentActivity) onInputSpeechStoppedAt(ev llm.InputSpeechStoppedEvent, s
 		stopped := timeToUnixSeconds(stoppedAt)
 		info.StoppedSpeakingAt = &stopped
 	}
-	a.beginEOUWait(a.ctx, info)
+	a.beginEOUTrace(a.ctx, info, "stt")
 	if !a.hasVADModel() {
 		a.userTurnMu.Lock()
 		a.userSpeechStoppedAt = stoppedAt
@@ -1775,7 +1783,7 @@ func (a *AgentActivity) OnGenerationCreated(ev llm.GenerationCreatedEvent, confi
 		return nil, ErrSpeechSchedulingPaused
 	}
 
-	a.endEOUWait("committed", time.Time{})
+	a.turnTelemetry.finishCurrent("committed", time.Time{})
 	a.Session.mu.Lock()
 	userTurn := a.Session.userTurnSpan
 	a.Session.mu.Unlock()
@@ -1868,6 +1876,9 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.drainHeldUserTranscriptWindow()
 
 	a.speechBoundaryMu.Lock()
+	if ev != nil {
+		a.Session.turnStream.vadEvent(a, ev, 0)
+	}
 	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
@@ -1888,6 +1899,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		} else {
 			startedAt = time.Now()
 		}
+		a.turnTelemetry.finishCurrent("user_resumed", startedAt)
 		if a.Session != nil {
 			a.Session.mu.Lock()
 		}
@@ -1925,7 +1937,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.Session.Logger().Infow("Start of speech detected")
 
 	// Cancel pending EOU detection
-	a.endEOUWait("user_resumed", a.userSpeechStartedAt)
+	a.turnTelemetry.finishCurrent("user_resumed", a.userSpeechStartedAt)
 	a.cancelPendingEOUDetection()
 
 	if a.adaptiveInterruptionActive() && a.Session.AgentStateValue() == AgentStateSpeaking && !a.backchannelBoundaryActive(time.Now()) {
@@ -1971,6 +1983,11 @@ func (a *AgentActivity) OnSTTEndOfSpeech(ev *stt.SpeechEvent) {
 func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEvent *stt.SpeechEvent) {
 	sttOwnsTiming := a.turnDetectionMode() == TurnDetectionModeSTT
 	a.speechBoundaryMu.Lock()
+	if synthetic || ev == nil {
+		a.Session.turnStream.syntheticEnd(a)
+	} else {
+		a.Session.turnStream.vadEvent(a, ev, 0)
+	}
 	wasSpeaking := a.setSpeaking(false)
 	stoppedAt := vadSpeechStoppedAt(ev)
 	a.userTurnMu.Lock()
@@ -2031,6 +2048,9 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 	}
 	a.overlapSpeechEnded = false
 	a.finishBackchannelUserTurn()
+	if a.adaptiveBackchannelConfirmed.Load() {
+		a.Session.turnStream.discardBackchannel(a)
+	}
 	a.speechBoundaryMu.Unlock()
 	a.notifyUserTurnUpdated()
 	if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
@@ -2084,6 +2104,7 @@ func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 		a.heldSTTEvents = nil
 		a.userTurnMu.Unlock()
 		a.finishBackchannelUserTurn()
+		a.Session.turnStream.discardBackchannel(a)
 	}
 	a.speechBoundaryMu.Unlock()
 	a.Session.EmitOverlappingSpeech(ev)
@@ -2107,6 +2128,9 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 }
 
 func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
+	a.speechBoundaryMu.Lock()
+	a.Session.turnStream.vadEvent(a, ev, 0)
+	a.speechBoundaryMu.Unlock()
 	a.updateVADInferenceTiming(ev)
 	turnDetection := a.turnDetectionMode()
 	if turnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeRealtimeLLM {
@@ -2334,7 +2358,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		a.maybeStartPreemptiveGeneration(pendingTranscript, confidenceSum/float64(confidenceCount))
 	}
 	if a.vadBasedTurnDetection() && !a.isUserSpeaking() {
-		a.runEOUDetection(a.pendingFinalEndOfTurnInfo(), "stt")
+		info := a.pendingFinalEndOfTurnInfo()
+		info.eouSource = "stt"
+		a.runEOUDetection(info)
 	}
 }
 
@@ -3072,6 +3098,8 @@ func (a *AgentActivity) resumeFinishedPausedSpeech(speech *SpeechHandle) {
 }
 
 func (a *AgentActivity) ClearUserTurn() {
+	a.turnTelemetry.finishCurrent("dropped", time.Time{})
+	a.Session.turnStream.reset(a, true)
 	a.cancelPendingEOUDetection()
 
 	a.clearPendingUserTurn()
@@ -3124,11 +3152,6 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	a.falseInterruptionMu.Lock()
 	speechSeq := a.userTurnSeq
 	a.falseInterruptionMu.Unlock()
-	if a.Session != nil {
-		userTurnSpan := a.Session.ensureUserTurnSpan(a.ctx)
-		defer a.Session.finishUserTurnSpan(userTurnSpan)
-	}
-
 	if ctx == nil {
 		ctx = a.ctx
 	}
@@ -3314,6 +3337,10 @@ collect:
 		return "", nil
 	}
 
+	manualTrace := a.beginEOUTrace(ctx, EndOfTurnInfo{NewTranscript: transcript, StartedSpeakingAt: startedSpeakingAt, StoppedSpeakingAt: stoppedSpeakingAt}, "manual")
+	defer a.Session.finishUserTurnSpan(manualTrace.wait.user)
+	defer a.turnTelemetry.finish(manualTrace, "dropped", time.Time{})
+
 	if fallbackFinal && a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   fallbackLanguage,
@@ -3326,6 +3353,7 @@ collect:
 		a.manualTurnCommitted = true
 	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
+		eouTrace:               manualTrace,
 		SkipReply:              opts.SkipReply,
 		ReplyAlreadyGenerated:  replyAlreadyGenerated,
 		GenerateReplyAfterHook: generateReplyAfterHook,
@@ -3382,6 +3410,12 @@ func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, 
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	if info.eouTrace != nil {
+		a.turnTelemetry.finish(info.eouTrace, "committed", time.Time{})
+	}
+	if !info.detectorCommitted {
+		a.Session.turnStream.reset(a, false)
+	}
 	turnSeq := a.nextUserTurnCompletionSeq()
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
@@ -3410,7 +3444,12 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	hookParentCtx := ctx
 	if a.Session != nil {
-		userTurnSpan := a.Session.ensureUserTurnSpan(ctx)
+		var userTurnSpan trace.Span
+		if info.eouTrace != nil {
+			userTurnSpan = info.eouTrace.wait.user
+		} else {
+			userTurnSpan = a.Session.ensureUserTurnSpan(ctx)
+		}
 		hookParentCtx = trace.ContextWithSpan(ctx, userTurnSpan)
 		sttProvider := a.Session.STT
 		attrs := []attribute.KeyValue{
@@ -3516,10 +3555,18 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	a.commitUserTurnMu.Lock()
 	a.userTurnHookActive++
 	a.commitUserTurnMu.Unlock()
-	hookCtx, hookSpan := telemetry.StartSpan(hookParentCtx, "on_user_turn_completed", trace.WithAttributes(attribute.String(telemetry.AttrAgentLabel, a.Agent.Label())))
-	err := a.AgentIntf.OnUserTurnCompleted(hookCtx, chatCtx, newMsg)
-	recordInferenceSpanError(hookCtx, hookSpan, err)
-	hookSpan.End()
+	err := func() error {
+		hookCtx, span := telemetry.StartSpan(hookParentCtx, "on_user_turn_completed", trace.WithAttributes(attribute.String(telemetry.AttrAgentLabel, a.Agent.Label())))
+		defer span.End()
+		err := a.AgentIntf.OnUserTurnCompleted(hookCtx, chatCtx, newMsg)
+		var stop llm.StopResponse
+		if errors.As(err, &stop) {
+			span.AddEvent("stop_response")
+		} else {
+			recordInferenceSpanError(hookCtx, span, err)
+		}
+		return err
+	}()
 	a.commitUserTurnMu.Lock()
 	a.userTurnHookActive--
 	a.commitUserTurnMu.Unlock()
@@ -4254,17 +4301,32 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 	done := make(chan struct{})
 	a.eouCancel = cancel
 	a.eouDone = done
+	if len(sources) > 0 {
+		info.eouSource = sources[0]
+	}
+	if info.eouSource == "" {
+		info.eouSource = "vad"
+		if a.turnDetectionMode() == TurnDetectionModeSTT {
+			info.eouSource = "stt"
+		}
+		if a.turnDetectionMode() == TurnDetectionModeManual {
+			info.eouSource = "manual"
+		}
+	}
+	info.eouTrace = a.beginEOUTrace(ctx, info, info.eouSource)
 	a.eouMu.Unlock()
-	ctx = a.beginEOUWait(ctx, info, sources...)
 	a.notifyUserTurnUpdated()
 
+	generation, _, stream := a.Session.turnStream.snapshot(a)
 	go func() {
 		defer func() {
+			if ctx.Err() != nil {
+				a.turnTelemetry.finish(info.eouTrace, "dropped", time.Time{})
+			}
 			cancel()
 			a.eouMu.Lock()
 			current := a.eouDone == done
 			if current {
-				a.endEOUWaitLocked("dropped", time.Time{})
 				a.eouCancel = nil
 				a.eouDone = nil
 			}
@@ -4278,7 +4340,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 		maxDelay := a.maxEndpointingDelay()
 		endpointingDelay := minDelay
 
-		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
+		if _, ok := a.Agent.TurnDetector.(TextTurnDetector); ok && a.Agent.TurnDetector.Capabilities().Input == TurnDetectorInputText && info.NewTranscript != "" && a.turnDetectionMode() != TurnDetectionModeManual && detectorSupportsLanguage(a.Agent.TurnDetector, info.Language) {
 			// Predict end of turn
 			chatCtx := a.RetrieveChatCtx().Copy()
 			chatCtx.Append(&llm.ChatMessage{
@@ -4287,9 +4349,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 			})
 
 			threshold := a.turnDetectorThreshold(info.Language)
-			eouCtx, eouSpan := a.startEOUPrediction(ctx)
-			prob, err := a.Agent.TurnDetector.PredictEndOfTurn(eouCtx, chatCtx)
+			eouCtx, eouSpan := a.turnTelemetry.startDetection(ctx, info.eouTrace)
+			prob, err := a.Agent.TurnDetector.(TextTurnDetector).PredictEndOfTurn(eouCtx, chatCtx)
 			attrs := []attribute.KeyValue{
+				attribute.String(telemetry.AttrEOUSource, info.eouSource),
+				attribute.Bool(telemetry.AttrEOUFromCache, false),
 				attribute.Float64(telemetry.AttrEOUUnlikelyThreshold, threshold),
 				attribute.String(telemetry.AttrEOULanguage, info.Language),
 				attribute.String(telemetry.AttrChatCtx, marshalTraceJSON(chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true, ExcludeInstructions: true, ExcludeEmptyMessage: true, ExcludeHandoff: true, ExcludeConfigUpdate: true}).ToDict(llm.ChatContextDictOptions{ExcludeMetrics: true}))),
@@ -4301,13 +4365,20 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 					endpointingDelay = maxDelay
 				}
 			} else {
+				attrs = append(attrs, attribute.Bool(telemetry.AttrEOUFallback, true))
 				a.Session.Logger().Errorw("EOU prediction failed", err)
 			}
 			attrs = append(attrs, attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay))
 			eouSpan.SetAttributes(attrs...)
 			recordInferenceSpanError(eouCtx, eouSpan, err)
-			a.finishEOUPrediction(eouSpan)
-			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrEOUDelay, endpointingDelay))
+			a.turnTelemetry.detectionDone(info.eouTrace, endpointingDelay)
+		}
+
+		if stream != nil && a.turnDetectionMode() != TurnDetectionModeManual && a.turnDetectionMode() != TurnDetectionModeRealtimeLLM && stream.SupportsLanguage(info.Language) {
+			eouCtx, eouSpan := a.turnTelemetry.startDetection(ctx, info.eouTrace)
+			eouSpan.SetAttributes(attribute.String(telemetry.AttrEOUSource, info.eouSource))
+			endpointingDelay = a.streamingEndpointingDelay(eouCtx, info.Language, minDelay, maxDelay)
+			a.turnTelemetry.detectionDone(info.eouTrace, endpointingDelay)
 		}
 
 		if info.StoppedSpeakingAt != nil {
@@ -4320,7 +4391,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 			return
 		}
 
+		if ctx.Err() != nil || (stream != nil && !a.Session.turnStream.current(a, generation)) {
+			return
+		}
 		if strings.TrimSpace(info.NewTranscript) == "" {
+			a.turnTelemetry.finish(info.eouTrace, "dropped", time.Time{})
 			a.clearPendingUserTurn()
 			return
 		}
@@ -4328,6 +4403,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 		currentSpeech := a.currentSpeech
 		a.queueMu.Unlock()
 		if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+			a.turnTelemetry.notCommitted(info.eouTrace)
 			a.cancelPreemptiveGeneration()
 			return
 		}
@@ -4353,14 +4429,18 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 		a.userTurnMu.Unlock()
 		a.eouMu.Lock()
 		current := a.eouDone == done && ctx.Err() == nil
-		if current {
-			a.endEOUWaitLocked("committed", time.Time{})
-		}
 		a.eouMu.Unlock()
 		if !current {
 			return
 		}
-		a.clearPendingUserTurn()
+		if stream != nil {
+			if !a.Session.turnStream.claim(a, generation, ctx, a.clearPendingUserTurn) {
+				return
+			}
+			info.detectorCommitted = true
+		} else {
+			a.clearPendingUserTurn()
+		}
 		if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 			a.Session.Logger().Errorw("user turn completion failed", err)
 			return

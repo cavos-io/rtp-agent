@@ -279,7 +279,10 @@ type realtimeOptionsUpdatingAssistant interface {
 }
 
 type AgentSession struct {
-	Options AgentSessionOptions
+	defaultMinEndpointing bool
+	defaultMaxEndpointing bool
+	turnStream            turnDetectorRuntime
+	Options               AgentSessionOptions
 
 	Timeline *EventTimeline
 
@@ -319,6 +322,7 @@ type AgentSession struct {
 	agentSpeakingSpan       trace.Span
 	userTurnCtx             context.Context
 	userTurnSpan            trace.Span
+	userTurnSpanStarted     time.Time
 	userSpeakingSpan        trace.Span
 	userSpeakingStartedAt   time.Time
 	userSpeakingInterrupted bool
@@ -1175,9 +1179,14 @@ func (s *AgentSession) userStateChangedSubscribers() (chan UserStateChangedEvent
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
+	defaultMin := opts.Endpointing == nil && !opts.MinEndpointingDelaySet && opts.MinEndpointingDelay == 0
+	defaultMax := opts.Endpointing == nil && !opts.MaxEndpointingDelaySet && opts.MaxEndpointingDelay == 0
 	opts = withAgentSessionOptionDefaults(opts)
 	baseAgent := agent.GetAgent()
 	session := &AgentSession{
+		defaultMinEndpointing: defaultMin,
+		defaultMaxEndpointing: defaultMax,
+
 		Agent:               agent,
 		Room:                room,
 		STT:                 baseAgent.STT,
@@ -1339,9 +1348,11 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	oldTurnDetection := s.Options.TurnDetection
 
 	if opts.MinEndpointingDelay != nil {
+		s.defaultMinEndpointing = false
 		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
 	}
 	if opts.MaxEndpointingDelay != nil {
+		s.defaultMaxEndpointing = false
 		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
 	}
 	if opts.EndpointingAlpha != nil {
@@ -1354,6 +1365,7 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		s.Options.Endpointing.UpdateOptions(opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
 	}
 	if opts.Endpointing != nil {
+		s.defaultMinEndpointing, s.defaultMaxEndpointing = false, false
 		s.Options.Endpointing = opts.Endpointing
 	}
 	if opts.EndpointingAlpha != nil {
@@ -2577,6 +2589,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	} else if s.Options.InterruptionMode == InterruptionModeAdaptive {
 		return rejectStart(fmt.Errorf("adaptive interruption requires an STT pipeline"))
 	}
+	if err := validateTurnDetector(agent.GetAgent().TurnDetector, pipelineVAD); err != nil {
+		return rejectStart(err)
+	}
 	if err := validateAdaptiveInterruption(s.Options, pipelineVAD, pipelineSTT); err != nil {
 		return rejectStart(err)
 	}
@@ -2646,7 +2661,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}
 	runCtx, runCancel := context.WithCancel(ctx)
+	if err := s.turnStream.configure(runCtx, agent.GetAgent().TurnDetector); err != nil {
+		s.Logger().Warnw("turn detector unavailable; using endpointing", err)
+	}
 	if err := assistant.Start(runCtx, s); err != nil {
+		_ = s.turnStream.close()
 		runCancel()
 		if unsubscribeAvatarMetrics != nil {
 			unsubscribeAvatarMetrics()
@@ -2855,6 +2874,7 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	if state == UserStateSpeaking {
 		if s.userTurnSpan == nil {
 			s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(s.runCtx, "user_turn", trace.WithTimestamp(createdAt))
+			s.userTurnSpanStarted = createdAt
 		}
 		if s.userSpeakingSpan == nil {
 			s.userSpeakingInterrupted = false
@@ -2891,21 +2911,30 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 }
 
 func (s *AgentSession) ensureUserTurnSpan(ctx context.Context, anchors ...time.Time) trace.Span {
+	started := time.Now()
+	for _, anchor := range anchors {
+		if !anchor.IsZero() && anchor.Before(started) {
+			started = anchor
+		}
+	}
+	span, _ := s.ensureUserTurnSpanAt(ctx, started)
+	return span
+}
+
+func (s *AgentSession) ensureUserTurnSpanAt(ctx context.Context, started time.Time) (trace.Span, time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.userTurnSpan == nil {
 		if ctx == nil {
 			ctx = s.runCtx
 		}
-		started := time.Now()
-		for _, anchor := range anchors {
-			if !anchor.IsZero() && anchor.Before(started) {
-				started = anchor
-			}
+		if now := time.Now(); started.IsZero() || started.After(now) {
+			started = now
 		}
 		s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(ctx, "user_turn", trace.WithTimestamp(started))
+		s.userTurnSpanStarted = started
 	}
-	return s.userTurnSpan
+	return s.userTurnSpan, s.userTurnSpanStarted
 }
 
 // endUserSpeakingSpanLocked serializes speech end with turn completion. VAD
@@ -2948,12 +2977,13 @@ func (s *AgentSession) finishEmptyUserTurnSpanLocked(candidate trace.Span, ended
 	return true
 }
 
-func (s *AgentSession) finishBackchannelUserTurnSpan(endedAt time.Time) bool {
+func (s *AgentSession) finishBackchannelUserTurnSpan(endedAt time.Time, turns *turnTelemetry) bool {
 	s.mu.Lock()
 	if s.userSpeakingSpan != nil || s.userTurnClaims > 0 {
 		s.mu.Unlock()
 		return false
 	}
+	turns.finishCurrent("dropped", endedAt)
 	span := s.userTurnSpan
 	s.userTurnSpan = nil
 	s.userTurnCtx = nil
@@ -3405,6 +3435,15 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		s.EmitError(ErrorEvent{Error: errRealtimeTurnDetectionInterruptionsDisabled, Source: agent})
 		return
 	}
+	validationVAD := s.VAD
+	if baseAgent.VAD != nil {
+		validationVAD = baseAgent.VAD
+	}
+	if err := validateTurnDetector(baseAgent.TurnDetector, validationVAD); err != nil {
+		s.mu.Unlock()
+		s.EmitError(ErrorEvent{Error: err, Source: agent})
+		return
+	}
 	oldActivity := s.activity
 	started := s.started
 	oldTools := copySessionTools(s.Tools)
@@ -3477,6 +3516,9 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		runState.RecordAgentHandoff(handoff, oldAgent, baseAgent)
 	}
 	s.EmitConversationItemAdded(handoff)
+	if err := s.turnStream.configure(runCtx, baseAgent.TurnDetector); err != nil {
+		s.Logger().Warnw("turn detector unavailable; using endpointing", err)
+	}
 	newActivity.startWithContext(handoffCtx)
 }
 
@@ -3679,6 +3721,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		activity.stopActivity(drainCtx)
 		recordInferenceSpanError(drainCtx, drainSpan, stopErr)
 		drainSpan.End()
+	}
+	if err := s.turnStream.close(); err != nil && stopErr == nil {
+		stopErr = err
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {

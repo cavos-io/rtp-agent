@@ -118,7 +118,7 @@ func (a *AgentActivity) finishBackchannelUserTurn() {
 		a.pendingUserTranscript != "" || a.pendingInterimTranscript != "" || a.pendingPreflightTranscript != "" {
 		return
 	}
-	if !a.Session.finishBackchannelUserTurnSpan(a.userSpeechStoppedAt) {
+	if !a.Session.finishBackchannelUserTurnSpan(a.userSpeechStoppedAt, &a.turnTelemetry) {
 		return
 	}
 	a.userTurnStartedAt = time.Time{}

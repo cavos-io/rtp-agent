@@ -1,0 +1,11 @@
+{"contract":"streaming-turn-lifecycle","events":[
+ {"type":"start_of_speech","pending":false,"predictions":0},
+ {"type":"inference_done","silence":0.1,"pending":false,"predictions":0},
+ {"type":"inference_done","silence":0.2,"pending":true,"predictions":1},
+ {"type":"inference_done","silence":0.3,"pending":true,"predictions":1},
+ {"type":"inference_done","speech":0.05,"pending":false,"predictions":1},
+ {"type":"inference_done","silence":0.2,"pending":true,"predictions":2},
+ {"type":"start_of_speech","pending":false,"predictions":2},
+ {"type":"inference_done","silence":0.25,"pending":true,"predictions":3},
+ {"type":"clear","pending":false,"predictions":3}
+]}

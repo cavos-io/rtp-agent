@@ -178,3 +178,7 @@ func (m *LLMTurnDetector) fallbackHeuristic(chatCtx *llm.ChatContext) float64 {
 }
 
 var _ TurnDetector = (*LLMTurnDetector)(nil)
+
+func (*LLMTurnDetector) Capabilities() TurnDetectorCapabilities {
+	return TurnDetectorCapabilities{Input: TurnDetectorInputText}
+}

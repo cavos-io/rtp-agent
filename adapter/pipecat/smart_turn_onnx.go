@@ -76,7 +76,13 @@ func NewSmartTurnWithONNX(options SmartTurnONNXOptions, opts ...SmartTurnOption)
 		return nil, err
 	}
 	logger.Logger.Infow("smart_turn.backend", "backend", "local", "model_path", options.ModelPath)
-	return newSmartTurnWithONNXRunner(options.FeatureExtractor, runner, opts...)
+	detector, err := newSmartTurnWithONNXRunner(options.FeatureExtractor, runner, opts...)
+	if err != nil {
+		_ = runner.session.Destroy()
+		return nil, err
+	}
+	detector.closeRunner = runner.session.Destroy
+	return detector, nil
 }
 
 func newSmartTurnWithONNXRunner(extractor FeatureExtractor, runner smartTurnONNXRunner, opts ...SmartTurnOption) (*SmartTurn, error) {
@@ -97,7 +103,7 @@ var smartTurnONNXRuntime = struct {
 func initializeSmartTurnONNXRuntime(configuredPath string) error {
 	smartTurnONNXRuntime.Lock()
 	defer smartTurnONNXRuntime.Unlock()
-	if smartTurnONNXRuntime.initialized {
+	if smartTurnONNXRuntime.initialized || ort.IsInitialized() {
 		return nil
 	}
 
@@ -179,12 +185,26 @@ func (r *smartTurnONNXSessionRunner) RunSmartTurnONNX(ctx context.Context, featu
 
 	outputs := []ort.Value{nil}
 	r.sessionMu.Lock()
-	err = r.session.Run([]ort.Value{inputTensor}, outputs)
+	runOptions, optionErr := ort.NewRunOptions()
+	if optionErr != nil {
+		r.sessionMu.Unlock()
+		return 0, optionErr
+	}
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = runOptions.Terminate(); close(canceled) })
+	err = r.session.RunWithOptions([]ort.Value{inputTensor}, outputs, runOptions)
+	if !stop() {
+		<-canceled
+	}
+	_ = runOptions.Destroy()
 	r.sessionMu.Unlock()
+	defer destroySmartTurnONNXValues(outputs)
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 	if err != nil {
 		return 0, fmt.Errorf("run pipecat smart turn ONNX inference: %w", err)
 	}
-	defer destroySmartTurnONNXValues(outputs)
 
 	output, ok := outputs[0].(*ort.Tensor[float32])
 	if !ok || len(output.GetData()) == 0 {

@@ -117,9 +117,9 @@ func TestLatencyRealtimeSpeechEndSharedByTraceAndMeter(t *testing.T) {
 				t.Error("speech-stop metrics prematurely ended the user turn")
 			}
 		}
-		activity.eouMu.Lock()
-		waitStart := activity.eouTrace.started
-		activity.eouMu.Unlock()
+		activity.turnTelemetry.mu.Lock()
+		waitStart := activity.turnTelemetry.wait.started
+		activity.turnTelemetry.mu.Unlock()
 		if !waitStart.Equal(unixSecondsToTime(stop)) {
 			t.Error("EOU wait used event receipt instead of the metric's speech-end anchor")
 		}

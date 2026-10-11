@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -33,9 +34,13 @@ type SmartTurnResult struct {
 type ProbabilityEstimator func(context.Context, []float32) (float64, error)
 
 type SmartTurn struct {
-	estimator  ProbabilityEstimator
-	sampleRate int
-	windowSec  int
+	lifecycleMu sync.Mutex
+	closed      bool
+	gate        chan struct{}
+	closeRunner func() error
+	estimator   ProbabilityEstimator
+	sampleRate  int
+	windowSec   int
 }
 
 type SmartTurnOption func(*SmartTurn)
@@ -48,6 +53,7 @@ func WithProbabilityEstimator(estimator ProbabilityEstimator) SmartTurnOption {
 
 func NewSmartTurn(opts ...SmartTurnOption) *SmartTurn {
 	detector := &SmartTurn{
+		gate:       make(chan struct{}, 1),
 		sampleRate: defaultSmartTurnSampleRate,
 		windowSec:  defaultSmartTurnWindowSec,
 	}
@@ -72,12 +78,24 @@ func (s *SmartTurn) PredictEndpoint(ctx context.Context, audio []float32) (Smart
 	if s.estimator == nil {
 		return SmartTurnResult{}, errors.New("pipecat smart turn probability estimator is not configured")
 	}
+	select {
+	case s.gate <- struct{}{}:
+	case <-ctx.Done():
+		return SmartTurnResult{}, ctx.Err()
+	}
+	defer func() { <-s.gate }()
+	s.lifecycleMu.Lock()
+	closed := s.closed
+	s.lifecycleMu.Unlock()
+	if closed {
+		return SmartTurnResult{}, errors.New("smart turn detector closed")
+	}
 	window := SmartTurnAudioWindow(audio, s.windowSec, s.sampleRate)
 	probability, err := s.estimator(ctx, window)
 	if err != nil {
 		return SmartTurnResult{}, err
 	}
-	if math.IsNaN(probability) || math.IsInf(probability, 0) {
+	if math.IsNaN(probability) || math.IsInf(probability, 0) || probability < 0 || probability > 1 {
 		return SmartTurnResult{}, fmt.Errorf("pipecat smart turn probability is not finite: %v", probability)
 	}
 	result := SmartTurnResult{Probability: probability, Prediction: SmartTurnIncomplete}
@@ -107,7 +125,7 @@ func (s *SmartTurn) PredictEndOfTurnAudio(ctx context.Context, frames []*model.A
 	start := time.Now()
 	result, err := s.PredictEndpoint(ctx, audio)
 	if err != nil {
-		logger.Logger.Errorw("smart_turn.onnx_failed falling back to not-complete", err)
+		logger.Logger.Errorw("smart_turn.inference_failed", err)
 		return agent.AudioTurnResult{}, err
 	}
 	out := agent.AudioTurnResult{
@@ -159,4 +177,23 @@ func PCM16MonoFloat32(frame *model.AudioFrame) ([]float32, error) {
 		audio[i] = float32(sample) / 32768.0
 	}
 	return audio, nil
+}
+
+// Close releases the shared model. Applications call this after closing sessions.
+func (s *SmartTurn) Close() error {
+	if s == nil || s.gate == nil {
+		return nil
+	}
+	s.gate <- struct{}{}
+	defer func() { <-s.gate }()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.closeRunner != nil {
+		return s.closeRunner()
+	}
+	return nil
 }

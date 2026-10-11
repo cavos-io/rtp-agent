@@ -45,6 +45,7 @@ type PipelineAgent struct {
 	session            *AgentSession
 	vadStream          vad.VADStream
 	vadSpeechStarted   bool
+	turnAudioOrigin    time.Duration
 	vadStallTimeout    time.Duration
 	vadStallTimer      *time.Timer
 	sttStream          stt.RecognizeStream
@@ -133,6 +134,9 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 		go va.consumeSTTRecovery(ctx)
 	}
 
+	if s != nil {
+		va.turnAudioOrigin = s.turnStream.audioPosition()
+	}
 	go va.run(ctx)
 	return nil
 }
@@ -306,13 +310,16 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	}()
 	va.session.Logger().Infow("PipelineAgent started")
 
+	va.mu.Lock()
+	vadProvider, sttProvider := va.vad, va.stt
+	va.mu.Unlock()
 	var vadStream vad.VADStream
-	if va.vad != nil {
-		stream, err := va.vad.Stream(ctx)
+	if vadProvider != nil {
+		stream, err := vadProvider.Stream(ctx)
 		if err != nil {
 			if !isSpeechStreamShutdownError(va.session, err) {
-				va.logVADError("failed to start VAD stream", err, va.vad, "vad_stream_start")
-				va.emitError(err, va.vad)
+				va.logVADError("failed to start VAD stream", err, vadProvider, "vad_stream_start")
+				va.emitError(err, vadProvider)
 			}
 			return
 		}
@@ -323,8 +330,8 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		va.mu.Unlock()
 		defer func() {
 			if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(va.session, err) {
-				va.logVADError("failed to close VAD stream", err, va.vad, "vad_stream_close")
-				va.emitError(err, va.vad)
+				va.logVADError("failed to close VAD stream", err, vadProvider, "vad_stream_close")
+				va.emitError(err, vadProvider)
 			}
 			va.mu.Lock()
 			if va.vadStream == vadStream {
@@ -337,28 +344,28 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	}
 
 	var sttStream stt.RecognizeStream
-	if va.stt != nil {
-		sttObj, err := streamableSTT(va.stt, va.vad)
+	if sttProvider != nil {
+		sttObj, err := streamableSTT(sttProvider, vadProvider)
 		if err != nil {
 			if !isSpeechStreamShutdownError(va.session, err) {
-				va.logSTTError("failed to prepare STT stream", err, va.stt, "stt_stream_prepare")
+				va.logSTTError("failed to prepare STT stream", err, sttProvider, "stt_stream_prepare")
 				label := "stt"
-				if va.stt != nil {
-					label = va.stt.Label()
+				if sttProvider != nil {
+					label = sttProvider.Label()
 				}
-				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+				va.emitError(stt.NewSTTError(label, err, false), sttProvider)
 			}
 			return
 		}
 		stream, err := sttObj.Stream(ctx, "")
 		if err != nil {
 			if !isSpeechStreamShutdownError(va.session, err) {
-				va.logSTTError("failed to start STT stream", err, va.stt, "stt_stream_start")
+				va.logSTTError("failed to start STT stream", err, sttProvider, "stt_stream_start")
 				label := "stt"
-				if va.stt != nil {
-					label = va.stt.Label()
+				if sttProvider != nil {
+					label = sttProvider.Label()
 				}
-				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+				va.emitError(stt.NewSTTError(label, err, false), sttProvider)
 			}
 			return
 		}
@@ -382,11 +389,16 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			if frame == nil {
 				continue
 			}
+			if va.session != nil {
+				if err := va.session.turnStream.push(frame); err != nil {
+					va.session.Logger().Warnw("turn detector audio input failed", err)
+				}
+			}
 			if vadStream != nil {
 				if err := vadStream.PushFrame(frame); err != nil {
 					if !isSpeechStreamShutdownError(va.session, err) {
-						va.logVADError("VAD push frame failed", err, va.vad, "vad_push_frame")
-						va.emitError(err, va.vad)
+						va.logVADError("VAD push frame failed", err, vadProvider, "vad_push_frame")
+						va.emitError(err, vadProvider)
 					}
 				}
 			}
@@ -397,12 +409,12 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			}
 			if err := va.pushSTTFrame(frame); err != nil {
 				if !isSpeechStreamShutdownError(va.session, err) {
-					va.logSTTError("STT push frame failed", err, va.stt, "stt_push_frame")
+					va.logSTTError("STT push frame failed", err, sttProvider, "stt_push_frame")
 					label := "stt"
-					if va.stt != nil {
-						label = va.stt.Label()
+					if sttProvider != nil {
+						label = sttProvider.Label()
 					}
-					va.emitError(stt.NewSTTError(label, err, false), va.stt)
+					va.emitError(stt.NewSTTError(label, err, false), sttProvider)
 				}
 			}
 		}
@@ -496,6 +508,11 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		}
 		activity := session.currentActivity()
 
+		if ev != nil && va.turnAudioOrigin != 0 {
+			adjusted := *ev
+			adjusted.Timestamp += va.turnAudioOrigin.Seconds()
+			ev = &adjusted
+		}
 		if ev.Type == vad.VADEventStartOfSpeech {
 			va.session.Logger().Infow("User started speaking")
 			va.mu.Lock()
@@ -1012,6 +1029,12 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		var assistantMetrics map[string]any
 		if speech.Generation.AssistantMessage != nil {
 			assistantMetrics = speech.Generation.AssistantMessage.Metrics
+		}
+		if ttsGen != nil && (ttsGen.TTFBSet || ttsGen.TTFB > 0) {
+			if assistantMetrics == nil {
+				assistantMetrics = make(map[string]any)
+			}
+			assistantMetrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
 		}
 		assistantMetrics = addAssistantSpeechMetrics(ctx, session, assistantMetrics, ttsGen, speech.Generation.UserMessage, speech.IsInterrupted())
 		if speech.Generation.AssistantMessage != nil {
