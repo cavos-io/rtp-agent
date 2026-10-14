@@ -915,8 +915,11 @@ func TestXaiSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 
 func TestXaiSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	handlerErr := make(chan error, 1)
+	closeServer := make(chan struct{})
 	oldDialer := websocket.DefaultDialer
-	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(*websocket.Conn, *http.Request) {}, handlerErr)
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(*websocket.Conn, *http.Request) {
+		<-closeServer
+	}, handlerErr)
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
 	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
@@ -924,6 +927,7 @@ func TestXaiSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
 	}
+	close(closeServer)
 	t.Cleanup(func() { _ = stream.Close() })
 
 	_, err = stream.Next()
