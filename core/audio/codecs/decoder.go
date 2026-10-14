@@ -455,9 +455,7 @@ func (d *FFmpegAudioStreamDecoder) processLoop() {
 	d.stdout = stdout
 	d.mu.Unlock()
 
-	waitCh := make(chan error, 1)
 	go d.writeFFmpegInput(stdin)
-	go func() { waitCh <- cmd.Wait() }()
 
 	frameBytes := max((d.sampleRate*20/1000)*d.numChannels*2, d.numChannels*2)
 	buf := make([]byte, frameBytes)
@@ -495,7 +493,7 @@ func (d *FFmpegAudioStreamDecoder) processLoop() {
 			SamplesPerChannel: uint32(len(chunk) / (d.numChannels * 2)),
 		}
 	}
-	if err := <-waitCh; err != nil {
+	if err := cmd.Wait(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
 			d.errCh <- fmt.Errorf("ffmpeg %s decode error: %w: %s", d.inputFormat, err, msg)
