@@ -2073,14 +2073,15 @@ func shouldRecordAuxTrack(options RoomOptions, trackKind webrtc.RTPCodecType, pa
 }
 
 func (rio *RoomIO) handleAuxAudioTrack(track *webrtc.TrackRemote) {
-	dec, err := newOpusDecoder(48000, 1)
+	// Decode at the aux stream rate: the stream repacks bytes without resampling.
+	dec, err := newOpusDecoder(int(roomIODefaultInputSampleRate), 1)
 	if err != nil {
 		rio.logger().Warnw("aux audio track decoder init failed", err)
 		return
 	}
 	defer dec.Close()
 
-	buffer := rio.newAuxAudioInputBuffer(track.ID(), track.Codec().ClockRate, dec)
+	buffer := rio.newAuxAudioInputBuffer(track.ID(), dec)
 	if !rio.registerAudioBuffer(buffer) {
 		return
 	}
@@ -2102,7 +2103,7 @@ func (rio *RoomIO) auxAudioInputActive() bool {
 	return !rio.closed && !rio.audioDisabled
 }
 
-func (rio *RoomIO) newAuxAudioInputBuffer(trackID string, clockRate uint32, dec AudioDecoder) *roomIOAudioBuffer {
+func (rio *RoomIO) newAuxAudioInputBuffer(trackID string, dec AudioDecoder) *roomIOAudioBuffer {
 	inputStream := newRoomIOAuxAudioStream()
 
 	recordFrames := func(frames []*model.AudioFrame) {
@@ -2122,8 +2123,7 @@ func (rio *RoomIO) newAuxAudioInputBuffer(trackID string, clockRate uint32, dec 
 		if decoded, decErr := dec.Decode(payload); decErr == nil {
 			pcm = decoded
 		}
-		frame := roomIOInputFrameFromPCM(pcm, clockRate, 1)
-		recordFrames(inputStream.Push(frame.Data))
+		recordFrames(inputStream.Push(pcm))
 	}, func() {
 		if rio.auxAudioInputActive() {
 			recordFrames(inputStream.Flush())
