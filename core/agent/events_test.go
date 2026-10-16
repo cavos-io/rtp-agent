@@ -1799,8 +1799,9 @@ func TestRunContextWithFillerTakesTheFloorWhileToolStillRuns(t *testing.T) {
 		Text:  holdLine,
 		Delay: 10 * time.Millisecond,
 	}, func(context.Context) error {
+		var ev SpeechCreatedEvent
 		select {
-		case ev := <-speechEvents:
+		case ev = <-speechEvents:
 			if ev.SpeechHandle == nil || ev.SpeechHandle.Generation.Text != holdLine {
 				t.Errorf("filler speech event = %#v, want the hold line", ev)
 				return nil
@@ -1810,6 +1811,10 @@ func TestRunContextWithFillerTakesTheFloorWhileToolStillRuns(t *testing.T) {
 			return nil
 		}
 
+		if err := ev.SpeechHandle.WaitForScheduled(context.Background()); err != nil {
+			t.Errorf("wait for filler scheduling: %v", err)
+			return nil
+		}
 		activity.processQueue()
 
 		activity.queueMu.Lock()

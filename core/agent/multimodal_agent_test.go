@@ -2471,6 +2471,7 @@ func TestMultimodalAgentKeepsRunOpenForRealtimeAutoToolReply(t *testing.T) {
 	if err := replyHandle.Wait(doneCtx); err != nil {
 		t.Fatalf("realtime auto tool reply handle did not complete: %v", err)
 	}
+	waitForRunResultDone(t, result)
 	if !result.Done() {
 		t.Fatal("RunResult did not complete after realtime auto tool reply generation completed")
 	}

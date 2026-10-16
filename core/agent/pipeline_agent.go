@@ -2107,15 +2107,15 @@ func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
 }
 
 func (va *PipelineAgent) logTTSError(message string, err error) {
-	va.logProviderError(message, err, va.tts, tts.Provider(va.tts), "tts_inference")
+	va.logProviderErrorAsWarning(message, err, va.tts, tts.Provider(va.tts), "tts_inference")
 }
 
 func (va *PipelineAgent) logSTTError(message string, err error, source stt.STT, stage string) {
-	va.logProviderError(message, err, source, stt.Provider(source), stage)
+	va.logProviderErrorAsWarning(message, err, source, stt.Provider(source), stage)
 }
 
 func (va *PipelineAgent) logLLMError(message string, err error, stage string) {
-	va.logProviderError(message, err, va.LLM, llm.Provider(va.LLM), stage)
+	va.logProviderErrorAsWarning(message, err, va.LLM, llm.Provider(va.LLM), stage)
 }
 
 func (va *PipelineAgent) logVADError(message string, err error, source vad.VAD, stage string) {
@@ -2123,11 +2123,11 @@ func (va *PipelineAgent) logVADError(message string, err error, source vad.VAD, 
 	if source != nil && source.Provider() != "" {
 		provider = source.Provider()
 	}
-	va.logProviderError(message, err, source, provider, stage)
+	va.logProviderErrorAsWarning(message, err, source, provider, stage)
 }
 
-func (va *PipelineAgent) logProviderError(message string, err error, source any, provider string, stage string) {
-	logAgentProviderError(va.session, message, err, source, provider, stage)
+func (va *PipelineAgent) logProviderErrorAsWarning(message string, err error, source any, provider string, stage string) {
+	logAgentProviderErrorAsWarning(va.session, message, err, source, provider, stage)
 }
 
 func logAgentProviderError(session *AgentSession, message string, err error, source any, provider string, stage string) {
@@ -2139,6 +2139,24 @@ func logAgentProviderError(session *AgentSession, message string, err error, sou
 	}
 
 	session.Logger().Errorw(
+		message,
+		err,
+		"error", err.Error(),
+		"error_type", fmt.Sprintf("%T", err),
+		"source", fmt.Sprintf("%T", source),
+		"provider", provider,
+		"stage", stage,
+	)
+}
+
+func logAgentProviderErrorAsWarning(session *AgentSession, message string, err error, source any, provider string, stage string) {
+	if session == nil || err == nil {
+		return
+	}
+	if provider == "" {
+		provider = "unknown"
+	}
+	session.Logger().Warnw(
 		message,
 		err,
 		"error", err.Error(),
