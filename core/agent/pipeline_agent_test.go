@@ -3696,6 +3696,9 @@ func assertStructuredWarningLog(t *testing.T, recorder *recordingLogger, message
 	if !recorder.hasWarn(message) {
 		t.Fatalf("warning messages = %#v, want %s", recorder.warnMessages, message)
 	}
+	if got := recorder.errorValue(message, "error"); got != nil {
+		t.Fatalf("error-level log field = %#v, want nil", got)
+	}
 	if got := recorder.warnValue(message, "error"); got != cause.Error() {
 		t.Fatalf("logged error field = %#v, want %q", got, cause.Error())
 	}

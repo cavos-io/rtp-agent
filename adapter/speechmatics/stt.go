@@ -1976,6 +1976,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
+			s.closeVADStream()
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
 					s.prepareDrainPendingRawFinals()
@@ -4437,6 +4438,11 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.done:
 		if event, ok := s.nextDrainedEvent(); ok {
 			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
 		}
 		return nil, io.EOF
 	}
