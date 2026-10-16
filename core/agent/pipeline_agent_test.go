@@ -3153,7 +3153,7 @@ func TestPipelineAgentLogsSTTErrorWithStructuredFields(t *testing.T) {
 
 	agent.sttLoop(stream)
 
-	assertStructuredErrorLog(t, recorder, "STT stream error", cause, "*agent.fakePipelineSTT", "test-stt-provider", "stt_stream")
+	assertStructuredWarningLog(t, recorder, "STT stream error", cause, "*agent.fakePipelineSTT", "test-stt-provider", "stt_stream")
 }
 
 func TestPipelineAgentIgnoresCanceledSTTStreamOnShutdown(t *testing.T) {
@@ -3688,27 +3688,27 @@ func TestPipelineAgentLogsVADErrorWithStructuredFields(t *testing.T) {
 
 	agent.vadLoop(&fakePipelineVADStream{err: cause})
 
-	assertStructuredErrorLog(t, recorder, "VAD stream error", cause, "*agent.fakePipelineVAD", "fake", "vad_stream")
+	assertStructuredWarningLog(t, recorder, "VAD stream error", cause, "*agent.fakePipelineVAD", "fake", "vad_stream")
 }
 
-func assertStructuredErrorLog(t *testing.T, recorder *recordingLogger, message string, cause error, source, provider, stage string) {
+func assertStructuredWarningLog(t *testing.T, recorder *recordingLogger, message string, cause error, source, provider, stage string) {
 	t.Helper()
-	if !recorder.hasError(message) {
-		t.Fatalf("error messages = %#v, want %s", recorder.errorMessages, message)
+	if !recorder.hasWarn(message) {
+		t.Fatalf("warning messages = %#v, want %s", recorder.warnMessages, message)
 	}
-	if got := recorder.errorValue(message, "error"); got != cause.Error() {
+	if got := recorder.warnValue(message, "error"); got != cause.Error() {
 		t.Fatalf("logged error field = %#v, want %q", got, cause.Error())
 	}
-	if got := recorder.errorValue(message, "error_type"); got != "*errors.errorString" {
+	if got := recorder.warnValue(message, "error_type"); got != "*errors.errorString" {
 		t.Fatalf("logged error_type field = %#v, want concrete error type", got)
 	}
-	if got := recorder.errorValue(message, "source"); got != source {
+	if got := recorder.warnValue(message, "source"); got != source {
 		t.Fatalf("logged source field = %#v, want %s", got, source)
 	}
-	if got := recorder.errorValue(message, "provider"); got != provider {
+	if got := recorder.warnValue(message, "provider"); got != provider {
 		t.Fatalf("logged provider field = %#v, want %s", got, provider)
 	}
-	if got := recorder.errorValue(message, "stage"); got != stage {
+	if got := recorder.warnValue(message, "stage"); got != stage {
 		t.Fatalf("logged stage field = %#v, want %s", got, stage)
 	}
 }
@@ -4195,7 +4195,7 @@ func TestPipelineAgentLogsLLMErrorWithStructuredFields(t *testing.T) {
 
 	agent.generateReply()
 
-	assertStructuredErrorLog(t, recorder, "LLM inference failed", cause, "*agent.failingPipelineLLM", "test-llm-provider", "llm_inference")
+	assertStructuredWarningLog(t, recorder, "LLM inference failed", cause, "*agent.failingPipelineLLM", "test-llm-provider", "llm_inference")
 }
 
 func TestPipelineAgentPreemptiveInterruptSuppressesCanceledTTSStartupError(t *testing.T) {
@@ -4337,7 +4337,7 @@ func TestPipelineAgentLogsTTSErrorWithStructuredFields(t *testing.T) {
 
 	agent.OnSpeechScheduled(context.Background(), speech)
 
-	assertStructuredErrorLog(t, recorder, "TTS inference failed", cause, "*agent.fakePipelineTTS", "test-provider", "tts_inference")
+	assertStructuredWarningLog(t, recorder, "TTS inference failed", cause, "*agent.fakePipelineTTS", "test-provider", "tts_inference")
 }
 
 func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {

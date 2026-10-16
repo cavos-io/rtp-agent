@@ -7659,6 +7659,7 @@ type recordingLogger struct {
 	warnMessages  []string
 	errorMessages []string
 	infoFields    map[string]map[string]any
+	warnFields    map[string]map[string]any
 	errorFields   map[string]map[string]any
 }
 
@@ -7680,6 +7681,18 @@ func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 }
 func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 	l.warnMessages = append(l.warnMessages, msg)
+	if l.warnFields == nil {
+		l.warnFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		fields[key] = keysAndValues[i+1]
+	}
+	l.warnFields[msg] = fields
 }
 func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {
 	l.errorMessages = append(l.errorMessages, msg)
@@ -7739,6 +7752,15 @@ func (l *recordingLogger) hasError(msg string) bool {
 	return false
 }
 
+func (l *recordingLogger) hasWarn(msg string) bool {
+	for _, logged := range l.warnMessages {
+		if logged == msg {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *recordingLogger) infoValue(msg, key string) any {
 	if l.infoFields == nil {
 		return nil
@@ -7751,6 +7773,13 @@ func (l *recordingLogger) errorValue(msg, key string) any {
 		return nil
 	}
 	return l.errorFields[msg][key]
+}
+
+func (l *recordingLogger) warnValue(msg, key string) any {
+	if l.warnFields == nil {
+		return nil
+	}
+	return l.warnFields[msg][key]
 }
 
 type fakeAvatarProvider struct {
