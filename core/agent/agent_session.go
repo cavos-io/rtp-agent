@@ -2860,6 +2860,18 @@ func (s *AgentSession) finishUserTurnSpan(span trace.Span) {
 	}
 }
 
+// finishEmptyUserTurnSpanLocked closes only the unclaimed candidate captured at resume.
+// Caller holds s.mu.
+func (s *AgentSession) finishEmptyUserTurnSpanLocked(candidate trace.Span, endedAt time.Time) bool {
+	if s.userSpeakingSpan != nil || s.userTurnClaims > 0 || candidate == nil || s.userTurnSpan == nil ||
+		s.userTurnSpan.SpanContext().SpanID() != candidate.SpanContext().SpanID() {
+		return false
+	}
+	s.userTurnCtx, s.userTurnSpan = nil, nil
+	candidate.End(trace.WithTimestamp(endedAt))
+	return true
+}
+
 func (s *AgentSession) updateUserAwayTimer() {
 	s.mu.Lock()
 	if s.userAwayTimer != nil {
