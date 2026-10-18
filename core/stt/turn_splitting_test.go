@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -237,4 +238,86 @@ func (s *splitTestStream) SetStartTime(startTime float64) {
 	s.mu.Lock()
 	s.startTime = startTime
 	s.mu.Unlock()
+}
+
+// Python RecognizeStream.__anext__ propagates terminal failures to the STT pump.
+func TestTurnSplittingSTTForwardsActiveErrorAfterTranscript(t *testing.T) {
+	want := errors.New("provider failed")
+	inner := &terminalSplitStream{err: want}
+	provider := &terminalSplitSTT{stream: inner}
+	logical, err := NewTurnSplittingSTT(provider, time.Second).Stream(t.Context(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	event, err := logical.Next()
+	if err != nil || event.Alternatives[0].Text != "tail" {
+		t.Fatalf("%+v %v", event, err)
+	}
+	result := make(chan error, 1)
+	go func() { _, e := logical.Next(); result <- e }()
+	select {
+	case err := <-result:
+		if !errors.Is(err, want) {
+			t.Fatalf("error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal provider error swallowed")
+	}
+}
+
+type terminalSplitSTT struct {
+	splitTestSTT
+	stream *terminalSplitStream
+}
+
+func (s *terminalSplitSTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return s.stream, nil
+}
+
+type terminalSplitStream struct {
+	err     error
+	emitted bool
+}
+
+func (s *terminalSplitStream) Next() (*SpeechEvent, error) {
+	if !s.emitted {
+		s.emitted = true
+		return &SpeechEvent{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "tail"}}}, nil
+	}
+	return nil, s.err
+}
+func (*terminalSplitStream) PushFrame(*model.AudioFrame) error { return nil }
+func (*terminalSplitStream) Flush() error                      { return nil }
+func (*terminalSplitStream) Close() error                      { return nil }
+
+func TestTurnSplittingSTTIgnoresRetiredStreamEOF(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, time.Millisecond).Stream(t.Context(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	if err = logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSplitStreams(t, provider, 2)
+	_ = provider.stream(0).Close()
+	provider.stream(1).events <- &SpeechEvent{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "current"}}}
+	got := make(chan error, 1)
+	go func() {
+		ev, e := logical.Next()
+		if e == nil && (ev == nil || ev.Alternatives[0].Text != "current") {
+			e = errors.New("wrong event")
+		}
+		got <- e
+	}()
+	select {
+	case e := <-got:
+		if e != nil {
+			t.Fatal(e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retired EOF stopped active stream")
+	}
 }
