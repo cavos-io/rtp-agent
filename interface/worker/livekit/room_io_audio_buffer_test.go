@@ -160,7 +160,11 @@ func TestRoomIOAudioBuffersDeliverDecodedAudioBeforeEOFFlush(t *testing.T) {
 			}
 			var b *roomIOAudioBuffer
 			if aux {
-				b = rio.newAuxAudioInputBuffer("track", 48000, dec)
+				auxDec, err := newOpusDecoder(int(roomIODefaultInputSampleRate), 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b = rio.newAuxAudioInputBuffer("track", auxDec)
 			} else {
 				b = rio.newAudioInputBuffer(1, 48000, rio.newInputAudioStream(), newRoomIOInputConverter(rio.audioInputSampleRate()))
 			}
@@ -183,9 +187,9 @@ func TestRoomIOAudioBuffersDeliverDecodedAudioBeforeEOFFlush(t *testing.T) {
 				}
 				samples += frame.SamplesPerChannel
 			}
-			want := uint32(2880)
+			want := uint32(1440) // 3 x 20 ms at 24 kHz.
 			if !aux {
-				want = 1440 + 12000
+				want += 12000
 			} // Existing 500 ms input silence flush.
 			if samples != want {
 				t.Fatalf("decoded samples = %d, want %d", samples, want)
