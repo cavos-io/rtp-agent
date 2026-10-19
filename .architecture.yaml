@@ -25,6 +25,7 @@ components:
   adapter:
     in:
       - adapter/*
+      - adapter/google/beta
 
   core_model:
     in:
@@ -102,6 +103,7 @@ directoryRules:
     directories:
       include:
         - adapter/*
+        - adapter/google/beta
     require:
       files:
         - plugin.go
@@ -111,6 +113,7 @@ directoryRules:
     directories:
       include:
         - adapter/*
+        - adapter/google/beta
       exclude:
         - adapter/blingfire
         - adapter/browser
@@ -137,6 +140,7 @@ fileContractRules:
     files:
       include:
         - adapter/*/plugin.go
+        - adapter/google/beta/plugin.go
     require:
       declarations:
         - kind: const
@@ -188,6 +192,7 @@ fileContractRules:
     files:
       include:
         - adapter/*/stt.go
+        - adapter/google/beta/stt.go
     require:
       siblingFiles:
         - stt_test.go
@@ -214,6 +219,7 @@ fileContractRules:
     files:
       include:
         - adapter/*/stt.go
+        - adapter/google/beta/stt.go
       exclude:
         - adapter/spitch/stt.go
     require:

@@ -54,7 +54,7 @@ require (
 	golang.org/x/text v0.40.0
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/api v0.286.0
-	google.golang.org/genai v1.62.0
+	google.golang.org/genai v1.75.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260807164820-c8921c73eeea
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11

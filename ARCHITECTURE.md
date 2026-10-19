@@ -93,11 +93,12 @@ Streaming ownership follows component boundaries:
 
 ## Adapter contracts
 
-Every directory matched by `adapter/*` must contain `plugin.go` with:
+Every directory matched by `adapter/*`, plus the explicitly covered experimental package
+`adapter/google/beta`, must contain `plugin.go` with:
 
-- `PluginTitle`, matching `rtp-agent.plugins.<package>`
+- `PluginTitle`, matching `rtp-agent.plugins.<package>` (the nested Google beta package uses `google_beta`)
 - `PluginVersion`, using a `vMAJOR.MINOR.PATCH` value
-- `PluginPackage`, matching `rtp-agent.plugins.<package>`
+- `PluginPackage`, matching `PluginTitle`
 
 A provider adapter must implement at least one capability file unless it is one of the explicitly exempt utility adapters: `blingfire`, `browser`, `hamming`, `krisp`, `nltk`, or `pipecat`.
 
