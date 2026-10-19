@@ -17,7 +17,7 @@ import (
 	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/google/uuid"
@@ -310,7 +310,7 @@ func (s *xaiTTSWebsocketChunkedStream) ensureConnected() error {
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, s.headers)
 	if err != nil {
 		s.closed = true
-		return llm.NewAPIConnectionError("failed to connect to xAI")
+		return inference.NewAPIConnectionError("failed to connect to xAI")
 	}
 	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
 		return writeXaiTTSMessage(conn, message)
@@ -447,7 +447,7 @@ func (s *xaiTTSSynthesizeStream) ensureConnLocked() error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, s.headers)
 	if err != nil {
-		return llm.NewAPIConnectionError("failed to connect to xAI")
+		return inference.NewAPIConnectionError("failed to connect to xAI")
 	}
 	s.conn = conn
 	s.inputEnded = false
@@ -594,7 +594,7 @@ func xaiTTSUnexpectedCloseError(err error) error {
 	if err != nil && err != io.EOF {
 		message = fmt.Sprintf("%s: %v", message, err)
 	}
-	return llm.NewAPIStatusError(message, -1, "", nil)
+	return inference.NewAPIStatusError(message, -1, "", nil)
 }
 
 func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {
@@ -604,13 +604,13 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, llm.NewAPIConnectionError(err.Error())
+		return nil, false, inference.NewAPIConnectionError(err.Error())
 	}
 	switch message.Type {
 	case "audio.delta":
 		audio, err := xaiDecodeBase64Audio(message.Delta)
 		if err != nil {
-			return nil, false, llm.NewAPIConnectionError(err.Error())
+			return nil, false, inference.NewAPIConnectionError(err.Error())
 		}
 		if len(audio) == 0 {
 			return nil, false, nil
@@ -622,7 +622,7 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 		if message.Message == "" {
 			message.Message = "unknown xai tts error"
 		}
-		return nil, false, llm.NewAPIStatusError(message.Message, -1, "", string(payload))
+		return nil, false, inference.NewAPIStatusError(message.Message, -1, "", string(payload))
 	default:
 		return nil, false, nil
 	}

@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -976,7 +976,7 @@ func processGladiaMessage(state *gladiaSTTStreamState, data map[string]any) ([]*
 		state.speaking = false
 		return nil, nil
 	case "error":
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Gladia WebSocket error: %v", data["data"]))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Gladia WebSocket error: %v", data["data"]))
 	default:
 		return nil, nil
 	}

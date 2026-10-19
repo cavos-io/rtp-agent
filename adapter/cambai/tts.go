@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -313,7 +313,7 @@ func (s *cambaiTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Camb.ai TTS failed", resp.StatusCode, resp.Header.Get("x-request-id"), string(respBody))
+		return inference.NewAPIStatusError("Camb.ai TTS failed", resp.StatusCode, resp.Header.Get("x-request-id"), string(respBody))
 	}
 	s.resp = resp
 	return nil

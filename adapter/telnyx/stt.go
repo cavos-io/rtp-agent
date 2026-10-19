@@ -16,7 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -298,12 +298,12 @@ func telnyxSTTDialError(err error, resp *http.Response) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError("Telnyx STT websocket connect timed out")
+		return inference.NewAPITimeoutError("Telnyx STT websocket connect timed out")
 	}
 	if resp != nil && resp.StatusCode > 0 {
-		return llm.NewAPIStatusError("Telnyx STT websocket handshake failed", resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError("Telnyx STT websocket handshake failed", resp.StatusCode, "", nil)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
 }
 
 func resolveTelnyxSTTLanguage(s *STT, language string) string {
@@ -486,7 +486,7 @@ func telnyxSTTWriteError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket write failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket write failed: %v", err))
 }
 
 func (s *telnyxSTTStream) writeBinaryMessage(data []byte) error {
@@ -562,7 +562,7 @@ func (s *telnyxSTTStream) readLoop() {
 			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) || err == io.EOF {
 				if !s.isClosed() && !s.isInputEnded() {
-					s.errCh <- llm.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
+					s.errCh <- inference.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
 				}
 			} else {
 				s.errCh <- telnyxSTTReadError(err)
@@ -591,7 +591,7 @@ func telnyxSTTReadError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket read failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket read failed: %v", err))
 }
 
 func (s *telnyxSTTStream) isClosed() bool {

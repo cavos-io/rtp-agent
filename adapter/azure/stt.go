@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -423,16 +423,16 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *STT, streamURL 
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, "", llm.NewAPITimeoutError(err.Error())
+			return nil, "", inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
+		return nil, "", inference.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, "", llm.NewAPITimeoutError(err.Error())
+			return nil, "", inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
+		return nil, "", inference.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
 	}
 	return conn, connectionID, nil
 }
@@ -449,28 +449,28 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, llm.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
+		return nil, inference.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
 	}
 	var result azureSTTRecognizeResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	event, err := azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return event, nil
 }
@@ -825,7 +825,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return io.ErrClosedPipe
 	}
 	if s.sessionStopped && !s.reconnectNext {
-		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+		s.finishWithErrorLocked(inference.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
 	if frame.SampleRate != 0 {
@@ -909,7 +909,7 @@ func (s *azureSTTStream) flushLocked() error {
 		return io.ErrClosedPipe
 	}
 	if s.sessionStopped && !s.reconnectNext {
-		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+		s.finishWithErrorLocked(inference.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
 	if s.reconnectNext {
@@ -1015,7 +1015,7 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 	s.mu.Lock()
 	if s.sessionStopped && !s.closed {
-		err := llm.NewAPIConnectionError("SpeechRecognition session stopped")
+		err := inference.NewAPIConnectionError("SpeechRecognition session stopped")
 		s.finishWithErrorLocked(err)
 		s.mu.Unlock()
 		select {
@@ -1113,7 +1113,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 		return io.ErrClosedPipe
 	}
 	if s.reconnects >= s.maxReconnects {
-		return llm.NewAPIConnectionError("azure stt websocket reconnect attempts exhausted")
+		return inference.NewAPIConnectionError("azure stt websocket reconnect attempts exhausted")
 	}
 	s.reconnects++
 	oldConn := s.conn
@@ -1187,18 +1187,18 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				s.sessionStopped = true
 				s.reconnectNext = true
 				select {
-				case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
+				case s.errCh <- inference.NewAPIConnectionError("SpeechRecognition session stopped"):
 				default:
 				}
 				s.mu.Unlock()
 				return
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || errors.Is(err, io.EOF) {
-				s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+				s.finishWithErrorLocked(inference.NewAPIConnectionError("SpeechRecognition session stopped"))
 				s.mu.Unlock()
 				return
 			}
-			s.finishWithErrorLocked(llm.NewAPIConnectionError(err.Error()))
+			s.finishWithErrorLocked(inference.NewAPIConnectionError(err.Error()))
 			s.mu.Unlock()
 			return
 		}
@@ -1301,7 +1301,7 @@ func (s *azureSTTStream) markSessionStopped() {
 		return
 	}
 	s.sessionStopped = true
-	s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+	s.finishWithErrorLocked(inference.NewAPIConnectionError("SpeechRecognition session stopped"))
 }
 
 func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {

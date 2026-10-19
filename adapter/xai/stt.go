@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/google/uuid"
@@ -196,7 +196,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	streamLanguage := resolveXaiSTTLanguage(s, language)
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, streamLanguage), buildXaiSTTHeaders(s))
 	if err != nil {
-		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
+		return nil, inference.NewAPIConnectionError("failed to connect to xAI")
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -276,18 +276,18 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("xAI STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("xAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result xaiSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return xaiSTTBatchSpeechEvent(s.enableDiarization, result), nil
 }
@@ -735,7 +735,7 @@ func (s *xaiSTTStream) reconnect() error {
 
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, streamURL, headers)
 	if err != nil {
-		return llm.NewAPIConnectionError("failed to connect to xAI")
+		return inference.NewAPIConnectionError("failed to connect to xAI")
 	}
 
 	s.mu.Lock()
@@ -799,7 +799,7 @@ func xaiSTTUnexpectedCloseError(err error) error {
 	if err != nil && err != io.EOF {
 		message += ": " + err.Error()
 	}
-	return llm.NewAPIStatusError(message, -1, "", nil)
+	return inference.NewAPIStatusError(message, -1, "", nil)
 }
 
 type xaiSTTStreamState struct {

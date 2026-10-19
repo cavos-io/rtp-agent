@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -308,7 +308,7 @@ func (s *simplismartTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Simplismart TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Simplismart TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil

@@ -11,7 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
@@ -162,7 +162,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 }
 
 func isClientClosedStatus(err error) bool {
-	var statusErr *llm.APIStatusError
+	var statusErr *inference.APIStatusError
 	return errors.As(err, &statusErr) && statusErr.StatusCode == 499
 }
 

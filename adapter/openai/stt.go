@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
@@ -1318,7 +1319,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		}
 		events, err := openAIRealtimeSTTEventsFromMessage(payload, s.state)
 		if err != nil {
-			var apiErr *llm.APIError
+			var apiErr *inference.APIError
 			if errors.As(err, &apiErr) && s.owner != nil && providerErrorRetries < s.owner.connect.MaxRetry {
 				providerErrorRetries++
 				if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
@@ -1332,7 +1333,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				continue
 			}
 			if errors.As(err, &apiErr) && s.owner != nil && s.owner.connect.MaxRetry > 0 {
-				s.terminateWithError(llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", providerErrorRetries)))
+				s.terminateWithError(inference.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", providerErrorRetries)))
 				return
 			}
 			s.terminateWithError(err)
@@ -1419,7 +1420,7 @@ func (s *openAIRealtimeSTTStream) isClosed() bool {
 
 func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	if s.owner == nil {
-		return llm.NewAPIStatusError("OpenAI Realtime STT connection closed unexpectedly", -1, "", "")
+		return inference.NewAPIStatusError("OpenAI Realtime STT connection closed unexpectedly", -1, "", "")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1585,7 +1586,7 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		return events, nil
 	case "error":
 		errorBody, _ := message["error"].(map[string]interface{})
-		return nil, llm.NewAPIError(
+		return nil, inference.NewAPIError(
 			fmt.Sprintf("OpenAI Realtime STT error: %s", openAIRealtimeSTTErrorMessage(errorBody)),
 			errorBody,
 			false,

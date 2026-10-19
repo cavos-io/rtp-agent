@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -305,7 +305,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial AssemblyAI websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial AssemblyAI websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -560,9 +560,9 @@ func (s *assemblyAISTTStream) readLoop() {
 					continue
 				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
-					s.errCh <- llm.NewAPIStatusError("AssemblyAI connection closed unexpectedly", closeErr.Code, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("AssemblyAI connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
-					s.errCh <- llm.NewAPIStatusError("AssemblyAI connection closed unexpectedly", -1, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("AssemblyAI connection closed unexpectedly", -1, "", err.Error())
 				} else {
 					s.errCh <- err
 				}

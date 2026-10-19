@@ -15,6 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -293,7 +294,7 @@ func (s *recognizeStream) run() {
 		if s.finals.Load() != finals || connectedFor > s.owner.options.Timeout {
 			retries = 0
 		}
-		var apiErr *llm.APIError
+		var apiErr *inference.APIError
 		retryable := errors.As(err, &apiErr) && apiErr.Retryable && !ended && retries < s.owner.options.MaxRetry
 		s.owner.EmitError(stt.NewSTTError(s.owner.Label(), err, retryable))
 		if !retryable {
@@ -323,7 +324,7 @@ func (s *recognizeStream) connect() (*websocket.Conn, error) {
 			if response.Body != nil {
 				_ = response.Body.Close()
 			}
-			return nil, llm.NewAPIStatusError("Gemini STT handshake failed", response.StatusCode, "", nil)
+			return nil, inference.NewAPIStatusError("Gemini STT handshake failed", response.StatusCode, "", nil)
 		}
 		return nil, normalizeError(err, false)
 	}
@@ -344,7 +345,7 @@ func (s *recognizeStream) connect() (*websocket.Conn, error) {
 	}
 	if msg.SetupComplete == nil {
 		_ = c.Close()
-		return nil, llm.NewAPIConnectionErrorWithRetryable("Gemini STT missing setup acknowledgement", false)
+		return nil, inference.NewAPIConnectionErrorWithRetryable("Gemini STT missing setup acknowledgement", false)
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	_ = c.SetWriteDeadline(time.Time{})
@@ -364,7 +365,7 @@ func readMessage(c *websocket.Conn) (*genai.LiveServerMessage, error) {
 		return nil, err
 	}
 	if msg.Error != nil {
-		return nil, llm.NewAPIStatusError("Gemini STT request failed", msg.Error.Code, "", nil)
+		return nil, inference.NewAPIStatusError("Gemini STT request failed", msg.Error.Code, "", nil)
 	}
 	return &msg.LiveServerMessage, nil
 }
@@ -511,7 +512,7 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 }
 
 func normalizeError(err error, goAway bool) error {
-	var api *llm.APIError
+	var api *inference.APIError
 	if errors.As(err, &api) {
 		return err
 	}
@@ -519,9 +520,9 @@ func normalizeError(err error, goAway bool) error {
 	if errors.As(err, &closeErr) {
 		duration := goAway || strings.Contains(closeErr.Text, "GoAway") || strings.Contains(closeErr.Text, "session duration")
 		retryable := duration || (closeErr.Code != 1008 && closeErr.Code != 1003 && closeErr.Code != 1007)
-		return llm.NewAPIStatusErrorWithRetryable("Gemini STT connection closed", closeErr.Code, "", nil, retryable)
+		return inference.NewAPIStatusErrorWithRetryable("Gemini STT connection closed", closeErr.Code, "", nil, retryable)
 	}
-	return llm.NewAPIConnectionError("Gemini STT connection failed")
+	return inference.NewAPIConnectionError("Gemini STT connection failed")
 }
 
 var _ stt.STT = (*STT)(nil)

@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -206,7 +206,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial simplismart stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial simplismart stt websocket: %v", err))
 	}
 	config, err := buildSimplismartSTTInitialConfig(resolveSimplismartSTTLanguage(s, language))
 	if err != nil {
@@ -251,7 +251,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("Simplismart STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("Simplismart STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result simplismartSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -262,13 +262,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 func simplismartHTTPTransportError(prefix string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeout interface{ Timeout() bool }
 	if errors.As(err, &timeout) && timeout.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
 }
 
 func simplismartSTTWAVBytes(frames []*model.AudioFrame) []byte {
@@ -468,7 +468,7 @@ func (s *simplismartSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Simplismart STT WebSocket closed unexpectedly")
+					s.errCh <- inference.NewAPIConnectionError("Simplismart STT WebSocket closed unexpectedly")
 				}
 			} else {
 				s.errCh <- err

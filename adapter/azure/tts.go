@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -579,9 +579,9 @@ func (s *azureTTSChunkedStream) start() error {
 			return io.EOF
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if s.closed.Load() {
 		resp.Body.Close()
@@ -597,7 +597,7 @@ func (s *azureTTSChunkedStream) start() error {
 		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.body = resp.Body
 	return nil
@@ -647,9 +647,9 @@ func (s *azureTTSChunkedStream) failRead(err error) error {
 	}
 	s.unregister()
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(err.Error())
+	return inference.NewAPIConnectionError(err.Error())
 }
 
 func (s *azureTTSChunkedStream) Close() error {

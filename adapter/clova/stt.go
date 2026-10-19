@@ -15,7 +15,7 @@ import (
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -97,7 +97,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("Clova STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("Clova STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result clovaSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

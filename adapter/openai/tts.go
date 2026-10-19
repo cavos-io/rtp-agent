@@ -21,7 +21,7 @@ import (
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/sashabaranov/go-openai"
@@ -538,7 +538,7 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 				return
 			}
 			mapped := mapOpenAIError(err)
-			var statusErr *llm.APIStatusError
+			var statusErr *inference.APIStatusError
 			if errors.As(mapped, &statusErr) && statusErr.StatusCode == 499 {
 				s.startErr = io.EOF
 				_ = s.Close()
@@ -732,14 +732,14 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		case "speech.audio.delta":
 			audioB64, ok, err := openAITTSSSEAudioBase64(event)
 			if err != nil {
-				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
+				return nil, s.terminalDecodeError(inference.NewAPIConnectionError(err.Error()))
 			}
 			if !ok {
 				continue
 			}
 			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
-				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
+				return nil, s.terminalDecodeError(inference.NewAPIConnectionError(err.Error()))
 			}
 			audio, err := s.audioFrameFromPCMChunk(audioData)
 			if err != nil {
@@ -824,7 +824,7 @@ func (s *openaiTTSChunkedStream) noAudioError() error {
 		s.emitTTSMetrics()
 		return io.EOF
 	}
-	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+	return inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
 }
 
 func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
@@ -834,11 +834,11 @@ func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.Synthe
 func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	resampled, err := coreaudio.ResampleAudioFrame(frame, s.targetSampleRate())
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	normalized, err := openAITTSConvertChannels(resampled, s.targetChannels())
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return normalized, nil
 }
@@ -926,7 +926,7 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 	if s.responseFormat == openai.SpeechResponseFormatWav {
 		frame, ok, err := s.nextWAVFrame(data)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, inference.NewAPIConnectionError(err.Error())
 		}
 		if ok {
 			frame, err = s.decodedAudioFrame(frame)
@@ -1074,7 +1074,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 		case "speech.audio.delta":
 			audioB64, ok, err := openAITTSSSEAudioBase64(event)
 			if err != nil {
-				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+				s.sendDecodeReadError(inference.NewAPIConnectionError(err.Error()))
 				return
 			}
 			if !ok {
@@ -1082,7 +1082,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			}
 			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
-				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+				s.sendDecodeReadError(inference.NewAPIConnectionError(err.Error()))
 				return
 			}
 			s.decoder.Push(audioData)
@@ -1106,13 +1106,13 @@ func openAITTSReadError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError("")
+		return inference.NewAPITimeoutError("")
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return llm.NewAPITimeoutError("")
+		return inference.NewAPITimeoutError("")
 	}
-	return llm.NewAPIConnectionError(openAIConnectionErrorMessage(err))
+	return inference.NewAPIConnectionError(openAIConnectionErrorMessage(err))
 }
 
 func openAITTSDecodeSSEAudioBase64(value string) ([]byte, error) {
@@ -1195,11 +1195,11 @@ func (s *openaiTTSChunkedStream) terminalReadError(err error) error {
 
 func (s *openaiTTSChunkedStream) terminalDecodeError(err error) error {
 	_ = s.Close()
-	var apiErr *llm.APIError
+	var apiErr *inference.APIError
 	if errors.As(err, &apiErr) {
 		return err
 	}
-	return llm.NewAPIConnectionError(err.Error())
+	return inference.NewAPIConnectionError(err.Error())
 }
 
 func (s *openaiTTSChunkedStream) sendDecodeReadError(err error) {
@@ -1231,7 +1231,7 @@ func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) error {
 	}
 	usage, ok := usageValue.(map[string]any)
 	if !ok {
-		return llm.NewAPIConnectionError("malformed speech.audio.done usage")
+		return inference.NewAPIConnectionError("malformed speech.audio.done usage")
 	}
 	inputTokens := openAIInt(usage["input_tokens"])
 	outputTokens := openAIInt(usage["output_tokens"])

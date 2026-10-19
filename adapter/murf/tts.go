@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -267,7 +267,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial murf tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial murf tts websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &murfTTSSynthesizeStream{
@@ -430,7 +430,7 @@ func (s *murfTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Murf TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Murf TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -648,9 +648,9 @@ func (s *murfTTSSynthesizeStream) readLoop() {
 func murfTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Murf AI connection closed unexpectedly", closeErr.Code, "", err.Error())
+		return inference.NewAPIStatusError("Murf AI connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Murf AI websocket receive failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Murf AI websocket receive failed: %v", err))
 }
 
 func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
@@ -699,11 +699,11 @@ func murfDecodeBase64Audio(data string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(string(clean))
 }
 
-func murfTTSConnectionError(message string, err error) *llm.APIConnectionError {
+func murfTTSConnectionError(message string, err error) *inference.APIConnectionError {
 	if err == nil {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func murfTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

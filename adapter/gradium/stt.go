@@ -15,7 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -336,7 +336,7 @@ func (s *gradiumSTTStream) readLoop(conn *websocket.Conn) {
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIStatusError("Gradium connection closed unexpectedly", gradiumSTTCloseStatusCode(err), "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("Gradium connection closed unexpectedly", gradiumSTTCloseStatusCode(err), "", err.Error())
 				}
 			} else {
 				s.errCh <- err
@@ -430,7 +430,7 @@ func (s *gradiumSTTStream) reconnectIfNeededLocked() error {
 	}
 	conn, _, err := s.provider.dialWebsocket(s.ctx, s.provider.modelEndpoint, buildGradiumSTTHeaders(s.provider))
 	if err != nil {
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect gradium stt websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to reconnect gradium stt websocket: %v", err))
 	}
 	if err := writeGradiumSTTMessage(conn, buildGradiumSTTSetupForLanguage(s.provider, language)); err != nil {
 		conn.Close()

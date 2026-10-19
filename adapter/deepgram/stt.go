@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/language"
@@ -442,7 +442,7 @@ func openDeepgramStreamConnection(ctx context.Context, s *STT, streamURL string,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
+		return nil, inference.NewAPIConnectionError("failed to connect to deepgram")
 	}
 	return conn, nil
 }
@@ -548,13 +548,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 
@@ -564,16 +564,16 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	if err := deepgramRecognizeValidateReferenceResponse(result); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 
 	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil

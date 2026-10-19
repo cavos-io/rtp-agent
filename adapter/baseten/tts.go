@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -278,9 +278,9 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten tts websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, startMessage); err != nil {
 		conn.Close()
@@ -417,13 +417,13 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func basetenTTSReadError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeout interface{ Timeout() bool }
 	if errors.As(err, &timeout) && timeout.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Baseten TTS response read failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Baseten TTS response read failed: %v", err))
 }
 
 func (s *basetenTTSChunkedStream) ensureResponse() error {
@@ -448,12 +448,12 @@ func (s *basetenTTSChunkedStream) ensureResponse() error {
 	req.Header.Set("Authorization", "Api-Key "+s.apiKey)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.body = resp.Body
 	return nil

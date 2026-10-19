@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/gorilla/websocket"
@@ -164,7 +164,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	}
 	conn, err := s.dialRealtime(ctx, buildMistralAISTTRealtimeURL(s), buildMistralAISTTRealtimeHeaders(s))
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	vadProvider := s.vad
 	if vadProvider == nil {
@@ -272,19 +272,19 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusGatewayTimeout {
-			return nil, llm.NewAPITimeoutError(string(respBody))
+			return nil, inference.NewAPITimeoutError(string(respBody))
 		}
-		return nil, llm.NewAPIStatusError("MistralAI STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("MistralAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result mistralAISTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return mistralAISTTSpeechEvent(resolveMistralAISTTLanguage(s, language), result), nil
 }
@@ -577,7 +577,7 @@ func (s *mistralAISTTRealtimeStream) readLoop() {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() && (err != io.EOF || !receivedMessage) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				s.errCh <- llm.NewAPIConnectionError(err.Error())
+				s.errCh <- inference.NewAPIConnectionError(err.Error())
 			}
 			return
 		}
@@ -664,7 +664,7 @@ func newMistralAISTTRealtimeAudioByteStream() *audio.AudioByteStream {
 func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, message []byte, startTimeOffset float64) ([]*stt.SpeechEvent, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(message, &payload); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	switch payloadString(payload, "type") {
 	case "session.created":
@@ -706,7 +706,7 @@ func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, messag
 		return events, nil
 	case "error":
 		errPayload, _ := payload["error"].(map[string]any)
-		return nil, llm.NewAPIStatusErrorWithRetryable(
+		return nil, inference.NewAPIStatusErrorWithRetryable(
 			payloadString(errPayload, "message"),
 			int(payloadFloat(errPayload, "code")),
 			state.requestID,

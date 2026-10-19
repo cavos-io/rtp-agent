@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -295,7 +295,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	frame, err := decodeSpeechifyWAVPCM16(data)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("speechify TTS response decode failed: %v", err))
 	}
 	s.hasAudio = true
 
@@ -330,12 +330,12 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Speechify TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Speechify TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIConnectionError(fmt.Sprintf("speechify tts returned non-audio data: %s", string(respBody)))
+		return inference.NewAPIConnectionError(fmt.Sprintf("speechify tts returned non-audio data: %s", string(respBody)))
 	}
 	s.resp = resp
 	return nil
@@ -343,24 +343,24 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 
 func speechifyTTSTransportError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(err.Error())
+	return inference.NewAPIConnectionError(err.Error())
 }
 
 func speechifyTTSReadError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+		return inference.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+		return inference.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {

@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -207,7 +207,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial fireworks stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial fireworks stt websocket: %v", err))
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -397,9 +397,9 @@ func (s *fireworksStream) readLoop(conn *websocket.Conn) {
 					continue
 				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
-					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("Fireworks connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
-					s.errCh <- llm.NewAPIStatusError("Fireworks connection closed unexpectedly", -1, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("Fireworks connection closed unexpectedly", -1, "", err.Error())
 				} else {
 					s.errCh <- err
 				}
@@ -449,7 +449,7 @@ func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, di
 	if err != nil {
 		var reconnectErr error = context.Canceled
 		if !errors.Is(err, context.Canceled) {
-			reconnectErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect fireworks stt websocket: %v", err))
+			reconnectErr = inference.NewAPIConnectionError(fmt.Sprintf("failed to reconnect fireworks stt websocket: %v", err))
 		}
 		s.mu.Lock()
 		if !s.closed {

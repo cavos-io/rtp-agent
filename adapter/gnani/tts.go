@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -238,11 +238,11 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return s.emitFinal()
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		return nil, err
 	}
@@ -266,11 +266,11 @@ func (s *ttsChunkedStream) ensureResponse() error {
 		s.closed = true
 		s.finalSent = true
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		return err
 	}
@@ -279,7 +279,7 @@ func (s *ttsChunkedStream) ensureResponse() error {
 		resp.Body.Close()
 		s.closed = true
 		s.finalSent = true
-		return llm.NewAPIStatusError("Gnani TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Gnani TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -405,13 +405,13 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani tts websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani tts websocket: %v", err))
 	}
 	request, err := buildGnaniTTSWebsocketRequest(s.provider, fullText)
 	if err != nil {
@@ -524,16 +524,16 @@ func (s *gnaniTTSSynthesizeStream) readLoop() {
 func gnaniTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket closed: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket closed: %v", err))
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket error: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket error: %v", err))
 }
 
 func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels int) (*tts.SynthesizedAudio, bool, error) {
@@ -578,7 +578,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		if message.Message == "" {
 			message.Message = string(payload)
 		}
-		return nil, false, llm.NewAPIStatusError("Gnani TTS stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
+		return nil, false, inference.NewAPIStatusError("Gnani TTS stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
 	default:
 		return nil, false, nil
 	}

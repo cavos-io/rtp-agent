@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -216,7 +216,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial resemble tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial resemble tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -347,7 +347,7 @@ func (s *resembleTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Resemble TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Resemble TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	s.resp = resp
@@ -597,9 +597,9 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 func resembleTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Resemble connection closed unexpectedly", closeErr.Code, "", err.Error())
+		return inference.NewAPIStatusError("Resemble connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Resemble websocket receive failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Resemble websocket receive failed: %v", err))
 }
 
 func (s *resembleTTSSynthesizeStream) shouldStopAfterAudioEnd(requestID int) bool {
@@ -667,11 +667,11 @@ func resembleDecodeBase64Audio(data string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(string(clean))
 }
 
-func resembleTTSConnectionError(message string, err error) *llm.APIConnectionError {
+func resembleTTSConnectionError(message string, err error) *inference.APIConnectionError {
 	if err == nil {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func resembleTTSMP3AudioFrame(audio []byte) (*tts.SynthesizedAudio, error) {

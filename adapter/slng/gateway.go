@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 )
 
 const slngErrorMessageMaxLen = 500
@@ -140,8 +140,8 @@ func slngErrorStatus(value any) (int, bool) {
 	return 0, false
 }
 
-func slngStatusError(message map[string]any) *llm.APIStatusError {
-	return llm.NewAPIStatusError(slngGatewayErrorMessage(message), extractSLNGErrorStatus(message), "", nil)
+func slngStatusError(message map[string]any) *inference.APIStatusError {
+	return inference.NewAPIStatusError(slngGatewayErrorMessage(message), extractSLNGErrorStatus(message), "", nil)
 }
 
 func slngGatewayErrorMessage(message map[string]any) string {
@@ -158,7 +158,7 @@ func isSLNGFallbackEligible(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
-	var statusErr *llm.APIStatusError
+	var statusErr *inference.APIStatusError
 	if !errors.As(err, &statusErr) {
 		return true
 	}

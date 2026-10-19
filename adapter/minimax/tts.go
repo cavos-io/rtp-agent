@@ -18,7 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -297,7 +297,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial minimax tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial minimax tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -533,7 +533,7 @@ func (s *minimaxTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("MiniMax TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("MiniMax TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -869,9 +869,9 @@ func minimaxTTSReadError(err error, traceID string) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
 		message := fmt.Sprintf("MiniMax connection closed unexpectedly (trace_id: %s)", traceID)
-		return llm.NewAPIStatusError(message, closeErr.Code, traceID, err.Error())
+		return inference.NewAPIStatusError(message, closeErr.Code, traceID, err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket receive failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket receive failed: %v", err))
 }
 
 func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
@@ -928,20 +928,20 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 	case "task_finished":
 		return &tts.SynthesizedAudio{RequestID: traceID, IsFinal: true}, true, traceID, nil
 	case "task_failed":
-		return nil, false, traceID, llm.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket task failed: %s", string(payload)))
+		return nil, false, traceID, inference.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket task failed: %s", string(payload)))
 	default:
 		return nil, false, traceID, nil
 	}
 }
 
-func minimaxTTSConnectionError(message string, err error) *llm.APIConnectionError {
+func minimaxTTSConnectionError(message string, err error) *inference.APIConnectionError {
 	if err == nil {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
-func minimaxStatusPayloadError(provider string, statusCode int, statusMsg, rootTraceID, baseTraceID, fallbackTraceID string, payload []byte) *llm.APIStatusError {
+func minimaxStatusPayloadError(provider string, statusCode int, statusMsg, rootTraceID, baseTraceID, fallbackTraceID string, payload []byte) *inference.APIStatusError {
 	if statusMsg == "" {
 		statusMsg = "Unknown error"
 	}
@@ -956,7 +956,7 @@ func minimaxStatusPayloadError(provider string, statusCode int, statusMsg, rootT
 	if err := json.Unmarshal(payload, &body); err != nil {
 		body = map[string]any{"raw": string(payload)}
 	}
-	return llm.NewAPIStatusError(
+	return inference.NewAPIStatusError(
 		fmt.Sprintf("%s error [%d]: %s (trace_id: %s)", provider, statusCode, statusMsg, traceID),
 		statusCode,
 		traceID,

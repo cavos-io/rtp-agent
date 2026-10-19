@@ -13,7 +13,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -212,7 +212,7 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	frame, err := decodeSpitchWAVPCM16(data)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
 	}
 
 	return &tts.SynthesizedAudio{
@@ -243,7 +243,7 @@ func (s *spitchTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Spitch TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Spitch TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -280,7 +280,7 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 			}
 			return nil, io.EOF
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
@@ -288,17 +288,17 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 func spitchTTSReadError(err error) error {
 	msg := fmt.Sprintf("Spitch TTS response read failed: %v", err)
 	if spitchIsTimeout(err) {
-		return llm.NewAPITimeoutError(msg)
+		return inference.NewAPITimeoutError(msg)
 	}
-	return llm.NewAPIConnectionError(msg)
+	return inference.NewAPIConnectionError(msg)
 }
 
 func spitchTTSTransportError(err error) error {
 	msg := err.Error()
 	if spitchIsTimeout(err) {
-		return llm.NewAPITimeoutError(msg)
+		return inference.NewAPITimeoutError(msg)
 	}
-	return llm.NewAPIConnectionError(msg)
+	return inference.NewAPIConnectionError(msg)
 }
 
 func spitchIsTimeout(err error) bool {

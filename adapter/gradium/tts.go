@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -267,7 +267,7 @@ func (s *gradiumTTSWebsocketChunkedStream) ensureConnected() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
 	}
 	setup, err := json.Marshal(s.setup)
 	if err != nil {
@@ -442,7 +442,7 @@ func (s *gradiumTTSSynthesizeStream) ensureConnected() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
 	}
 	if err := writeGradiumTTSMessage(conn, setup); err != nil {
 		_ = conn.Close()
@@ -532,13 +532,13 @@ func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		Audio string `json:"audio"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, llm.NewAPIConnectionError(err.Error())
+		return nil, false, inference.NewAPIConnectionError(err.Error())
 	}
 	switch message.Type {
 	case "audio":
 		audio, err := gradiumDecodeBase64Audio(message.Audio)
 		if err != nil {
-			return nil, false, llm.NewAPIConnectionError(err.Error())
+			return nil, false, inference.NewAPIConnectionError(err.Error())
 		}
 		if len(audio) == 0 {
 			return nil, false, nil

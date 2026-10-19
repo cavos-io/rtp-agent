@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -225,7 +225,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial soniox websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial soniox websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		conn.Close()
@@ -319,7 +319,7 @@ func (s *sonioxStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Soniox STT WebSocket closed; reconnect required")
+					s.errCh <- inference.NewAPIConnectionError("Soniox STT WebSocket closed; reconnect required")
 				}
 			} else {
 				s.errCh <- err
@@ -598,7 +598,7 @@ func sonioxProviderError(message sonioxMessage, body map[string]any) error {
 	if message.ErrorCode == nil && message.ErrorMessage == "" {
 		return nil
 	}
-	return llm.NewAPIStatusError(
+	return inference.NewAPIStatusError(
 		fmt.Sprintf("Soniox STT error: %v - %s", message.ErrorCode, message.ErrorMessage),
 		sonioxStatusCode(message.ErrorCode),
 		"",

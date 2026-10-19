@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -115,13 +115,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani stt websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &gnaniSTTStream{
@@ -180,11 +180,11 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		return nil, err
 	}
@@ -192,17 +192,17 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("Gnani STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("Gnani STT request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	var result gnaniSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		return nil, err
 	}
@@ -393,7 +393,7 @@ func (s *gnaniSTTStream) readLoop() {
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Gnani STT WebSocket closed unexpectedly")
+					s.errCh <- inference.NewAPIConnectionError("Gnani STT WebSocket closed unexpectedly")
 				}
 			} else {
 				s.errCh <- err
@@ -508,7 +508,7 @@ func gnaniSTTEventsFromStreamMessage(payload []byte, defaultLanguage string) ([]
 		if message.Message == "" {
 			message.Message = string(payload)
 		}
-		return nil, llm.NewAPIStatusError("Gnani STT stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
+		return nil, inference.NewAPIStatusError("Gnani STT stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
 	default:
 		return nil, nil
 	}

@@ -15,7 +15,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -369,7 +369,7 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 
 	return &tts.SynthesizedAudio{
@@ -398,14 +398,14 @@ func (s *cartesiaTTSChunkedStream) ensureResponse() error {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Cartesia TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Cartesia TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -564,7 +564,7 @@ func (s *cartesiaTTSStream) readLoop() {
 		if err != nil {
 			if !s.isClosed() {
 				if _, ok := err.(*websocket.CloseError); ok || err == io.EOF {
-					s.errCh <- llm.NewAPIConnectionError("Cartesia connection closed unexpectedly")
+					s.errCh <- inference.NewAPIConnectionError("Cartesia connection closed unexpectedly")
 				} else {
 					s.errCh <- err
 				}
@@ -574,19 +574,19 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		var resp cartesiaWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
-			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to parse Cartesia message: %v", err))
+			s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("failed to parse Cartesia message: %v", err))
 			return
 		}
 
 		if resp.Type == "error" {
-			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("cartesia error: %s", resp.Error))
+			s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("cartesia error: %s", resp.Error))
 			return
 		}
 
 		if resp.Type == "chunk" && resp.Data != "" {
 			data, err := cartesiaDecodeBase64Chunk(resp.Data)
 			if err != nil {
-				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to decode Cartesia audio: %v", err))
+				s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("failed to decode Cartesia audio: %v", err))
 				return
 			}
 			if len(data) == 0 {
@@ -614,7 +614,7 @@ func (s *cartesiaTTSStream) readLoop() {
 			if s.isFlushed() {
 				if !emittedAudio {
 					if pushedText := s.pushedInputText(); strings.TrimSpace(pushedText) != "" {
-						s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
+						s.errCh <- inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 					}
 				}
 				if emittedAudio && !emittedFinal {
@@ -852,9 +852,9 @@ func (s *cartesiaTTSStream) ensureConnectedLocked() error {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.streamURL, s.streamHeaders)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if s.closed {
 		_ = conn.Close()

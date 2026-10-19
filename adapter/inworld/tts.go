@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -291,7 +291,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldTTSWebsocketURL(t), buildInworldTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		_ = conn.Close()
@@ -527,12 +527,12 @@ func (s *inworldTTSChunkedStream) ensureResponse() error {
 	}
 	resp, err := http.DefaultClient.Do(s.req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, s.req.Header.Get("X-Request-Id"), string(respBody))
+		return inference.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, s.req.Header.Get("X-Request-Id"), string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -813,9 +813,9 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 func inworldTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: close %d: %s", closeErr.Code, closeErr.Text))
+		return inference.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: close %d: %s", closeErr.Code, closeErr.Text))
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: %v", err))
 }
 
 func (s *inworldTTSSynthesizeStream) handleWebsocketMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {
@@ -853,7 +853,7 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 		return nil, false, err
 	}
 	if message.Error != nil {
-		return nil, false, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
+		return nil, false, inference.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.AudioContent == "" {
 		return nil, false, nil
@@ -905,10 +905,10 @@ func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID str
 		return nil, false, false, 0, err
 	}
 	if message.Error != nil {
-		return nil, false, false, 0, llm.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
+		return nil, false, false, 0, inference.NewAPIStatusError(message.Error.Message, message.Error.Code, "", nil)
 	}
 	if message.Result.Status != nil && message.Result.Status.Code != 0 {
-		return nil, false, false, 0, llm.NewAPIStatusError(message.Result.Status.Message, message.Result.Status.Code, "", nil)
+		return nil, false, false, 0, inference.NewAPIStatusError(message.Result.Status.Message, message.Result.Status.Code, "", nil)
 	}
 	if message.Result.ContextID != "" && message.Result.ContextID != contextID {
 		return nil, false, false, 0, nil

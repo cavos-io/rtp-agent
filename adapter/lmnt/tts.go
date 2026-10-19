@@ -12,7 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -280,7 +280,7 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, inference.NewAPIConnectionError(err.Error())
 		}
 	}
 }
@@ -306,12 +306,12 @@ func (s *lmntTTSChunkedStream) ensureResponse() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("LMNT TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("LMNT TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -325,7 +325,7 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, inference.NewAPIConnectionError(err.Error())
 		}
 		if len(data) == 0 {
 			s.finalSent = true

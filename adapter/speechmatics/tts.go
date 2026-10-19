@@ -17,6 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	lkmath "github.com/cavos-io/rtp-agent/library/math"
@@ -757,7 +758,7 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 		requestCancel()
 		resp.Body.Close()
 		message := speechmaticsTTSStatusReason(resp)
-		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	s.mu.Lock()
 	if s.closed || s.finalSent {
@@ -775,11 +776,11 @@ func (s *speechmaticsTTSChunkedStream) openStream() error {
 }
 
 func speechmaticsTTSTimeoutAPIError() error {
-	return llm.NewAPITimeoutError("")
+	return inference.NewAPITimeoutError("")
 }
 
 func speechmaticsTTSConnectionAPIError() error {
-	return llm.NewAPIConnectionError("")
+	return inference.NewAPIConnectionError("")
 }
 
 func speechmaticsTTSReadAPIError(err error) error {
@@ -790,7 +791,7 @@ func speechmaticsTTSReadAPIError(err error) error {
 }
 
 func (s *speechmaticsTTSChunkedStream) prepareRetryBeforeAudio(err error) error {
-	var apiErr *llm.APIError
+	var apiErr *inference.APIError
 	if s.emittedAudio || !errors.As(err, &apiErr) {
 		return err
 	}
@@ -866,7 +867,7 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 		return nil, io.EOF
 	}
 	if strings.TrimSpace(s.text) != "" && !s.emittedAudio {
-		err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		err := inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 		if retryErr := s.prepareRetryBeforeAudio(err); retryErr == nil {
 			if openErr := s.ensureStream(); openErr != nil {
 				s.finish()
