@@ -127,9 +127,11 @@ type AgentActivity struct {
 	startedCh          chan struct{}
 	startedOnce        sync.Once
 
-	sttEOSReceived             bool
-	speaking                   bool
-	speakingMu                 sync.RWMutex
+	sttEOSReceived bool
+	speaking       bool
+	speakingMu     sync.RWMutex
+	// Serializes speech boundaries with false-interruption timer resolution.
+	speechBoundaryMu           sync.Mutex
 	interruptionDetected       bool
 	overlapSpeechEnded         bool
 	manualTurnCommitted        bool
@@ -220,11 +222,14 @@ type AgentActivity struct {
 	backchannelBoundaryUntil time.Time
 	audioActivityDisabled    bool
 
-	falseInterruptionMu    sync.Mutex
-	pausedSpeech           *pausedSpeechInfo
-	falseInterruptionTimer *time.Timer
-	agentSpeechEndedAt     time.Time
-	agentSpeakingSince     time.Time
+	falseInterruptionMu       sync.Mutex
+	pausedSpeech              *pausedSpeechInfo
+	falseInterruptionTimer    *time.Timer
+	falseInterruptionTimerSeq uint64
+	// Guarded by userTurnMu; retained until the next onset or accepted text.
+	resolvedEmptyTurn  *resolvedEmptyUserTurn
+	agentSpeechEndedAt time.Time
+	agentSpeakingSince time.Time
 
 	userTurnExceededCancel context.CancelFunc
 	userTurnExceededSeq    uint64
@@ -265,6 +270,13 @@ type pausedSpeechInfo struct {
 	agentState        AgentState
 	timeout           time.Duration
 	awaitedTranscript bool
+}
+
+// A resumed interruption is provisional: a delayed transcript can still claim it.
+type resolvedEmptyUserTurn struct {
+	startedAt  time.Time
+	resolvedAt time.Time
+	span       trace.Span
 }
 
 type inputTranscriptionFlusher interface {
@@ -1903,6 +1915,7 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	// overwrites userSpeechStartedAt, or a replayed transcript gets the new turn's timestamp.
 	a.drainHeldUserTranscriptWindow()
 
+	a.speechBoundaryMu.Lock()
 	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
@@ -1925,21 +1938,32 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 		} else {
 			startedAt = time.Now()
 		}
+		if a.Session != nil {
+			a.Session.mu.Lock()
+		}
+		a.userTurnMu.Lock()
+		a.finishResolvedEmptyUserTurn(startedAt)
 		a.userSpeechStartedAt = startedAt
-		a.appendSpeechEpoch(startedAt, a.agentWasSpeakingAt(startedAt))
 		if a.userTurnStartedAt.IsZero() {
 			a.userTurnStartedAt = startedAt
 		}
+		a.userTurnMu.Unlock()
+		if a.Session != nil {
+			a.Session.mu.Unlock()
+		}
+		a.appendSpeechEpoch(startedAt, a.agentWasSpeakingAt(startedAt))
 		a.clearUserAudioFrames()
 	}
-	a.userSpeechStoppedAt = time.Time{}
 	a.userTurnMu.Lock()
+	a.userSpeechStoppedAt = time.Time{}
 	a.syntheticEOU = false
 	a.syntheticEOUNotBefore = time.Time{}
 	a.userTurnMu.Unlock()
 	if a.Session != nil {
 		a.Session.updateUserStateAt(UserStateSpeaking, a.userSpeechStartedAt)
 	}
+	a.cancelFalseInterruptionTimer()
+	a.speechBoundaryMu.Unlock()
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadSpeechStartTimestamp(ev)
@@ -1955,7 +1979,6 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	// Cancel pending EOU detection
 	a.cancelPendingEOUDetection()
 
-	a.cancelFalseInterruptionTimer()
 	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
 		if a.bargeInGateGoverns() {
 			// The gate owns interruption: keep playing and let its verdict decide. Still arm the
@@ -1983,14 +2006,14 @@ func (a *AgentActivity) onSyntheticEndOfSpeech() {
 }
 
 func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
+	a.speechBoundaryMu.Lock()
 	wasSpeaking := a.setSpeaking(false)
 	stoppedAt := vadSpeechStoppedAt(ev)
+	a.userTurnMu.Lock()
 	if ev == nil && !a.userSpeechStoppedAt.IsZero() {
 		stoppedAt = a.userSpeechStoppedAt
 	}
 	a.userSpeechStoppedAt = stoppedAt
-	a.stampEpochStopped(stoppedAt)
-	a.userTurnMu.Lock()
 	a.syntheticEOU = synthetic
 	if synthetic {
 		a.syntheticEOUNotBefore = time.Now().Add(time.Duration(a.maxEndpointingDelay() * float64(time.Second)))
@@ -1998,12 +2021,14 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		a.syntheticEOUNotBefore = time.Time{}
 	}
 	a.userTurnMu.Unlock()
+	a.stampEpochStopped(stoppedAt)
 	if ev == nil {
 		a.sttEOSReceived = true
 	}
 	if a.Session != nil {
 		a.Session.updateUserStateAt(UserStateListening, a.userSpeechStoppedAt)
 	}
+	a.speechBoundaryMu.Unlock()
 	a.notifyUserTurnUpdated()
 	if endpointing := a.endpointing(); endpointing != nil && wasSpeaking {
 		shouldIgnore := a.overlapSpeechEnded && !a.interruptionDetected
@@ -2123,6 +2148,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		}
 		a.lastFinalTranscriptTime = time.Now()
 	}
+	if strings.TrimSpace(transcript) != "" {
+		a.resolvedEmptyTurn = nil
+	}
 	a.pendingInterimTranscript = transcript
 	a.pendingInterimLanguage = language
 	a.pendingInterimSpeakerID = speakerID
@@ -2205,9 +2233,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 
 	finalTranscriptAt := time.Now()
-	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
-
 	a.userTurnMu.Lock()
+	a.resolvedEmptyTurn = nil
+	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
 	if !a.pendingUserTranscriptPresent {
 		if ep, ok := a.consumeEpochForFinalLocked(); ok {
 			a.pendingTurnOverlap = ep.overlap
@@ -2822,6 +2850,7 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 			a.falseInterruptionMu.Unlock()
 			return false
 		}
+		a.falseInterruptionTimerSeq++
 		if a.falseInterruptionTimer != nil {
 			a.falseInterruptionTimer.Stop()
 			a.falseInterruptionTimer = nil
@@ -2830,6 +2859,7 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 		a.falseInterruptionMu.Unlock()
 		return true
 	}
+	a.falseInterruptionTimerSeq++
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
@@ -2849,8 +2879,35 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 	return true
 }
 
+// Caller holds userTurnMu. Held events are drained before the next onset.
+func (a *AgentActivity) hasPendingUserTextLocked() bool {
+	return a.pendingUserTranscriptPresent || strings.TrimSpace(a.pendingInterimTranscript) != "" || strings.TrimSpace(a.pendingPreflightTranscript) != ""
+}
+
+// Caller holds speechBoundaryMu, Session.mu, and userTurnMu (in that order). Only retire the still-empty
+// candidate; accepted text and claimed/active session turns retain ownership.
+func (a *AgentActivity) finishResolvedEmptyUserTurn(nextStartedAt time.Time) {
+	candidate := a.resolvedEmptyTurn
+	a.resolvedEmptyTurn = nil
+	if candidate == nil || a.hasPendingUserTextLocked() || !candidate.startedAt.Equal(a.userTurnStartedAt) {
+		return
+	}
+	endedAt := candidate.resolvedAt
+	if nextStartedAt.Before(endedAt) {
+		endedAt = nextStartedAt
+	}
+	if a.Session.finishEmptyUserTurnSpanLocked(candidate.span, endedAt) {
+		a.userTurnStartedAt = time.Time{}
+	}
+}
+
 func (a *AgentActivity) startFalseInterruptionTimer() {
 	if a == nil {
+		return
+	}
+	a.speechBoundaryMu.Lock()
+	defer a.speechBoundaryMu.Unlock()
+	if a.isUserSpeaking() {
 		return
 	}
 	a.falseInterruptionMu.Lock()
@@ -2863,7 +2920,7 @@ func (a *AgentActivity) startFalseInterruptionTimer() {
 		a.falseInterruptionTimer.Stop()
 	}
 	timeout := paused.timeout
-	a.falseInterruptionTimer = time.AfterFunc(timeout, a.resumeFalseInterruption)
+	a.armFalseInterruptionTimerLocked(paused, timeout)
 	a.falseInterruptionMu.Unlock()
 }
 
@@ -2872,6 +2929,7 @@ func (a *AgentActivity) cancelFalseInterruptionTimer() {
 		return
 	}
 	a.falseInterruptionMu.Lock()
+	a.falseInterruptionTimerSeq++
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
@@ -2879,18 +2937,40 @@ func (a *AgentActivity) cancelFalseInterruptionTimer() {
 	a.falseInterruptionMu.Unlock()
 }
 
+// Caller holds falseInterruptionMu. A stopped timer may already be running,
+// so bind its callback to both the timer generation and the speech epoch.
+func (a *AgentActivity) armFalseInterruptionTimerLocked(paused *pausedSpeechInfo, timeout time.Duration) {
+	a.falseInterruptionTimerSeq++
+	timerSeq, speechSeq := a.falseInterruptionTimerSeq, a.userTurnSeq
+	a.falseInterruptionTimer = time.AfterFunc(timeout, func() {
+		a.resumeFalseInterruptionFor(paused, timerSeq, speechSeq)
+	})
+}
+
 func (a *AgentActivity) resumeFalseInterruption() {
 	if a == nil || a.Session == nil {
 		return
 	}
 	a.falseInterruptionMu.Lock()
-	paused := a.pausedSpeech
-	a.pausedSpeech = nil
-	a.falseInterruptionTimer = nil
+	paused, timerSeq, speechSeq := a.pausedSpeech, a.falseInterruptionTimerSeq, a.userTurnSeq
 	a.falseInterruptionMu.Unlock()
-	if paused == nil {
+	a.resumeFalseInterruptionFor(paused, timerSeq, speechSeq)
+}
+
+func (a *AgentActivity) resumeFalseInterruptionFor(paused *pausedSpeechInfo, timerSeq, speechSeq uint64) {
+	a.speechBoundaryMu.Lock()
+	a.falseInterruptionMu.Lock()
+	if paused == nil || a.pausedSpeech != paused || a.falseInterruptionTimerSeq != timerSeq || a.userTurnSeq != speechSeq || a.isUserSpeaking() {
+		a.falseInterruptionMu.Unlock()
+		a.speechBoundaryMu.Unlock()
 		return
 	}
+	a.pausedSpeech = nil
+	if a.falseInterruptionTimer != nil {
+		a.falseInterruptionTimer.Stop()
+	}
+	a.falseInterruptionTimer = nil
+	a.falseInterruptionMu.Unlock()
 
 	// STT-first: user speech that arrives while the agent is talking is buffered in
 	// heldSTTEvents and is otherwise only flushed on a real interruption. When the barge-in
@@ -2910,15 +2990,26 @@ func (a *AgentActivity) resumeFalseInterruption() {
 			if a.falseInterruptionTimer != nil {
 				a.falseInterruptionTimer.Stop()
 			}
-			a.falseInterruptionTimer = time.AfterFunc(500*time.Millisecond, a.resumeFalseInterruption)
+			a.armFalseInterruptionTimerLocked(paused, 500*time.Millisecond)
 			a.falseInterruptionMu.Unlock()
+			a.speechBoundaryMu.Unlock()
 			return
 		}
 		// a new pause raced in; let its own lifecycle decide
 		a.falseInterruptionMu.Unlock()
+		a.speechBoundaryMu.Unlock()
 		return
 	}
+	a.speechBoundaryMu.Unlock()
 	if a.commitHeldBargeIn() {
+		return
+	}
+	a.speechBoundaryMu.Lock()
+	defer a.speechBoundaryMu.Unlock()
+	a.falseInterruptionMu.Lock()
+	stale := a.userTurnSeq != speechSeq || a.falseInterruptionTimerSeq != timerSeq || a.pausedSpeech != nil
+	a.falseInterruptionMu.Unlock()
+	if stale || a.isUserSpeaking() {
 		return
 	}
 
@@ -2928,7 +3019,17 @@ func (a *AgentActivity) resumeFalseInterruption() {
 	current := a.currentSpeech
 	a.queueMu.Unlock()
 	if current == paused.handle && !paused.handle.IsDone() && controller != nil && controller.CanPauseAudioOutput() && a.Session.Options.ResumeFalseInterruption {
+		// State restoration may flush held STT and re-enter speech callbacks.
+		// Let those callbacks run, then revalidate before touching output/timing.
+		a.speechBoundaryMu.Unlock()
 		a.Session.UpdateAgentState(paused.agentState)
+		a.speechBoundaryMu.Lock()
+		a.falseInterruptionMu.Lock()
+		stale = a.userTurnSeq != speechSeq || a.falseInterruptionTimerSeq != timerSeq || a.pausedSpeech != nil
+		a.falseInterruptionMu.Unlock()
+		if stale || a.isUserSpeaking() {
+			return
+		}
 		resumed = true
 
 		a.Session.Logger().Infow("false_interruption.resumed", "agent_state", paused.agentState)
@@ -2937,6 +3038,15 @@ func (a *AgentActivity) resumeFalseInterruption() {
 		controller.ResumeAudioOutput()
 	}
 
+	if resumed {
+		a.Session.mu.Lock()
+		a.userTurnMu.Lock()
+		if !a.hasPendingUserTextLocked() && !a.userTurnStartedAt.IsZero() {
+			a.resolvedEmptyTurn = &resolvedEmptyUserTurn{startedAt: a.userTurnStartedAt, resolvedAt: time.Now(), span: a.Session.userTurnSpan}
+		}
+		a.userTurnMu.Unlock()
+		a.Session.mu.Unlock()
+	}
 	a.Session.Logger().Infow("false_interruption.resolved", "resumed", resumed)
 	a.Session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: resumed})
 }
@@ -2987,6 +3097,7 @@ func (a *AgentActivity) cancelPausedFalseInterruption(interrupt bool) *pausedSpe
 	a.falseInterruptionMu.Lock()
 	paused := a.pausedSpeech
 	a.pausedSpeech = nil
+	a.falseInterruptionTimerSeq++
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
@@ -3022,6 +3133,7 @@ func (a *AgentActivity) resumeFinishedPausedSpeech(speech *SpeechHandle) {
 		return
 	}
 	a.pausedSpeech = nil
+	a.falseInterruptionTimerSeq++
 	if a.falseInterruptionTimer != nil {
 		a.falseInterruptionTimer.Stop()
 		a.falseInterruptionTimer = nil
