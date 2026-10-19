@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -381,15 +381,15 @@ func (s *humeTTSChunkedStream) ensureResponse() error {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	s.resp = resp
@@ -529,7 +529,7 @@ func humeAudioFromJSONLine(line string) ([]byte, error) {
 		return nil, err
 	}
 	if data.Type == "error" {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Hume TTS error: %s", line))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Hume TTS error: %s", line))
 	}
 	if data.Audio == "" {
 		return nil, nil

@@ -20,7 +20,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
@@ -228,7 +228,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
-		return nil, llm.NewAPIConnectionError("Failed to connect to ElevenLabs")
+		return nil, inference.NewAPIConnectionError("Failed to connect to ElevenLabs")
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -307,22 +307,22 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		_, _, err := elevenLabsSTTStatusErrorBody(respBody)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, inference.NewAPIConnectionError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError("")
+		return nil, inference.NewAPIConnectionError("")
 	}
 	var result elevenLabsSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
 }
@@ -663,7 +663,7 @@ func (s *elevenLabsSTTStream) reconnect(streamURL string, headers http.Header, s
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, streamURL, headers)
 	if err != nil {
-		s.sendError(llm.NewAPIConnectionError("Failed to connect to ElevenLabs"))
+		s.sendError(inference.NewAPIConnectionError("Failed to connect to ElevenLabs"))
 		return
 	}
 
@@ -768,7 +768,7 @@ func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
 
 func (s *elevenLabsSTTStream) closeAfterWriteFailureLocked(err error) {
 	s.closed = true
-	s.sendError(llm.NewAPIConnectionError(fmt.Sprintf("failed to write to ElevenLabs: %v", err)))
+	s.sendError(inference.NewAPIConnectionError(fmt.Sprintf("failed to write to ElevenLabs: %v", err)))
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -838,7 +838,7 @@ func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 			return nil, io.EOF
 		}
 		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(s.ctx.Err().Error())
+			return nil, inference.NewAPITimeoutError(s.ctx.Err().Error())
 		}
 		return nil, s.ctx.Err()
 	}
@@ -897,7 +897,7 @@ func elevenLabsSTTUnexpectedCloseError(err error) error {
 	if errors.As(err, &closeErr) && closeErr.Code != 0 {
 		statusCode = closeErr.Code
 	}
-	return llm.NewAPIStatusError("ElevenLabs STT connection closed unexpectedly", statusCode, "", err.Error())
+	return inference.NewAPIStatusError("ElevenLabs STT connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func (s *elevenLabsSTTStream) keepAliveLoop() {
@@ -1014,7 +1014,7 @@ func processElevenLabsSTTStreamEvent(state *elevenLabsSTTStreamState, data map[s
 		if details != "" {
 			msg += " - " + details
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("%s: %s", messageType, msg))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("%s: %s", messageType, msg))
 	default:
 		return nil, nil
 	}

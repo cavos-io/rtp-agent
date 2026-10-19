@@ -11,7 +11,7 @@ import (
 	"net/http"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -126,18 +126,18 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Fal STT request failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Fal STT request failed: %v", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Fal STT request failed: %s", string(respBody)))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Fal STT request failed: %s", string(respBody)))
 	}
 
 	var result falSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Fal STT response decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Fal STT response decode failed: %v", err))
 	}
 
 	return falSTTResponseToEvent(result, resolvedLanguage), nil

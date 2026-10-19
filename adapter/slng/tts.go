@@ -17,7 +17,7 @@ import (
 	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -812,7 +812,7 @@ func (t *TTS) dialTTSStandby(ctx context.Context, candidateIndex int) (*websocke
 	}
 	if err != nil {
 		_ = conn.Close()
-		return nil, ttsConnectionCandidate{}, nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng tts websocket: %v", err))
+		return nil, ttsConnectionCandidate{}, nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng tts websocket: %v", err))
 	}
 	return conn, candidate, attempt, nil
 }
@@ -866,7 +866,7 @@ func (t *TTS) dialTTSCandidates(ctx context.Context, candidateIndex int) (*webso
 			}
 			if err != nil {
 				_ = conn.Close()
-				candidateErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng tts websocket: %v", err))
+				candidateErr = inference.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng tts websocket: %v", err))
 			}
 		}
 		if candidateErr != nil {
@@ -907,7 +907,7 @@ func (t *TTS) advanceTTSCandidate(ctx context.Context, candidateIndex int) (*web
 
 func slngTTSDialError(response *http.Response, err error) error {
 	if response == nil {
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng tts websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial slng tts websocket: %v", err))
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
@@ -915,7 +915,7 @@ func slngTTSDialError(response *http.Response, err error) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return llm.NewAPIStatusError(message, response.StatusCode, response.Header.Get("X-Request-ID"), string(body))
+	return inference.NewAPIStatusError(message, response.StatusCode, response.Header.Get("X-Request-ID"), string(body))
 }
 
 func buildTTSWebsocketHeaders(t *TTS) (http.Header, error) {
@@ -1454,7 +1454,7 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 			armedDeadline := s.firstAudioDeadline
 			s.mu.Unlock()
 			if errors.As(err, &netErr) && netErr.Timeout() && !armedDeadline.IsZero() {
-				candidateErr = llm.NewAPITimeoutError("SLNG TTS first audio timed out")
+				candidateErr = inference.NewAPITimeoutError("SLNG TTS first audio timed out")
 			}
 			if fallbackErr, ok := s.fallbackBeforeFirstAudio(candidateErr); ok {
 				if fallbackErr == nil {
@@ -1462,7 +1462,7 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, fallbackErr
 			}
-			if _, ok := candidateErr.(*llm.APITimeoutError); ok {
+			if _, ok := candidateErr.(*inference.APITimeoutError); ok {
 				_ = s.Close()
 			}
 			return nil, candidateErr
@@ -1524,7 +1524,7 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 				audioSeen := s.audioFrames > 0
 				s.mu.Unlock()
 				if !audioSeen {
-					candidateErr := llm.NewAPIConnectionError("TTS produced no audio")
+					candidateErr := inference.NewAPIConnectionError("TTS produced no audio")
 					if fallbackErr, ok := s.fallbackBeforeFirstAudio(candidateErr); ok {
 						if fallbackErr == nil {
 							continue
@@ -1662,7 +1662,7 @@ func (s *ttsStream) readError(err error) error {
 		s.textMessages,
 		s.lastMessageType,
 	)
-	return llm.NewAPIStatusError(message, closeErr.Code, "", err.Error())
+	return inference.NewAPIStatusError(message, closeErr.Code, "", err.Error())
 }
 
 func slngTTSMessageKind(payload []byte) string {

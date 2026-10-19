@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -207,9 +207,9 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -591,9 +591,9 @@ func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
 					continue
 				}
 				if closeErr, ok := err.(*websocket.CloseError); ok {
-					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("Baseten connection closed unexpectedly", closeErr.Code, "", err.Error())
 				} else if err == io.EOF {
-					s.errCh <- llm.NewAPIStatusError("Baseten connection closed unexpectedly", -1, "", err.Error())
+					s.errCh <- inference.NewAPIStatusError("Baseten connection closed unexpectedly", -1, "", err.Error())
 				} else {
 					s.errCh <- err
 				}

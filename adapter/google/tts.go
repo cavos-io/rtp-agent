@@ -16,7 +16,7 @@ import (
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
@@ -451,7 +451,7 @@ func googleTTSSynthesisError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var apiStatusErr *llm.APIStatusError
+	var apiStatusErr *inference.APIStatusError
 	if errors.As(err, &apiStatusErr) && apiStatusErr.StatusCode == 499 {
 		return io.EOF
 	}
@@ -462,10 +462,10 @@ func googleTTSSynthesisError(err error) error {
 		return io.EOF
 	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	if st, ok := status.FromError(err); ok {
-		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleTTSStatusRetryable(st.Code()))
+		return inference.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleTTSStatusRetryable(st.Code()))
 	}
 	return err
 }
@@ -587,7 +587,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.offset >= len(s.data) {
 		if strings.TrimSpace(s.inputText) != "" && !s.emittedAudio && !s.finalSent {
 			s.finalSent = true
-			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+			return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
 		}
 		return s.emitFinal()
 	}
@@ -637,7 +637,7 @@ func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 			}
 			if strings.TrimSpace(s.inputText) != "" && !s.finalSent {
 				s.finalSent = true
-				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), err, true)
+				return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), err, true)
 			}
 		}
 		return nil, err
@@ -1049,7 +1049,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			if segment != nil && strings.TrimSpace(segment.text.String()) != "" && !segment.emittedAudio {
 				s.markClosedLocked()
 				s.mu.Unlock()
-				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", segment.text.String()), nil, true)
+				return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", segment.text.String()), nil, true)
 			}
 			s.mu.Unlock()
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
@@ -1082,7 +1082,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			delete(s.segments, stream)
 			s.markClosedLocked()
 			s.mu.Unlock()
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("google TTS streaming audio decode: %v", err))
+			return nil, inference.NewAPIConnectionError(fmt.Sprintf("google TTS streaming audio decode: %v", err))
 		}
 		s.mu.Lock()
 		if segment := s.segments[stream]; segment != nil {

@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -240,7 +240,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial respeecher tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial respeecher tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -303,7 +303,7 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) > 0 {
 			frame, err := decodeRespeecherWAVPCM16(data)
 			if err != nil {
-				return nil, llm.NewAPIConnectionError(fmt.Sprintf("Respeecher TTS response decode failed: %v", err))
+				return nil, inference.NewAPIConnectionError(fmt.Sprintf("Respeecher TTS response decode failed: %v", err))
 			}
 			s.audio = frame
 		}
@@ -320,13 +320,13 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func respeecherTTSHTTPReadError(err error) error {
 	msg := fmt.Sprintf("Respeecher TTS response read failed: %v", err)
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(msg)
+		return inference.NewAPITimeoutError(msg)
 	}
 	var timeout interface{ Timeout() bool }
 	if errors.As(err, &timeout) && timeout.Timeout() {
-		return llm.NewAPITimeoutError(msg)
+		return inference.NewAPITimeoutError(msg)
 	}
-	return llm.NewAPIConnectionError(msg)
+	return inference.NewAPIConnectionError(msg)
 }
 
 func (s *respeecherTTSChunkedStream) ensureResponse() error {
@@ -344,7 +344,7 @@ func (s *respeecherTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("Respeecher TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("Respeecher TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -692,9 +692,9 @@ func (s *respeecherTTSSynthesizeStream) readLoop() {
 func respeecherTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Respeecher connection closed unexpectedly", closeErr.Code, "", err.Error())
+		return inference.NewAPIStatusError("Respeecher connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Respeecher WebSocket transport error: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Respeecher WebSocket transport error: %v", err))
 }
 
 func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
@@ -726,7 +726,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	case "error":
-		return nil, false, llm.NewAPIError(fmt.Sprintf("Respeecher returned error: %v", message.Error), nil, true)
+		return nil, false, inference.NewAPIError(fmt.Sprintf("Respeecher returned error: %v", message.Error), nil, true)
 	default:
 		return nil, false, nil
 	}

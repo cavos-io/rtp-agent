@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -204,7 +204,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldSTTStreamURL(s), buildInworldSTTHeaders(s))
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()

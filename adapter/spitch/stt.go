@@ -11,7 +11,7 @@ import (
 	"net/http"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -54,12 +54,12 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("Spitch STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("Spitch STT request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	var result spitchSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch STT response decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("Spitch STT response decode failed: %v", err))
 	}
 
 	return spitchSTTResponseToEvent(result, language), nil
@@ -68,9 +68,9 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 func spitchSTTTransportError(err error) error {
 	msg := fmt.Sprintf("Spitch STT request failed: %v", err)
 	if spitchIsTimeout(err) {
-		return llm.NewAPITimeoutError(msg)
+		return inference.NewAPITimeoutError(msg)
 	}
-	return llm.NewAPIConnectionError(msg)
+	return inference.NewAPIConnectionError(msg)
 }
 
 func (s *STT) resolveLanguage(language string) string {

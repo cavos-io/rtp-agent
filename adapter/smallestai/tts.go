@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -228,7 +228,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai tts websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestaiTTSSynthesizeStream{
@@ -432,7 +432,7 @@ func (s *smallestaiTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("SmallestAI TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("SmallestAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.mu.Lock()
 	s.resp = resp
@@ -665,7 +665,7 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 		if message.Message == "" {
 			message.Message = "unknown error"
 		}
-		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("SmallestAI TTS error: %s", message.Message))
+		return nil, false, inference.NewAPIConnectionError(fmt.Sprintf("SmallestAI TTS error: %s", message.Message))
 	default:
 		return nil, false, nil
 	}

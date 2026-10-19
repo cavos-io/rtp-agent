@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -339,15 +339,15 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		return nil, io.ErrClosedPipe
 	}
 	if s.client == nil {
-		return nil, llm.NewAPIConnectionError("aws transcribe client is not configured")
+		return nil, inference.NewAPIConnectionError("aws transcribe client is not configured")
 	}
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
 	}
 
 	eventStream := newAWSRealtimeQueuedStream[*stt.SpeechEvent]()
@@ -479,10 +479,10 @@ func (s *awsSTTStream) readLoop() {
 				}
 				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
 					if errors.Is(err, context.DeadlineExceeded) {
-						s.errCh <- llm.NewAPITimeoutError(err.Error())
+						s.errCh <- inference.NewAPITimeoutError(err.Error())
 						return
 					}
-					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
+					s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
 			return
@@ -579,10 +579,10 @@ func (s *awsSTTStream) restartAfterTimeout() bool {
 	stream, err := s.restart()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			s.errCh <- llm.NewAPITimeoutError(err.Error())
+			s.errCh <- inference.NewAPITimeoutError(err.Error())
 			return false
 		}
-		s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream restart failed: %v", err))
+		s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream restart failed: %v", err))
 		return false
 	}
 	s.streamMu.Lock()
@@ -736,7 +736,7 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 	if stream == nil {
-		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
+		return inference.NewAPIConnectionError("AWS Transcribe stream is not initialized")
 	}
 	ctx, cancel := s.writeContext()
 	defer cancel()
@@ -749,9 +749,9 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return nil
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
 }

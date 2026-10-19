@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -222,7 +222,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if strings.HasPrefix(line, "data:") {
 			audio, done, err := mistralAITTSAudioFromStreamEvent(strings.TrimSpace(strings.TrimPrefix(line, "data:")), s.responseFormat)
 			if err != nil {
-				return nil, llm.NewAPIConnectionError(err.Error())
+				return nil, inference.NewAPIConnectionError(err.Error())
 			}
 			if done {
 				s.done = true
@@ -240,7 +240,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.jsonRead = true
 			audio, err := mistralAITTSAudioFromJSONResponse(line, s.responseFormat)
 			if err != nil {
-				return nil, llm.NewAPIConnectionError(err.Error())
+				return nil, inference.NewAPIConnectionError(err.Error())
 			}
 			if audio != nil {
 				return audio, nil
@@ -248,7 +248,7 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	s.done = true
 	if !s.finalSent {
@@ -270,14 +270,14 @@ func (s *mistralAITTSChunkedStream) ensureResponse() error {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.reader = resp.Body
 	s.closer = resp.Body

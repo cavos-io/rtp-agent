@@ -20,7 +20,7 @@ import (
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -457,14 +457,14 @@ func (t *TTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("ElevenLabs voices request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("ElevenLabs voices request failed", resp.StatusCode, "", string(respBody))
 	}
 	var payload struct {
 		Voices []struct {
@@ -474,7 +474,7 @@ func (t *TTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, error) {
 		} `json:"voices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	voices := make([]ElevenLabsVoice, 0, len(payload.Voices))
 	for _, voice := range payload.Voices {
@@ -593,7 +593,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if !strings.HasPrefix(s.encoding, "pcm") {
 		s.mu.Unlock()
 		s.finish()
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding))
 	}
 	body := s.resp.Body
 	pendingErr := s.pcmPendingErr
@@ -693,9 +693,9 @@ func (s *elevenLabsChunkedStream) ensureResponse() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
@@ -704,13 +704,13 @@ func (s *elevenLabsChunkedStream) ensureResponse() error {
 		if message == "" {
 			message = resp.Status
 		}
-		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	if contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		s.finish()
-		return llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
+		return inference.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
 	}
 	s.mu.Lock()
 	if s.closed || s.finalSent {
@@ -739,7 +739,7 @@ func (s *elevenLabsChunkedStream) finishPCM() (*tts.SynthesizedAudio, error) {
 	if strings.TrimSpace(s.text) == "" {
 		return nil, io.EOF
 	}
-	return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+	return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 }
 
 func (s *elevenLabsChunkedStream) finishReadError(err error, encoding string) error {
@@ -749,13 +749,13 @@ func (s *elevenLabsChunkedStream) finishReadError(err error, encoding string) er
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
+		return inference.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
+		return inference.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s response read %s: %v", encoding, state, err))
 }
 
 func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio, error) {
@@ -791,7 +791,7 @@ func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio
 		if readLen == 0 && !finalSent {
 			s.finish()
 			if strings.TrimSpace(s.text) != "" {
-				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+				return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 			}
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
@@ -803,14 +803,14 @@ func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio
 			return nil, io.EOF
 		}
 		s.finish()
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s decode %s: %v", elevenLabsEncodingKind(s.encoding), s.audioByteState(), err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked %s decode %s: %v", elevenLabsEncodingKind(s.encoding), s.audioByteState(), err))
 	}
 	if strings.HasPrefix(s.encoding, "mp3") {
 		frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
 		if err != nil {
 			state := s.audioByteState()
 			s.finish()
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 resample %s: %v", state, err))
+			return nil, inference.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 resample %s: %v", state, err))
 		}
 	}
 	s.mu.Lock()
@@ -1184,9 +1184,9 @@ func (c *elevenLabsTTSConnection) connect() {
 	conn, _, err := c.dialer.DialContext(c.ctx, c.streamURL, c.header)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			err = llm.NewAPITimeoutError(err.Error())
+			err = inference.NewAPITimeoutError(err.Error())
 		} else {
-			err = llm.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
+			err = inference.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
 		}
 		c.fail(err)
 		return
@@ -1260,12 +1260,12 @@ func (c *elevenLabsTTSConnection) wait(ctx context.Context) (*websocket.Conn, er
 		return nil, io.ErrClosedPipe
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil, llm.NewAPITimeoutError(ctx.Err().Error())
+		return nil, inference.NewAPITimeoutError(ctx.Err().Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, llm.NewAPIConnectionError("could not connect to ElevenLabs")
+	return nil, inference.NewAPIConnectionError("could not connect to ElevenLabs")
 }
 
 func (c *elevenLabsTTSConnection) writeJSON(ctx context.Context, payload any) error {
@@ -1413,7 +1413,7 @@ func (s *elevenLabsStream) closeAudio() {
 func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
 	if resp.Error != "" {
 		logger.Logger.Errorw("ElevenLabs WebSocket returned error", nil, "error", resp.Error)
-		s.sendError(llm.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
+		s.sendError(inference.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
 		return true
 	}
 	deltaText := s.deltaText(resp)
@@ -1487,7 +1487,7 @@ func elevenLabsTTSSynthesisStatusError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return llm.NewAPIStatusError("Could not synthesize", -1, "", err.Error())
+	return inference.NewAPIStatusError("Could not synthesize", -1, "", err.Error())
 }
 
 func (s *elevenLabsStream) bufferMP3Metadata(deltaText string, timedTranscript []tts.TimedString) {
@@ -1689,7 +1689,7 @@ func elevenLabsTTSUnexpectedCloseError(err error) error {
 	if errors.As(err, &closeErr) && closeErr.Code != 0 {
 		statusCode = closeErr.Code
 	}
-	return llm.NewAPIStatusError("ElevenLabs websocket connection closed unexpectedly", statusCode, "", err.Error())
+	return inference.NewAPIStatusError("ElevenLabs websocket connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding string) (*tts.SynthesizedAudio, error) {
@@ -2029,7 +2029,7 @@ func (s *elevenLabsStream) armResponseTimeoutLocked() {
 		s.responseTimer = nil
 		s.responseTimerID++
 		s.mu.Unlock()
-		s.sendError(llm.NewAPITimeoutError(fmt.Sprintf("11labs tts timed out after %s", elevenLabsTimeoutString(timeout))))
+		s.sendError(inference.NewAPITimeoutError(fmt.Sprintf("11labs tts timed out after %s", elevenLabsTimeoutString(timeout))))
 		_ = s.Close()
 	})
 }
@@ -2378,7 +2378,7 @@ func (s *elevenLabsStream) writeJSONLocked(payload any) error {
 		return s.sharedConn.writeJSON(s.ctx, payload)
 	}
 	if s.conn == nil {
-		return llm.NewAPIConnectionError("could not connect to ElevenLabs")
+		return inference.NewAPIConnectionError("could not connect to ElevenLabs")
 	}
 	return s.conn.WriteJSON(payload)
 }
@@ -2406,7 +2406,7 @@ func (s *elevenLabsStream) waitConnectionLocked() error {
 	}
 	ready := s.connReady
 	if ready == nil {
-		return llm.NewAPIConnectionError("could not connect to ElevenLabs")
+		return inference.NewAPIConnectionError("could not connect to ElevenLabs")
 	}
 	s.mu.Unlock()
 	select {
@@ -2427,16 +2427,16 @@ func (s *elevenLabsStream) waitConnectionLocked() error {
 		return io.ErrClosedPipe
 	}
 	if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(s.ctx.Err().Error())
+		return inference.NewAPITimeoutError(s.ctx.Err().Error())
 	}
 	if err := s.ctx.Err(); err != nil {
 		return err
 	}
-	return llm.NewAPIConnectionError("could not connect to ElevenLabs")
+	return inference.NewAPIConnectionError("could not connect to ElevenLabs")
 }
 
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
-	err := llm.NewAPIConnectionError("failed to write to elevenlabs")
+	err := inference.NewAPIConnectionError("failed to write to elevenlabs")
 	s.closed = true
 	s.inputErr = io.ErrClosedPipe
 	s.sendError(err)
@@ -2526,7 +2526,7 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 		default:
 		}
 		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(s.ctx.Err().Error())
+			return nil, inference.NewAPITimeoutError(s.ctx.Err().Error())
 		}
 		return nil, io.EOF
 	case err := <-s.errCh:

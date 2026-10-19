@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -224,12 +224,12 @@ func telnyxTTSDialError(err error, resp *http.Response) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError("Telnyx TTS websocket connect timed out")
+		return inference.NewAPITimeoutError("Telnyx TTS websocket connect timed out")
 	}
 	if resp != nil && resp.StatusCode > 0 {
-		return llm.NewAPIStatusError("Telnyx TTS websocket handshake failed", resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError("Telnyx TTS websocket handshake failed", resp.StatusCode, "", nil)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
 }
 
 func buildTelnyxTTSTextMessage(text string) map[string]string {
@@ -271,7 +271,7 @@ func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if errors.Is(err, io.EOF) {
 			s.closed = true
 			if strings.TrimSpace(s.text) != "" && !s.emitted {
-				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+				return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 			}
 		}
 		return nil, err
@@ -469,7 +469,7 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.current = nil
 			if strings.TrimSpace(text) != "" && !current.emitted {
 				_ = s.Close()
-				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
+				return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
 			}
 			if current.emitted && !current.finalized {
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
@@ -489,7 +489,7 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 		text := s.current.text
 		if audio != nil && audio.IsFinal && strings.TrimSpace(text) != "" && !s.current.emitted {
 			_ = s.Close()
-			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
+			return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
 		}
 		return audio, err
 	}
@@ -582,7 +582,7 @@ func telnyxTTSWriteError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
 }
 
 func telnyxTTSWarmupWriteError(err error) error {
@@ -705,7 +705,7 @@ func (s *telnyxTTSStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS WebSocket closed unexpectedly: %v", err))
+				s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS WebSocket closed unexpectedly: %v", err))
 			}
 			return
 		}
@@ -756,7 +756,7 @@ func (s *telnyxTTSStream) decodeLoop() {
 				s.events <- &tts.SynthesizedAudio{IsFinal: true}
 				return
 			}
-			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
+			s.errCh <- inference.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 			return
 		}
 		s.events <- &tts.SynthesizedAudio{Frame: frame}
@@ -772,14 +772,14 @@ func (s *telnyxTTSStream) closeEvents() {
 func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 	audio, ok, err := telnyxTTSAudioPayload(payload)
 	if err != nil {
-		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
+		return nil, false, inference.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
 	if !ok {
 		return nil, false, nil
 	}
 	data, err := telnyxDecodeBase64Audio(audio)
 	if err != nil {
-		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
+		return nil, false, inference.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
 	return data, false, nil
 }

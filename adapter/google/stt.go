@@ -17,7 +17,7 @@ import (
 	speechv2 "cloud.google.com/go/speech/apiv2"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
@@ -983,7 +983,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 		}
 		alternatives, err := googleSpeechDataFromRecognizeResultsV2Strict(resp.GetResults())
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, inference.NewAPIConnectionError(err.Error())
 		}
 		return &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
@@ -1010,7 +1010,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	alternatives, err := googleSpeechDataFromRecognizeResultsStrict(resp.Results)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, inference.NewAPIConnectionError(err.Error())
 	}
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
@@ -2272,10 +2272,10 @@ func googleSTTStreamError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	if st, ok := status.FromError(err); ok {
-		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleSTTStatusRetryable(st.Code()))
+		return inference.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleSTTStatusRetryable(st.Code()))
 	}
 	return err
 }
@@ -2295,19 +2295,19 @@ func googleSTTWrapGenericConnectionError(mapped error) error {
 	if errors.Is(mapped, context.Canceled) {
 		return mapped
 	}
-	var timeoutErr *llm.APITimeoutError
+	var timeoutErr *inference.APITimeoutError
 	if errors.As(mapped, &timeoutErr) {
 		return mapped
 	}
-	var statusErr *llm.APIStatusError
+	var statusErr *inference.APIStatusError
 	if errors.As(mapped, &statusErr) {
 		return mapped
 	}
-	var connectionErr *llm.APIConnectionError
+	var connectionErr *inference.APIConnectionError
 	if errors.As(mapped, &connectionErr) {
 		return mapped
 	}
-	return llm.NewAPIConnectionError(mapped.Error())
+	return inference.NewAPIConnectionError(mapped.Error())
 }
 
 func googleSTTStatusRetryable(code codes.Code) bool {

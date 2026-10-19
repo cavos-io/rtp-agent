@@ -21,7 +21,7 @@ import (
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -528,7 +528,7 @@ func (s *upliftAITTSSynthesizeStream) run() {
 					_ = s.sendResult(nil, err)
 					return
 				}
-				_ = s.sendResult(nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
+				_ = s.sendResult(nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
 				return
 			}
 		}
@@ -673,7 +673,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	s.outputFormat = outputFormat
 	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
 		s.finalSent = true
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if upliftAIUsesSocketIO(baseURL) {
 		body, err := s.owner.socketIOSynthesis(
@@ -703,7 +703,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	req, err := http.NewRequestWithContext(s.ctx, "POST", baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		s.finalSent = true
-		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
@@ -714,9 +714,9 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) || upliftAIIsTimeoutError(err) {
-			return llm.NewAPITimeoutError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+			return inference.NewAPITimeoutError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == 499 {
@@ -727,7 +727,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		s.finalSent = true
-		return llm.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -855,7 +855,7 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 				c.mu.Unlock()
 				return context.Canceled
 			}
-			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
+			lastErr = inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
 		} else if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
 			_ = conn.Close()
 			if errors.Is(err, context.Canceled) {
@@ -885,7 +885,7 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 					return context.Canceled
 				}
 				c.mu.Unlock()
-				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
+				return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
 			case <-timer.C:
 			}
 		}
@@ -894,7 +894,7 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return llm.NewAPIConnectionError("UpliftAI TTS socket.io dial failed")
+	return inference.NewAPIConnectionError("UpliftAI TTS socket.io dial failed")
 }
 
 func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
@@ -1105,7 +1105,7 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 				upliftAISetSocketIOReadDeadline(conn, time.Time{})
 				return nil
 			}
-			return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
+			return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
 		}
 		packet := string(msg)
 		if packet == "2" {
@@ -1113,7 +1113,7 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 				if errors.Is(err, context.Canceled) {
 					return context.Canceled
 				}
-				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
+				return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
 			}
 			continue
 		}
@@ -1123,7 +1123,7 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 				if errors.Is(err, context.Canceled) {
 					return context.Canceled
 				}
-				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
+				return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
 			}
 			continue
 		}
@@ -1189,7 +1189,7 @@ func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
 	}
 	return nil
 }
@@ -1294,7 +1294,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 			return nil, io.EOF
 		}
 		s.finalSent = true
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
 	if s.closed {
 		s.finalSent = true
@@ -1305,7 +1305,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
 			s.finalSent = true
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
+			return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
 		}
 		frame = resampled
 	}
@@ -1352,7 +1352,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}
 		s.finalSent = true
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
 	}
 	if s.closed {
 		s.finalSent = true
@@ -1363,7 +1363,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
 			s.finalSent = true
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
+			return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
 		}
 		frame = resampled
 	}
@@ -1475,7 +1475,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
 		}
 		s.finalSent = true
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 	}
 	if s.closed {
 		s.finalSent = true
@@ -1497,7 +1497,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
+			return nil, inference.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
 		}
 		frame = resampled
 	}
@@ -1820,11 +1820,11 @@ func (s *upliftAITTSChunkedStream) noAudioError() error {
 	if s.hasAudio || strings.TrimSpace(s.text) == "" {
 		return nil
 	}
-	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+	return inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 }
 
 func upliftAIIsNoAudioError(err error) bool {
-	var apiErr *llm.APIError
+	var apiErr *inference.APIError
 	return errors.As(err, &apiErr) && strings.HasPrefix(apiErr.Error(), "no audio frames were pushed for text:")
 }
 
@@ -1833,9 +1833,9 @@ func upliftAITTSReadError(prefix string, err error) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) || upliftAIIsTimeoutError(err) {
-		return llm.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
+		return inference.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
 }
 
 func decodeUpliftAIMuLaw(data []byte) []byte {

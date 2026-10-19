@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -705,7 +705,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				}
 				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
-					err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+					err := inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
@@ -1074,7 +1074,7 @@ func (s *fallbackSynthesizeStream) tryStartStreamWithActivation(index int, activ
 }
 
 func (f *FallbackAdapter) allFailedError(startedAt time.Time) error {
-	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %.9g seconds", f.labels(), time.Since(startedAt).Seconds()))
+	return inference.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %.9g seconds", f.labels(), time.Since(startedAt).Seconds()))
 }
 
 func (f *FallbackAdapter) labels() []string {
@@ -1166,7 +1166,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
 				if !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
-					err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.pushedText()), nil, true)
+					err := inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.pushedText()), nil, true)
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)
 					s.errCh <- err

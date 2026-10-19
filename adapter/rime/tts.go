@@ -19,7 +19,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/adapter/blingfire"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -983,15 +983,15 @@ func (t *TTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 			if resp.StatusCode == 499 {
 				return nil, errRimeTTSClientClosed
 			}
-			return nil, llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
+			return nil, inference.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 		}
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
 	}
 	return conn, nil
 }
@@ -1349,7 +1349,7 @@ func (s *rimeTTSChunkedStream) noAudioError() error {
 	if strings.TrimSpace(s.text) == "" {
 		return io.EOF
 	}
-	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+	return inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 }
 
 func (s *rimeTTSChunkedStream) closeResponseBody() {
@@ -1369,11 +1369,11 @@ func rimeTTSReadBodyError(err error) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	return rimeTTSConnectionError("Rime TTS stream read failed", err)
 }
@@ -1470,7 +1470,7 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		return rimeTTSConnectionError("Rime TTS request failed", err)
 	}
@@ -1488,13 +1488,13 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		}
 		resp.Body.Close()
 		cancel()
-		return llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "audio") {
 		resp.Body.Close()
 		cancel()
 		if strings.TrimSpace(s.text) != "" {
-			s.pendingErr = llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			s.pendingErr = inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 		}
 		return nil
 	}
@@ -2026,7 +2026,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		s.mu.Unlock()
 		if done && !audioSeen && strings.TrimSpace(pushedText) != "" {
 			s.dropConnectionAfterProviderError()
-			s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
+			s.errCh <- inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 			return
 		}
 		if audio != nil && audio.Frame == nil && len(audio.TimedTranscript) > 0 {
@@ -2170,17 +2170,17 @@ func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Rime ws closed unexpectedly", 0, requestID, nil)
+		return inference.NewAPIStatusError("Rime ws closed unexpectedly", 0, requestID, nil)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Rime WS error: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Rime WS error: %v", err))
 }
 
 func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
@@ -2240,7 +2240,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
-		return nil, false, "", llm.NewAPIError("Rime ws error: "+rimeTTSWebsocketErrorMessage(message.Message), nil, true)
+		return nil, false, "", inference.NewAPIError("Rime ws error: "+rimeTTSWebsocketErrorMessage(message.Message), nil, true)
 	default:
 		return nil, false, "", nil
 	}
@@ -2277,11 +2277,11 @@ func rimeDecodeBase64Chunk(data string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(string(clean))
 }
 
-func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
+func rimeTTSConnectionError(message string, err error) *inference.APIConnectionError {
 	if err == nil {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func rimeTTSWebsocketMessageType(raw json.RawMessage) string {

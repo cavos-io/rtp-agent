@@ -17,7 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -217,13 +217,13 @@ func (t *TTS) isClosed() bool {
 
 func groqTTSTransportError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(err.Error())
+	return inference.NewAPIConnectionError(err.Error())
 }
 
 func validateGroqTTSAPIKey(apiKey string) error {
@@ -439,7 +439,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			resp.Body.Close()
 			reqCancel()
 			s.requestCancel = nil
-			s.startErr = llm.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
+			s.startErr = inference.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
 			s.unregister()
 			return
 		}
@@ -448,7 +448,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			resp.Body.Close()
 			reqCancel()
 			s.requestCancel = nil
-			s.startErr = llm.NewAPIError("Groq returned non-audio data", string(respBody), true)
+			s.startErr = inference.NewAPIError("Groq returned non-audio data", string(respBody), true)
 			s.unregister()
 			return
 		}

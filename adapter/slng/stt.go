@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -601,7 +601,7 @@ func (s *STT) dialSTTCandidatesFrom(ctx context.Context, active *sttStream, cand
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return nil, sttConnectionCandidate{}, -1, STT{}, ctxErr
 				}
-				candidateErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng stt websocket: %v", err))
+				candidateErr = inference.NewAPIConnectionError(fmt.Sprintf("failed to initialize slng stt websocket: %v", err))
 			} else if candidate.waitReady {
 				candidateErr = waitForSLNGSTTReady(ctx, conn)
 				if candidateErr != nil {
@@ -799,7 +799,7 @@ func waitForSLNGSTTReady(ctx context.Context, conn *websocket.Conn) error {
 		deadline = ctxDeadline
 	}
 	if err := conn.SetReadDeadline(deadline); err != nil {
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to set SLNG STT ready deadline: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to set SLNG STT ready deadline: %v", err))
 	}
 	readDone := make(chan struct{})
 	watcherDone := make(chan struct{})
@@ -829,13 +829,13 @@ func waitForSLNGSTTReady(ctx context.Context, conn *websocket.Conn) error {
 			}
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				return llm.NewAPIConnectionError("timed out waiting for SLNG STT ready")
+				return inference.NewAPIConnectionError("timed out waiting for SLNG STT ready")
 			}
 			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) {
-				return llm.NewAPIConnectionError("SLNG STT closed before ready")
+				return inference.NewAPIConnectionError("SLNG STT closed before ready")
 			}
-			return llm.NewAPIConnectionError(fmt.Sprintf("failed waiting for SLNG STT ready: %v", err))
+			return inference.NewAPIConnectionError(fmt.Sprintf("failed waiting for SLNG STT ready: %v", err))
 		}
 		if messageType != websocket.TextMessage {
 			continue
@@ -940,7 +940,7 @@ func buildSTTWebsocketHeadersForCandidate(s *STT, candidate http.Header) (http.H
 
 func slngSTTDialError(response *http.Response, err error) error {
 	if response == nil {
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng stt websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to dial slng stt websocket: %v", err))
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
@@ -948,7 +948,7 @@ func slngSTTDialError(response *http.Response, err error) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return llm.NewAPIStatusError(message, response.StatusCode, response.Header.Get("X-Request-ID"), string(body))
+	return inference.NewAPIStatusError(message, response.StatusCode, response.Header.Get("X-Request-ID"), string(body))
 }
 
 func buildSTTInitPayload(s *STT) []byte {
@@ -1812,7 +1812,7 @@ func (s *sttStream) trySilentReconnectLocked(readErr error) (bool, error) {
 	}
 	s.silentReconnects++
 	if s.silentReconnects >= maxSLNGSTTSilentReconnects {
-		return true, llm.NewAPIStatusError(
+		return true, inference.NewAPIStatusError(
 			"SLNG STT closed the connection repeatedly without producing transcripts",
 			closeErr.Code,
 			"",
@@ -1839,7 +1839,7 @@ func (s *sttStream) startFinalTimerLocked() {
 	generation := s.finalTimerGeneration
 	var timer *time.Timer
 	timer = slngSTTAfterFunc(s.finalTimeout, func() {
-		timeoutErr := llm.NewAPITimeoutError("SLNG STT timed out waiting for final transcript")
+		timeoutErr := inference.NewAPITimeoutError("SLNG STT timed out waiting for final transcript")
 		s.mu.Lock()
 		if s.finalTimerGeneration != generation || s.finalTimer != timer {
 			s.mu.Unlock()
@@ -1888,7 +1888,7 @@ func (s *sttStream) isClosed() bool {
 func slngSTTReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("SLNG connection closed unexpectedly", closeErr.Code, "", err.Error())
+		return inference.NewAPIStatusError("SLNG connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
 	return err
 }

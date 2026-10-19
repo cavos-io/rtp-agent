@@ -15,7 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -202,7 +202,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial cartesia stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial cartesia stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -558,7 +558,7 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect cartesia stt websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to reconnect cartesia stt websocket: %v", err))
 	}
 
 	s.mu.Lock()
@@ -592,7 +592,7 @@ func cartesiaSTTUnexpectedCloseError(err error) error {
 	if err != nil && err != io.EOF {
 		message += ": " + err.Error()
 	}
-	return llm.NewAPIConnectionError(message)
+	return inference.NewAPIConnectionError(message)
 }
 
 func cartesiaSTTUnexpectedCloseEvents(state *cartesiaSTTStreamState) []*stt.SpeechEvent {
@@ -825,7 +825,7 @@ func cartesiaSTTError(data map[string]any, codeKey string) error {
 		message = "unknown error from cartesia"
 	}
 	if status >= 500 || status == 0 {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
 	return nil
 }

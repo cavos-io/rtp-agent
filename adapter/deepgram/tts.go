@@ -18,7 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/google/uuid"
@@ -572,13 +572,13 @@ func deepgramTTSChunkedReadError(err error) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
-	return llm.NewAPIConnectionError(err.Error())
+	return inference.NewAPIConnectionError(err.Error())
 }
 
 func (s *deepgramTTSChunkedStream) startRequestLocked() error {
@@ -611,13 +611,13 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 499 {
@@ -629,7 +629,7 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 		resp.Body.Close()
 		s.cancelRequestLocked()
 		s.finalSent = true
-		return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
+		return inference.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 	}
 	s.resp = resp
 	return nil
@@ -647,7 +647,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	}
 	s.finishLocked()
 	if !s.audioSent && strings.TrimSpace(s.inputText) != "" {
-		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+		return nil, inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
 	}
 	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
@@ -802,7 +802,7 @@ func (s *deepgramTTSStream) handleBinaryMessage(message []byte) *tts.Synthesized
 func deepgramTTSReadError(err error) error {
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	return deepgramTTSUnexpectedCloseError(err)
 }
@@ -862,16 +862,16 @@ func deepgramTTSUnexpectedCloseError(err error) error {
 	if errors.As(err, &closeErr) && closeErr.Code != 0 {
 		statusCode = closeErr.Code
 	}
-	return llm.NewAPIStatusError("Deepgram websocket connection closed unexpectedly", statusCode, "", err.Error())
+	return inference.NewAPIStatusError("Deepgram websocket connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	var metadata map[string]interface{}
 	if err := json.Unmarshal(message, &metadata); err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if metadata == nil {
-		return llm.NewAPIConnectionError("Deepgram TTS returned null text control")
+		return inference.NewAPIConnectionError("Deepgram TTS returned null text control")
 	}
 	switch metadata["type"] {
 	case "Flushed":
@@ -901,7 +901,7 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 			return errDeepgramTTSReleasedToPool
 		}
 	case "Error", "error":
-		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
+		return inference.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
 }
@@ -942,7 +942,7 @@ func (s *deepgramTTSStream) noAudioErrorIfNeeded() error {
 	if !s.segmentSent || s.segmentHadAudio.Load() || strings.TrimSpace(s.segmentText) == "" {
 		return nil
 	}
-	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.segmentText), nil, true)
+	return inference.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.segmentText), nil, true)
 }
 
 func (s *deepgramTTSStream) shouldSuppressSilentWhitespaceFinal() bool {
@@ -1330,19 +1330,19 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		if resp != nil && resp.StatusCode != 0 {
 			if resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-			return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
+			return inference.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if s.provider != nil && s.provider.isClosed() {
 		_ = conn.Close()

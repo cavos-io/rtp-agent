@@ -15,7 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
@@ -204,6 +204,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 		return nil, io.ErrClosedPipe
 	}
 	if s.apiKey == "" {
+		//lint:ignore ST1005 preserve existing public error text
 		return nil, fmt.Errorf("Deepgram API key is required")
 	}
 	if err := validateDeepgramSTTv2Options(s); err != nil {
@@ -253,7 +254,7 @@ func deepgramSTTv2DialError(err error, resp *http.Response) error {
 		return context.Canceled
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError("Deepgram STT websocket connect timed out")
+		return inference.NewAPITimeoutError("Deepgram STT websocket connect timed out")
 	}
 	if resp != nil && resp.StatusCode > 0 {
 		var body string
@@ -263,14 +264,14 @@ func deepgramSTTv2DialError(err error, resp *http.Response) error {
 			_ = resp.Body.Close()
 			resp.Body = nil
 		}
-		return llm.NewAPIStatusError(
+		return inference.NewAPIStatusError(
 			"Deepgram STT websocket handshake failed",
 			resp.StatusCode,
 			resp.Header.Get("dg-request-id"),
 			body,
 		)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to deepgram: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("failed to connect to deepgram: %v", err))
 }
 
 func (s *DeepgramSTTv2) Close() error {
@@ -561,7 +562,7 @@ func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
 		if description == "" {
 			description = "unknown error from deepgram"
 		}
-		err = llm.NewAPIStatusError(description, -1, "", "")
+		err = inference.NewAPIStatusError(description, -1, "", "")
 	}
 	s.eventMu.Unlock()
 
@@ -751,7 +752,7 @@ func (s *deepgramV2Stream) reconnectLocked() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError("failed to connect to deepgram")
+		return inference.NewAPIConnectionError("failed to connect to deepgram")
 	}
 	oldConn := s.conn
 	s.conn = conn

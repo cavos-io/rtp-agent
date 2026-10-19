@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -237,7 +237,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai stt websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -321,7 +321,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("SmallestAI STT request failed", resp.StatusCode, "", string(respBody))
+		return nil, inference.NewAPIStatusError("SmallestAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result smallestAIBatchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -696,7 +696,7 @@ func (s *smallestAISTTStream) reconnect() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect smallestai stt websocket: %v", err))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to reconnect smallestai stt websocket: %v", err))
 	}
 
 	s.mu.Lock()

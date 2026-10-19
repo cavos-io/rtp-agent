@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	corevad "github.com/cavos-io/rtp-agent/core/vad"
@@ -544,13 +545,13 @@ func (s *STT) waitBeforeStartupRetry(ctx context.Context, err error, startupAtte
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	connectionErr := llm.NewAPIConnectionError(err.Error())
+	connectionErr := inference.NewAPIConnectionError(err.Error())
 	if startupAttempt == nil {
 		return connectionErr
 	}
 	maxRetry := llm.DefaultAPIConnectOptions().MaxRetry
 	if *startupAttempt >= maxRetry {
-		return llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", *startupAttempt))
+		return inference.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", *startupAttempt))
 	}
 	interval := speechmaticsSTTRetryInterval(*startupAttempt)
 	*startupAttempt = *startupAttempt + 1
@@ -1980,12 +1981,12 @@ func (s *speechmaticsSTTStream) readLoop() {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
 				if !s.isClosed() {
 					s.prepareDrainPendingRawFinals()
-					s.enqueueError(llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
+					s.enqueueError(inference.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly"))
 					s.markClosedDrainingEvents()
 				}
 			} else {
 				s.prepareDrainPendingRawFinals()
-				s.enqueueError(llm.NewAPIConnectionError(err.Error()))
+				s.enqueueError(inference.NewAPIConnectionError(err.Error()))
 				s.markClosedDrainingEvents()
 			}
 			return
@@ -2008,7 +2009,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 				if speechmaticsDataMessageName(messageName) {
 					_ = s.closeTransportOnce()
 					s.prepareDrainPendingRawFinals()
-					s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid Speechmatics message: %v", err)))
+					s.enqueueError(inference.NewAPIConnectionError(fmt.Sprintf("Invalid Speechmatics message: %v", err)))
 					s.markClosedDrainingEvents()
 					return
 				}
@@ -2016,7 +2017,7 @@ func (s *speechmaticsSTTStream) readLoop() {
 			}
 			_ = s.closeTransportOnce()
 			s.prepareDrainPendingRawFinals()
-			s.enqueueError(llm.NewAPIConnectionError(fmt.Sprintf("Invalid JSON received: %v", err)))
+			s.enqueueError(inference.NewAPIConnectionError(fmt.Sprintf("Invalid JSON received: %v", err)))
 			s.markClosedDrainingEvents()
 			return
 		}

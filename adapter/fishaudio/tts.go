@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -311,13 +311,13 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return nil, llm.NewAPITimeoutError(err.Error())
+			return nil, inference.NewAPITimeoutError(err.Error())
 		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial fishaudio tts websocket: %v", err))
+		return nil, inference.NewAPIConnectionError(fmt.Sprintf("failed to dial fishaudio tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -464,18 +464,18 @@ func (s *fishaudioTTSChunkedStream) ensureResponse() error {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
 		var timeoutErr interface{ Timeout() bool }
 		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			return llm.NewAPITimeoutError(err.Error())
+			return inference.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionError(err.Error())
+		return inference.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return llm.NewAPIStatusError("FishAudio TTS request failed", resp.StatusCode, "", string(respBody))
+		return inference.NewAPIStatusError("FishAudio TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.resp = resp
 	return nil
@@ -758,9 +758,9 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 func fishAudioTTSReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Fish Audio websocket connection closed unexpectedly", closeErr.Code, "", err.Error())
+		return inference.NewAPIStatusError("Fish Audio websocket connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Fish Audio websocket receive failed: %v", err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("Fish Audio websocket receive failed: %v", err))
 }
 
 func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format string) (*tts.SynthesizedAudio, bool, error) {
@@ -782,7 +782,7 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format s
 		return decoded, false, nil
 	case "finish":
 		if reason, _ := message["reason"].(string); reason == "error" {
-			return nil, false, llm.NewAPIStatusError("Fish Audio TTS reported an error", -1, "", fmt.Sprint(message))
+			return nil, false, inference.NewAPIStatusError("Fish Audio TTS reported an error", -1, "", fmt.Sprint(message))
 		}
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	default:
@@ -790,20 +790,20 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format s
 	}
 }
 
-func fishAudioTTSConnectionError(message string, err error) *llm.APIConnectionError {
+func fishAudioTTSConnectionError(message string, err error) *inference.APIConnectionError {
 	if err == nil {
-		return llm.NewAPIConnectionError(message)
+		return inference.NewAPIConnectionError(message)
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+	return inference.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func fishAudioTTSReadBodyError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	var timeoutErr interface{ Timeout() bool }
 	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-		return llm.NewAPITimeoutError(err.Error())
+		return inference.NewAPITimeoutError(err.Error())
 	}
 	return fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
 }
