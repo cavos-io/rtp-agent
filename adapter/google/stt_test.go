@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -5683,7 +5684,7 @@ func TestGoogleSTTStreamCloseUnblocksBlockedReferenceSend(t *testing.T) {
 
 func TestGoogleSTTStreamCloseUnblocksBlockedReferenceEndInput(t *testing.T) {
 	closeStarted := make(chan struct{})
-	closeRelease := make(chan struct{})
+	closeRelease := make(chan struct{}, 1)
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		closeBlock:   closeStarted,
 		closeRelease: closeRelease,
@@ -6006,6 +6007,8 @@ func (c *fakeGoogleV2StreamingRecognizeClient) SendMsg(m any) error      { retur
 func (c *fakeGoogleV2StreamingRecognizeClient) RecvMsg(m any) error      { return nil }
 
 type fakeGoogleStreamingRecognizeClient struct {
+	closeOnce          sync.Once
+	closeMu            sync.Mutex
 	sent               []*speechpb.StreamingRecognizeRequest
 	sentCh             chan int
 	responses          []*speechpb.StreamingRecognizeResponse
@@ -6063,25 +6066,31 @@ func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecogniz
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) CloseSend() error {
-	if c.closeBlock != nil {
-		closeBlock := c.closeBlock
-		c.closeBlock = nil
-		select {
-		case closeBlock <- struct{}{}:
-			<-c.closeRelease
-		case c.closeRelease <- struct{}{}:
+	setClosed := func() error {
+		c.closeMu.Lock()
+		defer c.closeMu.Unlock()
+		if c.closed {
+			return io.ErrClosedPipe
 		}
+		c.closed = true
+		return c.closeErr
+	}
+	blocked := false
+	c.closeOnce.Do(func() {
+		blocked = c.closeBlock != nil
+	})
+	if blocked {
+		c.closeBlock <- struct{}{}
+		<-c.closeRelease
 	} else if c.closeRelease != nil {
+		err := setClosed()
 		select {
 		case c.closeRelease <- struct{}{}:
 		default:
 		}
+		return err
 	}
-	if c.closed {
-		return io.ErrClosedPipe
-	}
-	c.closed = true
-	return c.closeErr
+	return setClosed()
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) Header() (metadata.MD, error) { return nil, nil }
