@@ -1547,6 +1547,9 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		if opts.SpeechHandle != nil {
 			opts.SpeechHandle.IncrementStep()
 			opts.SpeechHandle.AuthorizeGeneration()
+			if activity := session.currentActivity(); activity != nil {
+				activity.resumeSpeechStep(opts.SpeechHandle)
+			}
 		}
 		toolSteps++
 		// Loop back to LLM with tool outputs

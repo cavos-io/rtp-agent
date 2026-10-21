@@ -1544,6 +1544,17 @@ func (a *AgentActivity) processQueue() {
 	}()
 }
 
+func (a *AgentActivity) resumeSpeechStep(speech *SpeechHandle) {
+	if a == nil || speech == nil {
+		return
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	if a.currentSpeech == nil || a.currentSpeech.IsDone() || a.currentSpeech.generationSettled() {
+		a.currentSpeech = speech
+	}
+}
+
 func (a *AgentActivity) MinConsecutiveSpeechDelay() time.Duration {
 	if a.Agent != nil && a.Agent.MinConsecutiveSpeechDelay > 0 {
 		return time.Duration(a.Agent.MinConsecutiveSpeechDelay * float64(time.Second))
