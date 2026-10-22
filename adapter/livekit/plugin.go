@@ -10,7 +10,7 @@ import (
 
 const (
 	PluginTitle   = "rtp-agent.plugins.livekit"
-	PluginVersion = "v0.8.14"
+	PluginVersion = "v0.8.18"
 	PluginPackage = "rtp-agent.plugins.livekit"
 )
 

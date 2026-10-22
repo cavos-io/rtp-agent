@@ -23,7 +23,7 @@ import (
 const (
 	defaultSmallestAIBaseURL       = "https://api.smallest.ai/waves/v1"
 	defaultSmallestAIWebsocketURL  = "wss://api.smallest.ai/waves/v1/tts/live"
-	smallestAIPluginVersion        = "v0.8.14"
+	smallestAIPluginVersion        = "v0.8.18"
 	defaultSmallestAIModel         = "lightning_v3.1_pro"
 	defaultSmallestAIProVoice      = "meher"
 	defaultSmallestAIStandardVoice = "sophia"
