@@ -5448,6 +5448,89 @@ func TestPipelineAgentScheduledReplyIncrementsSpeechStepForToolReply(t *testing.
 	}
 }
 
+type gatedGenerationLLMStream struct {
+	*fakeGenerationLLMStream
+	gate <-chan struct{}
+}
+
+func (g *gatedGenerationLLMStream) Next() (*llm.ChatChunk, error) {
+	<-g.gate
+	return g.fakeGenerationLLMStream.Next()
+}
+
+func TestPipelineAgentInterruptReachesToolReplyStep(t *testing.T) {
+	releaseReply := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseReply) }) }
+	defer release()
+
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&gatedGenerationLLMStream{
+				fakeGenerationLLMStream: &fakeGenerationLLMStream{
+					chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "transferring you now"}}},
+				},
+				gate: releaseReply,
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for handle.NumSteps() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := handle.NumSteps(); got != 2 {
+		t.Fatalf("handle.NumSteps() = %d, want the tool reply step running", got)
+	}
+
+	interruptDone := make(chan error, 1)
+	go func() { interruptDone <- session.Interrupt(false) }()
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for !handle.IsInterrupted() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	interrupted := handle.IsInterrupted()
+	release()
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("tool turn did not settle: %v", err)
+	}
+	if err := <-interruptDone; err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+	if !interrupted {
+		t.Fatal("Interrupt did not reach the speaking tool reply; it keeps playing under the next reply")
+	}
+}
+
 func TestPipelineAgentToolReplyWaitsForFillerPlayout(t *testing.T) {
 	waitStarted := make(chan struct{})
 	releaseWait := make(chan struct{})
