@@ -2,6 +2,6 @@ package trugen
 
 const (
 	PluginTitle   = "rtp-agent.plugins.trugen"
-	PluginVersion = "v0.8.14"
+	PluginVersion = "v0.8.17"
 	PluginPackage = "rtp-agent.plugins.trugen"
 )

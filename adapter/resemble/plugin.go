@@ -2,6 +2,6 @@ package resemble
 
 const (
 	PluginTitle   = "rtp-agent.plugins.resemble"
-	PluginVersion = "v0.8.14"
+	PluginVersion = "v0.8.17"
 	PluginPackage = "rtp-agent.plugins.resemble"
 )
