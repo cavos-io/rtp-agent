@@ -12,9 +12,9 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestStreamAdapterPropagatesVADStartError(t *testing.T) {
@@ -293,7 +293,7 @@ func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterRecordsSTTStreamSpan(t *testing.T) {
+func TestStreamAdapterDoesNotEmitSTTSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -303,12 +303,20 @@ func TestStreamAdapterRecordsSTTStreamSpan(t *testing.T) {
 		_ = provider.Shutdown(context.Background())
 	})
 
+	ctx, parent := telemetry.StartSpan(context.Background(), "user_turn")
+	defer parent.End()
+
 	stream, err := NewStreamAdapter(
 		&fakeStreamAdapterSTT{model: "speech-model", provider: "speech-provider"},
 		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{nextErr: io.EOF}},
-	).Stream(context.Background(), "en")
+	).Stream(ctx, "en")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	wrapper := stream.(*streamAdapterWrapper)
+	if got := trace.SpanFromContext(wrapper.ctx).SpanContext().SpanID(); got != parent.SpanContext().SpanID() {
+		t.Fatalf("STT replaced caller trace context: %s", got)
 	}
 
 	_, err = stream.Next()
@@ -316,19 +324,24 @@ func TestStreamAdapterRecordsSTTStreamSpan(t *testing.T) {
 		t.Fatalf("Next error = %v, want EOF", err)
 	}
 
-	spans := recorder.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("ended spans = %d, want 1", len(spans))
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
-	if spans[0].Name() != "stt_stream" {
-		t.Fatalf("span name = %q, want stt_stream", spans[0].Name())
+	if !parent.IsRecording() {
+		t.Fatal("STT completion ended the caller's user turn")
 	}
-	attrs := streamAdapterSpanAttributes(spans[0].Attributes())
-	if attrs[telemetry.AttrGenAIRequestModel] != "speech-model" {
-		t.Fatalf("span model attr = %q, want speech-model", attrs[telemetry.AttrGenAIRequestModel])
+	if got := len(recorder.Started()); got != 1 {
+		t.Fatalf("started spans = %d, want only caller user_turn", got)
 	}
-	if attrs[telemetry.AttrGenAIProviderName] != "speech-provider" {
-		t.Fatalf("span provider attr = %q, want speech-provider", attrs[telemetry.AttrGenAIProviderName])
+
+	if got := len(recorder.Ended()); got != 0 {
+		t.Fatalf("STT emitted %d spans; Python reports transcription timing on user_turn", got)
+	}
+
+	parent.End()
+	ended := recorder.Ended()
+	if len(ended) != 1 || ended[0].Name() != "user_turn" {
+		t.Fatalf("caller span was lost or STT added spans: %v", ended)
 	}
 }
 
@@ -1119,14 +1132,6 @@ func TestStreamAdapterDoesNotReadNextVADEventBeforeFinalTranscript(t *testing.T)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for final transcript")
 	}
-}
-
-func streamAdapterSpanAttributes(attrs []attribute.KeyValue) map[string]string {
-	values := make(map[string]string, len(attrs))
-	for _, attr := range attrs {
-		values[string(attr.Key)] = attr.Value.AsString()
-	}
-	return values
 }
 
 type fakeStreamAdapterSTT struct {

@@ -12,7 +12,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type MultimodalAgent struct {
@@ -27,6 +30,9 @@ type MultimodalAgent struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	realtimeSpans             map[string]trace.Span
+	traceClosed               bool
+	realtimeSpanIDs           []string
 	pendingAutoToolReply      *SpeechHandle
 	pendingAutoToolReplyTimer *time.Timer
 
@@ -53,6 +59,7 @@ func NewMultimodalAgent(
 func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	ma.mu.Lock()
 	ma.session = s
+	ma.traceClosed = false
 	ma.ctx = ctx
 	ma.mu.Unlock()
 
@@ -83,6 +90,9 @@ func (ma *MultimodalAgent) Close() error {
 	ma.mu.Lock()
 	rtSession := ma.rtSession
 	ma.rtSession = nil
+	ma.realtimeSpans = nil
+	ma.traceClosed = true
+	ma.realtimeSpanIDs = nil
 	ma.mu.Unlock()
 
 	if rtSession != nil {
@@ -315,6 +325,10 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 	defer speech.MarkDone()
+	ma.mu.Lock()
+	traceSession := ma.session
+	ma.mu.Unlock()
+	ctx = ensureSpeechAgentTurn(ctx, speech, traceSession)
 	speech.AuthorizeGeneration()
 	if speech.IsInterrupted() {
 		return
@@ -695,6 +709,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ma.session == nil || ev.Metrics == nil {
 			return
 		}
+		ma.recordRealtimeMetrics(ev.Metrics)
 		if ma.session.activity != nil {
 			ma.session.activity.OnMetricsCollected(ev.Metrics)
 		} else {
@@ -734,6 +749,14 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	if generation == nil || (generation.MessageCh == nil && generation.FunctionCh == nil) {
 		return
 	}
+	turnCtx := ctx
+	outputType := "text"
+	if ma.model != nil && ma.model.Capabilities().AudioOutput {
+		outputType = "speech"
+	}
+	ctx, inferenceSpan := telemetry.StartSpan(ctx, "realtime_inference", trace.WithAttributes(attribute.String(telemetry.AttrGenAIOperationName, "generate_content"), attribute.String(telemetry.AttrGenAIProviderName, normalizeGenAIProvider(llm.RealtimeProvider(ma.model))), attribute.String(telemetry.AttrGenAIRequestModel, llm.RealtimeModelName(ma.model)), attribute.Bool(telemetry.AttrGenAIRequestStream, true), attribute.String(telemetry.AttrGenAIOutputType, outputType)))
+	defer ma.endRealtimeSpan(inferenceSpan)
+	ma.rememberRealtimeSpan(generation.ResponseID, inferenceSpan)
 	messageCh := generation.MessageCh
 	functionCh := generation.FunctionCh
 	for messageCh != nil || functionCh != nil {
@@ -773,7 +796,7 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 				}
 				return
 			}
-			ma.executeRealtimeFunctionCall(call)
+			ma.executeRealtimeFunctionCallWithContext(turnCtx, call)
 		}
 	}
 }
@@ -1078,6 +1101,10 @@ func (ma *MultimodalAgent) realtimeTools() ([]llm.Tool, error) {
 }
 
 func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {
+	ma.executeRealtimeFunctionCallWithContext(ma.ctx, functionCall)
+}
+
+func (ma *MultimodalAgent) executeRealtimeFunctionCallWithContext(callCtx context.Context, functionCall *llm.FunctionCall) {
 	if functionCall == nil {
 		return
 	}
@@ -1132,7 +1159,7 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 			Name:      functionCall.Name,
 			Arguments: functionCall.Arguments,
 			Extra:     functionCall.Extra,
-		}, *functionCall, ma.session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+		}, *functionCall, ma.session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID, callCtx)
 		if cancel != nil {
 			cancel()
 		}
@@ -1140,11 +1167,10 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		return
 	}
 
-	callCtx := ma.ctx
 	if callCtx == nil {
 		callCtx = context.Background()
 	}
-	callCtx = contextWithSessionMockTools(callCtx, ma.session)
+	callCtx = contextWithSessionMockTools(toolAgentContext(callCtx, ma.session), ma.session)
 	runCtx := NewRunContext(ma.session, nil, functionCall)
 	runCtx.attach()
 	callCtx = WithRunContext(callCtx, runCtx)

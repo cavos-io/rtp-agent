@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -1587,10 +1588,15 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	fncCall.Arguments = args
 	toolCall.Arguments = args
 
+	ctx, span := telemetry.StartToolSpan(ctx, toolCall.CallID, toolCall.Name, args, tool.Description())
+	defer span.End()
 	output, err := tool.Execute(ctx, args)
 	result := MakeToolOutput(fncCall, output, err)
 	if result.FncCallOut != nil && result.FncCallOut.CreatedAt.IsZero() {
 		result.FncCallOut.CreatedAt = time.Now()
+	}
+	if result.FncCallOut != nil {
+		telemetry.RecordToolResult(span, result.FncCallOut.Output, result.FncCallOut.IsError)
 	}
 	return result
 }

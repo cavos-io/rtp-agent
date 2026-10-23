@@ -65,3 +65,6 @@ type CerebrasLLM = LLM
 func NewCerebrasLLM(apiKey string, model string) *LLM {
 	return NewLLM(apiKey, model)
 }
+
+// TracesRequestAttempts delegates attempt tracing to the OpenAI-compatible implementation.
+func (*LLM) TracesRequestAttempts() bool { return true }

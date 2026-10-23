@@ -208,6 +208,11 @@ func (j *JSONJob) UnmarshalJSON(data []byte) error {
 }
 
 type RunningJobInfo struct {
+	ReceivedAt float64 `json:"received_at,omitempty"`
+	AcceptedAt float64 `json:"accepted_at,omitempty"`
+	AssignedAt float64 `json:"assigned_at,omitempty"`
+	LaunchedAt float64 `json:"launched_at,omitempty"`
+
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
 	Job             Job                `json:"job"`
 	URL             string             `json:"url"`
@@ -218,6 +223,11 @@ type RunningJobInfo struct {
 
 func (info RunningJobInfo) MarshalJSON() ([]byte, error) {
 	type runningJobInfoJSON struct {
+		ReceivedAt float64 `json:"received_at,omitempty"`
+		AcceptedAt float64 `json:"accepted_at,omitempty"`
+		AssignedAt float64 `json:"assigned_at,omitempty"`
+		LaunchedAt float64 `json:"launched_at,omitempty"`
+
 		AcceptArguments JobAcceptArguments `json:"accept_arguments"`
 		Job             json.RawMessage    `json:"job"`
 		URL             string             `json:"url"`
@@ -234,6 +244,10 @@ func (info RunningJobInfo) MarshalJSON() ([]byte, error) {
 		jobJSON = data
 	}
 	return json.Marshal(runningJobInfoJSON{
+		ReceivedAt:      info.ReceivedAt,
+		AcceptedAt:      info.AcceptedAt,
+		AssignedAt:      info.AssignedAt,
+		LaunchedAt:      info.LaunchedAt,
 		AcceptArguments: info.AcceptArguments,
 		Job:             jobJSON,
 		URL:             info.URL,
@@ -245,6 +259,11 @@ func (info RunningJobInfo) MarshalJSON() ([]byte, error) {
 
 func (info *RunningJobInfo) UnmarshalJSON(data []byte) error {
 	type runningJobInfoJSON struct {
+		ReceivedAt float64 `json:"received_at,omitempty"`
+		AcceptedAt float64 `json:"accepted_at,omitempty"`
+		AssignedAt float64 `json:"assigned_at,omitempty"`
+		LaunchedAt float64 `json:"launched_at,omitempty"`
+
 		AcceptArguments JobAcceptArguments `json:"accept_arguments"`
 		Job             json.RawMessage    `json:"job"`
 		URL             string             `json:"url"`
@@ -256,6 +275,10 @@ func (info *RunningJobInfo) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	info.ReceivedAt = decoded.ReceivedAt
+	info.AcceptedAt = decoded.AcceptedAt
+	info.AssignedAt = decoded.AssignedAt
+	info.LaunchedAt = decoded.LaunchedAt
 	info.AcceptArguments = decoded.AcceptArguments
 	info.URL = decoded.URL
 	info.Token = decoded.Token

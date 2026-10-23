@@ -464,7 +464,9 @@ func TestMultiSpeakerAdapterStreamPropagatesInitialTimingAnchors(t *testing.T) {
 }
 
 func TestMultiSpeakerAdapterWrapperEndInputDoesNotFlushAndRejectsMoreInput(t *testing.T) {
-	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, callCh: make(chan struct{}, 2)}
+	nextDone := make(chan struct{})
+	defer close(nextDone)
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, nextBlock: nextDone, callCh: make(chan struct{}, 2)}
 	wrapper := &multiSpeakerAdapterWrapper{
 		inner:    inner,
 		ctx:      context.Background(),

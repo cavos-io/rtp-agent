@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -27,17 +26,18 @@ import (
 )
 
 const (
-	llmFinishReasonError    = "error"
-	llmFinishReasonStop     = "stop"
-	llmFinishReasonToolCall = "tool_call"
-	traceJSONKeyArguments   = "arguments"
-	traceJSONKeyContent     = "content"
-	traceJSONKeyName        = "name"
-	traceJSONKeyParts       = "parts"
-	traceJSONKeyRole        = "role"
-	traceJSONKeyType        = "type"
-	traceJSONRoleAssistant  = "assistant"
-	traceJSONTypeText       = "text"
+	llmFinishReasonError     = "error"
+	llmFinishReasonCancelled = "cancelled"
+	llmFinishReasonStop      = "stop"
+	llmFinishReasonToolCall  = "tool_call"
+	traceJSONKeyArguments    = "arguments"
+	traceJSONKeyContent      = "content"
+	traceJSONKeyName         = "name"
+	traceJSONKeyParts        = "parts"
+	traceJSONKeyRole         = "role"
+	traceJSONKeyType         = "type"
+	traceJSONRoleAssistant   = "assistant"
+	traceJSONTypeText        = "text"
 )
 
 type LLMGenerationData struct {
@@ -146,7 +146,7 @@ func performLLMInference(
 	}
 
 	requestCtx, requestSpan := telemetry.StartSpan(ctx, "llm_request", trace.WithAttributes(requestAttrs...))
-	runCtx, runSpan := telemetry.StartSpan(requestCtx, "llm_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, 0)))
+	runCtx, runSpan := telemetry.StartProviderAttempt(requestCtx, "llm_request_run", l, 0)
 
 	stream, err := l.Chat(runCtx, chatCtx, chatOptions...)
 	if err != nil {
@@ -180,7 +180,9 @@ func performLLMInference(
 				finishReason = llmFinishReasonToolCall
 			}
 
-			if data.StreamErr != nil {
+			if isInferenceCancellation(requestCtx, data.StreamErr) {
+				finishReason = llmFinishReasonCancelled
+			} else if data.StreamErr != nil {
 				finishReason = llmFinishReasonError
 
 				recordInferenceSpanError(requestCtx, requestSpan, data.StreamErr)
@@ -290,8 +292,19 @@ func performLLMInference(
 	return data, nil
 }
 
+// Some provider adapters preserve cancellation text but discard its error cause.
+// Require both the connection-error type and a canceled request in that case.
+func isInferenceCancellation(ctx context.Context, err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	var connectionErr *llm.APIConnectionError
+	return ctx != nil && errors.Is(ctx.Err(), context.Canceled) &&
+		errors.As(err, &connectionErr) && connectionErr.Message == context.Canceled.Error()
+}
+
 func recordInferenceSpanError(ctx context.Context, span trace.Span, err error) {
-	if span == nil || err == nil {
+	if span == nil || err == nil || isInferenceCancellation(ctx, err) {
 		return
 	}
 
@@ -352,97 +365,7 @@ func setLLMUsageSpanAttributes(span trace.Span, usage *llm.CompletionUsage, requ
 }
 
 func normalizeGenAIProvider(provider string) string {
-	value := strings.TrimSpace(provider)
-
-	host := strings.ToLower(value)
-	if normalized := normalizeGenAIProviderHost(host); normalized != "" {
-		return normalized
-	}
-
-	canonical := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			return r
-		}
-
-		return -1
-	}, host)
-
-	if normalized := normalizeCanonicalGenAIProvider(canonical); normalized != "" {
-		return normalized
-	}
-
-	return value
-}
-
-func normalizeGenAIProviderHost(host string) string {
-	switch host {
-	case "api.anthropic.com":
-		return "anthropic"
-	case "api.cohere.ai", "api.cohere.com":
-		return "cohere"
-	case "api.deepseek.com":
-		return "deepseek"
-	case "api.groq.com":
-		return "groq"
-	case "api.mistral.ai":
-		return "mistral_ai"
-	case "api.moonshot.ai", "api.moonshot.cn":
-		return "moonshot_ai"
-	case "api.openai.com":
-		return "openai"
-	case "api.perplexity.ai":
-		return "perplexity"
-	default:
-		return normalizeOtherGenAIProviderHost(host)
-	}
-}
-
-func normalizeOtherGenAIProviderHost(host string) string {
-	switch host {
-	case "api.x.ai":
-		return "x_ai"
-	case "generativelanguage.googleapis.com":
-		return "gcp.gemini"
-	}
-
-	if strings.HasSuffix(host, ".openai.azure.com") {
-		return "azure.ai.openai"
-	}
-
-	if strings.HasSuffix(host, ".services.ai.azure.com") {
-		return "azure.ai.inference"
-	}
-
-	if strings.HasSuffix(host, ".aiplatform.googleapis.com") {
-		return "gcp.vertex_ai"
-	}
-
-	if strings.HasPrefix(host, "bedrock") && strings.HasSuffix(host, ".amazonaws.com") {
-		return "aws.bedrock"
-	}
-
-	return ""
-}
-
-func normalizeCanonicalGenAIProvider(canonical string) string {
-	switch canonical {
-	case "openai":
-		return "openai"
-	case "google", "googlegenai", "googlecloudplatform":
-		return "gcp.gen_ai"
-	case "gemini", "generativelanguagegoogleapiscom":
-		return "gcp.gemini"
-	case "vertexai", "vertexaimodelgarden":
-		return "gcp.vertex_ai"
-	case "amazon", "amazonbedrock", "awsbedrock", "bedrock":
-		return "aws.bedrock"
-	case "mistral", "mistralai":
-		return "mistral_ai"
-	case "xai":
-		return "x_ai"
-	default:
-		return ""
-	}
+	return telemetry.NormalizeGenAIProvider(provider)
 }
 
 func llmRequestContentAttributes(chatCtx *llm.ChatContext, tools []llm.Tool) []attribute.KeyValue {
@@ -582,8 +505,15 @@ func traceJSONValue(raw string) any {
 }
 
 func marshalTraceJSON(value any) string {
-	if reflect.ValueOf(value).Len() == 0 {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
 		return ""
+	}
+	switch v.Kind() {
+	case reflect.Slice, reflect.Map, reflect.String, reflect.Array:
+		if v.Len() == 0 {
+			return ""
+		}
 	}
 
 	payload, err := json.Marshal(value)
@@ -994,7 +924,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		attribute.Bool(telemetry.AttrTTSStreaming, streamed),
 		attribute.String(telemetry.AttrTTSLabel, t.Label()),
 	))
-	runCtx, runSpan := telemetry.StartSpan(requestCtx, "tts_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, 0)))
+	runCtx, runSpan := telemetry.StartProviderAttempt(requestCtx, "tts_request_run", t, 0)
 	ctx = runCtx
 	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler, requestSpan, runSpan, !telemetry.RedactionEnabled(requestCtx))
 
@@ -1439,6 +1369,8 @@ func PerformToolExecutions(
 		opt(&options)
 	}
 
+	ctx = toolAgentContext(ctx, options.Session)
+
 	go func() {
 		defer close(outCh)
 		var wg sync.WaitGroup
@@ -1481,7 +1413,7 @@ func PerformToolExecutions(
 			functionCall := makeExecutionFunctionCall(fncCall, executionArgs)
 			callCtx, callCancel := context.WithCancel(ctx)
 			if isToolExecutorSystemTool(fncCall.Name) {
-				output, cancel := executeToolExecutorSystemTool(fncCall, functionCall, options.Session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID)
+				output, cancel := executeToolExecutorSystemTool(fncCall, functionCall, options.Session, &activeMu, activeCallIDs, activeFunctionCalls, activeCallsByID, callCtx)
 				if cancel != nil {
 					cancel()
 				}
@@ -1798,7 +1730,17 @@ func executeToolExecutorSystemTool(
 	activeCallIDs map[string]struct{},
 	activeFunctionCalls map[string]map[string]activeToolCall,
 	activeCallsByID map[string]activeToolCall,
+	contexts ...context.Context,
 ) (ToolExecutionOutput, context.CancelFunc) {
+	ctx := context.Background()
+	if session != nil {
+		ctx = session.TraceContext()
+	}
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
+	_, span := telemetry.StartToolSpan(toolAgentContext(ctx, session), fc.CallID, fc.Name, fc.Arguments, "")
+	defer span.End()
 	var output any
 	var err error
 	var cancel context.CancelFunc
@@ -1813,6 +1755,9 @@ func executeToolExecutorSystemTool(
 	}
 
 	result := llm.MakeToolOutput(functionCall, output, err)
+	if result.FncCallOut != nil {
+		telemetry.RecordToolResult(span, result.FncCallOut.Output, result.FncCallOut.IsError)
+	}
 	return ToolExecutionOutput{
 		FncCall:    result.FncCall,
 		FncCallOut: result.FncCallOut,
@@ -1924,4 +1869,17 @@ func cancelRunningTask(
 		session.toolExecutionRegistry.delete(callID)
 	}
 	return fmt.Sprintf("Task %s cancelled successfully.", callID), active.cancel, nil
+}
+
+func toolAgentContext(ctx context.Context, session *AgentSession) context.Context {
+	if session == nil {
+		return ctx
+	}
+	session.mu.Lock()
+	agent := session.Agent
+	session.mu.Unlock()
+	if agent == nil || agent.GetAgent() == nil {
+		return ctx
+	}
+	return telemetry.ContextWithAgentName(ctx, agent.GetAgent().Label())
 }

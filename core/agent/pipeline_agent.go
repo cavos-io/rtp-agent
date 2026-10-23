@@ -889,10 +889,10 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	if speech == nil || speech.IsInterrupted() || speech.IsDone() {
 		return
 	}
-	ctx = ensureSpeechAgentTurn(ctx, speech)
 	va.mu.Lock()
 	session := va.session
 	va.mu.Unlock()
+	ctx = ensureSpeechAgentTurn(ctx, speech, session)
 	if session == nil || va.LLM == nil {
 		return
 	}
@@ -936,8 +936,10 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	if speech == nil {
 		return
 	}
-	ctx = ensureSpeechAgentTurn(ctx, speech)
-	defer finishSpeechAgentTurn(speech)
+	va.mu.Lock()
+	traceSession := va.session
+	va.mu.Unlock()
+	ctx = ensureSpeechAgentTurn(ctx, speech, traceSession)
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 	if speech.IsInterrupted() {
@@ -1016,27 +1018,56 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	va.generateReplyWithContext(ctx, va.speechOptions(speech))
 }
 
-func ensureSpeechAgentTurn(ctx context.Context, speech *SpeechHandle) context.Context {
+func ensureSpeechAgentTurn(ctx context.Context, speech *SpeechHandle, sessions ...*AgentSession) context.Context {
+	var agentLabel string
+	if len(sessions) > 0 && sessions[0] != nil {
+		session := sessions[0]
+		session.mu.Lock()
+		if session.Agent != nil {
+			agentLabel = session.Agent.GetAgent().Label()
+		}
+		session.mu.Unlock()
+		ctx = telemetry.ContextWithAgentName(ctx, agentLabel)
+	}
 	if speech == nil {
 		return ctx
 	}
 	speech.mu.Lock()
+	if speech.IsDone() {
+		speech.mu.Unlock()
+		return ctx
+	}
 	if speech.agentTurnCtx != nil {
 		turnCtx := speech.agentTurnCtx
+		recordSpeechGenerationLocked(speech, trace.SpanFromContext(turnCtx))
 		speech.mu.Unlock()
 		return turnCtx
 	}
-	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps))}
+	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps)), attribute.String(telemetry.AttrSpeechID, speech.ID), attribute.String(telemetry.AttrGenAIOperationName, "invoke_agent"), attribute.String(telemetry.AttrAgentLabel, agentLabel), attribute.String("gen_ai.agent.name", agentLabel)}
 	if speech.numSteps > 1 {
 		parentID := speech.ID + "_" + strconv.Itoa(speech.numSteps-1)
 		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, parentID))
 	}
 	turnCtx, turnSpan := telemetry.StartSpan(ctx, "agent_turn", trace.WithAttributes(attrs...))
 	speech.agentTurnCtx = turnCtx
+	recordSpeechGenerationLocked(speech, turnSpan)
 	speech.agentTurnEnd = func() { turnSpan.End() }
 	speech.mu.Unlock()
-	speech.AddDoneCallback(func(*SpeechHandle) { finishSpeechAgentTurn(speech) })
 	return turnCtx
+}
+
+// Called with speech.mu held; repeated scheduling of the same step is not a generation.
+func recordSpeechGenerationLocked(speech *SpeechHandle, span trace.Span) {
+	if speech.agentTurnStep == speech.numSteps {
+		return
+	}
+	speech.agentTurnStep = speech.numSteps
+	attrs := []attribute.KeyValue{attribute.String(telemetry.AttrAgentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps))}
+	if speech.numSteps > 1 {
+		attrs = append(attrs, attribute.String(telemetry.AttrAgentParentTurnID, speech.ID+"_"+strconv.Itoa(speech.numSteps-1)))
+	}
+	span.AddEvent("generation", trace.WithAttributes(attrs...))
+	span.SetAttributes(append(attrs, attribute.Int("lk.generation_count", speech.numSteps))...)
 }
 
 func finishSpeechAgentTurn(speech *SpeechHandle) {
@@ -1546,6 +1577,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 		}
 		if opts.SpeechHandle != nil {
 			opts.SpeechHandle.IncrementStep()
+			ctx = ensureSpeechAgentTurn(ctx, opts.SpeechHandle)
 			opts.SpeechHandle.AuthorizeGeneration()
 			if activity := session.currentActivity(); activity != nil {
 				activity.resumeSpeechStep(opts.SpeechHandle)

@@ -358,6 +358,11 @@ type AssignmentContextValuesResult struct {
 type JobAssignment = lkprotocol.JobAssignment
 
 type RunningJobInfo struct {
+	ReceivedAt float64 `json:"received_at,omitempty"`
+	AcceptedAt float64 `json:"accepted_at,omitempty"`
+	AssignedAt float64 `json:"assigned_at,omitempty"`
+	LaunchedAt float64 `json:"launched_at,omitempty"`
+
 	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
 	Job             *lkprotocol.Job    `json:"job"`
 	URL             string             `json:"url"`
@@ -367,6 +372,11 @@ type RunningJobInfo struct {
 }
 
 type RunningJobInfoOptions struct {
+	ReceivedAt float64
+	AcceptedAt float64
+	AssignedAt float64
+	LaunchedAt float64
+
 	AcceptArguments JobAcceptArguments
 	Job             *lkprotocol.Job
 	URL             string

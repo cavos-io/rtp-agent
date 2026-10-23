@@ -24,6 +24,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var currentJobContexts sync.Map
@@ -234,7 +235,14 @@ type JobContext struct {
 	observabilityOnce      sync.Once
 	observabilityErr       error
 	customTracerProvider   *sdktrace.TracerProvider
+	borrowTracerProvider   bool
 	customTraceMetadata    []attribute.KeyValue
+	customTracingOptions   telemetry.TracingOptions
+	traceMu                sync.Mutex
+	shutdownTraceCtx       context.Context
+	jobSpan, shutdownSpan  trace.Span
+	dispatchTimeline       jobDispatchTimeline
+	entrypointReturnedAt   time.Time
 	shutdownCallbacks      []func(string)
 	shutdownMu             sync.Mutex
 	shutdownTimeout        time.Duration
@@ -333,6 +341,11 @@ func (c *JobContext) Observability() *telemetry.JobObservability {
 // called before StartSession. The JobContext owns and shuts down the provider;
 // do not share it with another job.
 func (c *JobContext) SetTracerProvider(provider *sdktrace.TracerProvider, metadata ...attribute.KeyValue) error {
+	return c.SetTracerProviderWithOptions(provider, telemetry.TracingOptions{}, metadata...)
+}
+
+// SetTracerProviderWithOptions configures job-owned tracing and content policy before session startup.
+func (c *JobContext) SetTracerProviderWithOptions(provider *sdktrace.TracerProvider, options telemetry.TracingOptions, metadata ...attribute.KeyValue) error {
 	if c == nil {
 		return fmt.Errorf("job context is nil")
 	}
@@ -342,11 +355,28 @@ func (c *JobContext) SetTracerProvider(provider *sdktrace.TracerProvider, metada
 	if c.primarySession != nil || c.observability != nil {
 		return fmt.Errorf("tracer provider must be set before session start")
 	}
-	if c.customTracerProvider != nil {
+	if c.borrowTracerProvider && c.customTracerProvider == provider {
+		return fmt.Errorf("server-owned tracer provider cannot be transferred to a job")
+	}
+	if c.customTracerProvider != nil && !c.borrowTracerProvider {
 		return fmt.Errorf("tracer provider is already set")
 	}
 	c.customTracerProvider = provider
-	c.customTraceMetadata = append([]attribute.KeyValue(nil), metadata...)
+	c.borrowTracerProvider = false
+	c.customTracingOptions = options
+	c.customTraceMetadata = append(c.customTraceMetadata, metadata...)
+	return nil
+}
+
+// SetTraceMetadata adds job-specific trace attributes before session startup.
+func (c *JobContext) SetTraceMetadata(metadata ...attribute.KeyValue) error {
+	if c == nil {
+		return errNilJobContext
+	}
+	if c.primarySession != nil || c.observability != nil {
+		return fmt.Errorf("trace metadata must be set before session start")
+	}
+	c.customTraceMetadata = append(c.customTraceMetadata, metadata...)
 	return nil
 }
 
@@ -388,20 +418,25 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 		traceMetadata := append([]attribute.KeyValue(nil), c.customTraceMetadata...)
 		traceMetadata = append(traceMetadata, attribute.Bool(telemetry.AttrRedactionEnabled, c.Job.GetEnableRedaction()))
 		c.observability, c.observabilityErr = telemetry.NewJobObservability(ctx, telemetry.JobObservabilityConfig{
-			EndpointURL:    endpoint,
-			Headers:        headers,
-			JobID:          c.JobID(),
-			RoomID:         room.GetSid(),
-			RoomName:       room.GetName(),
-			AgentName:      c.Job.GetAgentName(),
-			TracerProvider: c.customTracerProvider,
-			TraceMetadata:  traceMetadata,
+			EndpointURL:          endpoint,
+			Headers:              headers,
+			JobID:                c.JobID(),
+			RoomID:               room.GetSid(),
+			RoomName:             room.GetName(),
+			AgentName:            c.Job.GetAgentName(),
+			TracerProvider:       c.customTracerProvider,
+			BorrowTracerProvider: c.borrowTracerProvider,
+			TraceMetadata:        traceMetadata,
+			TracingOptions:       c.customTracingOptions,
 		})
 	})
 	return c.observabilityErr
 }
 
 func (c *JobContext) FinalizeObservability(ctx context.Context) error {
+	if c != nil {
+		c.endJobTrace()
+	}
 	if c == nil || (c.observability == nil && c.customTracerProvider == nil) {
 		return nil
 	}
@@ -411,6 +446,9 @@ func (c *JobContext) FinalizeObservability(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, observabilityFinalizeTimeout)
 	defer cancel()
 	if c.observability == nil {
+		if c.borrowTracerProvider {
+			return c.customTracerProvider.ForceFlush(ctx)
+		}
 		return errors.Join(
 			c.customTracerProvider.ForceFlush(ctx),
 			c.customTracerProvider.Shutdown(ctx),
@@ -715,6 +753,14 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := c.ensureObservability(ctx); err != nil {
+		return err
+	}
+	if !trace.SpanContextFromContext(ctx).IsValid() {
+		ctx = c.jobTraceContext(ctx)
+	}
+	ctx, connectSpan := telemetry.StartSpan(ctx, "room_connect", trace.WithAttributes(attribute.String(telemetry.AttrRoomName, c.Job.GetRoom().GetName()), attribute.String("lk.room_sid", c.Job.GetRoom().GetSid())))
+	defer connectSpan.End()
 	opts := livekitJobContextNormalizeConnectOptions(options...)
 	if err := livekitJobContextJoinPreparedRoom(ctx, AcceptedJobRoomConnectOptions{
 		Room:          room,
@@ -728,6 +774,7 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 		Accept:        c.AcceptArguments,
 		Identity:      c.ParticipantIdentity(),
 	}); err != nil {
+		recordJobSpanError(connectSpan, err)
 		return err
 	}
 	// Avoid re-writing JobContext.Room in the common (prepared) path, where room is
@@ -769,60 +816,82 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	c.SetPrimarySession(session)
 	session.SetJobContext(c)
 
-	roomOptions := opts.RoomOptions
-	if roomOptions.DeleteRoom == nil {
-		roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
-			_, err := c.DeleteRoom(deleteCtx, roomName)
-			return err
-		}
+	if err := c.ensureObservability(sessionCtx); err != nil {
+		return err
 	}
-
-	var roomIO SessionRoomIO
-	if c.roomNeedsConnect() {
-		// RoomIO must be registered before the join, so that no track event can
-		// fire before it is listening. PrepareRoom only allocates; the join is
-		// ConnectPreparedRoom below.
-		//
-		// Registration order mirrors the previous WithCallback composition: the
-		// caller's handlers run before RoomIO's.
-		c.AddRoomCallback(opts.RoomCallback)
-		roomIO = livekitNewRoomIO(nil, session, roomOptions)
-		detachRoomIO := c.AddRoomCallback(roomIO.GetCallback())
-		room := c.PrepareRoom(opts.ConnectOptions...)
-		roomIO.AttachRoom(room)
-		if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
-			detachRoomIO()
-			_ = roomIO.Close()
-			return err
+	sessionCtx = c.jobTraceContext(sessionCtx)
+	initializeTransport := func(startupCtx context.Context) error {
+		operationCtx := ctx
+		if c.observability != nil {
+			operationCtx = c.observability.Context(operationCtx)
 		}
-		roomIO.ReconcileParticipants()
-	}
+		ctx := trace.ContextWithSpan(operationCtx, trace.SpanFromContext(startupCtx))
+		roomOptions := opts.RoomOptions
+		if roomOptions.DeleteRoom == nil {
+			roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
+				_, err := c.DeleteRoom(deleteCtx, roomName)
+				return err
+			}
+		}
 
-	if c.Room != nil {
-		session.Room = c.Room
-		if roomIO == nil {
-			roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
-			c.AddRoomCallback(roomIO.GetCallback())
+		var roomIO SessionRoomIO
+		if c.roomNeedsConnect() {
+			// RoomIO must be registered before the join, so that no track event can
+			// fire before it is listening. PrepareRoom only allocates; the join is
+			// ConnectPreparedRoom below.
+			//
+			// Registration order mirrors the previous WithCallback composition: the
+			// caller's handlers run before RoomIO's.
+			c.AddRoomCallback(opts.RoomCallback)
+			roomIO = livekitNewRoomIO(nil, session, roomOptions)
+			if tracer, ok := roomIO.(interface{ SetTraceContext(context.Context) }); ok {
+				tracer.SetTraceContext(ctx)
+			}
+			detachRoomIO := c.AddRoomCallback(roomIO.GetCallback())
+			room := c.PrepareRoom(opts.ConnectOptions...)
+			roomIO.AttachRoom(room)
+			if err := c.ConnectPreparedRoom(ctx, room, opts.ConnectOptions...); err != nil {
+				detachRoomIO()
+				_ = roomIO.Close()
+				return err
+			}
 			roomIO.ReconcileParticipants()
 		}
-		if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
-			if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
-				return err
-			}
-		}
-		session.AddPreCloseCallback(func() {
-			if err := roomIO.StopRecorder(); err != nil {
-				logger.Logger.Errorw("failed to finalize session recording", err)
-			}
-		})
-		if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
-			if err := roomIO.Start(ctx); err != nil {
-				return err
-			}
-		}
-	}
 
-	c.SetPrimaryRoomIO(roomIO)
+		if c.Room != nil {
+			session.Room = c.Room
+			if roomIO == nil {
+				roomIO = livekitNewRoomIO(c.Room, session, roomOptions)
+				if tracer, ok := roomIO.(interface{ SetTraceContext(context.Context) }); ok {
+					tracer.SetTraceContext(ctx)
+				}
+				c.AddRoomCallback(roomIO.GetCallback())
+				roomIO.ReconcileParticipants()
+			}
+			if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+				if err := roomIO.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+					return err
+				}
+			}
+			session.AddPreCloseCallback(func() {
+				if tracer, ok := roomIO.(interface{ EndInputTrace() }); ok {
+					tracer.EndInputTrace()
+				}
+				if err := roomIO.StopRecorder(); err != nil {
+					logger.Logger.Errorw("failed to finalize session recording", err)
+				}
+			})
+			if livekitJobContextRoomReadyForRoomIOStart(c.Room) {
+				if err := roomIO.Start(ctx); err != nil {
+					return err
+				}
+			}
+		}
+
+		c.SetPrimaryRoomIO(roomIO)
+		return nil
+
+	}
 
 	info := c.AvatarStartInfo()
 	if info.LiveKitURL != "" && info.LiveKitToken != "" {
@@ -834,7 +903,7 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 	if c.observability != nil {
 		sessionCtx = c.observability.Context(sessionCtx)
 	}
-	if err := session.Start(sessionCtx); err != nil {
+	if _, err := session.StartWithOptions(sessionCtx, agent.StartOptions{BeforeStart: initializeTransport}); err != nil {
 		return err
 	}
 	_, err := c.MakeSessionReport(session)
@@ -895,6 +964,20 @@ func (c *JobContext) AddShutdownCallback(callback any) error {
 	default:
 		return fmt.Errorf("shutdown callback must be func() or func(string)")
 	}
+	index := len(c.shutdownCallbacks) - 1
+	original := c.shutdownCallbacks[index]
+	name := callbackTraceName(callback)
+	c.shutdownCallbacks[index] = func(reason string) {
+		_, span := telemetry.StartSpan(c.shutdownTraceContext(context.Background()), "shutdown_callback", trace.WithAttributes(attribute.String("lk.callback.name", name)))
+		defer span.End()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				recordJobSpanError(span, fmt.Errorf("shutdown callback panicked: %v", recovered))
+				panic(recovered)
+			}
+		}()
+		original(reason)
+	}
 	return nil
 }
 
@@ -938,7 +1021,14 @@ func (c *JobContext) WaitForParticipant(
 	if err := c.ensureRoomConnected(ctx); err != nil {
 		return nil, err
 	}
-	return livekitJobContextWaitForParticipant(ctx, c.Room, identity, kinds...)
+	if !trace.SpanContextFromContext(ctx).IsValid() {
+		ctx = c.jobTraceContext(ctx)
+	}
+	ctx, span := telemetry.StartSpan(ctx, "wait_for_participant", trace.WithAttributes(attribute.Bool("lk.room_io.participant_filter", identity != "")))
+	defer span.End()
+	participant, err := livekitJobContextWaitForParticipant(ctx, c.Room, identity, kinds...)
+	recordJobSpanError(span, err)
+	return participant, err
 }
 
 func (c *JobContext) WaitForAgent(
@@ -1059,6 +1149,7 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 		return settled
 	}
 	c.shutdownOnce.Do(func() {
+		shutdownCtx := c.beginShutdownTrace(reason)
 		c.shutdownMu.Lock()
 		if c.shutdownDone == nil {
 			c.shutdownDone = make(chan struct{})
@@ -1077,6 +1168,8 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 		disconnect := func() {}
 		if c.Room != nil {
 			disconnect = func() {
+				_, span := telemetry.StartSpan(shutdownCtx, "room_disconnect")
+				defer span.End()
 				c.Room.Disconnect()
 			}
 		}
@@ -1117,6 +1210,7 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 		}
 		settled := livekitJobContextRunShutdown(reason, jobContextShutdownPlan{
 			Drain:          drain,
+			Context:        shutdownCtx,
 			StopPublishing: stopPublishing,
 			Callbacks:      callbacks,
 			Disconnect:     disconnect,
@@ -1136,6 +1230,7 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 }
 
 type jobContextShutdownPlan struct {
+	Context        context.Context
 	Drain          func(context.Context)
 	StopPublishing func()
 	Callbacks      []func(string)
@@ -1145,7 +1240,11 @@ type jobContextShutdownPlan struct {
 }
 
 func livekitJobContextRunShutdown(reason string, plan jobContextShutdownPlan, jobID string) <-chan struct{} {
-	ctx, cancel := context.WithTimeout(context.Background(), plan.Timeout)
+	parent := plan.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, plan.Timeout)
 	defer cancel()
 
 	jobLogger := plan.Logger

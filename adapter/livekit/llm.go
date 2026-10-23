@@ -294,3 +294,6 @@ type LiveKitInferenceLLMOption = LLMOption
 func NewLiveKitInferenceLLM(model string, apiKey, apiSecret string, opts ...LLMOption) (*LLM, error) {
 	return NewLLM(model, apiKey, apiSecret, opts...)
 }
+
+// TracesRequestAttempts delegates attempt tracing to the OpenAI-compatible implementation.
+func (*LLM) TracesRequestAttempts() bool { return true }
