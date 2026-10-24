@@ -38,7 +38,7 @@ The exporter honors standard `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OT
 
 For Langfuse, set the base endpoint to your host's `/api/public/otel` path and supply its Basic authentication header through `OTEL_EXPORTER_OTLP_HEADERS`. Generate the header outside the repository from your public and secret keys. Do not commit it. The example includes both `session.id` and `langfuse.session.id` using the job ID.
 
-The example initializes one provider per server process and transfers ownership with `AgentServer.SetTracerProvider`. Jobs share its exporter and batching worker, with separate trace contexts and metadata supplied by `JobContext.SetTraceMetadata`. Jobs flush after teardown, callbacks and report upload; the CLI closes the server and shuts down the provider after job finalization. Applications embedding the server must call `AgentServer.Close(ctx)` after execution. Explicit `JobContext.SetTracerProvider` overrides remain job-owned. Custom trace providers replace the LiveKit Cloud trace exporter; this example exports traces to the configured OTLP backend.
+The example initializes one provider per server process and transfers ownership with `AgentServer.SetTracerProvider`. Jobs share its exporter and batching worker, with separate trace contexts and metadata supplied by `JobContext.SetTraceMetadata`. Jobs flush after teardown, callbacks and report upload; the CLI closes the server and shuts down the provider after job finalization. Applications embedding the server must call `AgentServer.Close(ctx)` after execution. Custom trace providers replace the LiveKit Cloud trace exporter; this example exports traces to the configured OTLP backend.
 
 ## Inspect the trace
 

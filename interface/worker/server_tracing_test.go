@@ -32,9 +32,6 @@ func TestServerSharedTracerLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.entrypointFnc = func(job *JobContext) error {
-		if err := job.SetTracerProvider(provider); err == nil {
-			t.Fatal("server provider ownership transferred to job")
-		}
 		if err := job.SetTraceMetadata(attribute.String("session.id", job.JobID())); err != nil {
 			return err
 		}
@@ -136,28 +133,41 @@ func TestServerSharedTracerCloseTimeout(t *testing.T) {
 	}
 }
 
-func TestServerTracerJobOverride(t *testing.T) {
+func TestServerSetTracerProviderValidatesLifecycle(t *testing.T) {
 	ctx := context.Background()
-	shared := &sharedTraceProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
-	owned := &sharedTraceProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
-	server := NewAgentServer(WorkerOptions{})
-	if err := server.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(shared))); err != nil {
-		t.Fatal(err)
+	if err := NewAgentServer(WorkerOptions{}).SetTracerProvider(nil); err == nil {
+		t.Fatal("nil provider was accepted")
 	}
-	defer server.Close(ctx)
-	server.entrypointFnc = func(job *JobContext) error {
-		return job.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(owned)))
-	}
-	job := NewJobContext(&livekit.Job{Id: "override", Room: &livekit.Room{}}, "", "", "")
-	job.fakeJob = true
-	defer job.onCleanUp()
-	if err := server.runJobEntrypoint(job); err != nil {
-		t.Fatal(err)
-	}
-	if err := job.FinalizeObservability(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if shared.shutdowns.Load() != 0 || owned.shutdowns.Load() != 1 {
-		t.Fatal("job override ownership changed")
+	for _, test := range []struct {
+		name    string
+		prepare func(*AgentServer) error
+	}{
+		{"already configured", func(server *AgentServer) error {
+			return server.SetTracerProvider(sdktrace.NewTracerProvider())
+		}},
+		{"execution started", func(server *AgentServer) error {
+			return server.beginRun()
+		}},
+		{"closed", func(server *AgentServer) error {
+			return server.Close(ctx)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := NewAgentServer(WorkerOptions{})
+			t.Cleanup(func() { _ = server.Close(ctx) })
+			if err := test.prepare(server); err != nil {
+				t.Fatal(err)
+			}
+			provider := sdktrace.NewTracerProvider()
+			t.Cleanup(func() { _ = provider.Shutdown(ctx) })
+			if err := server.SetTracerProvider(provider); err == nil {
+				t.Fatal("provider was accepted after configuration or execution ended")
+			}
+			_, span := provider.Tracer("test").Start(ctx, "rejected provider")
+			defer span.End()
+			if !span.IsRecording() {
+				t.Fatal("rejected provider ownership was consumed")
+			}
+		})
 	}
 }

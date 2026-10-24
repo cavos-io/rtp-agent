@@ -21,7 +21,13 @@ func TestJobLifecycleTraceParity(t *testing.T) {
 	j.fakeJob = true
 	j.roomConnected.Store(true)
 	t.Cleanup(func() { _ = j.onCleanUp() })
-	if err := j.SetTracerProvider(p); err != nil {
+	server := NewAgentServer(WorkerOptions{})
+	if err := server.SetTracerProvider(p); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close(context.Background()) })
+	server.entrypointFnc = func(*JobContext) error { return nil }
+	if err := server.runJobEntrypoint(j); err != nil {
 		t.Fatal(err)
 	}
 	s := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
@@ -38,7 +44,6 @@ func TestJobLifecycleTraceParity(t *testing.T) {
 	if !called {
 		t.Fatal("callback missing")
 	}
-	server := NewAgentServer(WorkerOptions{})
 	server.sessionEndFnc = func(*JobContext) error { return nil }
 	done := make(chan struct{})
 	server.finishJobLifecycle(j, j.JobID(), done)

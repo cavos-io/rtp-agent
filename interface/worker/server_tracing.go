@@ -10,7 +10,7 @@ import (
 )
 
 // SetTracerProvider transfers ownership of a shared provider to the server.
-// Configure it before running jobs. Job-specific providers override this default.
+// Configure it before running jobs. All jobs share this provider.
 func (s *AgentServer) SetTracerProvider(provider *sdktrace.TracerProvider) error {
 	if provider == nil {
 		return fmt.Errorf("tracer provider is nil")

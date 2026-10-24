@@ -234,10 +234,8 @@ type JobContext struct {
 	observability          *telemetry.JobObservability
 	observabilityOnce      sync.Once
 	observabilityErr       error
-	customTracerProvider   *sdktrace.TracerProvider
-	borrowTracerProvider   bool
+	serverTracerProvider   *sdktrace.TracerProvider
 	customTraceMetadata    []attribute.KeyValue
-	customTracingOptions   telemetry.TracingOptions
 	traceMu                sync.Mutex
 	shutdownTraceCtx       context.Context
 	jobSpan, shutdownSpan  trace.Span
@@ -337,37 +335,6 @@ func (c *JobContext) Observability() *telemetry.JobObservability {
 	return c.observability
 }
 
-// SetTracerProvider routes this job's spans exclusively to provider. It must be
-// called before StartSession. The JobContext owns and shuts down the provider;
-// do not share it with another job.
-func (c *JobContext) SetTracerProvider(provider *sdktrace.TracerProvider, metadata ...attribute.KeyValue) error {
-	return c.SetTracerProviderWithOptions(provider, telemetry.TracingOptions{}, metadata...)
-}
-
-// SetTracerProviderWithOptions configures job-owned tracing and content policy before session startup.
-func (c *JobContext) SetTracerProviderWithOptions(provider *sdktrace.TracerProvider, options telemetry.TracingOptions, metadata ...attribute.KeyValue) error {
-	if c == nil {
-		return fmt.Errorf("job context is nil")
-	}
-	if provider == nil {
-		return fmt.Errorf("tracer provider is nil")
-	}
-	if c.primarySession != nil || c.observability != nil {
-		return fmt.Errorf("tracer provider must be set before session start")
-	}
-	if c.borrowTracerProvider && c.customTracerProvider == provider {
-		return fmt.Errorf("server-owned tracer provider cannot be transferred to a job")
-	}
-	if c.customTracerProvider != nil && !c.borrowTracerProvider {
-		return fmt.Errorf("tracer provider is already set")
-	}
-	c.customTracerProvider = provider
-	c.borrowTracerProvider = false
-	c.customTracingOptions = options
-	c.customTraceMetadata = append(c.customTraceMetadata, metadata...)
-	return nil
-}
-
 // SetTraceMetadata adds job-specific trace attributes before session startup.
 func (c *JobContext) SetTraceMetadata(metadata ...attribute.KeyValue) error {
 	if c == nil {
@@ -389,7 +356,7 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 		options = c.Report.RecordingOptions
 	}
 	cloudReporting := options.Audio || options.Traces || options.Logs || options.Transcript
-	if !cloudReporting && c.customTracerProvider == nil {
+	if !cloudReporting && c.serverTracerProvider == nil {
 		return nil
 	}
 	c.observabilityOnce.Do(func() {
@@ -402,7 +369,7 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 				return
 			}
 		}
-		if endpoint == "" && c.customTracerProvider == nil {
+		if endpoint == "" && c.serverTracerProvider == nil {
 			return
 		}
 		headers := map[string]string(nil)
@@ -424,10 +391,9 @@ func (c *JobContext) ensureObservability(ctx context.Context) error {
 			RoomID:               room.GetSid(),
 			RoomName:             room.GetName(),
 			AgentName:            c.Job.GetAgentName(),
-			TracerProvider:       c.customTracerProvider,
-			BorrowTracerProvider: c.borrowTracerProvider,
+			TracerProvider:       c.serverTracerProvider,
+			BorrowTracerProvider: true,
 			TraceMetadata:        traceMetadata,
-			TracingOptions:       c.customTracingOptions,
 		})
 	})
 	return c.observabilityErr
@@ -437,7 +403,7 @@ func (c *JobContext) FinalizeObservability(ctx context.Context) error {
 	if c != nil {
 		c.endJobTrace()
 	}
-	if c == nil || (c.observability == nil && c.customTracerProvider == nil) {
+	if c == nil || (c.observability == nil && c.serverTracerProvider == nil) {
 		return nil
 	}
 	if ctx == nil {
@@ -446,13 +412,7 @@ func (c *JobContext) FinalizeObservability(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, observabilityFinalizeTimeout)
 	defer cancel()
 	if c.observability == nil {
-		if c.borrowTracerProvider {
-			return c.customTracerProvider.ForceFlush(ctx)
-		}
-		return errors.Join(
-			c.customTracerProvider.ForceFlush(ctx),
-			c.customTracerProvider.Shutdown(ctx),
-		)
+		return c.serverTracerProvider.ForceFlush(ctx)
 	}
 	return errors.Join(
 		c.observability.ForceFlush(ctx),

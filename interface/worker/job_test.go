@@ -616,16 +616,6 @@ func (workerTestSessionAssistant) OnAudioFrame(context.Context, *audiomodel.Audi
 func (workerTestSessionAssistant) SetPublishAudio(func(context.Context, *audiomodel.AudioFrame) error) {
 }
 
-type shutdownTrackingSpanProcessor struct {
-	*tracetest.SpanRecorder
-	shutdown atomic.Bool
-}
-
-func (p *shutdownTrackingSpanProcessor) Shutdown(ctx context.Context) error {
-	p.shutdown.Store(true)
-	return p.SpanRecorder.Shutdown(ctx)
-}
-
 func TestJobContextStartSessionUsesIsolatedJobObservability(t *testing.T) {
 	var traceRequests atomic.Int32
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -686,7 +676,7 @@ func TestJobContextStartSessionUsesIsolatedJobObservability(t *testing.T) {
 	}
 }
 
-func TestJobContextCustomTracerProvidersAreIsolatedAndExclusive(t *testing.T) {
+func TestJobContextSharedTracerKeepsJobsIsolatedAndExclusive(t *testing.T) {
 	var cloudTraceRequests atomic.Int32
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/observability/traces/otlp/v0" {
@@ -701,18 +691,24 @@ func TestJobContextCustomTracerProvidersAreIsolatedAndExclusive(t *testing.T) {
 		NewJobContext(&livekit.Job{Id: "job-a", Room: &livekit.Room{Sid: "room-a"}}, "wss://test.livekit.cloud", "key-a", "secret-a"),
 		NewJobContext(&livekit.Job{Id: "job-b", Room: &livekit.Room{Sid: "room-b"}}, "wss://test.livekit.cloud", "key-b", "secret-b"),
 	}
-	processors := make([]*shutdownTrackingSpanProcessor, len(contexts))
-	providers := make([]*sdktrace.TracerProvider, len(contexts))
+	processor := &sharedTraceProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
+	server := NewAgentServer(WorkerOptions{})
+	if err := server.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close(context.Background()) })
+	server.entrypointFnc = func(job *JobContext) error {
+		return job.SetTraceMetadata(attribute.String("session.id", job.JobID()))
+	}
 	sessions := make([]*agent.AgentSession, len(contexts))
 	for i, jobCtx := range contexts {
 		jobCtx.fakeJob = true
 		jobCtx.roomConnected.Store(true)
 		jobCtx.InitRecording(agent.RecordingOptions{Traces: true})
-		processors[i] = &shutdownTrackingSpanProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
-		providers[i] = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processors[i]))
-		if err := jobCtx.SetTracerProvider(providers[i], attribute.String("session.id", jobCtx.JobID())); err != nil {
-			t.Fatalf("SetTracerProvider() error = %v", err)
+		if err := server.runJobEntrypoint(jobCtx); err != nil {
+			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = jobCtx.onCleanUp() })
 		sessions[i] = agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 		sessions[i].Assistant = workerTestSessionAssistant{}
 	}
@@ -741,29 +737,28 @@ func TestJobContextCustomTracerProvidersAreIsolatedAndExclusive(t *testing.T) {
 		if err := contexts[i].FinalizeObservability(context.Background()); err != nil {
 			t.Fatalf("FinalizeObservability() error = %v", err)
 		}
-		spans := processors[i].Ended()
-		if len(spans) == 0 {
-			t.Fatalf("job %d custom provider exported no spans", i)
+		if processor.shutdowns.Load() != 0 {
+			t.Fatal("job shut down shared tracer provider")
 		}
-		for _, span := range spans {
-			attrs := make(map[string]string, len(span.Attributes()))
-			for _, attr := range span.Attributes() {
-				attrs[string(attr.Key)] = attr.Value.AsString()
-			}
-			if got, want := attrs["session.id"], contexts[i].JobID(); got != want {
-				t.Fatalf("job %d session.id = %q, want %q", i, got, want)
-			}
+	}
+	seen := map[string]bool{}
+	for _, span := range processor.Ended() {
+		attrs := testReadOnlySpanAttributes(span)
+		jobID := attrs["job_id"]
+		if (jobID != "job-a" && jobID != "job-b") || attrs["session.id"] != jobID {
+			t.Fatalf("job metadata leaked: %v", attrs)
 		}
-		if !processors[i].shutdown.Load() {
-			t.Fatalf("job %d custom tracer provider was not shut down", i)
-		}
+		seen[jobID] = true
+	}
+	if len(seen) != len(contexts) {
+		t.Fatalf("exported jobs = %v, want both jobs", seen)
 	}
 	if got := cloudTraceRequests.Load(); got != 0 {
 		t.Fatalf("LiveKit trace requests = %d, want 0", got)
 	}
 }
 
-func TestJobContextCustomTracerProviderWorksWithoutCloudReporting(t *testing.T) {
+func TestJobContextSharedTracerWorksWithoutCloudReporting(t *testing.T) {
 	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "")
 	tests := []struct {
 		name            string
@@ -795,7 +790,16 @@ func TestJobContextCustomTracerProviderWorksWithoutCloudReporting(t *testing.T) 
 
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-			if err := jobCtx.SetTracerProvider(provider, attribute.String("session.id", "session-custom")); err != nil {
+			server := NewAgentServer(WorkerOptions{})
+			if err := server.SetTracerProvider(provider); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Close(context.Background()) })
+			t.Cleanup(func() { _ = jobCtx.onCleanUp() })
+			server.entrypointFnc = func(job *JobContext) error {
+				return job.SetTraceMetadata(attribute.String("session.id", "session-custom"))
+			}
+			if err := server.runJobEntrypoint(jobCtx); err != nil {
 				t.Fatal(err)
 			}
 
@@ -832,7 +836,15 @@ func TestJobContextPropagatesProjectRedactionToTelemetry(t *testing.T) {
 		EnableRedaction: true,
 	}, "wss://test.livekit.cloud", "", "")
 	provider := sdktrace.NewTracerProvider()
-	if err := jobCtx.SetTracerProvider(provider); err != nil {
+	server := NewAgentServer(WorkerOptions{})
+	if err := server.SetTracerProvider(provider); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close(context.Background()) })
+	t.Cleanup(func() { _ = jobCtx.onCleanUp() })
+	jobCtx.fakeJob = true
+	server.entrypointFnc = func(*JobContext) error { return nil }
+	if err := server.runJobEntrypoint(jobCtx); err != nil {
 		t.Fatal(err)
 	}
 	if err := jobCtx.ensureObservability(context.Background()); err != nil {
@@ -854,35 +866,52 @@ func testReadOnlySpanAttributes(span sdktrace.ReadOnlySpan) map[string]string {
 	return attrs
 }
 
-func TestJobContextSetTracerProviderValidatesLifecycle(t *testing.T) {
-	jobCtx := NewJobContext(&livekit.Job{Id: "job-custom-provider"}, "", "", "")
-	if err := jobCtx.SetTracerProvider(nil); err == nil {
-		t.Fatal("SetTracerProvider(nil) error = nil")
-	}
-
-	provider := sdktrace.NewTracerProvider()
-	jobCtx.SetPrimarySession(agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{}))
-	if err := jobCtx.SetTracerProvider(provider); err == nil {
-		t.Fatal("SetTracerProvider() after session start error = nil")
-	}
-	if err := provider.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
+func TestJobContextSetTraceMetadataValidatesLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		job  *JobContext
+	}{
+		{name: "nil"},
+		{name: "session started", job: &JobContext{primarySession: agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})}},
+		{name: "observability initialized", job: &JobContext{observability: &telemetry.JobObservability{}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.job.SetTraceMetadata(attribute.String("session.id", "late")); err == nil {
+				t.Fatal("SetTraceMetadata() error = nil")
+			}
+		})
 	}
 }
 
-func TestJobContextFinalizeObservabilityShutsUninitializedCustomProvider(t *testing.T) {
-	jobCtx := NewJobContext(&livekit.Job{Id: "job-custom-provider-finalize"}, "", "", "")
-	processor := &shutdownTrackingSpanProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
-	if err := jobCtx.SetTracerProvider(provider); err != nil {
+func TestJobContextFinalizeObservabilityFlushesUninitializedSharedProvider(t *testing.T) {
+	ctx := context.Background()
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-shared-provider-finalize"}, "", "", "")
+	jobCtx.fakeJob = true
+	t.Cleanup(func() { _ = jobCtx.onCleanUp() })
+	processor := &sharedTraceProcessor{SpanRecorder: tracetest.NewSpanRecorder()}
+	server := NewAgentServer(WorkerOptions{})
+	if err := server.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+	t.Cleanup(func() { _ = server.Close(ctx) })
+	server.entrypointFnc = func(*JobContext) error { return nil }
+	if err := server.runJobEntrypoint(jobCtx); err != nil {
 		t.Fatal(err)
 	}
-	if !processor.shutdown.Load() {
-		t.Fatal("uninitialized custom tracer provider was not shut down")
+	if jobCtx.Observability() != nil {
+		t.Fatal("job initialized observability before finalization")
+	}
+	if err := jobCtx.FinalizeObservability(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if processor.flushes.Load() != 1 || processor.shutdowns.Load() != 0 {
+		t.Fatal("finalization must flush shared provider without shutting it down")
+	}
+	if err := server.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if processor.shutdowns.Load() != 1 {
+		t.Fatal("server did not shut down provider")
 	}
 }
 

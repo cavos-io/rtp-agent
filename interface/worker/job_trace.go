@@ -75,7 +75,7 @@ func (c *JobContext) shutdownTraceContext(ctx context.Context) context.Context {
 
 func (c *JobContext) beginShutdownTrace(reason string) context.Context {
 	// Teardown must not enable Cloud reporting for a job that never used it.
-	if c.customTracerProvider != nil {
+	if c.serverTracerProvider != nil {
 		if err := c.ensureObservability(context.Background()); err != nil {
 			c.Logger().Warnw("failed to initialize shutdown tracing", err)
 		}

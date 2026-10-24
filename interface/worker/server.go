@@ -2058,10 +2058,7 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) (resultErr error) {
 		return fmt.Errorf("worker is closed")
 	}
 	s.executionStarted = true
-	if jobCtx.customTracerProvider == nil && s.tracerProvider != nil {
-		jobCtx.customTracerProvider = s.tracerProvider
-		jobCtx.borrowTracerProvider = true
-	}
+	jobCtx.serverTracerProvider = s.tracerProvider
 	s.mu.Unlock()
 	if jobCtx.process == nil {
 		jobCtx.process = s.newJobProcess()
