@@ -536,6 +536,7 @@ func (s *upliftAITTSSynthesizeStream) run() {
 }
 
 func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
+	tts.MarkSynthesisStarted(s.ctx)
 	stream, err := s.owner.Synthesize(s.ctx, text)
 	if err != nil {
 		return err
@@ -812,6 +813,7 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 		_ = pr.Close()
 		return nil, err
 	}
+	tts.MarkSynthesisStarted(ctx)
 	err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID)
 	c.unlockWrite()
 	if err != nil {

@@ -422,6 +422,9 @@ func (s *xaiTTSSynthesizeStream) writeTTSMessage(message map[string]any) error {
 	if err := s.ensureConnLocked(); err != nil {
 		return err
 	}
+	if message["type"] == "text.delta" {
+		tts.MarkSynthesisStarted(s.ctx)
+	}
 	return writeXaiTTSMessage(s.conn, message)
 }
 

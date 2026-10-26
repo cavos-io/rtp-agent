@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -443,9 +444,9 @@ func TestPerformTTSInferenceRecordsRequestSpanHierarchy(t *testing.T) {
 	innerTTSProvider := &fakeGenerationTTS{
 		model:    "test-voice",
 		provider: "test-provider",
-		stream: &fakeGenerationTTSStream{
+		stream: gateLatencyTTSInput(&fakeGenerationTTSStream{
 			audio: []*tts.SynthesizedAudio{{RequestID: "tts-request-1", Frame: &model.AudioFrame{Data: []byte{1, 2}}}},
-		},
+		}),
 	}
 	ttsProvider := &fakeGenerationTTSWrapper{TTS: innerTTSProvider}
 
@@ -629,35 +630,23 @@ func TestPerformTTSInferenceTTFBStartsAtFirstInputText(t *testing.T) {
 	}
 }
 
-func TestPerformTTSInferenceNonStreamingTTFBStartsAtFirstInputText(t *testing.T) {
-	provider := &fakeGenerationChunkedTTS{
-		stream: &fakeGenerationChunkedStream{
-			frames: []*model.AudioFrame{{
-				Data:              []byte("audio"),
-				SampleRate:        24000,
-				NumChannels:       1,
-				SamplesPerChannel: 2,
-			}},
-			nextDelay: 20 * time.Millisecond,
-		},
-	}
-	textCh := make(chan string)
-
-	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSPreserveTimedTranscript())
-	if err != nil {
-		t.Fatalf("PerformTTSInference error = %v", err)
-	}
-
-	textCh <- "hello"
-	time.Sleep(150 * time.Millisecond)
-	close(textCh)
-
-	if _, ok := <-data.AudioCh; !ok {
-		t.Fatal("AudioCh closed before audio, want synthesized frame")
-	}
-	if data.TTFB < 100*time.Millisecond {
-		t.Fatalf("TTFB = %v, want measured from first text input, including text collection delay", data.TTFB)
-	}
+// Python 1.8.8 anchors built-in batch synthesis at submission, after text collection.
+func TestPerformTTSInferenceNonStreamingTTFBStartsAtSynthesis(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		input := make(chan string)
+		data, err := PerformTTSInference(context.Background(), &latencyChunkedTTS{}, input, WithTTSPreserveTimedTranscript())
+		if err != nil {
+			t.Fatal(err)
+		}
+		input <- "hello"
+		time.Sleep(150 * time.Millisecond)
+		close(input)
+		for range data.AudioCh {
+		}
+		if data.TTFB != 100*time.Millisecond {
+			t.Fatalf("TTFB = %v, want first frame 100ms after synthesis, excluding text collection", data.TTFB)
+		}
+	})
 }
 
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
@@ -3191,4 +3180,89 @@ func TestPerformLLMInferenceStopsStreamingOnCancel(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("generation stayed blocked after cancel — a streaming send ignored ctx.Done()")
 	}
+}
+
+func TestLatencyTTFBIgnoresEmptyAudioFrames(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now()
+		provider := &fakeGenerationTTS{stream: &fakeGenerationTTSStream{audio: []*tts.SynthesizedAudio{
+			{SynthesisStartedAt: now.Add(-500 * time.Millisecond), Frame: &model.AudioFrame{}},
+			{SynthesisStartedAt: now.Add(-time.Second), Frame: &model.AudioFrame{Data: []byte{0, 0}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		}}}
+		input := make(chan string, 1)
+		input <- "hello"
+		close(input)
+		data, err := PerformTTSInference(context.Background(), provider, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for range data.AudioCh {
+			count++
+		}
+		if !data.TTFBSet || data.TTFB != time.Second || count != 1 {
+			t.Fatalf("TTFB=%v set=%v frames=%d, want 1s and one actual audio frame", data.TTFB, data.TTFBSet, count)
+		}
+	})
+}
+
+// Model a streaming provider that waits for a local phrase before submission.
+type latencySubmissionTTS struct{ fakeGenerationTTS }
+
+func (p *latencySubmissionTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	stream := newEndInputGenerationTTSStream()
+	stream.emitAfterPush = true
+	stream.nextDelay = 100 * time.Millisecond
+	return &latencySubmissionStream{SynthesizeStream: stream, ctx: ctx}, nil
+}
+
+type latencySubmissionStream struct {
+	tts.SynthesizeStream
+	ctx context.Context
+}
+
+func (s *latencySubmissionStream) PushText(text string) error {
+	time.Sleep(200 * time.Millisecond)
+	tts.MarkSynthesisStarted(s.ctx)
+	return s.SynthesizeStream.PushText(text)
+}
+
+func TestPerformTTSInferenceRejectsNilChunkedStream(t *testing.T) {
+	input := make(chan string, 1)
+	input <- "hello"
+	close(input)
+	data, err := PerformTTSInference(context.Background(), &fakeGenerationChunkedTTS{}, input, WithTTSPreserveTimedTranscript())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range data.AudioCh {
+	}
+	if data.StreamErr == nil || data.TTFBSet {
+		t.Fatal("nil provider stream must fail without a TTFB measurement")
+	}
+}
+
+func TestLatencyStreamingTTFBUsesSubmissionForNodeAndBaseline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		input := make(chan string)
+		metricsCh := make(chan *telemetry.TTSMetrics, 1)
+		data, err := PerformTTSInference(context.Background(), &latencySubmissionTTS{}, input, withTTSMetricsHandler(func(m *telemetry.TTSMetrics) { metricsCh <- m }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		input <- "hello"
+		close(input)
+		for range data.AudioCh {
+		}
+		metrics := <-metricsCh
+		if !data.TTFBSet || data.TTFB != 100*time.Millisecond || metrics.TTFB != 0.1 {
+			t.Fatalf("node=%v baseline=%v, want 100ms after submission", data.TTFB, metrics.TTFB)
+		}
+		select {
+		case <-metricsCh:
+			t.Fatal("duplicate baseline TTS event")
+		default:
+		}
+	})
 }

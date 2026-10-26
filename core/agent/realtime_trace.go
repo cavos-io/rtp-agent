@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"math"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -46,6 +48,9 @@ func (ma *MultimodalAgent) recordRealtimeMetrics(metrics telemetry.AgentMetrics)
 		}
 	}
 	ctx := ma.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if span == nil {
 		return
 	}
@@ -64,7 +69,8 @@ func (ma *MultimodalAgent) recordRealtimeMetrics(metrics telemetry.AgentMetrics)
 	if cached := m.InputTokenDetails.CachedTokensDetails; cached != nil {
 		attrs = append(attrs, attribute.Int("gen_ai.usage.text.cache_read.input_tokens", cached.TextTokens), attribute.Int("gen_ai.usage.audio.cache_read.input_tokens", cached.AudioTokens), attribute.Int("gen_ai.usage.image.cache_read.input_tokens", cached.ImageTokens))
 	}
-	if m.TTFT >= 0 && !m.Timestamp.IsZero() {
+	validTTFT := m.TTFT >= 0 && !math.IsNaN(m.TTFT) && !math.IsInf(m.TTFT, 0)
+	if validTTFT && !m.Timestamp.IsZero() {
 		attrs = append(attrs, attribute.String("langfuse.completion_start_time", m.Timestamp.Add(time.Duration(m.TTFT*float64(time.Second))).UTC().Format(time.RFC3339Nano)))
 	}
 
@@ -74,7 +80,7 @@ func (ma *MultimodalAgent) recordRealtimeMetrics(metrics telemetry.AgentMetrics)
 	if m.RequestID != "" {
 		attrs = append(attrs, attribute.String(telemetry.AttrGenAIResponseID, m.RequestID))
 	}
-	if m.TTFT >= 0 {
+	if validTTFT {
 		attrs = append(attrs, attribute.Float64(telemetry.AttrGenAIResponseTTFC, m.TTFT))
 	}
 	span.SetAttributes(attrs...)

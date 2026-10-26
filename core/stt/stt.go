@@ -186,6 +186,8 @@ type SpeechEvent struct {
 	Alternatives     []SpeechData      `json:"alternatives"`
 	RecognitionUsage *RecognitionUsage `json:"recognition_usage"`
 	SpeechStartTime  *float64          `json:"speech_start_time"`
+	SpeechEndTime    *float64          `json:"speech_end_time,omitempty"`
+	ReceivedAt       time.Time         `json:"-"`
 	Interrupted      bool              `json:"-"`
 }
 
@@ -492,13 +494,6 @@ func SetStreamStartTime(stream StreamTiming, startTime float64) {
 		panic("start_time must be non-negative")
 	}
 	stream.SetStartTime(startTime)
-}
-
-func nonNegativeStreamTime(value float64) float64 {
-	if value < 0 {
-		return 0
-	}
-	return value
 }
 
 func streamStartTimeNow() float64 {

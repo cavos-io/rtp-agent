@@ -253,6 +253,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	w.flushSegmentPending(false)
 	w.markSegmentStart(segmentID)
 
+	synthesisStartedAt := time.Now()
 	stream, err := w.adapter.tts.Synthesize(w.ctx, synthText)
 	if err != nil {
 		return err
@@ -284,6 +285,10 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		}
 		if audio == nil || audio.Frame == nil {
 			continue
+		}
+		if audio.SynthesisStartedAt.IsZero() {
+			audio = cloneSynthesizedAudio(audio)
+			audio.SynthesisStartedAt = synthesisStartedAt
 		}
 
 		if pending != nil {

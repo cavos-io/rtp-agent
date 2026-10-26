@@ -1206,6 +1206,7 @@ func (s *deepgramTTSStream) sendSpeakLocked(text string) error {
 	}
 	speakText := deepgramTTSSpeakText(text)
 	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, deepgramTTSPythonJSONString(speakText))
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.writeTextData(payload, map[string]interface{}{
 		"type": "Speak",
 		"text": speakText,

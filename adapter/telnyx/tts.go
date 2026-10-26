@@ -567,6 +567,7 @@ func (s *telnyxTTSStream) flushPendingTextLocked() error {
 	}
 	text := s.pendingText
 	s.pendingText = ""
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return telnyxTTSWriteError(err)

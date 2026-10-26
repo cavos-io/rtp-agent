@@ -439,6 +439,7 @@ type realtimeSession struct {
 	audioBStream          *audio.AudioByteStream
 	audioNormalizer       openAIRealtimeInputAudioNormalizer
 	pushedDuration        float64
+	inputAudioStartedAt   time.Time
 	optionsState          map[string]any
 	connectedAt           time.Time
 	lastGeneration        realtimeGenerationTiming
@@ -1804,6 +1805,11 @@ func (s *realtimeSession) clientEventsClosed() bool {
 }
 
 func (s *realtimeSession) appendAudioChunk(chunk *model.AudioFrame) error {
+	s.mu.Lock()
+	if s.inputAudioStartedAt.IsZero() && chunk.SampleRate > 0 {
+		s.inputAudioStartedAt = time.Now().Add(-time.Duration(float64(chunk.SamplesPerChannel) / float64(chunk.SampleRate) * float64(time.Second)))
+	}
+	s.mu.Unlock()
 	msg := map[string]any{
 		"type":  "input_audio_buffer.append",
 		"audio": base64.StdEncoding.EncodeToString(chunk.Data),
@@ -2540,6 +2546,7 @@ func (s *realtimeSession) eventLoop() {
 			if realtimeEvent.Type == llm.RealtimeEventTypeSpeechStopped && realtimeEvent.SpeechStopped != nil {
 				realtimeEvent.SpeechStopped.UserTranscriptionEnabled = s.inputAudioTranscriptionEnabled()
 			}
+			s.alignSpeechTiming(&realtimeEvent, ev)
 			if realtimeEvent.Type == llm.RealtimeEventTypeGenerationCreated && realtimeEvent.Generation != nil {
 				if response, _ := ev["response"].(map[string]any); response != nil {
 					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok && s.consumePendingRealtimeResponse(clientEventID) {
@@ -2695,6 +2702,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.audioNormalizer.reset()
 	s.pushedDuration = 0
+	s.inputAudioStartedAt = time.Time{}
 	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
@@ -3390,6 +3398,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeSpeechStopped,
 			SpeechStopped: &llm.InputSpeechStoppedEvent{
+				ItemID:                   openAIRealtimeString(ev["item_id"]),
 				UserTranscriptionEnabled: true,
 			},
 		}, true

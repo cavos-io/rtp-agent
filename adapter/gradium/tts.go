@@ -418,6 +418,9 @@ func (s *gradiumTTSSynthesizeStream) writeMessageData(message map[string]any) er
 	if conn == nil {
 		return io.ErrClosedPipe
 	}
+	if message["type"] == "text" {
+		tts.MarkSynthesisStarted(s.ctx)
+	}
 	return writeGradiumTTSMessage(conn, message)
 }
 
