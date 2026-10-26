@@ -496,13 +496,6 @@ func SetStreamStartTime(stream StreamTiming, startTime float64) {
 	stream.SetStartTime(startTime)
 }
 
-func nonNegativeStreamTime(value float64) float64 {
-	if value < 0 {
-		return 0
-	}
-	return value
-}
-
 func streamStartTimeNow() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
