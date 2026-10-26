@@ -398,6 +398,8 @@ type RoomIO struct {
 	lastPlaybackEvent            PlaybackFinishedEvent
 	playbackWaiters              []chan struct{}
 	playbackStartedHandlers      []func(PlaybackStartedEvent)
+	playbackStartSubscribers     map[uint64]func(time.Time)
+	nextPlaybackStartSubscriber  uint64
 	playbackFinishedHandlers     []func(PlaybackFinishedEvent)
 	roomEventListeners           map[string]map[uint64]func(RoomEvent)
 	nextRoomEventListenerID      uint64
@@ -591,6 +593,25 @@ func (rio *RoomIO) Close() error {
 
 type roomIOPlaybackController struct {
 	rio *RoomIO
+}
+
+func (c roomIOPlaybackController) OnPlaybackStarted(handler func(time.Time)) func() {
+	if c.rio == nil || handler == nil {
+		return func() {}
+	}
+	c.rio.mu.Lock()
+	if c.rio.playbackStartSubscribers == nil {
+		c.rio.playbackStartSubscribers = make(map[uint64]func(time.Time))
+	}
+	c.rio.nextPlaybackStartSubscriber++
+	id := c.rio.nextPlaybackStartSubscriber
+	c.rio.playbackStartSubscribers[id] = handler
+	c.rio.mu.Unlock()
+	return func() {
+		c.rio.mu.Lock()
+		delete(c.rio.playbackStartSubscribers, id)
+		c.rio.mu.Unlock()
+	}
 }
 
 func (c roomIOPlaybackController) ClearBuffer() {
@@ -2620,7 +2641,6 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	}
 	rio.playbackCapturing = true
 	rio.playbackSegmentsCount++
-	rio.audioOutputDeadline = time.Time{}
 	rio.playbackAudioFrames = 0
 	rio.playbackAudioBytes = 0
 	rio.playbackAudioEncoded = 0
@@ -2633,7 +2653,19 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	rio.playbackStartedAt = startedAt
 	ev := PlaybackStartedEvent{CreatedAt: startedAt}
 	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
+	for _, subscriber := range rio.playbackStartSubscribers {
+		handlers = append(handlers, func(ev PlaybackStartedEvent) { subscriber(ev.CreatedAt) })
+	}
 	return ev, handlers, true
+}
+
+func (rio *RoomIO) notifyPlaybackStarted() {
+	started, handlers, ok := rio.startPlayback()
+	if ok {
+		for _, handler := range handlers {
+			callPlaybackStartedHandler(rio.logger(), handler, started)
+		}
+	}
 }
 
 func (rio *RoomIO) setPlaybackTranscript(transcript string, final bool) {
@@ -2852,14 +2884,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 		}
 	}
 
-	started, handlers, ok := rio.startPlayback()
-	if ok {
-		for _, handler := range handlers {
-			callPlaybackStartedHandler(rio.logger(), handler, started)
-		}
-	}
-	rio.recordPlaybackInputFrame(frame)
-
 	if encoder != nil {
 		for _, encodeFrame := range encodeFrames {
 			select {
@@ -2883,8 +2907,12 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 				rio.recordAudioOutputError(err)
 				return err
 			}
+			rio.notifyPlaybackStarted()
 			rio.recordAudioOutputFramePublished(frame, encodeFrame, len(encoded), 1)
 			rio.addPlaybackPosition(duration)
+		}
+		if len(encodeFrames) > 0 {
+			rio.recordPlaybackInputFrame(frame)
 		}
 		return nil
 	}
@@ -2898,6 +2926,8 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 		rio.recordAudioOutputError(err)
 		return err
 	}
+	rio.notifyPlaybackStarted()
+	rio.recordPlaybackInputFrame(frame)
 	rio.recordAudioOutputFramePublished(frame, frame, len(frame.Data), 1)
 	rio.addPlaybackPosition(duration)
 	return nil
@@ -3220,6 +3250,7 @@ func (rio *RoomIO) flushAudioOutputTail(ctx context.Context) {
 			rio.recordAudioOutputError(err)
 			return
 		}
+		rio.notifyPlaybackStarted()
 		rio.recordAudioOutputFramePublished(encodeFrame, encodeFrame, len(encoded), 1)
 		rio.addPlaybackPosition(duration)
 	}

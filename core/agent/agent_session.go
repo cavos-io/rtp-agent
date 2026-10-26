@@ -234,6 +234,12 @@ type AudioPlaybackController interface {
 	WaitForPlayout(context.Context) (AudioPlaybackResult, error)
 }
 
+// AudioPlaybackStartNotifier is optional. Publishers without it retain the
+// publication-completion timing fallback used by custom outputs.
+type AudioPlaybackStartNotifier interface {
+	OnPlaybackStarted(func(time.Time)) func()
+}
+
 type AudioPlaybackResult struct {
 	PlaybackPosition          time.Duration
 	Interrupted               bool
@@ -301,8 +307,9 @@ type AgentSession struct {
 	MetricsCollector    *telemetry.UsageCollector
 	ModelUsageCollector *telemetry.ModelUsageCollector
 
-	userState  UserState
-	agentState AgentState
+	userState                UserState
+	agentState               AgentState
+	lastAnsweredUserSpeechAt float64
 
 	mu                      sync.Mutex
 	logMu                   sync.RWMutex

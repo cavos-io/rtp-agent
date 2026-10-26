@@ -2938,7 +2938,7 @@ func TestComputeEndOfTurnDelay(t *testing.T) {
 	}
 }
 
-func TestAgentActivityCompleteUserTurnFallsBackToTranscriptTimeForEOUDelay(t *testing.T) {
+func TestAgentActivityCompleteUserTurnOmitsUnknownEOUDelay(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
 	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
@@ -2965,9 +2965,15 @@ func TestAgentActivityCompleteUserTurnFallsBackToTranscriptTimeForEOUDelay(t *te
 		if !ok {
 			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
 		}
-		if metrics.EndOfUtteranceDelay < 0.4 || metrics.EndOfUtteranceDelay > 1.0 {
-			t.Fatalf("EndOfUtteranceDelay = %v, want ~0.5 from final-transcript-time fallback",
-				metrics.EndOfUtteranceDelay)
+		if metrics.EndOfUtteranceDelay != 0 {
+			t.Fatalf("legacy EOU delay = %v, want no fabricated transcript-based delay", metrics.EndOfUtteranceDelay)
+		}
+		for _, item := range agent.ChatCtx.Items {
+			if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
+				if _, ok := msg.Metrics["end_of_turn_delay"]; ok {
+					t.Fatal("unknown EOT was exported")
+				}
+			}
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("MetricsCollectedEvents did not receive EOU metrics")

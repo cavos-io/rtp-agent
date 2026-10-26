@@ -85,6 +85,7 @@ type turnSplittingStream struct {
 	events          chan splitResult
 	startTimeOffset float64
 	startTime       float64
+	pushedDuration  float64
 }
 
 func (s *turnSplittingStream) StartTimeOffset() float64 {
@@ -134,7 +135,13 @@ func (s *turnSplittingStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.active.PushFrame(frame)
+	if err := s.active.PushFrame(frame); err != nil {
+		return err
+	}
+	if frame != nil && frame.SampleRate > 0 {
+		s.pushedDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+	}
+	return nil
 }
 
 func (s *turnSplittingStream) Flush() error {
@@ -230,6 +237,9 @@ func (s *turnSplittingStream) split(snapshot uint64) {
 	}
 	old := s.active
 	s.applyTiming(replacement)
+	if timing, ok := replacement.(StreamTiming); ok && s.startTime > 0 {
+		SetStreamStartTime(timing, s.startTime+s.pushedDuration)
+	}
 	s.active = replacement
 	s.streams[replacement] = struct{}{}
 	s.pendingFinals++
@@ -271,6 +281,7 @@ func (s *turnSplittingStream) pump(stream RecognizeStream) {
 				}
 				s.mu.Unlock()
 			}
+			event = AlignSpeechEventTiming(event, stream)
 			select {
 			case s.events <- splitResult{stream: stream, event: event}:
 			case <-s.ctx.Done():

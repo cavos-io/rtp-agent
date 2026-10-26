@@ -622,6 +622,7 @@ func (s *neuphonicTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	return s.writeMessageData(websocket.TextMessage, message)
 }
 

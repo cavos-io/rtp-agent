@@ -492,6 +492,7 @@ func (s *resembleTTSSynthesizeStream) sendTextLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 

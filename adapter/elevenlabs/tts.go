@@ -2186,6 +2186,7 @@ func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.writeJSONLocked(elevenLabsTextPayload(s.contextID, text, flush)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)

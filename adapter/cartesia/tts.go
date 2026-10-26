@@ -748,6 +748,7 @@ func (s *cartesiaTTSStream) sendTranscriptLocked(text string) error {
 	msg["transcript"] = text + " "
 	msg["continue"] = true
 	s.sentTokens = append(s.sentTokens, text+" ")
+	tts.MarkSynthesisStarted(s.ctx)
 	return s.writeJSONData(msg)
 }
 

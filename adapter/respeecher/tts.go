@@ -556,6 +556,7 @@ func (s *respeecherTTSSynthesizeStream) sendTextLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.writeMessageData(message); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err

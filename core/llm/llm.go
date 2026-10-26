@@ -1339,10 +1339,13 @@ const (
 )
 
 type GenerationCreatedEvent struct {
-	MessageCh     <-chan MessageGeneration
-	FunctionCh    <-chan *FunctionCall
-	ResponseID    string
-	UserInitiated bool
+	// UserSpeechStoppedAt snapshots the input turn before speech enters the queue.
+	// A nonnil zero means that turn had no reliable speech-end anchor.
+	UserSpeechStoppedAt *float64
+	MessageCh           <-chan MessageGeneration
+	FunctionCh          <-chan *FunctionCall
+	ResponseID          string
+	UserInitiated       bool
 }
 
 type MessageGeneration struct {
@@ -1375,10 +1378,14 @@ type InputTranscriptionCompleted struct {
 }
 
 type InputSpeechStoppedEvent struct {
+	ItemID                   string
 	UserTranscriptionEnabled bool
+	// SpeechEndTime is Unix seconds, aligned to the local input-audio timeline.
+	SpeechEndTime *float64
 }
 
 type RealtimeEvent struct {
+	SpeechStartTime    *float64
 	Type               RealtimeEventType
 	ItemID             string
 	ContentIndex       int

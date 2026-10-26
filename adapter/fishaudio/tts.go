@@ -594,6 +594,7 @@ func (s *fishAudioTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.writeMessageData(websocket.BinaryMessage, message); err != nil {
 		return err
 	}

@@ -403,6 +403,11 @@ func (va *PipelineAgent) pushSTTFrame(frame *model.AudioFrame) error {
 		}
 	}
 	va.mu.Lock()
+	if va.lastSTTFrame == nil {
+		if timing, ok := sttStream.(stt.StreamTiming); ok {
+			stt.SetStreamStartTime(timing, timeToUnixSeconds(time.Now()))
+		}
+	}
 	va.lastSTTFrame = &model.AudioFrame{
 		SampleRate:        sttFrame.SampleRate,
 		NumChannels:       sttFrame.NumChannels,
@@ -637,6 +642,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				activity.noteSTTRequestID(ev.RequestID)
 			}
 		}
+		ev = stt.AlignSpeechEventTiming(ev, stream)
 
 		if ev.Type == stt.SpeechEventRecognitionUsage {
 			va.emitSTTMetrics(ev)
@@ -656,7 +662,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 						activity.OnSTTStartOfSpeech(ev)
 					} else {
 						va.flushActiveVADSegment()
-						activity.OnEndOfSpeech(nil)
+						activity.OnSTTEndOfSpeech(ev)
 					}
 				}
 			}
@@ -962,6 +968,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			}
 		}()
 		ttsGen, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
+		defer finalizeTTSPlaybackTiming(ttsGen)
 		speechCancel()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			va.logTTSError("TTS inference failed", err)
@@ -980,7 +987,13 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			}
 			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
 				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
-				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
+				if ttsGen != nil && (ttsGen.TTFBSet || ttsGen.TTFB > 0) {
+					if speech.Generation.AssistantMessage.Metrics == nil {
+						speech.Generation.AssistantMessage.Metrics = make(map[string]any)
+					}
+					speech.Generation.AssistantMessage.Metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
+				}
+				speech.Generation.AssistantMessage.Metrics = addAssistantSpeechMetrics(ctx, session, speech.Generation.AssistantMessage.Metrics, ttsGen, speech.Generation.UserMessage)
 				started, stopped := 0.0, 0.0
 				if ttsGen != nil {
 					started, stopped = ttsGen.StartedSpeakingAt, ttsGen.StoppedSpeakingAt
@@ -1075,11 +1088,11 @@ func finishSpeechAgentTurn(speech *SpeechHandle) {
 		return
 	}
 	speech.mu.Lock()
+	defer speech.mu.Unlock()
 	turnCtx := speech.agentTurnCtx
 	end := speech.agentTurnEnd
 	speech.agentTurnCtx = nil
 	speech.agentTurnEnd = nil
-	speech.mu.Unlock()
 	if end != nil {
 		trace.SpanFromContext(turnCtx).SetAttributes(attribute.Bool(telemetry.AttrSpeechInterrupted, speech.IsInterrupted()))
 		end()
@@ -1297,6 +1310,7 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 				ttsGen, err = va.synthesizeSpeech(ctx, session, genData.TextCh, opts.SpeechHandle)
 			}
 		}
+		defer finalizeTTSPlaybackTiming(ttsGen)
 		if err != nil {
 			if suppressReplyContextCanceledError(ctx, session, opts.SpeechHandle, err) {
 				waitForLLMGenerationDone(genData)
@@ -1369,16 +1383,16 @@ func (va *PipelineAgent) generateReplyWithContext(ctx context.Context, opts pipe
 					modelProviderMetricKey: tts.Provider(va.tts),
 				},
 			}
-			if genData.TTFT > 0 {
+			if genData.TTFTSet || genData.TTFT > 0 {
 				metrics["llm_node_ttft"] = genData.TTFT.Seconds()
 			}
 			if va.tts == nil {
 				delete(metrics, "tts_metadata")
 			}
-			if ttsGen != nil && ttsGen.TTFB > 0 {
+			if ttsGen != nil && (ttsGen.TTFBSet || ttsGen.TTFB > 0) {
 				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
 			}
-			metrics = addAssistantSpeechMetrics(ctx, metrics, ttsGen, opts.UserMessage)
+			metrics = addAssistantSpeechMetrics(ctx, session, metrics, ttsGen, opts.UserMessage)
 			args.Metrics = metrics
 			started, stopped := 0.0, 0.0
 			if ttsGen != nil {
@@ -1718,6 +1732,13 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 		segment = nil
 		current.closeInput()
 		_, err := va.playTTSGenerationWithTranscript(ctx, session, current.ttsGen, current.transcriptSync, current.transcriptionDone, speech, current.published)
+		if firstGen != current.ttsGen && !firstGen.ForwardedAudio && current.ttsGen.ForwardedAudio {
+			finalizeTTSPlaybackTiming(firstGen)
+			firstGen = current.ttsGen
+		}
+		if current.ttsGen != firstGen {
+			finalizeTTSPlaybackTiming(current.ttsGen)
+		}
 		if firstGen != nil && current.ttsGen != nil && current.ttsGen.ForwardedAudio {
 			firstGen.ForwardedAudio = true
 		}
@@ -1735,7 +1756,8 @@ func (va *PipelineAgent) synthesizeSegmentedSpeech(ctx context.Context, session 
 		select {
 		case event, ok := <-textCh:
 			if !ok {
-				return firstGen, playSegment()
+				err := playSegment()
+				return firstGen, err
 			}
 			if event.Flush {
 				if err := playSegment(); err != nil {
@@ -1902,7 +1924,15 @@ func (va *PipelineAgent) playPrecomputedTTSSegments(ctx context.Context, session
 			firstGen = segment.ttsGen
 		}
 		if _, err := va.playTTSGenerationWithTranscript(ctx, session, segment.ttsGen, segment.transcriptSync, segment.transcriptionDone, speech, segment.published); err != nil {
+			finalizeTTSPlaybackTiming(segment.ttsGen)
 			return firstGen, err
+		}
+		if firstGen != segment.ttsGen && firstGen != nil && !firstGen.ForwardedAudio && segment.ttsGen != nil && segment.ttsGen.ForwardedAudio {
+			finalizeTTSPlaybackTiming(firstGen)
+			firstGen = segment.ttsGen
+		}
+		if segment.ttsGen != firstGen {
+			finalizeTTSPlaybackTiming(segment.ttsGen)
 		}
 		if firstGen != nil && segment.ttsGen != nil && segment.ttsGen.ForwardedAudio {
 			firstGen.ForwardedAudio = true
@@ -2109,6 +2139,9 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 			ModelProvider: llm.Provider(va.LLM),
 		},
 	}
+	if !genData.TTFTSet && genData.TTFT == 0 {
+		metrics.TTFT = -1
+	}
 	if metrics.Duration > 0 {
 		metrics.TokensPerSecond = float64(metrics.CompletionTokens) / metrics.Duration
 	}
@@ -2286,6 +2319,9 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		defer func() { ttsGen.PublishedTranscript = pub.text }()
 	}
 	startedSpeaking := false
+	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
+	ttsGen.playbackTiming = playbackTiming
+	ttsGen.stopPlaybackTiming = unsubscribePlayback
 	for {
 		var frame *model.AudioFrame
 		select {
@@ -2321,6 +2357,7 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			return ttsGen, nil
 		}
 		transcriptSync.PushAudio(frame)
+		playbackTiming.arm()
 		if va.PublishAudio != nil {
 			if err := va.PublishAudio(ctx, frame); err != nil {
 				transcriptSync.Close()
@@ -2335,7 +2372,9 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		ttsGen.ForwardedAudio = true
 		if !startedSpeaking {
-			ttsGen.StartedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
+			if at := playbackTiming.published(); !at.IsZero() {
+				ttsGen.StartedSpeakingAt = timeToUnixSeconds(at)
+			}
 			session.updateAgentState(AgentStateSpeaking, ctx)
 			startedSpeaking = true
 		}
@@ -2349,13 +2388,14 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 }
 
 func markTTSGenerationStoppedSpeaking(ttsGen *TTSGenerationData) {
+	finalizeTTSPlaybackTiming(ttsGen)
 	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt != 0 {
 		return
 	}
 	ttsGen.StoppedSpeakingAt = float64(time.Now().UnixNano()) / 1e9
 }
 
-func addAssistantSpeechMetrics(ctx context.Context, metrics map[string]any, ttsGen *TTSGenerationData, userMessage *llm.ChatMessage) map[string]any {
+func addAssistantSpeechMetrics(ctx context.Context, session *AgentSession, metrics map[string]any, ttsGen *TTSGenerationData, userMessage *llm.ChatMessage) map[string]any {
 	if ttsGen == nil || ttsGen.StartedSpeakingAt == 0 || ttsGen.StoppedSpeakingAt == 0 {
 		return metrics
 	}
@@ -2368,7 +2408,12 @@ func addAssistantSpeechMetrics(ctx context.Context, metrics map[string]any, ttsG
 		if stopped, ok := userMessage.Metrics["stopped_speaking_at"].(float64); ok && ttsGen.StartedSpeakingAt >= stopped {
 			e2eLatency := ttsGen.StartedSpeakingAt - stopped
 			metrics["e2e_latency"] = e2eLatency
-			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, e2eLatency))
+			if session != nil {
+				session.claimE2EMetric(metrics, userMessage)
+			}
+			if _, ok := metrics["e2e_latency"]; ok {
+				trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, e2eLatency))
+			}
 		}
 	}
 	return metrics

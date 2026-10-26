@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,6 +36,8 @@ type MultimodalAgent struct {
 	realtimeSpanIDs           []string
 	pendingAutoToolReply      *SpeechHandle
 	pendingAutoToolReplyTimer *time.Timer
+	lastUserSpeechStoppedAt   time.Time
+	lastAnsweredUserSpeechAt  time.Time
 
 	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
 }
@@ -348,7 +351,10 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 
 	if speech.Generation.Text != "" && session != nil && session.TTS != nil {
-		publishedAudio, errSource, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, speech.Generation.Text)
+		timing, unsubscribe := observePlaybackTiming(session)
+		defer unsubscribe()
+		metrics := make(map[string]any)
+		publishedAudio, errSource, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, speech.Generation.Text, timing, metrics)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -378,6 +384,16 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 			}
 		}
 		if !speech.IsInterrupted() && speech.Generation.AssistantMessage != nil {
+			if at := timing.published(); publishedAudio && !at.IsZero() {
+				metrics = addAssistantSpeechMetrics(ctx, session, metrics, &TTSGenerationData{StartedSpeakingAt: timeToUnixSeconds(at), StoppedSpeakingAt: timeToUnixSeconds(time.Now())}, speech.Generation.UserMessage)
+				speech.Generation.AssistantMessage.CreatedAt = at
+			}
+			if speech.Generation.AssistantMessage.Metrics == nil {
+				speech.Generation.AssistantMessage.Metrics = make(map[string]any)
+			}
+			for key, value := range metrics {
+				speech.Generation.AssistantMessage.Metrics[key] = value
+			}
 			session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
 			addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 		}
@@ -582,21 +598,25 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 	switch ev.Type {
 	case llm.RealtimeEventTypeSpeechStarted:
+		ma.mu.Lock()
+		ma.lastUserSpeechStoppedAt = time.Time{}
+		ma.mu.Unlock()
 		ma.session.Logger().Infow("User started speaking (multimodal)")
 		if ma.session != nil && ma.session.activity != nil {
-			ma.session.activity.OnInputSpeechStarted()
+			ma.session.activity.onInputSpeechStartedAt(ev.SpeechStartTime)
 		} else if ma.session != nil {
 			ma.session.UpdateUserState(UserStateSpeaking)
 		}
 
 	case llm.RealtimeEventTypeSpeechStopped:
+		stoppedAt := ma.recordRealtimeSpeechStopped(ev.SpeechStopped)
 		ma.session.Logger().Infow("User stopped speaking (multimodal)")
 		if ma.session != nil && ma.session.activity != nil {
 			speechStopped := llm.InputSpeechStoppedEvent{}
 			if ev.SpeechStopped != nil {
 				speechStopped = *ev.SpeechStopped
 			}
-			ma.session.activity.OnInputSpeechStopped(speechStopped)
+			ma.session.activity.onInputSpeechStoppedAt(speechStopped, stoppedAt)
 		} else if ma.session != nil {
 			ma.session.UpdateUserState(UserStateListening)
 		}
@@ -631,6 +651,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		_ = ev.Text
 
 	case llm.RealtimeEventTypeGenerationCreated:
+		if ev.Generation != nil && ev.Generation.UserSpeechStoppedAt == nil {
+			ma.mu.Lock()
+			value := 0.0
+			if !ma.lastUserSpeechStoppedAt.IsZero() {
+				value = timeToUnixSeconds(ma.lastUserSpeechStoppedAt)
+			}
+			ma.mu.Unlock()
+			ev.Generation.UserSpeechStoppedAt = &value
+		}
 		if ev.Generation == nil || ev.Generation.UserInitiated || ma.session == nil {
 			return
 		}
@@ -756,6 +785,7 @@ func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech
 	}
 	ctx, inferenceSpan := telemetry.StartSpan(ctx, "realtime_inference", trace.WithAttributes(attribute.String(telemetry.AttrGenAIOperationName, "generate_content"), attribute.String(telemetry.AttrGenAIProviderName, normalizeGenAIProvider(llm.RealtimeProvider(ma.model))), attribute.String(telemetry.AttrGenAIRequestModel, llm.RealtimeModelName(ma.model)), attribute.Bool(telemetry.AttrGenAIRequestStream, true), attribute.String(telemetry.AttrGenAIOutputType, outputType)))
 	defer ma.endRealtimeSpan(inferenceSpan)
+	inferenceSpan.SetAttributes(attribute.String(telemetry.AttrGenAIResponseID, generation.ResponseID))
 	ma.rememberRealtimeSpan(generation.ResponseID, inferenceSpan)
 	messageCh := generation.MessageCh
 	functionCh := generation.FunctionCh
@@ -805,6 +835,10 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	var text string
 	var modalities []string
 	startedSpeaking := false
+	playbackTiming, unsubscribePlayback := observePlaybackTiming(ma.session)
+	defer unsubscribePlayback()
+	var startedSpeakingAt time.Time
+	responseMetrics := make(map[string]any)
 	publishedAudio := false
 	modalitiesCh := message.ModalitiesCh
 	timedTextCh := message.TimedTextCh
@@ -839,6 +873,7 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			session := ma.session
 			ma.mu.Unlock()
 			if publish != nil {
+				playbackTiming.arm()
 				if err := publish(ctx, frame); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return false
@@ -852,6 +887,9 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 					return false
 				}
 				if !startedSpeaking && session != nil {
+					if at := playbackTiming.published(); !at.IsZero() {
+						startedSpeakingAt = at
+					}
 					session.UpdateAgentState(AgentStateSpeaking)
 					startedSpeaking = true
 				}
@@ -864,7 +902,8 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	}
 	interrupted := speech != nil && speech.IsInterrupted()
 	if !interrupted && text != "" && !realtimeModalitiesContain(modalities, "audio") {
-		fallbackPublishedAudio, errSource, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text)
+		playbackTiming.arm()
+		fallbackPublishedAudio, errSource, err := ma.publishTTSFallbackForRealtimeText(ctx, speech, text, playbackTiming, responseMetrics)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return false
@@ -921,12 +960,41 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	if text == "" {
 		return false
 	}
+	if publishedAudio && startedSpeakingAt.IsZero() {
+		startedSpeakingAt = playbackTiming.published()
+	}
 	msg := &llm.ChatMessage{
 		ID:          message.MessageID,
 		Role:        llm.ChatRoleAssistant,
 		Content:     []llm.ChatContent{{Text: text}},
 		Interrupted: interrupted,
 		CreatedAt:   time.Now(),
+		Metrics:     responseMetrics,
+	}
+	if !startedSpeakingAt.IsZero() {
+		msg.CreatedAt = startedSpeakingAt
+		msg.Metrics["started_speaking_at"] = timeToUnixSeconds(startedSpeakingAt)
+		msg.Metrics["stopped_speaking_at"] = timeToUnixSeconds(time.Now())
+		ma.mu.Lock()
+		stoppedAt := ma.lastUserSpeechStoppedAt
+		if speech != nil && speech.Generation.RealtimeGeneration != nil && speech.Generation.RealtimeGeneration.UserSpeechStoppedAt != nil {
+			value := *speech.Generation.RealtimeGeneration.UserSpeechStoppedAt
+			stoppedAt = time.Time{}
+			if value > 0 {
+				stoppedAt = unixSecondsToTime(value)
+			}
+		}
+		if speech != nil && speech.Generation.UserMessage != nil {
+			if stopped, ok := speech.Generation.UserMessage.Metrics["stopped_speaking_at"].(float64); ok {
+				stoppedAt = unixSecondsToTime(stopped)
+			}
+		}
+		if !stoppedAt.IsZero() && stoppedAt.After(ma.lastAnsweredUserSpeechAt) && !stoppedAt.After(startedSpeakingAt) {
+			msg.Metrics["e2e_latency"] = startedSpeakingAt.Sub(stoppedAt).Seconds()
+			ma.lastAnsweredUserSpeechAt = startedSpeakingAt
+			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, startedSpeakingAt.Sub(stoppedAt).Seconds()))
+		}
+		ma.mu.Unlock()
 	}
 	if ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
@@ -952,7 +1020,7 @@ func realtimeMessagePending(messageCh <-chan llm.MessageGeneration) bool {
 	}
 }
 
-func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string) (bool, any, error) {
+func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context, speech *SpeechHandle, text string, timing *playbackTiming, metrics map[string]any) (bool, any, error) {
 	ma.mu.Lock()
 	session := ma.session
 	publish := ma.PublishAudio
@@ -967,6 +1035,12 @@ func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context
 	if err != nil {
 		return false, session.TTS, err
 	}
+	defer func() {
+		if metrics != nil && (ttsGen.TTFBSet || ttsGen.TTFB > 0) {
+			metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
+			metrics["tts_metadata"] = map[string]any{modelNameMetricKey: tts.Model(session.TTS), modelProviderMetricKey: tts.Provider(session.TTS)}
+		}
+	}()
 	startedSpeaking := false
 	publishedAudio := false
 	for frame := range ttsGen.AudioCh {
@@ -977,8 +1051,14 @@ func (ma *MultimodalAgent) publishTTSFallbackForRealtimeText(ctx context.Context
 			if speech != nil && speech.IsInterrupted() {
 				return publishedAudio, nil, nil
 			}
+			if timing != nil {
+				timing.arm()
+			}
 			if err := publish(ctx, frame); err != nil {
 				return publishedAudio, ma, err
+			}
+			if timing != nil {
+				timing.published()
 			}
 			publishedAudio = true
 			if !startedSpeaking {

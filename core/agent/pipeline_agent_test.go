@@ -55,7 +55,7 @@ func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	ctx, span := provider.Tracer("test").Start(context.Background(), "agent_turn")
 
-	metrics := addAssistantSpeechMetrics(ctx, nil, &TTSGenerationData{
+	metrics := addAssistantSpeechMetrics(ctx, nil, nil, &TTSGenerationData{
 		StartedSpeakingAt: 12,
 		StoppedSpeakingAt: 13,
 	}, &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": 10.0}})
@@ -286,10 +286,10 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageTTSMetrics(t *testing.T) 
 		frames: []*model.AudioFrame{{Data: []byte{1, 2}}},
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+	agent := NewPipelineAgent(nil, nil, l, &fakeGenerationTTS{
 		model:    "test-voice",
 		provider: "test-tts-provider",
-		stream:   ttsStream,
+		stream:   gateLatencyTTSInput(ttsStream),
 	}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
@@ -4648,7 +4648,7 @@ func TestPipelineAgentEmitsBaselineTTSMetricsForSilentProvider(t *testing.T) {
 			Data:              make([]byte, 480),
 		}}},
 	}
-	agent := NewPipelineAgent(nil, nil, l, ttsProvider, llm.NewChatContext())
+	agent := NewPipelineAgent(nil, nil, l, latencyInputGatedTTS{ttsProvider}, llm.NewChatContext())
 	agent.session = session
 	agent.ctx = context.Background()
 

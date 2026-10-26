@@ -499,6 +499,7 @@ func (s *asyncAITTSStream) sendTextLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	return s.writeMessageData(payload)
 }
 

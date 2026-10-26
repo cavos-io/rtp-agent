@@ -1368,6 +1368,7 @@ func (s *ttsStream) sendTextLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := s.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		s.closed = true
 		_ = s.conn.Close()

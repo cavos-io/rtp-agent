@@ -553,6 +553,7 @@ func (s *smallestaiTTSSynthesizeStream) Flush() error {
 	if err != nil {
 		return err
 	}
+	tts.MarkSynthesisStarted(s.ctx)
 	return s.conn.WriteMessage(websocket.TextMessage, payload)
 }
 

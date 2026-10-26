@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"sort"
@@ -93,6 +94,7 @@ type EndOfTurnInfo struct {
 	Language               string
 	TranscriptConfidence   float64
 	EndOfTurnDelay         float64
+	EndOfTurnDelaySet      bool
 	TranscriptionDelay     float64
 	TranscriptionDelaySet  bool
 	StartedSpeakingAt      *float64
@@ -189,6 +191,7 @@ type AgentActivity struct {
 	pendingTranscriptionDelay        float64
 	pendingTranscriptionDelaySet     bool
 	pendingSTTRequestIDs             []string
+	realtimeUserTurnMetrics          map[string]map[string]any
 	syntheticEOU                     bool
 	syntheticEOUNotBefore            time.Time
 	userTurnLimitStartedAt           time.Time
@@ -1614,13 +1617,29 @@ func (a *AgentActivity) OnPipelineReplyDone(speech *SpeechHandle) {
 }
 
 func (a *AgentActivity) OnInputSpeechStarted() {
+	a.onInputSpeechStartedAt(nil)
+}
+
+func (a *AgentActivity) onInputSpeechStartedAt(at *float64) {
 	if a == nil || a.Session == nil {
 		return
 	}
-	a.endEOUWait("user_resumed", time.Now())
-	a.Session.ensureUserTurnSpan(a.ctx)
+	startedAt := time.Time{}
+	if at != nil && *at > 0 && !math.IsNaN(*at) && !math.IsInf(*at, 0) {
+		startedAt = unixSecondsToTime(*at)
+		if startedAt.After(time.Now()) {
+			startedAt = time.Now()
+		}
+	}
+	a.endEOUWait("user_resumed", startedAt)
+	a.Session.ensureUserTurnSpan(a.ctx, startedAt)
 	if !a.hasVADModel() {
-		a.Session.UpdateUserState(UserStateSpeaking)
+		a.userTurnMu.Lock()
+		a.userSpeechStartedAt = time.Time{}
+		a.userSpeechStoppedAt = time.Time{}
+		a.userSpeechStartedAt = startedAt
+		a.userTurnMu.Unlock()
+		a.Session.updateUserStateAt(UserStateSpeaking, startedAt)
 	}
 	go func() {
 		if err := a.Interrupt(false); err != nil {
@@ -1630,13 +1649,30 @@ func (a *AgentActivity) OnInputSpeechStarted() {
 }
 
 func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
+	a.onInputSpeechStoppedAt(ev, realtimeSpeechEndAt(&ev, a))
+}
+
+func (a *AgentActivity) onInputSpeechStoppedAt(ev llm.InputSpeechStoppedEvent, stoppedAt time.Time) {
 	if a == nil || a.Session == nil {
 		return
 	}
-	stopped := timeToUnixSeconds(time.Now())
-	a.beginEOUWait(a.ctx, EndOfTurnInfo{StoppedSpeakingAt: &stopped})
+	info := EndOfTurnInfo{}
+	a.userTurnMu.Lock()
+	if !a.userSpeechStartedAt.IsZero() {
+		started := timeToUnixSeconds(a.userSpeechStartedAt)
+		info.StartedSpeakingAt = &started
+	}
+	a.userTurnMu.Unlock()
+	if !stoppedAt.IsZero() {
+		stopped := timeToUnixSeconds(stoppedAt)
+		info.StoppedSpeakingAt = &stopped
+	}
+	a.beginEOUWait(a.ctx, info)
 	if !a.hasVADModel() {
-		a.Session.UpdateUserState(UserStateListening)
+		a.userTurnMu.Lock()
+		a.userSpeechStoppedAt = stoppedAt
+		a.userTurnMu.Unlock()
+		a.Session.updateUserStateAt(UserStateListening, stoppedAt)
 	}
 	if ev.UserTranscriptionEnabled {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
@@ -1666,6 +1702,10 @@ func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscrip
 		},
 		CreatedAt: time.Now(),
 	}
+	a.userTurnMu.Lock()
+	msg.Metrics = a.realtimeUserTurnMetrics[ev.ItemID]
+	delete(a.realtimeUserTurnMetrics, ev.ItemID)
+	a.userTurnMu.Unlock()
 	if a.Agent != nil {
 		chatCtxMu := a.Agent.chatContextMutex()
 		chatCtxMu.Lock()
@@ -2051,12 +2091,38 @@ func (a *AgentActivity) onSyntheticEndOfSpeech() {
 }
 
 func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
+	a.onEndOfSpeechAt(ev, synthetic, nil)
+}
+
+func (a *AgentActivity) OnSTTEndOfSpeech(ev *stt.SpeechEvent) {
+	a.onEndOfSpeechAt(nil, false, ev)
+}
+
+func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEvent *stt.SpeechEvent) {
+	sttOwnsTiming := a.turnDetectionMode() == TurnDetectionModeSTT
 	a.speechBoundaryMu.Lock()
 	wasSpeaking := a.setSpeaking(false)
 	stoppedAt := vadSpeechStoppedAt(ev)
 	a.userTurnMu.Lock()
 	if ev == nil && !a.userSpeechStoppedAt.IsZero() {
 		stoppedAt = a.userSpeechStoppedAt
+	}
+	if sttOwnsTiming && a.pendingStoppedSpeakingAt != nil {
+		candidate := unixSecondsToTime(*a.pendingStoppedSpeakingAt)
+		if !candidate.Before(a.userSpeechStartedAt) {
+			stoppedAt = candidate
+		}
+	}
+	if sttEvent != nil {
+		if a.pendingStoppedSpeakingAt == nil {
+			stoppedAt = a.userSpeechStoppedAt
+		}
+		if sttEvent.SpeechEndTime != nil {
+			candidate := unixSecondsToTime(*sttEvent.SpeechEndTime)
+			if !candidate.Before(a.userSpeechStartedAt) {
+				stoppedAt = candidate
+			}
+		}
 	}
 	a.userSpeechStoppedAt = stoppedAt
 	a.syntheticEOU = synthetic
@@ -2071,7 +2137,11 @@ func (a *AgentActivity) onEndOfSpeech(ev *vad.VADEvent, synthetic bool) {
 		a.sttEOSReceived = true
 	}
 	if a.Session != nil {
-		a.Session.updateUserStateAt(UserStateListening, a.userSpeechStoppedAt)
+		stateAt := a.userSpeechStoppedAt
+		if stateAt.IsZero() {
+			stateAt = time.Now()
+		}
+		a.Session.updateUserStateAt(UserStateListening, stateAt)
 	}
 	a.speechBoundaryMu.Unlock()
 	a.notifyUserTurnUpdated()
@@ -2139,6 +2209,12 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 
 func (a *AgentActivity) updateVADInferenceTiming(ev *vad.VADEvent) {
 	if a == nil || ev == nil || ev.RawAccumulatedSpeech <= 0 {
+		return
+	}
+	sttOwnsTiming := a.turnDetectionMode() == TurnDetectionModeSTT
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	if sttOwnsTiming && a.pendingStoppedSpeakingAt != nil && !unixSecondsToTime(*a.pendingStoppedSpeakingAt).Before(a.userSpeechStartedAt) {
 		return
 	}
 	now := time.Now()
@@ -2277,8 +2353,26 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		return
 	}
 
-	finalTranscriptAt := time.Now()
+	finalTranscriptAt := ev.ReceivedAt
+	if finalTranscriptAt.IsZero() {
+		finalTranscriptAt = time.Now()
+	}
+	sttOwnsTiming := a.turnDetectionMode() == TurnDetectionModeSTT || !a.hasVADModel()
 	a.userTurnMu.Lock()
+	if sttOwnsTiming || a.userSpeechStoppedAt.IsZero() {
+		if ev.SpeechStartTime != nil && (a.userSpeechStartedAt.IsZero() || (sttOwnsTiming && !a.pendingUserTranscriptPresent)) {
+			if a.userTurnStartedAt.IsZero() || a.userTurnStartedAt.Equal(a.userSpeechStartedAt) {
+				a.userTurnStartedAt = unixSecondsToTime(*ev.SpeechStartTime)
+			}
+			a.userSpeechStartedAt = unixSecondsToTime(*ev.SpeechStartTime)
+		}
+		if ev.SpeechEndTime != nil {
+			stoppedAt := unixSecondsToTime(*ev.SpeechEndTime)
+			if !stoppedAt.Before(a.userSpeechStartedAt) {
+				a.userSpeechStoppedAt = stoppedAt
+			}
+		}
+	}
 	a.resolvedEmptyTurn = nil
 	startedSpeakingAt, stoppedSpeakingAt, transcriptionDelay, transcriptionDelaySet := a.finalTranscriptTiming(finalTranscriptAt)
 	if !a.pendingUserTranscriptPresent {
@@ -2641,7 +2735,7 @@ func (a *AgentActivity) flushHeldSTTEvents() {
 		case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
 			a.OnInterimTranscript(ev)
 		case stt.SpeechEventEndOfSpeech:
-			a.OnEndOfSpeech(nil)
+			a.OnSTTEndOfSpeech(ev)
 		default:
 			a.OnFinalTranscript(ev)
 		}
@@ -2732,6 +2826,10 @@ func computeEndOfTurnDelay(startedSpeakingAt, stoppedSpeakingAt *float64, now fl
 		return 0
 	}
 	return max(now-*stoppedSpeakingAt, 0)
+}
+
+func validSpeechTiming(started, stopped *float64) bool {
+	return started != nil && stopped != nil && *started > 0 && *stopped >= *started
 }
 
 func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
@@ -3507,18 +3605,16 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if !a.userSpeechStoppedAt.IsZero() {
 			stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
 			info.StoppedSpeakingAt = &stopped
-		} else if !a.lastFinalTranscriptTime.IsZero() {
-			stopped := timeToUnixSeconds(a.lastFinalTranscriptTime)
-			info.StoppedSpeakingAt = &stopped
 		}
 		a.userTurnMu.Unlock()
 	}
-	if info.EndOfTurnDelay == 0 {
+	if !info.EndOfTurnDelaySet && info.EndOfTurnDelay == 0 {
 		info.EndOfTurnDelay = computeEndOfTurnDelay(
 			info.StartedSpeakingAt,
 			info.StoppedSpeakingAt,
 			timeToUnixSeconds(time.Now()),
 		)
+		info.EndOfTurnDelaySet = validSpeechTiming(info.StartedSpeakingAt, info.StoppedSpeakingAt)
 	}
 
 	if len(info.sttRequestIDs) == 0 {
@@ -3535,7 +3631,9 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		attrs := []attribute.KeyValue{
 			attribute.String(telemetry.AttrUserTranscript, info.NewTranscript),
 			attribute.Float64(telemetry.AttrTranscriptConfidence, info.TranscriptConfidence),
-			attribute.Float64(telemetry.AttrEndOfTurnDelay, info.EndOfTurnDelay),
+		}
+		if info.EndOfTurnDelaySet || info.EndOfTurnDelay != 0 {
+			attrs = append(attrs, attribute.Float64(telemetry.AttrEndOfTurnDelay, info.EndOfTurnDelay))
 		}
 		if info.TranscriptionDelaySet || info.TranscriptionDelay != 0 {
 			attrs = append(attrs, attribute.Float64(telemetry.AttrTranscriptionDelay, info.TranscriptionDelay))
@@ -3574,6 +3672,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if info.SkipReply {
 		a.cancelPreemptiveGeneration()
 		a.resetPreemptiveGenerationCount()
+		newMsg.Metrics = metricsReportFromEndOfTurn(info, 0, a.Session.STT)
 		a.commitUserMessage(newMsg)
 		return nil, nil
 	}
@@ -4181,7 +4280,9 @@ func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay flo
 	if info.TranscriptionDelaySet || info.TranscriptionDelay != 0 {
 		metrics["transcription_delay"] = info.TranscriptionDelay
 	}
-	metrics["end_of_turn_delay"] = info.EndOfTurnDelay
+	if info.EndOfTurnDelaySet || info.EndOfTurnDelay != 0 {
+		metrics["end_of_turn_delay"] = info.EndOfTurnDelay
+	}
 	metrics["on_user_turn_completed_delay"] = onUserTurnCompletedDelay
 	return metrics
 }
@@ -4676,6 +4777,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo, sources ...string) {
 			info.StoppedSpeakingAt,
 			timeToUnixSeconds(time.Now()),
 		)
+		info.EndOfTurnDelaySet = validSpeechTiming(info.StartedSpeakingAt, info.StoppedSpeakingAt)
 		if info.FromInterimFallback {
 			// A final for this speech epoch may still arrive late (that's the
 			// whole reason we fell back). Mark the epoch so OnFinalTranscript

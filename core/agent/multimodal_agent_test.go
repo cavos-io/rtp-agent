@@ -156,7 +156,7 @@ func TestMultimodalAgentTTSFallbackMarksSpeakingAfterFirstAudioFrame(t *testing.
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello")
+		_, _, err := ma.publishTTSFallbackForRealtimeText(context.Background(), nil, "hello", nil, nil)
 		done <- err
 	}()
 

@@ -186,6 +186,8 @@ type SpeechEvent struct {
 	Alternatives     []SpeechData      `json:"alternatives"`
 	RecognitionUsage *RecognitionUsage `json:"recognition_usage"`
 	SpeechStartTime  *float64          `json:"speech_start_time"`
+	SpeechEndTime    *float64          `json:"speech_end_time,omitempty"`
+	ReceivedAt       time.Time         `json:"-"`
 	Interrupted      bool              `json:"-"`
 }
 

@@ -777,6 +777,7 @@ func (s *inferenceTTSStream) run() {
 				s.mu.Unlock()
 				return
 			}
+			tts.MarkSynthesisStarted(s.ctx)
 			err = s.conn.WriteJSON(tokenPkt)
 			s.mu.Unlock()
 

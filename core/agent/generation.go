@@ -50,6 +50,7 @@ type LLMGenerationData struct {
 	GeneratedExtra     map[string]any
 	ID                 string
 	TTFT               time.Duration
+	TTFTSet            bool
 	Duration           time.Duration
 	RequestID          string
 	Usage              *llm.CompletionUsage
@@ -148,6 +149,7 @@ func performLLMInference(
 	requestCtx, requestSpan := telemetry.StartSpan(ctx, "llm_request", trace.WithAttributes(requestAttrs...))
 	runCtx, runSpan := telemetry.StartProviderAttempt(requestCtx, "llm_request_run", l, 0)
 
+	startTime := time.Now()
 	stream, err := l.Chat(runCtx, chatCtx, chatOptions...)
 	if err != nil {
 		recordInferenceSpanError(runCtx, runSpan, err)
@@ -170,7 +172,7 @@ func performLLMInference(
 		defer stream.Close()
 		defer func() {
 			attrs := make([]attribute.KeyValue, 0, 1)
-			if data.TTFT > 0 {
+			if data.TTFTSet || data.TTFT > 0 {
 				attrs = append(attrs, attribute.Float64(telemetry.AttrResponseTTFT, data.TTFT.Seconds()))
 			}
 			nodeSpan.SetAttributes(attrs...)
@@ -202,7 +204,7 @@ func performLLMInference(
 				runSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, providerRequestIDs))
 			}
 
-			if data.TTFT > 0 {
+			if data.TTFTSet || data.TTFT > 0 {
 				requestSpan.SetAttributes(attribute.Float64(telemetry.AttrGenAIResponseTTFC, data.TTFT.Seconds()))
 			}
 
@@ -221,7 +223,6 @@ func performLLMInference(
 			nodeSpan.End()
 		}()
 
-		startTime := time.Now()
 		for {
 			chunk, err := nextLLMChunk(ctx, stream)
 			if err != nil {
@@ -231,8 +232,9 @@ func performLLMInference(
 				break
 			}
 
-			if data.TTFT == 0 {
+			if !data.TTFTSet && chunk.Delta != nil && (chunk.Delta.Content != "" || len(chunk.Delta.ToolCalls) > 0) {
 				data.TTFT = time.Since(startTime)
+				data.TTFTSet = true
 			}
 			data.Duration = time.Since(startTime)
 			if chunk.ID != "" {
@@ -602,11 +604,14 @@ type TTSGenerationData struct {
 	AudioCh             chan *model.AudioFrame
 	TimedTextCh         chan tts.TimedString
 	TTFB                time.Duration
+	TTFBSet             bool
 	StreamErr           error
 	ForwardedAudio      bool
 	StartedSpeakingAt   float64
 	StoppedSpeakingAt   float64
 	PublishedTranscript string
+	playbackTiming      *playbackTiming
+	stopPlaybackTiming  func()
 }
 
 type TTSInferenceOptions struct {
@@ -713,12 +718,15 @@ func (m *ttsInferenceMetrics) addText(text string) {
 }
 
 func (m *ttsInferenceMetrics) observeAudio(synthesized *tts.SynthesizedAudio) {
-	if synthesized == nil || synthesized.Frame == nil {
+	if synthesized == nil || synthesized.Frame == nil || len(synthesized.Frame.Data) == 0 {
 		return
 	}
 	m.mu.Lock()
 	if m.firstAudioAt.IsZero() {
 		m.firstAudioAt = time.Now()
+		if !synthesized.SynthesisStartedAt.IsZero() && !synthesized.SynthesisStartedAt.After(m.firstAudioAt) {
+			m.startedAt = synthesized.SynthesisStartedAt
+		}
 	}
 	if synthesized.RequestID != "" {
 		m.requestID = synthesized.RequestID
@@ -728,6 +736,20 @@ func (m *ttsInferenceMetrics) observeAudio(synthesized *tts.SynthesizedAudio) {
 	}
 	m.audioDuration += audio.CalculateFrameDuration(synthesized.Frame)
 	m.mu.Unlock()
+}
+
+// Observe frames before Collect combines them, so TTFB excludes the response tail.
+type observedTTSChunkedStream struct {
+	tts.ChunkedStream
+	observe func(*tts.SynthesizedAudio)
+}
+
+func (s observedTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	audio, err := s.ChunkedStream.Next()
+	if err == nil && audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+		s.observe(audio)
+	}
+	return audio, err
 }
 
 func (m *ttsInferenceMetrics) emit(cancelled bool) {
@@ -760,11 +782,8 @@ func (m *ttsInferenceMetrics) emit(cancelled bool) {
 		return
 	}
 	metrics.Duration = time.Since(startedAt).Seconds()
-	if !firstAudioAt.IsZero() {
+	if !firstAudioAt.IsZero() && !firstAudioAt.Before(startedAt) {
 		metrics.TTFB = firstAudioAt.Sub(startedAt).Seconds()
-		if metrics.TTFB < 0 {
-			metrics.TTFB = 0
-		}
 	}
 	mergeProviderTTSMetrics(metrics, providerData)
 
@@ -881,9 +900,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	getInputStart := func() time.Time {
 		inputStartMu.Lock()
 		defer inputStartMu.Unlock()
-		if inputStartedAt.IsZero() {
-			return time.Now()
-		}
 		return inputStartedAt
 	}
 	input := tts.NewTextStream(func(ctx context.Context) (string, error) {
@@ -894,8 +910,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			if !ok {
 				return "", io.EOF
 			}
-
-			markInputStart()
 
 			return text, nil
 		}
@@ -917,6 +931,14 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		cancelInference()
 		return nil, err
 	}
+	transformed := transformedInput
+	transformedInput = tts.NewTextStream(func(ctx context.Context) (string, error) {
+		text, err := transformed.Next(ctx)
+		if err == nil && text != "" {
+			markInputStart()
+		}
+		return text, err
+	}, transformed.Close)
 	ctx, span := telemetry.NewTTSNodeSpan(inferenceCtx, tts.Model(t), tts.Provider(t))
 	requestCtx, requestSpan := telemetry.StartSpan(ctx, "tts_request", trace.WithAttributes(
 		attribute.String(telemetry.AttrGenAIRequestModel, tts.Model(t)),
@@ -926,6 +948,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	))
 	runCtx, runSpan := telemetry.StartProviderAttempt(requestCtx, "tts_request_run", t, 0)
 	ctx = runCtx
+	ctx, synthesisTiming := tts.WithSynthesisTiming(ctx)
 	metrics := newTTSInferenceMetrics(t, streamed, options.metricsHandler, requestSpan, runSpan, !telemetry.RedactionEnabled(requestCtx))
 
 	if !t.Capabilities().Streaming && !options.PreserveTimedTranscript {
@@ -971,10 +994,15 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			metrics.addText(transformedText)
 
-			if !startTimeSet {
-				startTime = time.Now()
-			}
+			startTime = time.Now()
+			metrics.mu.Lock()
+			metrics.startedAt = startTime
+			metrics.mu.Unlock()
 			stream, err := t.Synthesize(ctx, transformedText)
+			value := reflect.ValueOf(stream)
+			if err == nil && (!value.IsValid() || (value.Kind() == reflect.Pointer && value.IsNil())) {
+				err = fmt.Errorf("TTS returned nil chunked stream")
+			}
 			if err != nil {
 				data.StreamErr = err
 				recordInferenceSpanError(runCtx, runSpan, err)
@@ -985,6 +1013,23 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			defer func() {
 				metrics.emit(errors.Is(data.StreamErr, context.Canceled) || ctx.Err() != nil)
 			}()
+			stream = observedTTSChunkedStream{ChunkedStream: stream, observe: func(audio *tts.SynthesizedAudio) {
+				if audio.SynthesisStartedAt.IsZero() {
+					copy := *audio
+					copy.SynthesisStartedAt = synthesisTiming.StartedAt()
+					audio = &copy
+				}
+				metrics.observeAudio(audio)
+				if !data.TTFBSet {
+					anchor := startTime
+					if !audio.SynthesisStartedAt.IsZero() && !audio.SynthesisStartedAt.After(time.Now()) {
+						anchor = audio.SynthesisStartedAt
+					}
+					data.TTFB = time.Since(anchor)
+					data.TTFBSet = true
+					span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
+				}
+			}}
 			var frame *model.AudioFrame
 			if options.PreserveTimedTranscript {
 				var timedTranscript []tts.TimedString
@@ -1017,9 +1062,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					return
 				}
 			}
-			data.TTFB = time.Since(startTime)
-			metrics.observeAudio(&tts.SynthesizedAudio{Frame: frame})
-			span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			data.AudioCh <- frame
 		}()
 		return data, nil
@@ -1070,29 +1112,16 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 		}()
 
-		streamOpenedAt := time.Now()
-		startTime := streamOpenedAt
-		var startTimeSet bool
-		var ttfbObserved bool
-		var startTimeMu sync.Mutex
-		markStartTime := func() {
-			startTimeMu.Lock()
-			startedAt := getInputStart()
-			metrics.startAt(startedAt)
-			if !startTimeSet && !ttfbObserved {
-				startTime = startedAt
-				startTimeSet = true
+		markStartTime := func() { metrics.startAt(getInputStart()) }
+		timeSinceStart := func(synthesisStartedAt time.Time) (time.Duration, bool) {
+			anchor := synthesisStartedAt
+			if anchor.IsZero() || anchor.After(time.Now()) {
+				anchor = getInputStart()
 			}
-			startTimeMu.Unlock()
-		}
-		timeSinceStart := func() (time.Duration, bool) {
-			startTimeMu.Lock()
-			defer startTimeMu.Unlock()
-			if !startTimeSet {
-				startTime = streamOpenedAt
+			if anchor.IsZero() {
+				return 0, false
 			}
-			ttfbObserved = true
-			return time.Since(startTime), true
+			return time.Since(anchor), true
 		}
 		var streamErrMu sync.Mutex
 		setStreamErr := func(err error) {
@@ -1183,6 +1212,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		}()
 		go func() {
 			defer wg.Done()
+			firstAudioObserved := false
 			for {
 				audio, err := stream.Next()
 				if err != nil {
@@ -1191,13 +1221,20 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					}
 					return
 				}
-				if audio == nil || audio.Frame == nil {
+				if audio == nil || audio.Frame == nil || len(audio.Frame.Data) == 0 {
 					continue
 				}
+				if audio.SynthesisStartedAt.IsZero() {
+					copy := *audio
+					copy.SynthesisStartedAt = synthesisTiming.StartedAt()
+					audio = &copy
+				}
 				metrics.observeAudio(audio)
-				if data.TTFB == 0 {
-					if ttfb, ok := timeSinceStart(); ok {
+				if !firstAudioObserved {
+					firstAudioObserved = true
+					if ttfb, ok := timeSinceStart(audio.SynthesisStartedAt); ok {
 						data.TTFB = ttfb
+						data.TTFBSet = true
 						span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 					}
 				}

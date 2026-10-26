@@ -845,6 +845,7 @@ func (s *googleTTSSynthesizeStream) sendText(text string) error {
 	}
 	prompt := s.nextPromptLocked()
 	s.mu.Unlock()
+	tts.MarkSynthesisStarted(s.ctx)
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
 			Input: googleTTSStreamingInput(text, prompt, s.markup),
