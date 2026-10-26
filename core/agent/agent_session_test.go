@@ -1838,19 +1838,20 @@ func TestAgentActivityLifecycleSpansAreChildrenOfRoot(t *testing.T) {
 	for _, span := range recorder.Ended() {
 		spans[span.Name()] = span
 	}
-	root := spans["agent_session"]
-	start := spans["start_agent_activity"]
-	if root == nil || start == nil || spans["on_enter"] == nil || spans["on_exit"] == nil {
-		t.Fatalf("lifecycle spans = %#v", spans)
-	}
-	if got, want := start.Parent().SpanID(), root.SpanContext().SpanID(); got != want {
-		t.Fatalf("start_agent_activity parent = %s, want %s", got, want)
-	}
-	if got, want := spans["on_enter"].Parent().SpanID(), start.SpanContext().SpanID(); got != want {
-		t.Fatalf("on_enter parent = %s, want %s", got, want)
-	}
-	if got, want := spans["on_exit"].Parent().SpanID(), root.SpanContext().SpanID(); got != want {
-		t.Fatalf("on_exit parent = %s, want %s", got, want)
+
+	for child, parent := range map[string]string{"session_start": "agent_session", "start_agent_activity": "session_start", "on_enter": "start_agent_activity", "session_close": "agent_session", "drain_agent_activity": "session_close", "on_exit": "drain_agent_activity"} {
+		if spans[child] == nil || spans[parent] == nil {
+			t.Fatalf("missing %s or %s", child, parent)
+		}
+		if got, want := spans[child].Parent().SpanID(), spans[parent].SpanContext().SpanID(); got != want {
+			t.Fatalf("%s parent=%s,want %s %s", child, got, parent, want)
+		}
+		if spans[child].StartTime().Before(spans[parent].StartTime()) {
+			t.Fatalf("%s starts before %s", child, parent)
+		}
+		if spans[child].EndTime().After(spans[parent].EndTime()) {
+			t.Fatalf("%s outlives %s", child, parent)
+		}
 	}
 }
 

@@ -25,34 +25,34 @@ const (
 	AttrRedactionEnabled   = "lk.redaction.enabled"
 
 	AttrParticipantID       = "lk.participant_id"
-	AttrParticipantIdentity = "lk.participant_identity"
+	AttrParticipantIdentity = "lk.pii.participant_identity"
 	AttrParticipantKind     = "lk.participant_kind"
 
 	AttrJobID          = "lk.job_id"
 	AttrAgentName      = "lk.agent_name"
-	AttrRoomName       = "lk.room_name"
+	AttrRoomName       = "lk.pii.room_name"
 	AttrSessionOptions = "lk.session_options"
 
 	AttrAgentTurnID       = "lk.generation_id"
 	AttrAgentParentTurnID = "lk.parent_generation_id"
-	AttrUserInput         = "lk.user_input"
-	AttrInstructions      = "lk.instructions"
+	AttrUserInput         = "lk.pii.user_input"
+	AttrInstructions      = "lk.pii.instructions"
 	AttrSpeechInterrupted = "lk.interrupted"
 
-	AttrChatCtx               = "lk.chat_ctx"
+	AttrChatCtx               = "lk.pii.chat_ctx"
 	AttrFunctionTools         = "lk.function_tools"
 	AttrProviderTools         = "lk.provider_tools"
 	AttrToolSets              = "lk.tool_sets"
-	AttrResponseText          = "lk.response.text"
-	AttrResponseFunctionCalls = "lk.response.function_calls"
+	AttrResponseText          = "lk.pii.response.text"
+	AttrResponseFunctionCalls = "lk.pii.response.function_calls"
 	AttrResponseTTFT          = "lk.response.ttft"
 	AttrResponseTTFB          = "lk.response.ttfb"
 
 	AttrFunctionToolID      = "lk.function_tool.id"
 	AttrFunctionToolName    = "lk.function_tool.name"
-	AttrFunctionToolArgs    = "lk.function_tool.arguments"
+	AttrFunctionToolArgs    = "lk.pii.function_tool.arguments"
 	AttrFunctionToolIsError = "lk.function_tool.is_error"
-	AttrFunctionToolOutput  = "lk.function_tool.output"
+	AttrFunctionToolOutput  = "lk.pii.function_tool.output"
 
 	AttrTTSInputText = "lk.pii.input_text"
 	AttrTTSStreaming = "lk.tts.streaming"
@@ -62,7 +62,7 @@ const (
 	AttrEOUUnlikelyThreshold = "lk.eou.unlikely_threshold"
 	AttrEOUDelay             = "lk.eou.endpointing_delay"
 	AttrEOULanguage          = "lk.eou.language"
-	AttrUserTranscript       = "lk.user_transcript"
+	AttrUserTranscript       = "lk.pii.user_transcript"
 	AttrTranscriptConfidence = "lk.transcript_confidence"
 	AttrTranscriptionDelay   = "lk.transcription_delay"
 	AttrEndOfTurnDelay       = "lk.end_of_turn_delay"
@@ -130,7 +130,7 @@ func TracerFromContext(ctx context.Context) trace.Tracer {
 	if observability := JobObservabilityFromContext(ctx); observability != nil {
 		return observability.Tracer()
 	}
-	return Tracer
+	return policyTracer{Tracer: Tracer}
 }
 
 type SpanContext struct {
@@ -140,13 +140,6 @@ type SpanContext struct {
 
 func NewTTSNodeSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
 	return StartSpan(ctx, "tts_node", trace.WithAttributes(
-		attribute.String(AttrGenAIRequestModel, model),
-		attribute.String(AttrGenAIProviderName, provider),
-	))
-}
-
-func NewSTTStreamSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
-	return StartSpan(ctx, "stt_stream", trace.WithAttributes(
 		attribute.String(AttrGenAIRequestModel, model),
 		attribute.String(AttrGenAIProviderName, provider),
 	))

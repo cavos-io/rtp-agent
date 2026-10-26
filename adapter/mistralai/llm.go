@@ -311,3 +311,6 @@ type MistralLLMOption = LLMOption
 func NewMistralLLM(apiKey string, model string, opts ...LLMOption) *LLM {
 	return NewLLM(apiKey, model, opts...)
 }
+
+// TracesRequestAttempts delegates attempt tracing to the OpenAI-compatible implementation.
+func (*LLM) TracesRequestAttempts() bool { return true }

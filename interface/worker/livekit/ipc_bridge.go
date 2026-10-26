@@ -28,6 +28,10 @@ func FromIPCJobAcceptArguments(args workeripc.JobAcceptArguments) JobAcceptArgum
 
 func ToIPCRunningJobInfo(info RunningJobInfo) workeripc.RunningJobInfo {
 	return workeripc.RunningJobInfo{
+		ReceivedAt:      info.ReceivedAt,
+		AcceptedAt:      info.AcceptedAt,
+		AssignedAt:      info.AssignedAt,
+		LaunchedAt:      info.LaunchedAt,
 		AcceptArguments: ToIPCJobAcceptArguments(info.AcceptArguments),
 		Job:             info.Job,
 		URL:             info.URL,
@@ -43,6 +47,10 @@ func FromIPCRunningJobInfo(info workeripc.RunningJobInfo) (RunningJobInfo, error
 		return RunningJobInfo{}, err
 	}
 	return RunningJobInfo{
+		ReceivedAt:      info.ReceivedAt,
+		AcceptedAt:      info.AcceptedAt,
+		AssignedAt:      info.AssignedAt,
+		LaunchedAt:      info.LaunchedAt,
 		AcceptArguments: FromIPCJobAcceptArguments(info.AcceptArguments),
 		Job:             job,
 		URL:             info.URL,

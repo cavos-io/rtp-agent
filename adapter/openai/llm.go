@@ -16,7 +16,10 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/sashabaranov/go-openai"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const defaultOpenAILLMModel = "gpt-4.1"
@@ -1188,25 +1191,31 @@ func (l *LLM) chatEager(ctx context.Context, chatCtx *llm.ChatContext, opts ...l
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		stream, err := client.CreateChatCompletionStream(ctx, req)
+		attemptCtx, attemptSpan := telemetry.StartSpan(ctx, "llm_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, attempt), attribute.String(telemetry.AttrGenAIRequestModel, l.model), attribute.String(telemetry.AttrGenAIProviderName, telemetry.NormalizeGenAIProvider(l.Provider()))))
+		stream, err := client.CreateChatCompletionStream(attemptCtx, req)
 		if err == nil {
 			l.unregisterRequest(requestID)
 			if l.isClosed() {
 				stream.Close()
+				attemptSpan.End()
 				cancel()
 				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 			}
 			wrapped := &openaiStream{
-				stream:   stream,
-				cancel:   cancel,
-				provider: l,
+				attemptSpan: attemptSpan,
+				stream:      stream,
+				cancel:      cancel,
+				provider:    l,
 			}
 			if !l.registerStream(wrapped) {
+				attemptSpan.End()
 				cancel()
 				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 			}
 			return wrapped, nil
 		}
+		telemetry.RecordAttemptError(attemptSpan, err)
+		attemptSpan.End()
 		if l.isClosed() && errors.Is(ctx.Err(), context.Canceled) {
 			cleanupRequest()
 			return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
@@ -2604,7 +2613,11 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 	}
 }
 
+// TracesRequestAttempts reports that Chat records each provider attempt.
+func (*LLM) TracesRequestAttempts() bool { return true }
+
 type openaiStream struct {
+	attemptSpan   trace.Span
 	stream        *openai.ChatCompletionStream
 	cancel        context.CancelFunc
 	provider      *LLM
@@ -2640,10 +2653,16 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 				return nil, io.EOF
 			}
 			mappedErr := openAIStreamRecvError(err, !s.hasEmitted())
+			if s.attemptSpan != nil && !errors.Is(err, context.Canceled) {
+				telemetry.RecordAttemptError(s.attemptSpan, mappedErr)
+			}
 			_ = s.Close()
 			return nil, mappedErr
 		}
 
+		if s.attemptSpan != nil && resp.ID != "" {
+			s.attemptSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, []string{resp.ID}))
+		}
 		if len(resp.Choices) == 0 {
 			if resp.Usage == nil {
 				continue
@@ -2948,6 +2967,9 @@ func (s *openaiStream) Close() error {
 	s.mu.Unlock()
 
 	s.stream.Close()
+	if s.attemptSpan != nil {
+		s.attemptSpan.End()
+	}
 	if cancel != nil {
 		cancel()
 	}

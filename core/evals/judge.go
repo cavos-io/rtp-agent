@@ -7,6 +7,9 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const taskCompletionCriteria = "Evaluate if the agent completed its goal based on its instructions. " +
@@ -51,7 +54,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 		if latest := getLatestInstructions(chatCtx); latest != "" {
 			instructions = latest
 		}
-		result, err := evaluateWithLLM(ctx, effectiveLLM, taskCompletionPrompt(chatCtx, reference, instructions))
+		result, err := evaluateWithLLM(ctx, effectiveLLM, taskCompletionPrompt(chatCtx, reference, instructions), j.name)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +69,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 				Reasoning: "No agent handoffs occurred in this conversation.",
 			}, nil
 		}
-		result, err := evaluateWithLLM(ctx, effectiveLLM, handoffPrompt(chatCtx, reference))
+		result, err := evaluateWithLLM(ctx, effectiveLLM, handoffPrompt(chatCtx, reference), j.name)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +84,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 	prompt += "\n\nEvaluate if the conversation meets the criteria."
 
-	result, err := evaluateWithLLM(ctx, effectiveLLM, prompt)
+	result, err := evaluateWithLLM(ctx, effectiveLLM, prompt, j.name)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +178,23 @@ func (t *submitVerdictTool) Execute(ctx context.Context, args string) (string, e
 	return "submitted", nil
 }
 
-func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (*JudgmentResult, error) {
+func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string, names ...string) (judgment *JudgmentResult, evalErr error) {
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
+	}
+	ctx, span := telemetry.StartSpan(ctx, "judge_evaluation", trace.WithAttributes(attribute.String("gen_ai.evaluation.name", name)))
+	defer func() {
+		telemetry.RecordAttemptError(span, evalErr)
+		if judgment != nil {
+			span.SetAttributes(attribute.String("gen_ai.evaluation.score.label", string(judgment.Verdict)))
+			if telemetry.CaptureGenAIContent(ctx) {
+				span.SetAttributes(attribute.String("gen_ai.evaluation.explanation", judgment.Reasoning))
+			}
+		}
+		span.End()
+	}()
+
 	evalCtx := llm.NewChatContext()
 	evalCtx.Append(&llm.ChatMessage{
 		Role: llm.ChatRoleSystem,

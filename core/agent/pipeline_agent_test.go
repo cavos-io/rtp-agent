@@ -2971,7 +2971,8 @@ func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testi
 
 func TestPipelineAgentClearInputTranscriptionReplacesSTTStream(t *testing.T) {
 	first := &fakePipelineRecognizeStream{closedCh: make(chan struct{})}
-	second := &fakePipelineRecognizeStream{}
+	second := &fakePipelineRecognizeStream{closedCh: make(chan struct{})}
+	defer second.Close()
 	sttObj := &queuedPipelineSTT{streams: []stt.RecognizeStream{second}}
 	pipeline := NewPipelineAgent(nil, sttObj, nil, nil, nil)
 	pipeline.sttStream = first

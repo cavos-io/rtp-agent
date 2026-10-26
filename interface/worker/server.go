@@ -24,6 +24,9 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -178,7 +181,12 @@ type WorkerOptions struct {
 }
 
 type AgentServer struct {
-	Options WorkerOptions
+	tracerProvider   *sdktrace.TracerProvider
+	closed           bool
+	executionStarted bool
+	closeOnce        sync.Once
+	closeErr         error
+	Options          WorkerOptions
 
 	entrypointFnc func(*JobContext) error
 	requestFnc    func(*JobRequest) error
@@ -188,6 +196,7 @@ type AgentServer struct {
 	finishingJobs          map[string]*JobContext
 	pendingAccepts         map[string]JobAcceptArguments
 	pendingTimers          map[string]*time.Timer
+	dispatchTimelines      map[string]jobDispatchTimeline
 	reservedSlots          int
 	draining               bool
 	running                bool
@@ -315,7 +324,15 @@ func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
 }
 
 func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
+	jobCtx.traceMu.Lock()
+	timeline := jobCtx.dispatchTimeline
+	jobCtx.traceMu.Unlock()
 	return livekitRunningJobInfoToIPC(livekitServerRunningJobInfoSnapshot(RunningJobInfoOptions{
+		ReceivedAt: dispatchTimestamp(timeline.ReceivedAt),
+		AcceptedAt: dispatchTimestamp(timeline.AcceptedAt),
+		AssignedAt: dispatchTimestamp(timeline.AssignedAt),
+		LaunchedAt: dispatchTimestamp(timeline.LaunchedAt),
+
 		AcceptArguments: JobAcceptArguments{
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
@@ -380,8 +397,13 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx.workerID = reloadedJob.WorkerID
 		jobCtx.AcceptArguments = reloadedJob.AcceptArguments
 		jobCtx.fakeJob = reloadedJob.FakeJob
+		jobCtx.dispatchTimeline = timelineFromSeconds(info.ReceivedAt, info.AcceptedAt, info.AssignedAt, info.LaunchedAt)
 
 		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return fmt.Errorf("worker is closed")
+		}
 		s.activeJobs[reloadedJob.JobID] = jobCtx
 		s.mu.Unlock()
 
@@ -418,8 +440,13 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx.workerID = runningJob.WorkerID
 	jobCtx.AcceptArguments = runningJob.AcceptArguments
 	jobCtx.fakeJob = runningJob.FakeJob
+	jobCtx.dispatchTimeline = timelineFromSeconds(info.ReceivedAt, info.AcceptedAt, info.AssignedAt, info.LaunchedAt)
 
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("worker is closed")
+	}
 	s.activeJobs[runningJob.JobID] = jobCtx
 	s.mu.Unlock()
 
@@ -455,6 +482,11 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 	if s.entrypointFnc == nil {
 		return
 	}
+	jobCtx.traceMu.Lock()
+	if jobCtx.dispatchTimeline.LaunchedAt.IsZero() {
+		jobCtx.dispatchTimeline.LaunchedAt = time.Now()
+	}
+	jobCtx.traceMu.Unlock()
 	if jobCtx.process == nil {
 		jobCtx.process = s.newJobProcess()
 	}
@@ -623,10 +655,14 @@ func (s *AgentServer) started() bool {
 func (s *AgentServer) beginRun() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("worker is closed")
+	}
 	if s.started() {
 		return fmt.Errorf("worker is already running")
 	}
 	s.running = true
+	s.executionStarted = true
 	return nil
 }
 
@@ -1662,12 +1698,34 @@ func (s *AgentServer) reportActiveJobs() {
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *AvailabilityRequest) {
+	id := livekitAvailabilityInfo(req).JobID
+	s.mu.Lock()
+	if s.dispatchTimelines == nil {
+		s.dispatchTimelines = make(map[string]jobDispatchTimeline)
+	}
+	s.dispatchTimelines[id] = jobDispatchTimeline{ReceivedAt: time.Now()}
+	s.mu.Unlock()
 	go s.answerAvailability(ctx, req)
 }
 
 func (s *AgentServer) answerAvailability(ctx context.Context, req *AvailabilityRequest) {
 	availability := livekitAvailabilityInfo(req)
 	jobID := availability.JobID
+	s.mu.Lock()
+	if s.dispatchTimelines == nil {
+		s.dispatchTimelines = make(map[string]jobDispatchTimeline)
+	}
+	if _, ok := s.dispatchTimelines[jobID]; !ok {
+		s.dispatchTimelines[jobID] = jobDispatchTimeline{ReceivedAt: time.Now()}
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if _, pending := s.pendingAccepts[jobID]; !pending {
+			delete(s.dispatchTimelines, jobID)
+		}
+		s.mu.Unlock()
+	}()
 	logger.Logger.Infow("Received availability request", "jobId", jobID)
 
 	livekitAnswerServerAvailabilityRequest(AvailabilityAnswerOptions{
@@ -1721,6 +1779,16 @@ func isWorkerWebSocketDisconnected(err error) bool {
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	if s.dispatchTimelines == nil {
+		s.dispatchTimelines = make(map[string]jobDispatchTimeline)
+	}
+	timeline := s.dispatchTimelines[jobID]
+	timeline.AcceptedAt = time.Now()
+	s.dispatchTimelines[jobID] = timeline
 	livekitStoreServerPendingAccept(PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
@@ -1730,6 +1798,9 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 		OnTimeout: func(jobID string, timer *time.Timer) {
 			s.mu.Lock()
 			expired := livekitExpireServerPendingAccept(s.pendingAccepts, s.pendingTimers, jobID, timer)
+			if expired {
+				delete(s.dispatchTimelines, jobID)
+			}
 			s.mu.Unlock()
 			if expired {
 				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
@@ -1757,6 +1828,9 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 		WorkerID:        s.workerID,
 	})
 	jobCtx := NewJobContext(assignedJob.Job, assignedJob.URL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.dispatchTimeline = s.dispatchTimelines[jobID]
+	jobCtx.dispatchTimeline.AssignedAt = time.Now()
+	delete(s.dispatchTimelines, jobID)
 	jobCtx.shutdownTimeout = time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second))
 	jobCtx.process = s.newJobProcess()
 	if assignedJob.EnableRecording {
@@ -1766,6 +1840,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	jobCtx.workerID = assignedJob.WorkerID
 	jobCtx.AcceptArguments = assignedJob.AcceptArguments
 	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.activeJobs[assignedJob.JobID] = jobCtx
 	s.mu.Unlock()
 
@@ -1879,6 +1957,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	entrypointDone := make(chan struct{})
 
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("worker is closed")
+	}
 	s.activeJobs[localJob.JobID] = jobCtx
 	s.mu.Unlock()
 
@@ -1966,10 +2048,18 @@ func (s *AgentServer) newJobProcess() *JobProcess {
 	return NewJobProcess(s.Options.JobExecutorType, s.Options.UserArguments, s.Options.HTTPProxy)
 }
 
-func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
+func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) (resultErr error) {
 	if jobCtx == nil {
 		return fmt.Errorf("job context is nil")
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("worker is closed")
+	}
+	s.executionStarted = true
+	jobCtx.serverTracerProvider = s.tracerProvider
+	s.mu.Unlock()
 	if jobCtx.process == nil {
 		jobCtx.process = s.newJobProcess()
 	}
@@ -1984,6 +2074,18 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
 	if !jobCtx.IsFakeJob() {
 		jobCtx.PrepareRoom()
 	}
+	jobCtx.traceMu.Lock()
+	jobCtx.dispatchTimeline.EntrypointAt = time.Now()
+	jobCtx.traceMu.Unlock()
+	defer func() {
+		jobCtx.traceMu.Lock()
+		jobCtx.entrypointReturnedAt = time.Now()
+		if jobCtx.jobSpan != nil {
+			jobCtx.jobSpan.AddEvent("entrypoint_returned", trace.WithTimestamp(jobCtx.entrypointReturnedAt))
+			recordJobSpanError(jobCtx.jobSpan, resultErr)
+		}
+		jobCtx.traceMu.Unlock()
+	}()
 	return runWithJobContext(jobCtx, func() error {
 		return s.entrypointFnc(jobCtx)
 	})
@@ -2023,6 +2125,9 @@ func (s *AgentServer) finishJobLifecycle(jobCtx *JobContext, jobID string, foreg
 			logger.Logger.Errorw("job teardown panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobID)...)
 		}
 
+		if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
+			logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", jobID)...)
+		}
 		if err := jobCtx.onCleanUp(); err != nil {
 			logger.Logger.Errorw("failed to run job cleanup", err, jobLogValues(jobCtx, "jobId", jobID)...)
 		}
@@ -2046,9 +2151,7 @@ func (s *AgentServer) finishJobLifecycle(jobCtx *JobContext, jobID string, foreg
 	}
 
 	s.uploadJobSessionReport(jobCtx)
-	if err := jobCtx.FinalizeObservability(context.Background()); err != nil {
-		logger.Logger.Errorw("failed to finalize job observability", err, jobLogValues(jobCtx, "jobId", jobID)...)
-	}
+
 }
 
 func (s *AgentServer) trackFinishingJob(jobCtx *JobContext) {
@@ -2078,6 +2181,11 @@ func (s *AgentServer) untrackFinishingJob(jobCtx *JobContext) {
 }
 
 func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
+	if jobCtx == nil {
+		return
+	}
+	_, span := telemetry.StartSpan(jobCtx.shutdownTraceContext(context.Background()), "session_end_upload")
+	defer span.End()
 	plan := jobSessionReportUploadPlan(jobCtx, s.Options)
 	if !plan.Upload {
 		return
@@ -2089,6 +2197,7 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 			uploadSessionRecordingOnly(plan.URL, plan.APIKey, plan.APISecret, plan.Report),
 		)
 		if err != nil {
+			recordJobSpanError(span, err)
 			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 		return
@@ -2101,6 +2210,7 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 		plan.Report,
 	)
 	if err != nil {
+		recordJobSpanError(span, err)
 		logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 	}
 }
@@ -2146,15 +2256,19 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) (<-chan struct{}, bool) 
 		Job:            jobCtx.Job,
 		TimeoutSeconds: s.Options.SessionEndTimeoutSeconds,
 	})
+	_, span := telemetry.StartSpan(jobCtx.shutdownTraceContext(context.Background()), "on_session_end", trace.WithAttributes(attribute.String("lk.callback.name", callbackTraceName(s.sessionEndFnc))))
 	go func() {
 		defer close(done)
+		defer span.End()
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				recordJobSpanError(span, fmt.Errorf("session end callback panicked: %v", recovered))
 				logger.Logger.Errorw("Session end callback panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", plan.JobID)...)
 			}
 		}()
 
 		if err := s.sessionEndFnc(jobCtx); err != nil {
+			recordJobSpanError(span, err)
 			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", plan.JobID)...)
 		}
 	}()
@@ -2171,6 +2285,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) (<-chan struct{}, bool) 
 	case <-done:
 		return done, false
 	case <-timer.C:
+		recordJobSpanError(span, context.DeadlineExceeded)
 		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", plan.JobID, "timeout", plan.Timeout)...)
 
 		return done, true

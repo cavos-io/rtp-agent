@@ -47,6 +47,7 @@ func registeredHandlers() handlerRegistry {
 		"stt_fallback":                 runSTTFallback,
 		"stt_stream_adapter":           runSTTStreamAdapter,
 		"stt_value_objects":            runSTTValueObjects,
+		"trace_content":                runTraceContent,
 		"telemetry_logs":               runTelemetryLogs,
 		"telemetry_otel":               runTelemetryOTel,
 		"telemetry_usage":              runTelemetryUsage,

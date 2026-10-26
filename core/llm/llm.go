@@ -14,6 +14,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ChatRole string
@@ -1639,12 +1641,16 @@ func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts .
 	return stream, nil
 }
 
+// TracesRequestAttempts delegates retry tracing to providers or records opaque attempts.
+func (*FallbackAdapter) TracesRequestAttempts() bool { return true }
+
 type fallbackLLMStream struct {
-	adapter *FallbackAdapter
-	ctx     context.Context
-	chatCtx *ChatContext
-	tools   []Tool
-	opts    []ChatOption
+	activeSpan trace.Span
+	adapter    *FallbackAdapter
+	ctx        context.Context
+	chatCtx    *ChatContext
+	tools      []Tool
+	opts       []ChatOption
 
 	activeStream LLMStream
 	activeCancel context.CancelFunc
@@ -1780,12 +1786,14 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
+			ctx, attemptSpan := telemetry.StartProviderAttempt(ctx, "llm_request_run", s.adapter.llms[i], 0, attribute.String(telemetry.AttrGenAIRequestModel, Model(s.adapter.llms[i])), attribute.String(telemetry.AttrGenAIProviderName, Provider(s.adapter.llms[i])))
 			stream, err := s.adapter.llms[i].Chat(ctx, s.ChatCtx(), s.adapter.attemptOptions(s.opts)...)
 			if err == nil && isNilLLMStream(stream) {
 				err = NewAPIConnectionError("LLM returned nil stream")
 			}
 			if err == nil {
 				s.closeActive()
+				s.activeSpan = attemptSpan
 				s.activeStream = stream
 				s.activeCancel = cancel
 				s.activeIndex = i
@@ -1797,6 +1805,8 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				}
 				return nil
 			}
+			telemetry.RecordAttemptError(attemptSpan, err)
+			attemptSpan.End()
 			cancel()
 			lastErr = err
 			s.markUnavailable(i, false)
@@ -1841,11 +1851,17 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
+			if s.activeSpan != nil && chunk != nil && chunk.ID != "" {
+				s.activeSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, []string{chunk.ID}))
+			}
 			s.activeCtxSet = true
 			if chunkHasVisibleOutput(chunk) {
 				s.outputSent = true
 			}
 			return chunk, nil
+		}
+		if s.activeSpan != nil {
+			telemetry.RecordAttemptError(s.activeSpan, err)
 		}
 		if errors.Is(err, io.EOF) {
 			s.rememberActiveMetadata()
@@ -1910,6 +1926,10 @@ func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Contex
 }
 
 func (s *fallbackLLMStream) closeActive() {
+	if s.activeSpan != nil {
+		s.activeSpan.End()
+		s.activeSpan = nil
+	}
 	if !isNilLLMStream(s.activeStream) {
 		_ = s.activeStream.Close()
 		s.activeStream = nil

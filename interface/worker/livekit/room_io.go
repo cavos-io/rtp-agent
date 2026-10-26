@@ -24,6 +24,8 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type AudioDecoder interface {
@@ -341,6 +343,11 @@ type RoomIO struct {
 	Options      RoomOptions
 	Recorder     *RecorderIO
 
+	inputTracingEnded                       bool
+	traceCtx                                context.Context
+	participantWaitSpan, audioTrackWaitSpan trace.Span
+	audioTrackWaitStarted                   time.Time
+
 	mu     sync.Mutex
 	closed bool
 
@@ -553,6 +560,9 @@ func (rio *RoomIO) Shutdown(ctx context.Context) error {
 
 	rio.shutdownStarted = true
 	rio.shutdownMu.Unlock()
+	rio.mu.Lock()
+	rio.endInputWaitsLocked()
+	rio.mu.Unlock()
 
 	var err error
 
@@ -1395,6 +1405,7 @@ func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
 		rio.userTranscriptionParticipantID = ""
 		rio.userTranscriptionSegmentID = ""
 	}
+	rio.updateInputWaitsLocked(participantIdentity, available)
 	rio.Options.ParticipantIdentity = participantIdentity
 	rio.participantAvailable = available
 }
@@ -1648,6 +1659,9 @@ func participantKindAllowed(kind lksdk.ParticipantKind, allowed []lksdk.Particip
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	if rio != nil {
+		rio.SetTraceContext(ctx)
+	}
 	if rio == nil || rio.Options.DisableAudioOutput {
 		return nil
 	}
@@ -2283,6 +2297,17 @@ func (rio *RoomIO) forwardRoomInputFrames(ctx context.Context, frames []*model.A
 func (rio *RoomIO) forwardRoomInputFrame(ctx context.Context, frame *model.AudioFrame) {
 	if rio == nil || frame == nil {
 		return
+	}
+	if len(frame.Data) > 0 && frame.SampleRate > 0 && frame.NumChannels > 0 && frame.SamplesPerChannel > 0 {
+		rio.mu.Lock()
+		if span := rio.audioTrackWaitSpan; span != nil {
+			now := time.Now()
+			span.AddEvent("first_frame", trace.WithTimestamp(now))
+			span.SetAttributes(attribute.Float64("lk.first_frame_delay", max(0, now.Sub(rio.audioTrackWaitStarted).Seconds())))
+			span.End(trace.WithTimestamp(now))
+			rio.audioTrackWaitSpan = nil
+		}
+		rio.mu.Unlock()
 	}
 	// Recording taps the untouched frame: an input processor exists to improve
 	// what the agent hears, not to rewrite the evidence of the call.

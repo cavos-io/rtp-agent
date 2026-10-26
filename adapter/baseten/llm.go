@@ -61,3 +61,6 @@ type BasetenLLM = LLM
 func NewBasetenLLM(apiKey string, model string) (*LLM, error) {
 	return NewLLM(apiKey, model)
 }
+
+// TracesRequestAttempts delegates attempt tracing to the OpenAI-compatible implementation.
+func (*LLM) TracesRequestAttempts() bool { return true }

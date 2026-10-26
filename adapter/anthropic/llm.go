@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type LLM struct {
@@ -311,9 +314,11 @@ func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.Ch
 	}
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag, connectTimeout)
+		attemptCtx, attemptSpan := telemetry.StartSpan(ctx, "llm_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, attempt), attribute.String(telemetry.AttrGenAIRequestModel, l.model), attribute.String(telemetry.AttrGenAIProviderName, "anthropic")))
+		resp, err := l.startAnthropicStream(attemptCtx, jsonBody, betaFlag, connectTimeout)
 		if err == nil {
 			return &anthropicStream{
+				attemptSpan:    attemptSpan,
 				llm:            l,
 				ctx:            ctx,
 				jsonBody:       jsonBody,
@@ -325,6 +330,8 @@ func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.Ch
 				reader:         bufio.NewReader(resp.Body),
 			}, nil
 		}
+		telemetry.RecordAttemptError(attemptSpan, err)
+		attemptSpan.End()
 		lastErr = err
 		var statusErr *llm.APIStatusError
 		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
@@ -677,7 +684,11 @@ func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl
 	}
 }
 
+// TracesRequestAttempts reports that Chat records each provider attempt.
+func (*LLM) TracesRequestAttempts() bool { return true }
+
 type anthropicStream struct {
+	attemptSpan    trace.Span
 	llm            *LLM
 	ctx            context.Context
 	jsonBody       []byte
@@ -1047,7 +1058,13 @@ func anthropicGroupID(itemID string, groupID *string) string {
 	return itemID
 }
 
-func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
+func (s *anthropicStream) Next() (chunk *llm.ChatChunk, nextErr error) {
+	defer func() {
+		if nextErr != nil && s.attemptSpan != nil {
+			telemetry.RecordAttemptError(s.attemptSpan, nextErr)
+			s.attemptSpan.End()
+		}
+	}()
 	for {
 		if s.closed {
 			return nil, io.EOF
@@ -1169,6 +1186,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				return nil, wrappedErr
 			}
 			s.requestID = *event.Message.ID
+			if s.attemptSpan != nil {
+				s.attemptSpan.SetAttributes(attribute.StringSlice(telemetry.AttrProviderRequestIDs, []string{s.requestID}))
+			}
 			s.inputTokens = *event.Message.Usage.InputTokens
 			s.outputTokens = event.Message.Usage.OutputTokens
 			s.cacheCreationTokens = event.Message.Usage.CacheCreationInputTokens
@@ -1348,9 +1368,7 @@ func anthropicSSEData(line string) (string, bool) {
 		return "", false
 	}
 	data := strings.TrimPrefix(line, "data:")
-	if strings.HasPrefix(data, " ") {
-		data = data[1:]
-	}
+	data = strings.TrimPrefix(data, " ")
 	return data, true
 }
 
@@ -1385,6 +1403,10 @@ func (s *anthropicStream) completeAnthropicSSEData(data string) (string, error) 
 }
 
 func (s *anthropicStream) retryBeforeOutput(err error) error {
+	if s.attemptSpan != nil {
+		telemetry.RecordAttemptError(s.attemptSpan, err)
+		s.attemptSpan.End()
+	}
 	if s.emittedChunk || s.llm == nil || s.retryAttempt >= s.connectOptions.MaxRetry {
 		if !s.emittedChunk && s.connectOptions.MaxRetry > 0 && s.retryAttempt >= s.connectOptions.MaxRetry && anthropicShouldRetryError(err) {
 			return llm.NewAPIConnectionError(
@@ -1404,11 +1426,15 @@ func (s *anthropicStream) retryBeforeOutput(err error) error {
 	}
 	for s.retryAttempt < s.connectOptions.MaxRetry {
 		s.retryAttempt++
-		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag, s.connectTimeout)
+		attemptCtx, attemptSpan := telemetry.StartSpan(s.ctx, "llm_request_run", trace.WithAttributes(attribute.Int(telemetry.AttrRetryCount, s.retryAttempt), attribute.String(telemetry.AttrGenAIProviderName, "anthropic"), attribute.String(telemetry.AttrGenAIRequestModel, s.llm.model)))
+		s.attemptSpan = attemptSpan
+		resp, startErr := s.llm.startAnthropicStream(attemptCtx, s.jsonBody, s.betaFlag, s.connectTimeout)
 		if startErr == nil {
 			s.resetAttempt(resp)
 			return nil
 		}
+		telemetry.RecordAttemptError(attemptSpan, startErr)
+		attemptSpan.End()
 		var statusErr *llm.APIStatusError
 		if errors.As(startErr, &statusErr) && statusErr.StatusCode == 499 {
 			s.closed = true
@@ -1502,6 +1528,9 @@ func (s *anthropicStream) visibleAnthropicTextDelta(text string) (string, bool) 
 }
 
 func (s *anthropicStream) Close() error {
+	if s.attemptSpan != nil {
+		s.attemptSpan.End()
+	}
 	if s.closed {
 		return nil
 	}
@@ -1518,6 +1547,9 @@ func (s *anthropicStream) Close() error {
 }
 
 func (s *anthropicStream) closeResponseBody() {
+	if s.attemptSpan != nil {
+		s.attemptSpan.End()
+	}
 	if s.closed {
 		return
 	}

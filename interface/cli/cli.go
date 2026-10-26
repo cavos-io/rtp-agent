@@ -170,14 +170,15 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 }
 
 func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
+	defer closeServer(server)
 	DiscoverPlugins()
 	if len(os.Args) < 2 {
 		printUsage()
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 	if err := applyDevModeEnv(os.Args); err != nil {
 		logger.Logger.Errorw("Failed to set dev mode environment", err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 
 	options := &runOptions{
@@ -194,11 +195,11 @@ func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
 		if err != nil {
 			fmt.Println(err)
 			printUsage()
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 		if err := applyWorkerArgs(server, args, drainTimeout); err != nil {
 			logger.Logger.Errorw("Failed to apply worker options", err)
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 		options.logFormat = args.LogFormat
 		configureCLIProtocolLogger(options)
@@ -207,14 +208,14 @@ func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
 		if handled, err := runProcessJobFromEnv(ctx, server, currentEnvMap()); handled {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				logger.Logger.Errorw("Process job error", err)
-				os.Exit(1)
+				closeServerAndExit(server, 1)
 			}
 			return
 		}
 		if workerStartActionForArgs(args) == workerStartActionDevReload {
 			if err := RunWithDevMode(os.Args); err != nil {
 				logger.Logger.Errorw("Dev mode error", err)
-				os.Exit(1)
+				closeServerAndExit(server, 1)
 			}
 			return
 		}
@@ -224,11 +225,11 @@ func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
 		if err != nil {
 			fmt.Println(err)
 			printUsage()
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 		if err := applyWorkerArgs(server, args, drainTimeout); err != nil {
 			logger.Logger.Errorw("Failed to apply worker options", err)
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 		options.logFormat = args.LogFormat
 		configureCLIProtocolLogger(options)
@@ -239,7 +240,7 @@ func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
 		}
 		if err := RunWithDevMode(os.Args); err != nil {
 			logger.Logger.Errorw("Dev mode error", err)
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 	case "connect":
 		runConnect(server)
@@ -251,16 +252,16 @@ func RunAppWithOptions(server *worker.AgentServer, opts ...Option) {
 		configureCLIProtocolLogger(options)
 		if err := runDownloadFiles(); err != nil {
 			logger.Logger.Errorw("Download files failed", err)
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 	case "eval":
 		if err := runEval(options.evalRunner, os.Stdout); err != nil {
 			logger.Logger.Errorw("Evaluation failed", err)
-			os.Exit(1)
+			closeServerAndExit(server, 1)
 		}
 	default:
 		printUsage()
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 }
 
@@ -482,7 +483,7 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	if err := runWorkerLifecycle(ctx, server, devMode); err != nil {
 		logger.Logger.Errorw("Worker error", err)
 		writeWorkerError(os.Stderr, err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 }
 
@@ -543,11 +544,11 @@ func runConnect(server *worker.AgentServer) {
 	args, err := parseConnectArgs(os.Args)
 	if err != nil {
 		fmt.Println("Usage: worker connect <room_name> [participant_identity]")
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 	if err := applyConnectArgs(server, args); err != nil {
 		logger.Logger.Errorw("Failed to apply connect options", err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 	configureCLIProtocolLogger(&runOptions{logLevel: server.Options.LogLevel, devMode: server.Options.DevMode})
 
@@ -559,7 +560,7 @@ func runConnect(server *worker.AgentServer) {
 	roomInfo, err := ensureConnectRoom(ctx, newLiveKitRoomService(server.Options.WSRL, server.Options.APIKey, server.Options.APISecret), args.RoomName)
 	if err != nil {
 		logger.Logger.Errorw("Connect room lookup error", err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 
 	jobDone := make(chan error, 1)
@@ -577,11 +578,11 @@ func runConnect(server *worker.AgentServer) {
 
 	if err := server.RunUnregistered(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Logger.Errorw("Connect error", err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 	if err := <-jobDone; err != nil && !errors.Is(err, context.Canceled) {
 		logger.Logger.Errorw("Connect error", err)
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 }
 
@@ -849,7 +850,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
 		fmt.Println("Usage: worker console [--text|--audio] [--record] [--input-device <device>] [--output-device <device>]")
-		os.Exit(1)
+		closeServerAndExit(server, 1)
 	}
 
 	if args.ListDevices {
@@ -925,4 +926,18 @@ func runConsole(server *worker.AgentServer, argv []string) {
 	}()
 
 	<-ctx.Done()
+}
+
+// Close explicitly before os.Exit, which does not run deferred cleanup.
+func closeServerAndExit(server *worker.AgentServer, code int) {
+	closeServer(server)
+	os.Exit(code)
+}
+
+func closeServer(server *worker.AgentServer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Close(ctx); err != nil {
+		logger.Logger.Errorw("failed to close agent server", err)
+	}
 }

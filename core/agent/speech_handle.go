@@ -90,6 +90,7 @@ type SpeechHandle struct {
 	precomputeCancel       context.CancelFunc
 	agentTurnCtx           context.Context
 	agentTurnEnd           func()
+	agentTurnStep          int
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -317,6 +318,7 @@ func (s *SpeechHandle) MarkDone() {
 	}
 	s.mu.Unlock()
 
+	finishSpeechAgentTurn(s)
 	go callSpeechDoneCallbacks(callbacks, s)
 }
 

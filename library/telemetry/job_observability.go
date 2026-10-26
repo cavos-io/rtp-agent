@@ -43,26 +43,34 @@ type JobObservabilityConfig struct {
 	RoomName    string
 	AgentName   string
 	// TracerProvider replaces the LiveKit Cloud trace exporter when set. The
-	// JobObservability takes ownership of the provider after successful creation.
+	// JobObservability takes ownership after successful creation unless borrowed.
 	TracerProvider *sdktrace.TracerProvider
-	TraceMetadata  []attribute.KeyValue
+	// BorrowTracerProvider leaves provider shutdown to its external owner.
+	BorrowTracerProvider bool
+	TraceMetadata        []attribute.KeyValue
+	TracingOptions       TracingOptions
 }
 
 type JobObservability struct {
-	tracerProvider   *sdktrace.TracerProvider
-	loggerProvider   *sdklog.LoggerProvider
-	meterProvider    *sdkmetric.MeterProvider
-	tracer           trace.Tracer
-	chatLogger       otellog.Logger
-	evalLogger       otellog.Logger
-	meter            metric.Meter
-	sessionAttrs     []attribute.KeyValue
-	redactionEnabled bool
-	shutdownOnce     sync.Once
-	shutdownErr      error
+	tracerProvider       *sdktrace.TracerProvider
+	borrowTracerProvider bool
+	loggerProvider       *sdklog.LoggerProvider
+	meterProvider        *sdkmetric.MeterProvider
+	tracer               trace.Tracer
+	chatLogger           otellog.Logger
+	evalLogger           otellog.Logger
+	meter                metric.Meter
+	sessionAttrs         []attribute.KeyValue
+	redactionEnabled     bool
+	shutdownOnce         sync.Once
+	shutdownErr          error
 }
 
 func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*JobObservability, error) {
+	if config.TracingOptions.AllowPII != nil {
+		allow := *config.TracingOptions.AllowPII
+		config.TracingOptions.AllowPII = &allow
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -154,11 +162,9 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 	if tracerProvider == nil {
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
-			sdktrace.WithSpanProcessor(jobSpanMetadataProcessor{attrs: traceMetadata}),
+			sdktrace.WithSpanProcessor(jobSpanMetadataProcessor{attrs: traceMetadata, policy: newContentPolicy(config.TracingOptions, redactionEnabled, config.TracerProvider == nil)}),
 			sdktrace.WithBatcher(traceExporter),
 		)
-	} else {
-		tracerProvider.RegisterSpanProcessor(jobSpanMetadataProcessor{attrs: traceMetadata})
 	}
 	noopLoggerProvider := lognoop.NewLoggerProvider()
 	chatLogger := noopLoggerProvider.Logger("chat_history")
@@ -182,13 +188,14 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 	}
 
 	return &JobObservability{
-		tracerProvider: tracerProvider,
-		loggerProvider: loggerProvider,
-		meterProvider:  meterProvider,
-		tracer:         tracerProvider.Tracer(jobObservabilityScope),
-		chatLogger:     chatLogger,
-		evalLogger:     evalLogger,
-		meter:          meter,
+		tracerProvider:       tracerProvider,
+		borrowTracerProvider: config.TracerProvider != nil && config.BorrowTracerProvider,
+		loggerProvider:       loggerProvider,
+		meterProvider:        meterProvider,
+		tracer:               policyTracer{Tracer: tracerProvider.Tracer(jobObservabilityScope), metadata: traceMetadata, options: config.TracingOptions, redacted: redactionEnabled, cloud: config.TracerProvider == nil},
+		chatLogger:           chatLogger,
+		evalLogger:           evalLogger,
+		meter:                meter,
 		sessionAttrs: []attribute.KeyValue{
 			attribute.String(AttrJobID, config.JobID),
 			attribute.String(AttrRoomName, config.RoomName),
@@ -198,11 +205,12 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 }
 
 type jobSpanMetadataProcessor struct {
-	attrs []attribute.KeyValue
+	attrs  []attribute.KeyValue
+	policy contentPolicy
 }
 
 func (p jobSpanMetadataProcessor) OnStart(_ context.Context, span sdktrace.ReadWriteSpan) {
-	span.SetAttributes(p.attrs...)
+	span.SetAttributes(p.policy.attributes(p.attrs)...)
 }
 
 func (jobSpanMetadataProcessor) OnEnd(sdktrace.ReadOnlySpan)      {}
@@ -258,8 +266,8 @@ func JobObservabilityFromContext(ctx context.Context) *JobObservability {
 }
 
 func (o *JobObservability) Tracer() trace.Tracer {
-	if o == nil {
-		return nil
+	if o == nil || o.tracer == nil {
+		return policyTracer{Tracer: Tracer}
 	}
 	return o.tracer
 }
@@ -304,7 +312,10 @@ func (o *JobObservability) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	o.shutdownOnce.Do(func() {
-		operations := []func() error{func() error { return o.tracerProvider.Shutdown(ctx) }}
+		var operations []func() error
+		if !o.borrowTracerProvider {
+			operations = append(operations, func() error { return o.tracerProvider.Shutdown(ctx) })
+		}
 		if o.loggerProvider != nil {
 			operations = append(operations, func() error { return o.loggerProvider.Shutdown(ctx) })
 		}

@@ -3411,7 +3411,7 @@ func TestAgentActivityUsesTurnDetectorLanguageThreshold(t *testing.T) {
 	}
 }
 
-func TestAgentActivityEOUDetectionSpanIsChildOfUserTurn(t *testing.T) {
+func TestAgentActivityEOUDetectionSpanIsChildOfEOUWait(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	oldTracer := telemetry.Tracer
@@ -3457,8 +3457,15 @@ func TestAgentActivityEOUDetectionSpanIsChildOfUserTurn(t *testing.T) {
 	if userTurn == nil || eou == nil {
 		t.Fatalf("spans = %#v, want user_turn and eou_detection", spans)
 	}
-	if got, want := eou.Parent().SpanID(), userTurn.SpanContext().SpanID(); got != want {
-		t.Fatalf("eou_detection parent = %s, want user_turn %s", got, want)
+	wait := spans["eou_wait"]
+	if wait == nil {
+		t.Fatal("missing eou_wait")
+	}
+	if got, want := eou.Parent().SpanID(), wait.SpanContext().SpanID(); got != want {
+		t.Fatalf("eou_detection parent=%s,want eou_wait %s", got, want)
+	}
+	if wait.Parent().SpanID() != userTurn.SpanContext().SpanID() {
+		t.Fatal("eou_wait not nested under user_turn")
 	}
 	attrs := spanAttributeValues(eou.Attributes())
 	if got := attrs[telemetry.AttrEOUProbability].AsFloat64(); got != 0.4 {
@@ -3473,8 +3480,8 @@ func TestAgentActivityEOUDetectionSpanIsChildOfUserTurn(t *testing.T) {
 	if got := attrs[telemetry.AttrEOULanguage].AsString(); got != "en-US" {
 		t.Fatalf("EOU language = %q, want en-US", got)
 	}
-	if _, ok := attrs[telemetry.AttrChatCtx]; ok {
-		t.Fatal("eou_detection unexpectedly includes lk.chat_ctx")
+	if got := attrs[telemetry.AttrChatCtx].AsString(); !strings.Contains(got, "still talking") {
+		t.Fatalf("missing judged conversation: %s", got)
 	}
 }
 
@@ -6423,9 +6430,6 @@ func TestAgentActivityCompleteUserTurnInterruptsObsoleteReply(t *testing.T) {
 	case <-testTimeout():
 		t.Fatal("first reply was not generated")
 	}
-	if !firstSpeech.IsInterrupted() {
-		t.Fatal("first reply was not interrupted after newer turn started")
-	}
 	select {
 	case err := <-firstDone:
 		if err != nil {
@@ -6433,6 +6437,9 @@ func TestAgentActivityCompleteUserTurnInterruptsObsoleteReply(t *testing.T) {
 		}
 	case <-testTimeout():
 		t.Fatal("first completeUserTurn did not finish")
+	}
+	if !firstSpeech.IsInterrupted() {
+		t.Fatal("first reply was not interrupted after newer turn started")
 	}
 	select {
 	case msg := <-agent.started:

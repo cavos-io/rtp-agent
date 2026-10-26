@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type FallbackAdapter struct {
@@ -645,15 +646,18 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			}
 			tts := s.adapter.ttss[i]
 			attemptCtx, cancel := s.adapter.attemptContext(s.ctx)
+			attemptCtx, attemptSpan := telemetry.StartProviderAttempt(attemptCtx, "tts_request_run", tts, s.retries[i], attribute.String(telemetry.AttrGenAIRequestModel, Model(tts)), attribute.String(telemetry.AttrGenAIProviderName, Provider(tts)))
 			stream, err := tts.Synthesize(attemptCtx, s.text)
 			if err == nil && isNilChunkedStream(stream) {
 				err = fmt.Errorf("TTS returned nil chunked stream")
 			}
 			if err == nil {
-				s.activeStream = stream
+				s.activeStream = &tracedChunkedAttempt{ChunkedStream: stream, attempt: &ttsAttemptTrace{span: attemptSpan, cancel: cancel}}
 				s.activeIndex = i
 				return nil
 			}
+			telemetry.RecordAttemptError(attemptSpan, err)
+			attemptSpan.End()
 			cancel()
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
 			if s.canRetryTTS(i) {
@@ -1039,7 +1043,7 @@ func (s *fallbackSynthesizeStream) tryStartStreamWithActivation(index int, activ
 					return err
 				}
 			}
-			stream, err := s.startProviderStream(tts)
+			stream, err := s.startProviderStream(tts, s.retries[i])
 			if err != nil {
 				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
 				if s.canRetryTTS(i) {
@@ -1085,17 +1089,20 @@ func (f *FallbackAdapter) labels() []string {
 	return labels
 }
 
-func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
+func (s *fallbackSynthesizeStream) startProviderStream(tts TTS, retry int) (SynthesizeStream, error) {
 	attemptCtx, cancel := s.adapter.attemptContext(s.ctx)
+	attemptCtx, attemptSpan := telemetry.StartProviderAttempt(attemptCtx, "tts_request_run", tts, retry, attribute.String(telemetry.AttrGenAIRequestModel, Model(tts)), attribute.String(telemetry.AttrGenAIProviderName, Provider(tts)))
 	stream, err := streamForTTS(attemptCtx, tts)
 	if err == nil && isNilSynthesizeStream(stream) {
 		err = fmt.Errorf("TTS returned nil synthesize stream")
 	}
 	if err != nil {
+		telemetry.RecordAttemptError(attemptSpan, err)
+		attemptSpan.End()
 		cancel()
 		return nil, err
 	}
-	return stream, nil
+	return &tracedSynthesizeAttempt{SynthesizeStream: stream, attempt: &ttsAttemptTrace{span: attemptSpan, cancel: cancel}}, nil
 }
 
 func (s *fallbackSynthesizeStream) activateProviderStream(stream SynthesizeStream, index int, locked bool) ([]fallbackSynthesizeInput, bool) {

@@ -204,8 +204,10 @@ type RunOptions struct {
 }
 
 type StartOptions struct {
-	CaptureRun bool
-	OutputType reflect.Type
+	// BeforeStart initializes transport resources under session_start before models start.
+	BeforeStart func(context.Context) error
+	CaptureRun  bool
+	OutputType  reflect.Type
 }
 
 type CommitUserTurnOptions struct {
@@ -312,10 +314,13 @@ type AgentSession struct {
 	runCtx                  context.Context
 	runCancel               context.CancelFunc
 	sessionSpan             trace.Span
+	startupTraceCtx         context.Context
+	closingTraceCtx         context.Context
 	agentSpeakingSpan       trace.Span
 	userTurnCtx             context.Context
 	userTurnSpan            trace.Span
 	userSpeakingSpan        trace.Span
+	userSpeakingStartedAt   time.Time
 	runState                *RunResult
 	onEnterDepth            int
 	userTurnClaims          int
@@ -2333,16 +2338,37 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	s.cancelUserAwayTimerLocked()
 	s.stopAgentSpeakingStallTimerLocked()
 	s.clearAECWarmupLocked()
+	telemetryCtx, rootSpan := s.runCtx, s.sessionSpan
 	closeEventListeners := s.closeEventListenersLocked()
 	closePrimary, closePrimarySubscribed, closeSubscribers := s.closeSubscribersLocked()
 	s.mu.Unlock()
 
+	if telemetryCtx == nil {
+		telemetryCtx = context.Background()
+	}
+	closeCtx, closeSpan := telemetry.StartSpan(context.WithoutCancel(telemetryCtx), "session_close", trace.WithAttributes(attribute.String("lk.close_reason", string(reason)), attribute.Bool("lk.close.drain", reason != CloseReasonError)))
+	s.mu.Lock()
+	s.closingTraceCtx = closeCtx
+	s.mu.Unlock()
+	defer func() {
+		recordInferenceSpanError(closeCtx, closeSpan, err)
+		closeSpan.End()
+		if rootSpan != nil {
+			rootSpan.End()
+		}
+		s.mu.Lock()
+		s.closingTraceCtx = nil
+		s.mu.Unlock()
+	}()
+	closeCtx = context.WithValue(closeCtx, sessionCloseTraceKey{}, closeSpan)
 	if activity != nil {
 		if err := activity.Interrupt(true); err != nil {
 			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
 		}
 	}
-	_ = s.stop(context.Background(), reason != CloseReasonError)
+	if stopErr := s.stop(closeCtx, reason != CloseReasonError); stopErr != nil {
+		recordInferenceSpanError(closeCtx, closeSpan, stopErr)
+	}
 
 	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
 	s.appendRecordedEvent(ev)
@@ -2533,7 +2559,6 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	agent := s.Agent
 	avatar := agent.GetAgent().Avatar
 	backgroundAudio := s.Options.BackgroundAudio
-	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
 	var runState *RunResult
 	if opts.CaptureRun {
@@ -2552,6 +2577,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 
 	ctx, sessionSpan := telemetry.StartSpan(ctx, "agent_session", trace.WithAttributes(
 		attribute.String(telemetry.AttrAgentLabel, agent.GetAgent().Label()),
+		attribute.String(telemetry.AttrGenAIOperationName, "invoke_workflow"), attribute.String("gen_ai.workflow.name", "agent_session"),
 	))
 	sessionStarted := false
 	defer func() {
@@ -2560,6 +2586,26 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}()
 
+	s.mu.Lock()
+	s.startupTraceCtx = ctx
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.startupTraceCtx = nil; s.mu.Unlock() }()
+	startupCtx, startupSpan := telemetry.StartSpan(ctx, "session_start")
+	endStartup := sync.OnceFunc(func() { startupSpan.End() })
+	defer endStartup()
+	if opts.BeforeStart != nil {
+		if err := opts.BeforeStart(startupCtx); err != nil {
+			recordInferenceSpanError(startupCtx, startupSpan, err)
+			s.clearRunStateIfCurrent(runState)
+			s.mu.Lock()
+			s.signalTeardown()
+			s.mu.Unlock()
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	room := s.Room
+	s.mu.Unlock()
 	s.UpdateAgentState(AgentStateInitializing)
 	tts.Prewarm(startupTTS)
 
@@ -2625,7 +2671,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	sessionStarted = true
 
 	s.EmitConversationItemAdded(newAgentHandoff(nil, agent.GetAgent()))
-	activity.Start()
+	activity.startWithContext(startupCtx)
+	endStartup()
 	if s.Options.IVRDetection {
 		ivrActivity := NewIVRActivity(s)
 		s.mu.Lock()
@@ -2779,7 +2826,6 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
-	var endedSpeakingSpan trace.Span
 	s.mu.Lock()
 	if s.userTurnClaims > 0 && state != UserStateSpeaking {
 		s.mu.Unlock()
@@ -2797,16 +2843,13 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		}
 		if s.userSpeakingSpan == nil {
 			_, s.userSpeakingSpan = telemetry.StartSpan(s.userTurnCtx, "user_speaking", trace.WithTimestamp(createdAt))
+			s.userSpeakingStartedAt = createdAt
 		}
 	} else if s.userSpeakingSpan != nil {
-		endedSpeakingSpan = s.userSpeakingSpan
-		s.userSpeakingSpan = nil
+		s.endUserSpeakingSpanLocked(createdAt)
 	}
 	videoSampler := s.videoSampler
 	s.mu.Unlock()
-	if endedSpeakingSpan != nil {
-		endedSpeakingSpan.End(trace.WithTimestamp(createdAt))
-	}
 
 	if videoSampler != nil {
 		videoSampler.SetSpeaking(state == UserStateSpeaking)
@@ -2831,16 +2874,36 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 	sendToSubscribers(subscribers, ev, done)
 }
 
-func (s *AgentSession) ensureUserTurnSpan(ctx context.Context) trace.Span {
+func (s *AgentSession) ensureUserTurnSpan(ctx context.Context, anchors ...time.Time) trace.Span {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.userTurnSpan == nil {
 		if ctx == nil {
 			ctx = s.runCtx
 		}
-		s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(ctx, "user_turn")
+		started := time.Now()
+		for _, anchor := range anchors {
+			if !anchor.IsZero() && anchor.Before(started) {
+				started = anchor
+			}
+		}
+		s.userTurnCtx, s.userTurnSpan = telemetry.StartSpan(ctx, "user_turn", trace.WithTimestamp(started))
 	}
 	return s.userTurnSpan
+}
+
+// endUserSpeakingSpanLocked serializes speech end with turn completion. VAD
+// timestamps can arrive out of order; clamp only the trace, not the state event.
+func (s *AgentSession) endUserSpeakingSpanLocked(endedAt time.Time) time.Time {
+	if s.userSpeakingSpan != nil {
+		if endedAt.Before(s.userSpeakingStartedAt) {
+			endedAt = s.userSpeakingStartedAt
+		}
+		s.userSpeakingSpan.End(trace.WithTimestamp(endedAt))
+		s.userSpeakingSpan = nil
+		s.userSpeakingStartedAt = time.Time{}
+	}
+	return endedAt
 }
 
 func (s *AgentSession) finishUserTurnSpan(span trace.Span) {
@@ -2848,15 +2911,12 @@ func (s *AgentSession) finishUserTurnSpan(span trace.Span) {
 		return
 	}
 	s.mu.Lock()
-	shouldEnd := false
+	defer s.mu.Unlock()
 	if s.userTurnSpan != nil && s.userTurnSpan.SpanContext().SpanID() == span.SpanContext().SpanID() {
+		endedAt := s.endUserSpeakingSpanLocked(time.Now())
 		s.userTurnCtx = nil
 		s.userTurnSpan = nil
-		shouldEnd = true
-	}
-	s.mu.Unlock()
-	if shouldEnd {
-		span.End()
+		span.End(trace.WithTimestamp(endedAt))
 	}
 }
 
@@ -3346,6 +3406,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	newActivity := newAgentActivity(agent, s, runCtx)
 	s.activity = newActivity
 	s.mu.Unlock()
+	handoffCtx, handoffSpan := telemetry.StartSpan(runCtx, "update_agent", trace.WithAttributes(attribute.String(telemetry.AttrAgentLabel, baseAgent.Label())))
+	defer handoffSpan.End()
+	if oldAgent != nil {
+		handoffSpan.SetAttributes(attribute.String("lk.previous_agent_label", oldAgent.Label()))
+	}
 
 	if replacementAssistant != nil {
 		if runCtx == nil {
@@ -3372,7 +3437,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		}
 	}
 	if oldActivity != nil {
-		oldActivity.Stop()
+		oldActivity.stopWithContext(handoffCtx)
 		_ = closeSessionToolsets(oldTools)
 	}
 	handoff := newAgentHandoff(oldAgent, baseAgent)
@@ -3380,7 +3445,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		runState.RecordAgentHandoff(handoff, oldAgent, baseAgent)
 	}
 	s.EmitConversationItemAdded(handoff)
-	newActivity.Start()
+	newActivity.startWithContext(handoffCtx)
 }
 
 func (s *AgentSession) invalidRealtimeTurnDetectionHandoffLocked(agent *Agent) bool {
@@ -3492,7 +3557,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	sessionSpan := s.sessionSpan
 	telemetryCtx := s.runCtx
 	agentSpeakingSpan := s.agentSpeakingSpan
-	userSpeakingSpan := s.userSpeakingSpan
+	// Audio input is ending; close speech before committing the pending turn.
+	s.endUserSpeakingSpanLocked(time.Now())
 	userTurnSpan := s.userTurnSpan
 	var avatar AvatarProvider
 	if s.Agent != nil && s.Agent.GetAgent() != nil {
@@ -3532,6 +3598,19 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	sessionTools := copySessionTools(s.Tools)
 	preCloseCallbacks := s.preCloseCallbacksForCycleLocked()
 	s.mu.Unlock()
+	var closeCtx context.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	closeSpan, externalClose := ctx.Value(sessionCloseTraceKey{}).(trace.Span)
+	if externalClose {
+		closeCtx = ctx
+	} else {
+		closeCtx, closeSpan = telemetry.StartSpan(telemetryCtx, "session_close", trace.WithAttributes(attribute.Bool("lk.close.drain", commitPendingUserTurn), attribute.String("lk.close_reason", string(CloseReasonUserInitiated))))
+		s.mu.Lock()
+		s.closingTraceCtx = closeCtx
+		s.mu.Unlock()
+	}
 	if ivrActivity != nil {
 		ivrActivity.Stop()
 	}
@@ -3561,10 +3640,13 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		if task, ok := activity.AgentIntf.(interface{ Cancel() }); ok {
 			task.Cancel()
 		}
+		drainCtx, drainSpan := telemetry.StartSpan(closeCtx, "drain_agent_activity", trace.WithAttributes(attribute.String(telemetry.AttrAgentLabel, activity.Agent.Label())))
 		if err := s.toolExecutionRegistry.drain(ctx); err != nil && stopErr == nil {
 			stopErr = err
 		}
-		activity.Stop()
+		activity.stopActivity(drainCtx)
+		recordInferenceSpanError(drainCtx, drainSpan, stopErr)
+		drainSpan.End()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {
@@ -3594,9 +3676,6 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	if agentSpeakingSpan != nil {
 		agentSpeakingSpan.End()
 	}
-	if userSpeakingSpan != nil {
-		userSpeakingSpan.End()
-	}
 	if userTurnSpan != nil {
 		userTurnSpan.End()
 	}
@@ -3604,8 +3683,15 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.userTurnCtx = nil
 	s.userTurnSpan = nil
 	s.mu.Unlock()
-	if sessionSpan != nil {
-		sessionSpan.End()
+	recordInferenceSpanError(closeCtx, closeSpan, stopErr)
+	if !externalClose {
+		closeSpan.End()
+		if sessionSpan != nil {
+			sessionSpan.End()
+		}
+		s.mu.Lock()
+		s.closingTraceCtx = nil
+		s.mu.Unlock()
 	}
 	return stopErr
 }
@@ -3659,6 +3745,29 @@ func closeSessionToolsetValue(tool llm.Tool) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+type sessionCloseTraceKey struct{}
+
+// TraceContext returns the session root for transport-owned asynchronous work,
+// or the close scope while synchronous close handlers run.
+
+func (s *AgentSession) TraceContext() context.Context {
+	if s == nil {
+		return context.Background()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runCtx != nil {
+		return s.runCtx
+	}
+	if s.startupTraceCtx != nil {
+		return s.startupTraceCtx
+	}
+	if s.closingTraceCtx != nil {
+		return s.closingTraceCtx
+	}
+	return context.Background()
 }
 
 func (s *AgentSession) telemetryContext() context.Context {
