@@ -1368,9 +1368,7 @@ func anthropicSSEData(line string) (string, bool) {
 		return "", false
 	}
 	data := strings.TrimPrefix(line, "data:")
-	if strings.HasPrefix(data, " ") {
-		data = data[1:]
-	}
+	data = strings.TrimPrefix(data, " ")
 	return data, true
 }
 
