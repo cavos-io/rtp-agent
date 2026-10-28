@@ -55,10 +55,12 @@ func TestAddAssistantSpeechMetricsRecordsE2ELatency(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	ctx, span := provider.Tracer("test").Start(context.Background(), "agent_turn")
 
-	metrics := addAssistantSpeechMetrics(ctx, nil, nil, &TTSGenerationData{
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	metrics := addAssistantSpeechMetrics(ctx, session, nil, &TTSGenerationData{
+		ForwardedAudio:    true,
 		StartedSpeakingAt: 12,
 		StoppedSpeakingAt: 13,
-	}, &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": 10.0}})
+	}, &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": 10.0}}, false)
 	span.End()
 
 	if got := metrics["e2e_latency"]; got != 2.0 {

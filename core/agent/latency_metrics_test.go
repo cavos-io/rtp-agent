@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"io"
+	"math"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -14,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -21,6 +23,94 @@ import (
 type latencyLLM struct {
 	fakeGenerationLLM
 	setup time.Duration
+}
+
+func TestMeasureAssistantE2EOutcomeMatrix(t *testing.T) {
+	tests := []struct {
+		name        string
+		user        *llm.ChatMessage
+		generation  *TTSGenerationData
+		interrupted bool
+		wantLatency bool
+		want        map[string]int64
+	}{
+		{name: "valid publication", user: e2eUser(1), generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: 2}, wantLatency: true, want: map[string]int64{"eligible": 1, "emitted": 1}},
+		{name: "missing user stop", user: &llm.ChatMessage{}, generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: 2}, want: map[string]int64{"missing_user_speech_stop": 1}},
+		{name: "no forwarded audio", user: e2eUser(1), generation: &TTSGenerationData{}, want: map[string]int64{"eligible": 1, "no_audio_published": 1}},
+		{name: "forwarded audio without start", user: e2eUser(1), generation: &TTSGenerationData{ForwardedAudio: true}, want: map[string]int64{"eligible": 1, "missing_audio_start": 1}},
+		{name: "start before user stop", user: e2eUser(2), generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: 1}, want: map[string]int64{"eligible": 1, "invalid_duration": 1}},
+		{name: "nan start", user: e2eUser(1), generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: math.NaN()}, want: map[string]int64{"eligible": 1, "invalid_duration": 1}},
+		{name: "infinite start", user: e2eUser(1), generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: math.Inf(1)}, want: map[string]int64{"eligible": 1, "invalid_duration": 1}},
+		{name: "interrupted after publication", user: e2eUser(1), generation: &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: 2}, interrupted: true, wantLatency: true, want: map[string]int64{"eligible": 1, "emitted": 1}},
+		{name: "interrupted before publication", user: e2eUser(1), generation: &TTSGenerationData{}, interrupted: true, want: map[string]int64{"eligible": 1, "no_audio_published": 1}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reader := latencyMeterReader(t)
+			session := NewAgentSession(NewAgent("timing"), nil, AgentSessionOptions{})
+			metrics := session.measureAssistantE2E(context.Background(), nil, test.generation, test.user, test.interrupted)
+			_, hasLatency := metrics["e2e_latency"]
+			if hasLatency != test.wantLatency {
+				t.Fatalf("e2e_latency present = %v, want %v", hasLatency, test.wantLatency)
+			}
+			if got := e2eOutcomeCounts(t, reader); !equalOutcomeCounts(got, test.want) {
+				t.Fatalf("outcomes = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAssistantE2EOutcomeDuplicateDoesNotIncreaseEligibility(t *testing.T) {
+	reader := latencyMeterReader(t)
+	session := NewAgentSession(NewAgent("timing"), nil, AgentSessionOptions{})
+	for range 2 {
+		session.measureAssistantE2E(context.Background(), nil, &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: 2}, e2eUser(1), false)
+	}
+	want := map[string]int64{"eligible": 1, "emitted": 1, "duplicate_user_turn": 1}
+	if got := e2eOutcomeCounts(t, reader); !equalOutcomeCounts(got, want) {
+		t.Fatalf("outcomes = %v, want %v", got, want)
+	}
+}
+
+func e2eUser(stopped float64) *llm.ChatMessage {
+	return &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": stopped}}
+}
+
+func e2eOutcomeCounts(t *testing.T, reader interface {
+	Collect(context.Context, *metricdata.ResourceMetrics) error
+}) map[string]int64 {
+	t.Helper()
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &data); err != nil {
+		t.Fatal(err)
+	}
+	counts := make(map[string]int64)
+	for _, scope := range data.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != "lk.agents.turn.e2e_measurements" {
+				continue
+			}
+			for _, point := range metric.Data.(metricdata.Sum[int64]).DataPoints {
+				if value, ok := point.Attributes.Value("outcome"); ok {
+					counts[value.AsString()] += point.Value
+				}
+			}
+		}
+	}
+	return counts
+}
+
+func equalOutcomeCounts(got, want map[string]int64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for outcome, count := range want {
+		if got[outcome] != count {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *latencyLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
