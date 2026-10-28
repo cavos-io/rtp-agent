@@ -4,30 +4,52 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 const (
 	DefaultTurnSplitDelay = 450 * time.Millisecond
 	turnSplitRetireDelay  = 5 * time.Second
+	// replies peak at -7..-25 dBFS, faint background at -33..-53 dBFS
+	DefaultTurnSplitMinSpeechDBFS = -30.0
 )
+
+func turnSplitMinSpeechDBFS() float64 {
+	if v, err := strconv.ParseFloat(os.Getenv("STT_TURN_FLUSH_MIN_DBFS"), 64); err == nil {
+		return v
+	}
+	return DefaultTurnSplitMinSpeechDBFS
+}
+
+func frameDBFS(frame *model.AudioFrame) float64 {
+	rms := pcm16RMS(frame)
+	if rms <= 0 {
+		return math.Inf(-1)
+	}
+	return 20 * math.Log10(rms/32768)
+}
 
 // TurnSplittingSTT forces a fresh provider stream when a flushed turn does not
 // produce a final transcript promptly. The logical stream continues forwarding
 // late events from the retired provider stream.
 type TurnSplittingSTT struct {
-	inner STT
-	delay time.Duration
+	inner         STT
+	delay         time.Duration
+	minSpeechDBFS float64
 }
 
 func NewTurnSplittingSTT(inner STT, delay time.Duration) *TurnSplittingSTT {
 	if delay <= 0 {
 		delay = DefaultTurnSplitDelay
 	}
-	return &TurnSplittingSTT{inner: inner, delay: delay}
+	return &TurnSplittingSTT{inner: inner, delay: delay, minSpeechDBFS: turnSplitMinSpeechDBFS()}
 }
 
 func (s *TurnSplittingSTT) Label() string                 { return s.inner.Label() }
@@ -49,14 +71,16 @@ func (s *TurnSplittingSTT) Stream(ctx context.Context, language string) (Recogni
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	w := &turnSplittingStream{
-		ctx:      streamCtx,
-		cancel:   cancel,
-		provider: s.inner,
-		language: language,
-		delay:    s.delay,
-		active:   stream,
-		streams:  map[RecognizeStream]struct{}{stream: {}},
-		events:   make(chan splitResult),
+		ctx:           streamCtx,
+		cancel:        cancel,
+		provider:      s.inner,
+		language:      language,
+		delay:         s.delay,
+		minSpeechDBFS: s.minSpeechDBFS,
+		peakDBFS:      math.Inf(-1),
+		active:        stream,
+		streams:       map[RecognizeStream]struct{}{stream: {}},
+		events:        make(chan splitResult),
 	}
 	if timing, ok := stream.(StreamTiming); ok {
 		w.startTimeOffset = timing.StartTimeOffset()
@@ -67,13 +91,15 @@ func (s *TurnSplittingSTT) Stream(ctx context.Context, language string) (Recogni
 }
 
 type turnSplittingStream struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	provider STT
-	language string
-	delay    time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	provider      STT
+	language      string
+	delay         time.Duration
+	minSpeechDBFS float64
 
 	mu              sync.Mutex
+	peakDBFS        float64
 	active          RecognizeStream
 	streams         map[RecognizeStream]struct{}
 	timer           *time.Timer
@@ -137,6 +163,9 @@ func (s *turnSplittingStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if err := s.active.PushFrame(frame); err != nil {
 		return err
+	}
+	if frame != nil {
+		s.peakDBFS = math.Max(s.peakDBFS, frameDBFS(frame))
 	}
 	if frame != nil && frame.SampleRate > 0 {
 		s.pushedDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
@@ -220,6 +249,12 @@ func (s *turnSplittingStream) split(snapshot uint64) {
 		s.mu.Unlock()
 		return
 	}
+	if s.peakDBFS < s.minSpeechDBFS {
+		peak := s.peakDBFS
+		s.mu.Unlock()
+		logger.Logger.Infow("stt turn split skipped: faint audio", "peak_dbfs", peak)
+		return
+	}
 	s.splitting = true
 	s.mu.Unlock()
 
@@ -240,11 +275,14 @@ func (s *turnSplittingStream) split(snapshot uint64) {
 	if timing, ok := replacement.(StreamTiming); ok && s.startTime > 0 {
 		SetStreamStartTime(timing, s.startTime+s.pushedDuration)
 	}
+	peak := s.peakDBFS
 	s.active = replacement
+	s.peakDBFS = math.Inf(-1)
 	s.streams[replacement] = struct{}{}
 	s.pendingFinals++
 	s.pump(replacement)
 	s.mu.Unlock()
+	logger.Logger.Infow("stt turn split forced", "peak_dbfs", peak)
 
 	if ending, ok := old.(InputEnding); ok {
 		_ = ending.EndInput()
@@ -278,6 +316,7 @@ func (s *turnSplittingStream) pump(stream RecognizeStream) {
 						s.timer.Stop()
 					}
 					s.pendingFinals = s.finals
+					s.peakDBFS = math.Inf(-1)
 				}
 				s.mu.Unlock()
 			}

@@ -59,6 +59,7 @@ func TestTurnSplittingTimingAdvancesWithInputAudio(t *testing.T) {
 		if err := logical.PushFrame(&model.AudioFrame{SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 16000}); err != nil {
 			t.Fatal(err)
 		}
+		speak(t, logical)
 		if err := logical.Flush(); err != nil {
 			t.Fatal(err)
 		}
