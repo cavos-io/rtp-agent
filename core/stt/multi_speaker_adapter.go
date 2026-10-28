@@ -492,6 +492,10 @@ func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
 }
 
 func (d *primarySpeakerDetector) computeRms(frame *model.AudioFrame) float64 {
+	return pcm16RMS(frame)
+}
+
+func pcm16RMS(frame *model.AudioFrame) float64 {
 	if len(frame.Data) == 0 {
 		return 0.0
 	}

@@ -540,7 +540,7 @@ func TestGeminiTurnSplittingDrainsRetiredFinal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err = s.PushFrame(&model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+	if err = s.PushFrame(&model.AudioFrame{Data: []byte{0x40, 0x1f}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Flush(); err != nil {

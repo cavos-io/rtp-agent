@@ -20,6 +20,7 @@ func TestTurnSplittingSTTReplacesBeforeRetiringAndForwardsLateFinal(t *testing.T
 	defer logical.Close()
 
 	first := provider.stream(0)
+	speak(t, logical)
 	if err := logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -36,10 +37,11 @@ func TestTurnSplittingSTTReplacesBeforeRetiringAndForwardsLateFinal(t *testing.T
 	if !first.isEnded() {
 		t.Fatal("old stream was not ended after replacement opened")
 	}
+	firstPushes := first.pushCount()
 	if err := logical.PushFrame(&model.AudioFrame{SampleRate: 16000}); err != nil {
 		t.Fatal(err)
 	}
-	if provider.stream(1).pushCount() != 1 || first.pushCount() != 0 {
+	if provider.stream(1).pushCount() != 1 || first.pushCount() != firstPushes {
 		t.Fatal("new audio did not route exclusively to replacement stream")
 	}
 
@@ -77,10 +79,12 @@ func TestTurnSplittingSTTLateRetiredFinalDoesNotCancelCurrentSplit(t *testing.T)
 		t.Fatal(err)
 	}
 	defer logical.Close()
+	speak(t, logical)
 	if err := logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	waitForSplitStreams(t, provider, 2)
+	speak(t, logical)
 	if err := logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +93,94 @@ func TestTurnSplittingSTTLateRetiredFinalDoesNotCancelCurrentSplit(t *testing.T)
 		t.Fatal(err)
 	}
 	waitForSplitStreams(t, provider, 3)
+}
+
+func TestTurnSplittingSTTSkipsFaintTurn(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, 10*time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	if err := logical.PushFrame(levelFrame(faintAmplitude)); err != nil {
+		t.Fatal(err)
+	}
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if provider.count() != 1 || provider.stream(0).isEnded() {
+		t.Fatalf("faint background must not force a final; streams=%d", provider.count())
+	}
+}
+
+func TestTurnSplittingSTTFinalResetsHeardLevel(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, 10*time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	speak(t, logical)
+	provider.stream(0).events <- &SpeechEvent{Type: SpeechEventFinalTranscript}
+	if _, err := logical.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if err := logical.PushFrame(levelFrame(faintAmplitude)); err != nil {
+		t.Fatal(err)
+	}
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if provider.count() != 1 {
+		t.Fatalf("finalised speech must not justify a later split; streams=%d", provider.count())
+	}
+}
+
+func TestTurnSplittingSTTSplitResetsHeardLevel(t *testing.T) {
+	provider := &splitTestSTT{}
+	logical, err := NewTurnSplittingSTT(provider, 10*time.Millisecond).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logical.Close()
+	speak(t, logical)
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSplitStreams(t, provider, 2)
+	if err := logical.PushFrame(levelFrame(faintAmplitude)); err != nil {
+		t.Fatal(err)
+	}
+	if err := logical.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if provider.count() != 2 {
+		t.Fatalf("replacement stream starts with nothing heard; streams=%d", provider.count())
+	}
+}
+
+const (
+	speechAmplitude = 8000 // ~ -12 dBFS
+	faintAmplitude  = 300  // ~ -41 dBFS
+)
+
+func levelFrame(amplitude int16) *model.AudioFrame {
+	data := make([]byte, 640)
+	for i := 0; i < len(data); i += 2 {
+		data[i] = byte(amplitude)
+		data[i+1] = byte(amplitude >> 8)
+	}
+	return &model.AudioFrame{Data: data, NumChannels: 1, SamplesPerChannel: 320}
+}
+
+func speak(t *testing.T, logical RecognizeStream) {
+	t.Helper()
+	if err := logical.PushFrame(levelFrame(speechAmplitude)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestTurnSplittingSTTPreservesTimingOnReplacement(t *testing.T) {
@@ -101,6 +193,7 @@ func TestTurnSplittingSTTPreservesTimingOnReplacement(t *testing.T) {
 	timing := logical.(StreamTiming)
 	timing.SetStartTimeOffset(2.5)
 	timing.SetStartTime(10.5)
+	speak(t, logical)
 	if err := logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +215,7 @@ func TestTurnSplittingSTTCloseCancelsReplacementOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider.block = true
+	speak(t, logical)
 	if err := logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +392,7 @@ func TestTurnSplittingSTTIgnoresRetiredStreamEOF(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer logical.Close()
+	speak(t, logical)
 	if err = logical.Flush(); err != nil {
 		t.Fatal(err)
 	}
