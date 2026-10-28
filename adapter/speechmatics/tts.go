@@ -30,7 +30,7 @@ const (
 	defaultSpeechmaticsTTSTimeout    = 30 * time.Second
 	speechmaticsTTSSlowFlushAfter    = 150 * time.Millisecond
 	speechmaticsTTSSlowFlushMargin   = 20 * time.Millisecond
-	speechmaticsTTSSDKParam          = "livekit-plugins-v0.9.0"
+	speechmaticsTTSSDKParam          = "livekit-plugins-v0.9.1"
 	speechmaticsTTSAppParam          = "livekit/0.2.8"
 )
 
