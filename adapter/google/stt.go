@@ -2525,10 +2525,9 @@ func googleApplySpeechDataTiming(data *stt.SpeechData, words []*speechpb.WordInf
 		return
 	}
 	if len(words) == 0 {
-		if data.Text != "" {
-			data.StartTime = startTimeOffset
-			data.EndTime = startTimeOffset
-		}
+		// A stream offset is not a speech endpoint when word timing is unknown.
+		data.StartTime = 0
+		data.EndTime = 0
 		return
 	}
 	data.StartTime = words[0].GetStartTime().AsDuration().Seconds() + startTimeOffset
@@ -2540,10 +2539,9 @@ func googleApplySpeechDataTimingV2(data *stt.SpeechData, words []*speechv2pb.Wor
 		return
 	}
 	if len(words) == 0 {
-		if data.Text != "" {
-			data.StartTime = startTimeOffset
-			data.EndTime = startTimeOffset
-		}
+		// Chirp 3 omits word timestamps; keep timing unknown like the reference.
+		data.StartTime = 0
+		data.EndTime = 0
 		return
 	}
 	data.StartTime = words[0].GetStartOffset().AsDuration().Seconds() + startTimeOffset

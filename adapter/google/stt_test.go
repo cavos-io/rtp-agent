@@ -26,6 +26,72 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
+// Matches the Python Google plugin's _streaming_recognize_response_to_speech_data:
+// transcripts without words have unknown timing, including chirp_3 results.
+func TestGoogleSTTStreamingUnknownTimingMatchesReference(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		for _, final := range []bool{false, true} {
+			for _, offset := range []float64{0, 2.5} {
+				t.Run(fmt.Sprintf("v%d/final=%t/offset=%g", version, final, offset), func(t *testing.T) {
+					var data stt.SpeechData
+					var eventType stt.SpeechEventType
+					var ok bool
+					if version == 1 {
+						data, eventType, ok = googleSpeechDataFromStreamingResultsOffset([]*speechpb.StreamingRecognitionResult{{
+							IsFinal: final, LanguageCode: "en-US",
+							Alternatives: []*speechpb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: 0.9}},
+						}}, 0.65, offset)
+					} else {
+						data, eventType, ok = googleSpeechDataFromStreamingResultsV2([]*speechv2pb.StreamingRecognitionResult{{
+							IsFinal: final, LanguageCode: "en-US",
+							Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: 0.9}},
+						}}, 0.65, offset)
+					}
+					wantType := stt.SpeechEventInterimTranscript
+					if final {
+						wantType = stt.SpeechEventFinalTranscript
+					}
+					if !ok || data.Text != "hello" || eventType != wantType {
+						t.Fatalf("result = %+v, %s, %t; want retained %s", data, eventType, ok, wantType)
+					}
+					if data.StartTime != 0 || data.EndTime != 0 {
+						t.Errorf("timing = %g-%g, want unknown (0-0)", data.StartTime, data.EndTime)
+					}
+					receivedAt := time.Unix(110, 0)
+					stream := &googleSTTStream{startTime: 100, startTimeOffset: offset}
+					event := stt.AlignSpeechEventTiming(&stt.SpeechEvent{
+						Type: eventType, Alternatives: []stt.SpeechData{data}, ReceivedAt: receivedAt,
+					}, stream)
+					if event.SpeechStartTime != nil || event.SpeechEndTime != nil {
+						t.Error("unknown timing fabricated absolute speech anchors")
+					}
+					if !event.ReceivedAt.Equal(receivedAt) {
+						t.Fatal("alignment changed transcript receipt time")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGoogleSTTStreamingV2WordTimingPreservesOffset(t *testing.T) {
+	data, _, ok := googleSpeechDataFromStreamingResultsV2([]*speechv2pb.StreamingRecognitionResult{{
+		IsFinal: true, LanguageCode: "en-US",
+		Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+			Transcript: "hello", Confidence: 0.9,
+			Words: []*speechv2pb.WordInfo{{
+				Word: "hello", StartOffset: durationpb.New(100 * time.Millisecond), EndOffset: durationpb.New(400 * time.Millisecond),
+			}},
+		}},
+	}}, 0.65, 2.5)
+	if !ok || math.Abs(data.StartTime-2.6) > 1e-6 || math.Abs(data.EndTime-2.9) > 1e-6 {
+		t.Fatalf("timed result = %+v, accepted=%t; want 2.6-2.9", data, ok)
+	}
+	if len(data.Words) != 1 || math.Abs(data.Words[0].StartTime-2.6) > 1e-6 || math.Abs(data.Words[0].EndTime-2.9) > 1e-6 {
+		t.Fatalf("word timing = %+v, want 2.6-2.9", data.Words)
+	}
+}
+
 func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil)
 	config := googleRecognitionConfig(provider, "id-ID")
