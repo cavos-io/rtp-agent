@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"time"
 
@@ -11,6 +12,45 @@ import (
 )
 
 const otelMetricsMeterName = "livekit-agents"
+
+type TurnMetricDimensions struct {
+	RuntimeMode       string
+	TurnDetectionMode string
+	Interrupted       bool
+}
+
+type E2EOutcome string
+
+const (
+	E2EOutcomeEligible              E2EOutcome = "eligible"
+	E2EOutcomeEmitted               E2EOutcome = "emitted"
+	E2EOutcomeMissingUserSpeechStop E2EOutcome = "missing_user_speech_stop"
+	E2EOutcomeMissingAudioStart     E2EOutcome = "missing_audio_start"
+	E2EOutcomeNoAudioPublished      E2EOutcome = "no_audio_published"
+	E2EOutcomeDuplicateUserTurn     E2EOutcome = "duplicate_user_turn"
+	E2EOutcomeInvalidDuration       E2EOutcome = "invalid_duration"
+)
+
+func RecordE2EOutcome(ctx context.Context, outcome E2EOutcome, dimensions TurnMetricDimensions) {
+	switch outcome {
+	case E2EOutcomeEligible,
+		E2EOutcomeEmitted,
+		E2EOutcomeMissingUserSpeechStop,
+		E2EOutcomeMissingAudioStart,
+		E2EOutcomeNoAudioPublished,
+		E2EOutcomeDuplicateUserTurn,
+		E2EOutcomeInvalidDuration:
+	default:
+		return
+	}
+
+	counter, err := MeterFromContext(ctx).Int64Counter("lk.agents.turn.e2e_measurements", metric.WithUnit("1"))
+	if err != nil {
+		return
+	}
+	attrs := append(turnMetricDimensionAttrs(dimensions), attribute.String("outcome", string(outcome)))
+	counter.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
 
 func CollectOTelUsage(metrics AgentMetrics) {
 	CollectOTelUsageWithContext(context.Background(), metrics)
@@ -67,8 +107,16 @@ func RecordOTelTurnMetricsWithContext(ctx context.Context, report map[string]any
 	llmAttrs := otelReportMetadataAttrs(report["llm_metadata"])
 	ttsAttrs := otelReportMetadataAttrs(report["tts_metadata"])
 	sttAttrs := otelReportMetadataAttrs(report["stt_metadata"])
+	e2eAttrs := append([]attribute.KeyValue{}, llmAttrs...)
+	e2eAttrs = append(e2eAttrs, otelPrefixedReportMetadataAttrs("stt", report["stt_metadata"])...)
+	e2eAttrs = append(e2eAttrs, otelPrefixedReportMetadataAttrs("tts", report["tts_metadata"])...)
+	if dimensions, ok := report["turn_metadata"].(TurnMetricDimensions); ok {
+		e2eAttrs = append(e2eAttrs, turnMetricDimensionAttrs(dimensions)...)
+	}
 
-	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.e2e_latency", report, "e2e_latency", llmAttrs)
+	if value, ok := reportFloat(report, "e2e_latency"); ok && value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0) {
+		recordFloat64Histogram(ctx, meter, "lk.agents.turn.e2e_latency", value, true, e2eAttrs)
+	}
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.llm_ttft", report, "llm_node_ttft", llmAttrs)
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.tts_ttfb", report, "tts_node_ttfb", ttsAttrs)
 	recordReportFloat64Histogram(ctx, meter, "lk.agents.turn.transcription_delay", report, "transcription_delay", sttAttrs)
@@ -112,6 +160,30 @@ func otelReportMetadataAttrs(value any) []attribute.KeyValue {
 		attrs = append(attrs, attribute.String("model_name", model))
 	}
 	return attrs
+}
+
+func otelPrefixedReportMetadataAttrs(prefix string, value any) []attribute.KeyValue {
+	metadata, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	attrs := make([]attribute.KeyValue, 0, 2)
+	if provider, ok := metadata["model_provider"].(string); ok && provider != "" {
+		attrs = append(attrs, attribute.String(prefix+"_model_provider", provider))
+	}
+	if model, ok := metadata["model_name"].(string); ok && model != "" {
+		attrs = append(attrs, attribute.String(prefix+"_model_name", model))
+	}
+	return attrs
+}
+
+func turnMetricDimensionAttrs(dimensions TurnMetricDimensions) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("runtime_mode", dimensions.RuntimeMode),
+		attribute.String("turn_detection_mode", dimensions.TurnDetectionMode),
+		attribute.Bool("interrupted", dimensions.Interrupted),
+	}
 }
 
 func reportFloat(report map[string]any, key string) (float64, bool) {
