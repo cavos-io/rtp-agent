@@ -2,6 +2,6 @@ package fishaudio
 
 const (
 	PluginTitle   = "rtp-agent.plugins.fishaudio"
-	PluginVersion = "v0.9.0"
+	PluginVersion = "v0.9.1"
 	PluginPackage = "rtp-agent.plugins.fishaudio"
 )

@@ -2,6 +2,6 @@ package gradium
 
 const (
 	PluginTitle   = "rtp-agent.plugins.gradium"
-	PluginVersion = "v0.9.0"
+	PluginVersion = "v0.9.1"
 	PluginPackage = "rtp-agent.plugins.gradium"
 )
