@@ -2408,7 +2408,9 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingTranscriptionDelay = transcriptionDelay
 	a.pendingTranscriptionDelaySet = transcriptionDelaySet
 	if a.syntheticEOU {
-		a.syntheticEOUNotBefore = finalTranscriptAt.Add(time.Duration(a.minEndpointingDelay() * float64(time.Second)))
+		// The final resolves the synthetic-end grace period. Keep endpointing
+		// anchored to speech end instead of starting another wait on arrival.
+		a.syntheticEOUNotBefore = time.Time{}
 	}
 	a.pendingInterimTranscript = ""
 	a.pendingInterimLanguage = ""

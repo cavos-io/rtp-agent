@@ -9624,3 +9624,33 @@ func TestBargeInLogMemoSuppressesRepeats(t *testing.T) {
 		t.Fatal("same verdict in a new turn should log again after the reset")
 	}
 }
+
+// A late final resolves the synthetic-end grace period. Endpointing still uses
+// the original speech stop, rather than starting a new delay at final arrival.
+func TestAgentActivitySyntheticEndLateFinalDoesNotRestartEndpointing(t *testing.T) {
+	base := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	base.TurnDetection = TurnDetectionModeVAD
+	base.VAD = &fakePipelineVAD{}
+	base.STT = &fakePipelineSTT{}
+	session := NewAgentSession(base, nil, AgentSessionOptions{MinEndpointingDelay: 0.25, MaxEndpointingDelay: 0.6})
+	activity := NewAgentActivity(base, session)
+	base.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+	activity.speaking = true
+	activity.userSpeechStartedAt = time.Now().Add(-2 * time.Second)
+	activity.userSpeechStoppedAt = time.Now().Add(-time.Second)
+	activity.onSyntheticEndOfSpeech()
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "late final", Confidence: 0.9}},
+	})
+	select {
+	case msg := <-base.turns:
+		if msg.TextContent() != "late final" {
+			t.Fatalf("turn = %q", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("late final restarted endpointing despite speech ending over 250ms ago")
+	}
+}
