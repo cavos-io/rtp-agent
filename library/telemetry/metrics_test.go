@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -243,6 +244,11 @@ func TestRecordOTelTurnMetricsRecordsReferenceLatencyHistograms(t *testing.T) {
 			"model_provider": "Google Cloud Platform",
 			"model_name":     "chirp_3",
 		},
+		"turn_metadata": TurnMetricDimensions{
+			RuntimeMode:       "pipeline",
+			TurnDetectionMode: "smart_turn",
+			Interrupted:       true,
+		},
 	})
 
 	var rm metricdata.ResourceMetrics
@@ -261,11 +267,87 @@ func TestRecordOTelTurnMetricsRecordsReferenceLatencyHistograms(t *testing.T) {
 	assertFloatHistogramPoint(t, rm, "lk.agents.turn.e2e_latency", attribute.NewSet(
 		attribute.String("model_provider", "openai"),
 		attribute.String("model_name", "gpt-4o"),
+		attribute.String("stt_model_provider", "Google Cloud Platform"),
+		attribute.String("stt_model_name", "chirp_3"),
+		attribute.String("tts_model_provider", "cartesia"),
+		attribute.String("tts_model_name", "sonic"),
+		attribute.String("runtime_mode", "pipeline"),
+		attribute.String("turn_detection_mode", "smart_turn"),
+		attribute.Bool("interrupted", true),
 	), 0.75)
 	assertFloatHistogramPoint(t, rm, "lk.agents.turn.transcription_delay", attribute.NewSet(
 		attribute.String("model_provider", "Google Cloud Platform"),
 		attribute.String("model_name", "chirp_3"),
 	), 0.35)
+}
+
+func TestRecordE2EOutcomeRecordsAllowedOutcomesWithTypedDimensions(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+	})
+
+	dims := TurnMetricDimensions{
+		RuntimeMode:       "pipeline",
+		TurnDetectionMode: "smart_turn",
+		Interrupted:       true,
+	}
+	outcomes := []E2EOutcome{
+		E2EOutcomeEligible,
+		E2EOutcomeEmitted,
+		E2EOutcomeMissingUserSpeechStop,
+		E2EOutcomeMissingAudioStart,
+		E2EOutcomeNoAudioPublished,
+		E2EOutcomeDuplicateUserTurn,
+		E2EOutcomeInvalidDuration,
+	}
+	for _, outcome := range outcomes {
+		RecordE2EOutcome(context.Background(), outcome, dims)
+	}
+	RecordE2EOutcome(context.Background(), E2EOutcome("arbitrary"), dims)
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	for _, outcome := range outcomes {
+		assertIntCounterPoint(t, rm, "lk.agents.turn.e2e_measurements", attribute.NewSet(
+			attribute.String("runtime_mode", "pipeline"),
+			attribute.String("turn_detection_mode", "smart_turn"),
+			attribute.Bool("interrupted", true),
+			attribute.String("outcome", string(outcome)),
+		), 1)
+	}
+	assertNoIntCounterPoint(t, rm, "lk.agents.turn.e2e_measurements", attribute.NewSet(
+		attribute.String("runtime_mode", "pipeline"),
+		attribute.String("turn_detection_mode", "smart_turn"),
+		attribute.Bool("interrupted", true),
+		attribute.String("outcome", "arbitrary"),
+	))
+}
+
+func TestRecordOTelTurnMetricsRejectsInvalidE2ELatency(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+	})
+
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -1} {
+		RecordOTelTurnMetrics(map[string]any{"e2e_latency": value})
+	}
+	RecordOTelTurnMetrics(map[string]any{"e2e_latency": 0.5})
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	assertFloatHistogramPoint(t, rm, "lk.agents.turn.e2e_latency", attribute.NewSet(), 0.5)
 }
 
 func TestCollectOTelUsageRecordsReferenceSTTConnectionAcquireTime(t *testing.T) {
@@ -369,6 +451,27 @@ func assertIntCounterPoint(t *testing.T, rm metricdata.ResourceMetrics, name str
 		}
 	}
 	t.Fatalf("missing metric %s", name)
+}
+
+func assertNoIntCounterPoint(t *testing.T, rm metricdata.ResourceMetrics, name string, attrs attribute.Set) {
+	t.Helper()
+
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != name {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s data = %T, want int64 sum", name, metric.Data)
+			}
+			for _, point := range sum.DataPoints {
+				if point.Attributes.Equals(&attrs) {
+					t.Fatalf("%s unexpectedly included attributes %v", name, attrs)
+				}
+			}
+		}
+	}
 }
 
 func assertFloatHistogramPoint(t *testing.T, rm metricdata.ResourceMetrics, name string, attrs attribute.Set, want float64) {

@@ -56,6 +56,48 @@ func assertLatencyHistograms(t *testing.T, reader *sdkmetric.ManualReader, want 
 	}
 }
 
+func TestLatencyImmediateEmission(t *testing.T) {
+	reader := latencyMeterReader(t)
+	session := NewAgentSession(NewAgent("timing"), nil, AgentSessionOptions{})
+	message := &llm.ChatMessage{
+		ID:      "assistant-1",
+		Role:    llm.ChatRoleAssistant,
+		Metrics: map[string]any{"e2e_latency": 0.5},
+	}
+
+	session.EmitConversationItemAdded(message)
+	assertLatencyHistograms(t, reader, map[string]float64{"lk.agents.turn.e2e_latency": 0.5})
+
+	session.flushOTelTurnMetrics(context.Background())
+	assertLatencyHistograms(t, reader, map[string]float64{"lk.agents.turn.e2e_latency": 0.5})
+}
+
+func TestLatencyCloseFlushIdempotent(t *testing.T) {
+	t.Run("duplicate assistant ID", func(t *testing.T) {
+		reader := latencyMeterReader(t)
+		session := NewAgentSession(NewAgent("timing"), nil, AgentSessionOptions{})
+		message := &llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Metrics: map[string]any{"e2e_latency": 0.5}}
+
+		session.EmitConversationItemAdded(message)
+		session.EmitConversationItemAdded(message)
+		session.flushOTelTurnMetrics(context.Background())
+
+		assertLatencyHistograms(t, reader, map[string]float64{"lk.agents.turn.e2e_latency": 0.5})
+	})
+
+	t.Run("user metric waits for close flush", func(t *testing.T) {
+		reader := latencyMeterReader(t)
+		session := NewAgentSession(NewAgent("timing"), nil, AgentSessionOptions{})
+		message := &llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Metrics: map[string]any{"end_of_turn_delay": 0.25}}
+
+		session.EmitConversationItemAdded(message)
+		assertLatencyHistograms(t, reader, nil, "lk.agents.turn.end_of_turn_delay")
+
+		session.flushOTelTurnMetrics(context.Background())
+		assertLatencyHistograms(t, reader, map[string]float64{"lk.agents.turn.end_of_turn_delay": 0.25})
+	})
+}
+
 func TestLatencyRealtimeSpeechEndSharedByTraceAndMeter(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		recorder := traceParityRecorder(t)

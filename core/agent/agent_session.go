@@ -44,6 +44,7 @@ type idleHoldContextKey struct{}
 type drainIdleContextKey struct{}
 
 type AgentSessionOptions struct {
+	TurnMetricDimensions                     telemetry.TurnMetricDimensions
 	AllowInterruptions                       bool
 	AllowInterruptionsSet                    bool
 	DiscardAudioIfUninterruptible            bool
@@ -310,6 +311,8 @@ type AgentSession struct {
 	userState                UserState
 	agentState               AgentState
 	lastAnsweredUserSpeechAt float64
+	turnMetricDimensions     telemetry.TurnMetricDimensions
+	recordedTurnMetrics      map[string]struct{}
 
 	mu                      sync.Mutex
 	logMu                   sync.RWMutex
@@ -1221,6 +1224,8 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		teardownCh:          make(chan struct{}),
 		log:                 logger.Logger,
 	}
+	session.turnMetricDimensions = opts.TurnMetricDimensions
+	session.recordedTurnMetrics = make(map[string]struct{})
 	session.Timeline = NewEventTimeline(session)
 	if opts.VideoSampler != nil {
 		session.videoSampler = opts.VideoSampler
@@ -1812,6 +1817,11 @@ func (s *AgentSession) emitConversationItemAddedEvent(ev *ConversationItemAddedE
 		ev.CreatedAt = time.Now()
 	}
 	s.insertChatItem(ev.Item)
+	if msg, ok := ev.Item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleAssistant {
+		if _, hasE2E := msg.Metrics["e2e_latency"]; hasE2E {
+			s.recordOTelTurnMetrics(s.telemetryContext(), msg)
+		}
+	}
 	s.recordEvent(ev)
 	primary, primarySubscribed, subscribers, done := s.conversationItemAddedSubscribers()
 	if primarySubscribed {
@@ -3796,9 +3806,36 @@ func (s *AgentSession) flushOTelTurnMetrics(ctx context.Context) {
 	}
 	for _, item := range s.ChatCtx.Items {
 		msg, ok := item.(*llm.ChatMessage)
-		if !ok || len(msg.Metrics) == 0 {
+		if !ok {
 			continue
 		}
-		telemetry.RecordOTelTurnMetricsWithContext(ctx, msg.Metrics)
+		s.recordOTelTurnMetrics(ctx, msg)
 	}
+}
+
+func (s *AgentSession) recordOTelTurnMetrics(ctx context.Context, msg *llm.ChatMessage) bool {
+	if s == nil || msg == nil || msg.ID == "" || len(msg.Metrics) == 0 {
+		return false
+	}
+
+	s.mu.Lock()
+	if s.recordedTurnMetrics == nil {
+		s.recordedTurnMetrics = make(map[string]struct{})
+	}
+	if _, recorded := s.recordedTurnMetrics[msg.ID]; recorded {
+		s.mu.Unlock()
+		return false
+	}
+	s.recordedTurnMetrics[msg.ID] = struct{}{}
+	dimensions := s.turnMetricDimensions
+	s.mu.Unlock()
+
+	report := make(map[string]any, len(msg.Metrics)+1)
+	for key, value := range msg.Metrics {
+		report[key] = value
+	}
+	dimensions.Interrupted = msg.Interrupted
+	report["turn_metadata"] = dimensions
+	telemetry.RecordOTelTurnMetricsWithContext(ctx, report)
+	return true
 }

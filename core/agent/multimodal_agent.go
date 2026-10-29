@@ -37,7 +37,6 @@ type MultimodalAgent struct {
 	pendingAutoToolReply      *SpeechHandle
 	pendingAutoToolReplyTimer *time.Timer
 	lastUserSpeechStoppedAt   time.Time
-	lastAnsweredUserSpeechAt  time.Time
 
 	PublishAudio func(ctx context.Context, frame *model.AudioFrame) error
 }
@@ -385,7 +384,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 		if !speech.IsInterrupted() && speech.Generation.AssistantMessage != nil {
 			if at := timing.published(); publishedAudio && !at.IsZero() {
-				metrics = addAssistantSpeechMetrics(ctx, session, metrics, &TTSGenerationData{StartedSpeakingAt: timeToUnixSeconds(at), StoppedSpeakingAt: timeToUnixSeconds(time.Now())}, speech.Generation.UserMessage)
+				metrics = addAssistantSpeechMetrics(ctx, session, metrics, &TTSGenerationData{ForwardedAudio: true, StartedSpeakingAt: timeToUnixSeconds(at), StoppedSpeakingAt: timeToUnixSeconds(time.Now())}, speech.Generation.UserMessage, speech.IsInterrupted())
 				speech.Generation.AssistantMessage.CreatedAt = at
 			}
 			if speech.Generation.AssistantMessage.Metrics == nil {
@@ -954,6 +953,12 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			ma.truncateInterruptedRealtimeMessage(message.MessageID, modalities, text, playback)
 		}
 		if skipped {
+			if ma.session != nil {
+				ma.session.measureAssistantE2E(ctx, nil, &TTSGenerationData{
+					ForwardedAudio:    publishedAudio,
+					StartedSpeakingAt: timeToUnixSeconds(startedSpeakingAt),
+				}, ma.e2eUserMessage(speech), true)
+			}
 			return true
 		}
 	}
@@ -971,30 +976,16 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 		CreatedAt:   time.Now(),
 		Metrics:     responseMetrics,
 	}
+	if ma.session != nil {
+		msg.Metrics = ma.session.measureAssistantE2E(ctx, msg.Metrics, &TTSGenerationData{
+			ForwardedAudio:    publishedAudio,
+			StartedSpeakingAt: timeToUnixSeconds(startedSpeakingAt),
+		}, ma.e2eUserMessage(speech), interrupted)
+	}
 	if !startedSpeakingAt.IsZero() {
 		msg.CreatedAt = startedSpeakingAt
 		msg.Metrics["started_speaking_at"] = timeToUnixSeconds(startedSpeakingAt)
 		msg.Metrics["stopped_speaking_at"] = timeToUnixSeconds(time.Now())
-		ma.mu.Lock()
-		stoppedAt := ma.lastUserSpeechStoppedAt
-		if speech != nil && speech.Generation.RealtimeGeneration != nil && speech.Generation.RealtimeGeneration.UserSpeechStoppedAt != nil {
-			value := *speech.Generation.RealtimeGeneration.UserSpeechStoppedAt
-			stoppedAt = time.Time{}
-			if value > 0 {
-				stoppedAt = unixSecondsToTime(value)
-			}
-		}
-		if speech != nil && speech.Generation.UserMessage != nil {
-			if stopped, ok := speech.Generation.UserMessage.Metrics["stopped_speaking_at"].(float64); ok {
-				stoppedAt = unixSecondsToTime(stopped)
-			}
-		}
-		if !stoppedAt.IsZero() && stoppedAt.After(ma.lastAnsweredUserSpeechAt) && !stoppedAt.After(startedSpeakingAt) {
-			msg.Metrics["e2e_latency"] = startedSpeakingAt.Sub(stoppedAt).Seconds()
-			ma.lastAnsweredUserSpeechAt = startedSpeakingAt
-			trace.SpanFromContext(ctx).SetAttributes(attribute.Float64(telemetry.AttrE2ELatency, startedSpeakingAt.Sub(stoppedAt).Seconds()))
-		}
-		ma.mu.Unlock()
 	}
 	if ma.chatCtx != nil {
 		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
@@ -1006,6 +997,28 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	}
 	speech.AddChatItems(msg)
 	return false
+}
+
+func (ma *MultimodalAgent) e2eUserMessage(speech *SpeechHandle) *llm.ChatMessage {
+	ma.mu.Lock()
+	stoppedAt := ma.lastUserSpeechStoppedAt
+	ma.mu.Unlock()
+	if speech != nil && speech.Generation.RealtimeGeneration != nil && speech.Generation.RealtimeGeneration.UserSpeechStoppedAt != nil {
+		value := *speech.Generation.RealtimeGeneration.UserSpeechStoppedAt
+		stoppedAt = time.Time{}
+		if value > 0 {
+			stoppedAt = unixSecondsToTime(value)
+		}
+	}
+	if speech != nil && speech.Generation.UserMessage != nil {
+		if stopped, ok := speech.Generation.UserMessage.Metrics["stopped_speaking_at"].(float64); ok {
+			stoppedAt = unixSecondsToTime(stopped)
+		}
+	}
+	if stoppedAt.IsZero() {
+		return nil
+	}
+	return &llm.ChatMessage{Metrics: map[string]any{"stopped_speaking_at": timeToUnixSeconds(stoppedAt)}}
 }
 
 func realtimeMessagePending(messageCh <-chan llm.MessageGeneration) bool {
