@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -37,48 +38,50 @@ func TestConnectionPoolReusesReturnedConnection(t *testing.T) {
 }
 
 func TestConnectionPoolExpiresAndClosesOldConnection(t *testing.T) {
-	var next int
-	var closed []int
-	pool := NewConnectionPool(ConnectionPoolOptions[int]{
-		MaxSessionDuration: 5 * time.Millisecond,
-		Connect: func(context.Context) (int, error) {
-			next++
-			return next, nil
-		},
-		Close: func(_ context.Context, conn int) error {
-			closed = append(closed, conn)
-			return nil
-		},
+	synctest.Test(t, func(t *testing.T) {
+		var next int
+		var closed []int
+		pool := NewConnectionPool(ConnectionPoolOptions[int]{
+			MaxSessionDuration: 5 * time.Millisecond,
+			Connect: func(context.Context) (int, error) {
+				next++
+				return next, nil
+			},
+			Close: func(_ context.Context, conn int) error {
+				closed = append(closed, conn)
+				return nil
+			},
+		})
+
+		conn, err := pool.Get(context.Background(), time.Second)
+		if err != nil {
+			t.Fatalf("Get() first error = %v", err)
+		}
+		pool.Put(conn)
+		time.Sleep(10 * time.Millisecond)
+
+		fresh, err := pool.Get(context.Background(), time.Second)
+		if err != nil {
+			t.Fatalf("Get() fresh error = %v", err)
+		}
+		if fresh == conn || pool.LastConnectionReused {
+			t.Fatalf("fresh Get() conn=%d reused=%v, want new connection", fresh, pool.LastConnectionReused)
+		}
+		if len(closed) != 0 {
+			t.Fatalf("closed immediately after expiry = %#v, want deferred close", closed)
+		}
+		pool.Put(fresh)
+		reused, err := pool.Get(context.Background(), time.Second)
+		if err != nil {
+			t.Fatalf("Get() after deferred close error = %v", err)
+		}
+		if reused != fresh || !pool.LastConnectionReused {
+			t.Fatalf("Get() after deferred close conn=%d reused=%v, want reused fresh conn %d", reused, pool.LastConnectionReused, fresh)
+		}
+		if !reflect.DeepEqual(closed, []int{conn}) {
+			t.Fatalf("closed = %#v, want [%d]", closed, conn)
+		}
 	})
-
-	conn, err := pool.Get(context.Background(), time.Second)
-	if err != nil {
-		t.Fatalf("Get() first error = %v", err)
-	}
-	pool.Put(conn)
-	time.Sleep(10 * time.Millisecond)
-
-	fresh, err := pool.Get(context.Background(), time.Second)
-	if err != nil {
-		t.Fatalf("Get() fresh error = %v", err)
-	}
-	if fresh == conn || pool.LastConnectionReused {
-		t.Fatalf("fresh Get() conn=%d reused=%v, want new connection", fresh, pool.LastConnectionReused)
-	}
-	if len(closed) != 0 {
-		t.Fatalf("closed immediately after expiry = %#v, want deferred close", closed)
-	}
-	pool.Put(fresh)
-	reused, err := pool.Get(context.Background(), time.Second)
-	if err != nil {
-		t.Fatalf("Get() after deferred close error = %v", err)
-	}
-	if reused != fresh || !pool.LastConnectionReused {
-		t.Fatalf("Get() after deferred close conn=%d reused=%v, want reused fresh conn %d", reused, pool.LastConnectionReused, fresh)
-	}
-	if !reflect.DeepEqual(closed, []int{conn}) {
-		t.Fatalf("closed = %#v, want [%d]", closed, conn)
-	}
 }
 
 func TestConnectionPoolExpiredCloseErrorDoesNotBlockFreshGet(t *testing.T) {

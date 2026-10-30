@@ -35,8 +35,6 @@ const (
 	googleSTTReplayBufferDuration         = 30 * time.Second
 	googleSTTMaxTransientRestartBackoff   = 2 * time.Second
 	googleSTTMaxLifetimeTransientRestarts = 50
-	googleSTTFlushSilenceDuration         = 2 * time.Second
-	googleSTTFlushSilenceChunk            = 200 * time.Millisecond
 )
 
 type STT struct {
@@ -2750,7 +2748,6 @@ func (s *googleSTTStream) Flush() error {
 		return io.ErrClosedPipe
 	}
 	tail := s.inputAudio.flush()
-	sampleRate := s.owner.sampleRate
 	s.mu.Unlock()
 	if tail != nil {
 		mono, err := googleSTTMonoAudioFrame(tail)
@@ -2761,20 +2758,8 @@ func (s *googleSTTStream) Flush() error {
 			return err
 		}
 	}
-	if sampleRate <= 0 {
-		return nil
-	}
-	samplesPerChunk := uint32(time.Duration(sampleRate) * googleSTTFlushSilenceChunk / time.Second)
-	for remaining := googleSTTFlushSilenceDuration; remaining > 0; remaining -= googleSTTFlushSilenceChunk {
-		if err := s.sendAudioFrame(&model.AudioFrame{
-			Data:              make([]byte, int(samplesPerChunk)*2),
-			SampleRate:        uint32(sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: samplesPerChunk,
-		}); err != nil {
-			return err
-		}
-	}
+	// Google has no finalize request. Preserve the audio clock here; the turn
+	// splitter ends withheld streams, and EndInput closes the send side below.
 	return nil
 }
 

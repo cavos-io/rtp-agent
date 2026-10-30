@@ -2209,45 +2209,51 @@ func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
 	}
-	if len(streamClient.sent) != 12 {
-		t.Fatalf("sent after Flush = %d, want config, resampler tail, and endpointing silence", len(streamClient.sent))
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent after Flush = %d, want only config and resampler tail", len(streamClient.sent))
 	}
 	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
 		t.Fatalf("flushed audio content = %#v, want reference resampler tail %#v", got, want)
 	}
 }
 
-func TestGoogleSTTStreamFlushSendsEndpointingSilence(t *testing.T) {
+func TestGoogleSTTStreamFlushDoesNotInjectSyntheticSilence(t *testing.T) {
 	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
-
-	stream, err := provider.Stream(context.Background(), "en-US")
+	stream, err := provider.Stream(t.Context(), "en-US")
 	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
+		t.Fatal(err)
 	}
 	defer stream.Close()
 	defer close(recvBlock)
-
 	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush returned error: %v", err)
+		t.Fatal(err)
 	}
-	if len(streamClient.sent) != 11 {
-		t.Fatalf("sent requests = %d, want config plus ten endpointing-silence chunks", len(streamClient.sent))
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("sent requests = %d, want only config; normal flush must not advance the provider audio clock", len(streamClient.sent))
 	}
-	var silence []byte
-	for _, req := range streamClient.sent[1:] {
-		chunk := req.GetAudioContent()
-		if len(chunk) != 6400 {
-			t.Fatalf("endpointing silence chunk bytes = %d, want 200ms of mono 16 kHz PCM", len(chunk))
+	for i := 0; i < 2; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame after flush %d: %v", i, err)
 		}
-		silence = append(silence, chunk...)
-	}
-	if len(silence) != 64000 {
-		t.Fatalf("endpointing silence bytes = %d, want two seconds of mono 16 kHz PCM", len(silence))
-	}
-	if !bytes.Equal(silence, make([]byte, 64000)) {
-		t.Fatal("endpointing audio contains non-silent samples")
+		if err := stream.Flush(); err != nil {
+			t.Fatalf("Flush after audio %d: %v", i, err)
+		}
+		if len(streamClient.sent) != i+2 {
+			t.Fatalf("sent requests after audio %d = %d, want %d without synthetic audio or replay", i, len(streamClient.sent), i+2)
+		}
+		if got := streamClient.sent[i+1].GetAudioContent(); !bytes.Equal(got, []byte{1, 0}) {
+			t.Fatalf("audio after flush %d = %v, want original PCM [1 0]", i, got)
+		}
+		if streamClient.closed {
+			t.Fatal("Flush closed provider input; subsequent audio must remain writable")
+		}
 	}
 }
 
@@ -2291,8 +2297,8 @@ func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testin
 	if !streamClient.closed {
 		t.Fatal("EndInput did not close provider send side")
 	}
-	if len(streamClient.sent) != 12 {
-		t.Fatalf("sent after EndInput = %d, want config, resampler tail, and endpointing silence", len(streamClient.sent))
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent after EndInput = %d, want config and resampler tail before closing input", len(streamClient.sent))
 	}
 	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
 		t.Fatalf("EndInput audio content = %#v, want flushed tail %#v", got, want)
