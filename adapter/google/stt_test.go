@@ -2233,6 +2233,28 @@ func TestGoogleSTTStreamFlushDoesNotInjectSyntheticSilence(t *testing.T) {
 	if len(streamClient.sent) != 1 {
 		t.Fatalf("sent requests = %d, want only config; normal flush must not advance the provider audio clock", len(streamClient.sent))
 	}
+	for i := 0; i < 2; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame after flush %d: %v", i, err)
+		}
+		if err := stream.Flush(); err != nil {
+			t.Fatalf("Flush after audio %d: %v", i, err)
+		}
+		if len(streamClient.sent) != i+2 {
+			t.Fatalf("sent requests after audio %d = %d, want %d without synthetic audio or replay", i, len(streamClient.sent), i+2)
+		}
+		if got := streamClient.sent[i+1].GetAudioContent(); !bytes.Equal(got, []byte{1, 0}) {
+			t.Fatalf("audio after flush %d = %v, want original PCM [1 0]", i, got)
+		}
+		if streamClient.closed {
+			t.Fatal("Flush closed provider input; subsequent audio must remain writable")
+		}
+	}
 }
 
 func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testing.T) {
