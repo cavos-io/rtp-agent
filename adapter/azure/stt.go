@@ -691,7 +691,7 @@ func buildAzureSTTSpeechConfigWithLanguages(s *STT, languages []string) []byte {
 	payload := map[string]any{
 		"context": map[string]any{
 			"system": map[string]any{
-				"version": "v0.9.10000",
+				"version": "v0.9.20000",
 			},
 		},
 	}

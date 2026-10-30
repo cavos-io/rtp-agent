@@ -2,6 +2,6 @@ package rtzr
 
 const (
 	PluginTitle   = "rtp-agent.plugins.rtzr"
-	PluginVersion = "v0.9.1"
+	PluginVersion = "v0.9.2"
 	PluginPackage = "rtp-agent.plugins.rtzr"
 )
