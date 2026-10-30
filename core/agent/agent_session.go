@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -360,6 +361,7 @@ type AgentSession struct {
 	videoSampler            *VoiceActivityVideoSampler
 	audioOutputController   AudioOutputController
 	audioPlaybackController AudioPlaybackController
+	textOutput              TextOutput
 	toolExecutionRegistry   activeToolRegistry
 
 	// Event channels
@@ -623,6 +625,18 @@ func (s *AgentSession) AudioOutputController() AudioOutputController {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.audioOutputController
+}
+
+func (s *AgentSession) SetTextOutput(output TextOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.textOutput = output
+}
+
+func (s *AgentSession) TextOutput() TextOutput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.textOutput
 }
 
 func (s *AgentSession) SetAudioPlaybackController(controller AudioPlaybackController) {
@@ -1467,7 +1481,7 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	s.mu.Lock()
 	userState := s.userState
 	s.mu.Unlock()
-	if ev.IsFinal && userState == UserStateAway {
+	if ev.IsFinal && strings.TrimSpace(ev.Transcript) != "" && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
 	}
 	s.recordEvent(&ev)

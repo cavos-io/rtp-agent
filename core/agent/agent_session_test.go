@@ -292,6 +292,35 @@ func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T
 	}
 }
 
+func TestAgentSessionEmptyFinalTranscriptDoesNotResetAway(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		filter     func(string) string
+	}{
+		{name: "empty"},
+		{name: "whitespace", transcript: " \t\n "},
+		{name: "filtered empty", transcript: "noise", filter: func(string) string { return "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			session.UserTranscriptFilter = tt.filter
+			session.UpdateUserState(UserStateAway)
+
+			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+				Transcript: tt.transcript,
+				IsFinal:    true,
+			})
+
+			if got := session.UserState(); got != UserStateAway {
+				t.Fatalf("UserState() = %q, want %q", got, UserStateAway)
+			}
+		})
+	}
+}
+
 func TestAgentSessionFinalUserInputTranscribedDeliveredWhenChannelFull(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ch := session.UserInputTranscribedEvents()
@@ -893,6 +922,31 @@ func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T
 
 	assertConversationItemAddedEvent(t, first, msg, "first")
 	assertConversationItemAddedEvent(t, second, msg, "second")
+}
+
+type recordingTextOutput struct {
+	chunks  []TextOutputChunk
+	flushes int
+}
+
+func (r *recordingTextOutput) CaptureText(_ context.Context, chunk TextOutputChunk) error {
+	r.chunks = append(r.chunks, chunk)
+	return nil
+}
+
+func (r *recordingTextOutput) Flush() {
+	r.flushes++
+}
+
+func TestAgentSessionStoresTextOutput(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	output := &recordingTextOutput{}
+
+	session.SetTextOutput(output)
+
+	if got := session.TextOutput(); got != output {
+		t.Fatalf("TextOutput() = %T, want configured recorder", got)
+	}
 }
 
 func TestAgentSessionConversationItemAddedDeliveredWhenChannelFull(t *testing.T) {
