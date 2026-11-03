@@ -9654,3 +9654,21 @@ func TestAgentActivitySyntheticEndLateFinalDoesNotRestartEndpointing(t *testing.
 		t.Fatal("late final restarted endpointing despite speech ending over 250ms ago")
 	}
 }
+
+func TestAgentActivityHoldsSTTSpeechBoundariesOnlyForSTTTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+
+	for _, kind := range []stt.SpeechEventType{stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech} {
+		if activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{Type: kind}) {
+			t.Fatalf("%s held in vad turn detection; replaying it would end the VAD turn", kind)
+		}
+	}
+	if !activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "iya"}}}) {
+		t.Fatal("final transcript not held while agent speaks")
+	}
+}

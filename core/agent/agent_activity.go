@@ -2705,7 +2705,11 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 		return false
 	}
 	switch ev.Type {
-	case "", stt.SpeechEventStartOfSpeech, stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech:
+	case stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech:
+		if a.turnDetectionMode() != TurnDetectionModeSTT {
+			return false
+		}
+	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript:
 	default:
 		return false
 	}
