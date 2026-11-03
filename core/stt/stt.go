@@ -222,11 +222,12 @@ func (e *SpeechEvent) UnmarshalJSON(data []byte) error {
 }
 
 type STTCapabilities struct {
-	Streaming         bool   `json:"streaming"`
-	InterimResults    bool   `json:"interim_results"`
-	Diarization       bool   `json:"diarization"`
-	AlignedTranscript string `json:"aligned_transcript"`
-	OfflineRecognize  bool   `json:"offline_recognize"`
+	Streaming           bool   `json:"streaming"`
+	InterimResults      bool   `json:"interim_results"`
+	Diarization         bool   `json:"diarization"`
+	AlignedTranscript   string `json:"aligned_transcript"`
+	OfflineRecognize    bool   `json:"offline_recognize"`
+	ProviderEndpointing bool   `json:"-"`
 }
 
 func (c STTCapabilities) MarshalJSON() ([]byte, error) {

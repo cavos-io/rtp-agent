@@ -45,6 +45,19 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterProviderEndpointingRequiresEveryProvider(t *testing.T) {
+	endpointing := func(label string) STT {
+		return &metadataSTT{label: label, capabilities: STTCapabilities{Streaming: true, ProviderEndpointing: true}}
+	}
+	if !NewFallbackAdapter([]STT{endpointing("gemini-a"), endpointing("gemini-b")}).Capabilities().ProviderEndpointing {
+		t.Fatal("ProviderEndpointing = false, want true when every provider endpoints")
+	}
+	mixed := NewFallbackAdapter([]STT{endpointing("gemini"), &metadataSTT{label: "chirp", capabilities: STTCapabilities{Streaming: true}}})
+	if mixed.Capabilities().ProviderEndpointing {
+		t.Fatal("ProviderEndpointing = true, want false when a fallback provider needs forced turn splits")
+	}
+}
+
 func TestFallbackAdapterRequiresAtLeastOneSTT(t *testing.T) {
 	defer func() {
 		r := recover()

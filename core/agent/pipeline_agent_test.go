@@ -3328,6 +3328,17 @@ func TestStreamableSTTWrapsStreamingProviderWithTurnSplitting(t *testing.T) {
 	}
 }
 
+func TestStreamableSTTKeepsProviderEndpointingSTTUnwrapped(t *testing.T) {
+	provider := &fakePipelineSTT{endpointing: true}
+	wrapped, err := streamableSTT(provider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrapped != stt.STT(provider) {
+		t.Fatalf("streamableSTT returned %T, want the provider-endpointing STT unwrapped", wrapped)
+	}
+}
+
 func TestPipelineAgentSeedsSTTStreamTimingOnStart(t *testing.T) {
 	sttClosed := make(chan struct{})
 	timingSeeded := make(chan struct{})
@@ -7808,10 +7819,11 @@ type fakePipelineSTT struct {
 	stt.MetricsEmitter
 	stt.ErrorEmitter
 
-	model     string
-	provider  string
-	stream    *fakePipelineRecognizeStream
-	streamErr error
+	model       string
+	provider    string
+	stream      *fakePipelineRecognizeStream
+	streamErr   error
+	endpointing bool
 }
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
@@ -7821,7 +7833,7 @@ func (f *fakePipelineSTT) Model() string { return f.model }
 func (f *fakePipelineSTT) Provider() string { return f.provider }
 
 func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true}
+	return stt.STTCapabilities{Streaming: true, ProviderEndpointing: f.endpointing}
 }
 
 func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {

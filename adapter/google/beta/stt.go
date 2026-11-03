@@ -95,7 +95,7 @@ func (s *STT) Model() string           { return s.model }
 func (s *STT) Provider() string        { return "google" }
 func (s *STT) InputSampleRate() uint32 { return s.sampleRate }
 func (s *STT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, ProviderEndpointing: true}
 }
 func (s *STT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
 	return nil, errors.New("gemini STT only supports streaming recognition")
@@ -447,7 +447,10 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 	fallback := language
 	goAway := false
 	emit := func(kind stt.SpeechEventType, text string) bool {
-		event := &stt.SpeechEvent{Type: kind, Alternatives: []stt.SpeechData{{Text: text, Language: language, Confidence: 1}}}
+		event := &stt.SpeechEvent{Type: kind}
+		if kind != stt.SpeechEventEndOfSpeech {
+			event.Alternatives = []stt.SpeechData{{Text: text, Language: language, Confidence: 1}}
+		}
 		select {
 		case <-ctx.Done():
 			return false
@@ -458,11 +461,21 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 			return true
 		}
 	}
+	final := func(text string) bool {
+		pending = ""
+		return emit(stt.SpeechEventFinalTranscript, text) && emit(stt.SpeechEventEndOfSpeech, "")
+	}
+	finishPending := func() error {
+		if pending != "" && !final(pending) {
+			return ctx.Err()
+		}
+		return nil
+	}
 	for {
 		msg, err := readMessage(c)
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) && !goAway {
-				return nil
+				return finishPending()
 			}
 			return normalizeError(err, goAway)
 		}
@@ -489,24 +502,20 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 				language = tr.LanguageCode
 			}
 			if text := strings.TrimSpace(tr.Text); text != "" {
-				pending = ""
-				if !emit(stt.SpeechEventFinalTranscript, text) {
+				if !final(text) {
 					return ctx.Err()
 				}
 				language = fallback
 			}
 		}
 		if sc.GenerationComplete || sc.TurnComplete {
-			if pending != "" {
-				if !emit(stt.SpeechEventFinalTranscript, pending) {
-					return ctx.Err()
-				}
-				pending = ""
+			if err := finishPending(); err != nil {
+				return err
 			}
 			language = fallback
 		}
 		if sentEnd.Load() && (sc.TurnComplete || sc.GenerationComplete || (sc.InputTranscription != nil && sc.InputTranscription.Finished)) {
-			return nil
+			return finishPending()
 		}
 	}
 }

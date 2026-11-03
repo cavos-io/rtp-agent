@@ -228,6 +228,9 @@ func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
 	if sttObj == nil {
 		return nil, nil
 	}
+	if caps := sttObj.Capabilities(); caps.Streaming && caps.ProviderEndpointing {
+		return sttObj, nil
+	}
 	if sttObj.Capabilities().Streaming {
 		return stt.NewTurnSplittingSTT(sttObj, 0), nil
 	}
