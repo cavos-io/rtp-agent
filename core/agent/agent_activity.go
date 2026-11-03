@@ -2358,6 +2358,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		finalTranscriptAt = time.Now()
 	}
 	sttOwnsTiming := a.turnDetectionMode() == TurnDetectionModeSTT || !a.hasVADModel()
+	heardOverAgent := a.agentWasSpeakingAt(finalTranscriptAt)
 	a.userTurnMu.Lock()
 	if sttOwnsTiming || a.userSpeechStoppedAt.IsZero() {
 		if ev.SpeechStartTime != nil && (a.userSpeechStartedAt.IsZero() || (sttOwnsTiming && !a.pendingUserTranscriptPresent)) {
@@ -2381,7 +2382,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			a.pendingTurnOnsetAt = ep.startedAt
 			a.pendingTurnStoppedAt = ep.stoppedAt
 		} else {
-			a.pendingTurnOverlap = false
+			a.pendingTurnOverlap = heardOverAgent
 			a.pendingTurnOnsetAt = time.Time{}
 			a.pendingTurnStoppedAt = time.Time{}
 		}
@@ -3858,8 +3859,7 @@ func (a *AgentActivity) emitEOUMetrics(handle *SpeechHandle, info EndOfTurnInfo,
 // bargeInGateGoverns reports whether the injected gate decides interruptions. When it does, audio
 // is never paused on onset — only the gate may stop playout, so a veto leaves the sentence playing.
 func (a *AgentActivity) bargeInGateGoverns() bool {
-	return a != nil && a.Session != nil && a.Session.Options.BargeInDecider != nil &&
-		a.Agent != nil && a.Agent.AudioTurnDetector != nil
+	return a != nil && a.Session != nil && a.Session.Options.BargeInDecider != nil && a.Agent != nil
 }
 
 type bargeInTurnAction int
@@ -3902,7 +3902,7 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 		return 0, "", false
 	}
 	decider := a.Session.Options.BargeInDecider
-	if decider == nil || a.Agent.AudioTurnDetector == nil {
+	if decider == nil {
 		return 0, "", false
 	}
 	a.userTurnMu.Lock()
@@ -4005,11 +4005,13 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	case currentSpeech.IsInterrupted():
 	case currentSpeech.IsDone():
 	case !a.InterruptionEnabled():
-	case spokeAtOnset && a.Agent != nil && a.Agent.AudioTurnDetector != nil:
+	case spokeAtOnset && a.Agent != nil && (a.Agent.AudioTurnDetector != nil || a.bargeInGateGoverns()):
 		if decision, _, ok := a.evaluateBargeIn(transcript); ok {
 			// Only a backchannel is withheld from the LLM; a non-interrupting verdict still
 			// commits, so the agent finishes its sentence and then answers.
 			skip = a.bargeInTurnAction(decision, transcript) != bargeInTurnCommit
+		} else if a.Agent.AudioTurnDetector == nil {
+			skip = a.shortInterruptionTranscript(transcript)
 		} else {
 			switch {
 			case !stPresent:

@@ -8969,6 +8969,51 @@ func overlappingFinal(activity *AgentActivity, text string) {
 	})
 }
 
+func TestGateGovernsWithoutAudioTurnDetector(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "backchannel_suppressed",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+
+	overlappingFinal(activity, "Yeah")
+
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 0: the gate governs without a Smart Turn detector", audioOutput.pauseCount)
+	}
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1: a backchannel must be woven, not answered", len(cps))
+	}
+}
+
+func TestGateDropsBackchannelFinalHeardOverAgentWithoutVADOnset(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "backchannel_suppressed",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, _, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+	activity.agentSpeakingSince = time.Now().Add(-5 * time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Yeah", Confidence: 0.9}},
+		ReceivedAt:   time.Now().Add(-time.Second),
+	})
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1: VAD missed the onset but the final arrived while the agent spoke", len(cps))
+	}
+	if activity.pendingFinalTranscriptPresent() {
+		t.Fatal("backchannel left pending; it would be committed as a user turn")
+	}
+}
+
 // go93.log: "Android" (419ms) got Ignore/speech_too_short and was destroyed, so the caller had
 // to repeat it. It is not a backchannel, so it must reach the LLM while the agent plays on.
 func TestGateIgnoreNonBackchannelCommitsTurnAndSparesAgent(t *testing.T) {
