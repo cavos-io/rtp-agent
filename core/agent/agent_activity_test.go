@@ -9014,6 +9014,26 @@ func TestGateDropsBackchannelFinalHeardOverAgentWithoutVADOnset(t *testing.T) {
 	}
 }
 
+func TestGateKeepsAgentSpeakingOnBackchannelInterimWithoutVADOnset(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "speech_too_short",
+		backchannels: map[string]bool{"Iya.": true},
+	}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Iya.", Confidence: 0.9}},
+	})
+
+	if audioOutput.pauseCount != 0 || current.IsInterrupted() {
+		t.Fatalf("agent paused (%d) or interrupted on a backchannel interim VAD missed", audioOutput.pauseCount)
+	}
+}
+
 // go93.log: "Android" (419ms) got Ignore/speech_too_short and was destroyed, so the caller had
 // to repeat it. It is not a backchannel, so it must reach the LLM while the agent plays on.
 func TestGateIgnoreNonBackchannelCommitsTurnAndSparesAgent(t *testing.T) {

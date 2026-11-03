@@ -3905,11 +3905,13 @@ func (a *AgentActivity) evaluateBargeIn(transcript string) (BargeInDecision, str
 	if decider == nil {
 		return 0, "", false
 	}
+	agentSpeaking := a.Session.AgentStateValue() == AgentStateSpeaking
 	a.userTurnMu.Lock()
 	overlap := a.pendingTurnOverlap
 	onsetAt := a.pendingTurnOnsetAt
 	stoppedAt := a.pendingTurnStoppedAt
 	if !a.pendingUserTranscriptPresent {
+		overlap = agentSpeaking
 		// No final yet (audio-activity path): the pending stamp is empty, so read
 		// the live utterance's onset facts from the newest unconsumed epoch.
 		for i := len(a.speechEpochs) - 1; i >= 0; i-- {
