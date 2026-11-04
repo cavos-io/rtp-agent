@@ -1913,19 +1913,28 @@ func (a *AgentActivity) stampEpochStopped(stoppedAt time.Time) {
 const maxLateFinalLag = 15 * time.Second
 
 // consumeEpochForFinalLocked correlates a final to its epoch: oldest unconsumed CLOSED epoch,
-// else newest open. Epochs past maxLateFinalLag retire unconsumed. Caller holds userTurnMu.
+// else newest open. A provider-endpointed final spans every closed epoch, so it takes the newest
+// and retires the rest. Epochs past maxLateFinalLag retire unconsumed. Caller holds userTurnMu.
 func (a *AgentActivity) consumeEpochForFinalLocked() (speechEpoch, bool) {
 	now := time.Now()
+	spansEpochs := a.sttProviderEndpointing()
+	var newestClosed *speechEpoch
 	for i := range a.speechEpochs {
 		e := &a.speechEpochs[i]
 		if !e.consumed && !e.stoppedAt.IsZero() {
+			e.consumed = true
 			if now.Sub(e.stoppedAt) > maxLateFinalLag {
-				e.consumed = true // stale: no final ever arrived for this onset
+				continue // stale: no final ever arrived for this onset
+			}
+			if spansEpochs {
+				newestClosed = e
 				continue
 			}
-			e.consumed = true
 			return *e, true
 		}
+	}
+	if newestClosed != nil {
+		return *newestClosed, true
 	}
 	for i := len(a.speechEpochs) - 1; i >= 0; i-- {
 		e := &a.speechEpochs[i]
@@ -4604,6 +4613,24 @@ func (a *AgentActivity) hasVADModel() bool {
 		return pipeline.vad != nil
 	}
 	return false
+}
+
+func (a *AgentActivity) sttProviderEndpointing() bool {
+	if a == nil {
+		return false
+	}
+	var model stt.STT
+	switch {
+	case a.Agent != nil && a.Agent.STT != nil:
+		model = a.Agent.STT
+	case a.Session != nil && a.Session.STT != nil:
+		model = a.Session.STT
+	case a.Session != nil:
+		if pipeline, ok := a.Session.Assistant.(*PipelineAgent); ok {
+			model = pipeline.stt
+		}
+	}
+	return model != nil && model.Capabilities().ProviderEndpointing
 }
 
 func (a *AgentActivity) hasSTTModel() bool {
