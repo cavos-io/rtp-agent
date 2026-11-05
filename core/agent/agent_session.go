@@ -2846,12 +2846,20 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	s.updateUserStateAt(state, time.Time{})
 }
 
-func (s *AgentSession) markUserSpeakingInterruption(interrupted bool) {
+func (s *AgentSession) markUserSpeakingInterruption(interrupted bool, detection *OverlappingSpeechEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.userSpeakingSpan != nil {
 		s.userSpeakingInterrupted = s.userSpeakingInterrupted || interrupted
 		s.userSpeakingSpan.SetAttributes(attribute.String(telemetry.AttrIsInterruption, fmt.Sprint(s.userSpeakingInterrupted)))
+		if interrupted && detection != nil {
+			s.userSpeakingSpan.SetAttributes(
+				attribute.Float64(telemetry.AttrInterruptionTotalDuration, detection.TotalDuration.Seconds()),
+				attribute.Float64(telemetry.AttrInterruptionPredictionDuration, detection.PredictionDuration.Seconds()),
+				attribute.Float64(telemetry.AttrInterruptionDetectionDelay, detection.DetectionDelay.Seconds()),
+				attribute.Float64(telemetry.AttrInterruptionProbability, detection.Probability),
+			)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -195,14 +196,14 @@ func TestAdaptiveDetectorVerdictInterruptsCurrentSpeech(t *testing.T) {
 		pipeline.consumeInterruptionStream(ctx, stream)
 	}()
 	stale := activity.userSpeechStartedAt.Add(-time.Second)
-	stream.events <- OverlappingSpeechEvent{IsInterruption: true, DetectedAt: time.Now(), OverlapStartedAt: &stale}
+	stream.events <- OverlappingSpeechEvent{IsInterruption: true, DetectedAt: time.Now(), OverlapStartedAt: &stale, TotalDuration: 9 * time.Second, Probability: 0.99}
 	select {
 	case <-current.interruptCh:
 		t.Fatal("stale detector verdict interrupted current speech")
 	case <-time.After(50 * time.Millisecond):
 	}
 	startedAt := activity.userSpeechStartedAt
-	stream.events <- OverlappingSpeechEvent{IsInterruption: true, DetectedAt: startedAt, OverlapStartedAt: &startedAt}
+	stream.events <- OverlappingSpeechEvent{IsInterruption: true, DetectedAt: startedAt, OverlapStartedAt: &startedAt, TotalDuration: 135 * time.Millisecond, PredictionDuration: 44 * time.Millisecond, DetectionDelay: 299 * time.Millisecond, Probability: 0.817}
 	waitForInterrupted(t, current)
 	select {
 	case ev := <-metrics:
@@ -220,6 +221,7 @@ func TestAdaptiveDetectorVerdictInterruptsCurrentSpeech(t *testing.T) {
 	if len(spans) != 1 || spanAttributeValues(spans[0].Attributes())[telemetry.AttrIsInterruption].AsString() != "true" {
 		t.Fatalf("detector interruption missing from exported user_speaking span: %v", spans)
 	}
+	assertInterruptionSpanDetails(t, spans[0].Attributes(), true)
 }
 
 func TestAdaptiveAgentSpeechEndReleasesUnresolvedUserTurn(t *testing.T) {
@@ -333,9 +335,9 @@ func TestAdaptiveUserSpeakingSpanVerdict(t *testing.T) {
 			session.userState = UserStateSpeaking
 			activity.adaptiveOverlapPending.Store(true)
 			if verdict == "true" {
-				activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: true})
+				activity.OnOverlapSpeechEnded(OverlappingSpeechEvent{IsInterruption: true, TotalDuration: 135 * time.Millisecond, PredictionDuration: 44 * time.Millisecond, DetectionDelay: 299 * time.Millisecond, Probability: 0.817})
 				// A late negative update must never replace the positive verdict.
-				session.markUserSpeakingInterruption(false)
+				session.markUserSpeakingInterruption(false, nil)
 			} else if verdict == "agent_ended" {
 				activity.onAgentSpeechEnded(time.Now())
 			}
@@ -345,6 +347,7 @@ func TestAdaptiveUserSpeakingSpanVerdict(t *testing.T) {
 				t.Fatalf("ended spans = %d", len(spans))
 			}
 			attrs := spanAttributeValues(spans[0].Attributes())
+			assertInterruptionSpanDetails(t, spans[0].Attributes(), verdict == "true")
 			got, present := attrs[telemetry.AttrIsInterruption]
 			if verdict == "agent_ended" {
 				if present {
@@ -539,5 +542,75 @@ func TestAdaptiveBackchannelConcurrentNextSpeech(t *testing.T) {
 	<-done
 	if activity.Session.userTurnSpan == nil || !activity.isUserSpeaking() || activity.userSpeechStartedAt != unixSecondsToTime(newStart) {
 		t.Fatal("old backchannel verdict cleared newer speech")
+	}
+}
+
+// Match the Python detector's _update_user_speech_span attribute contract.
+func assertInterruptionSpanDetails(t *testing.T, attributes []attribute.KeyValue, present bool) {
+	t.Helper()
+	attrs := spanAttributeValues(attributes)
+	for key, want := range map[string]float64{
+		"lk.interruption.total_duration":      0.135,
+		"lk.interruption.prediction_duration": 0.044,
+		"lk.interruption.detection_delay":     0.299,
+		"lk.interruption.probability":         0.817,
+	} {
+		got, ok := attrs[key]
+		if ok != present {
+			t.Errorf("%s present = %v, want %v", key, ok, present)
+			continue
+		}
+		if present && (got.Type() != attribute.FLOAT64 || got.AsFloat64() != want) {
+			t.Errorf("%s = %v, want float64 %v", key, got, want)
+		}
+	}
+}
+
+func TestAdaptiveUserSpeakingSpanDetailsLifecycle(t *testing.T) {
+	for _, scenario := range []string{"absent", "ended", "vad", "stale", "backchannel", "agent_ended"} {
+		t.Run(scenario, func(t *testing.T) {
+			recorder := tracetest.NewSpanRecorder()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+			defer provider.Shutdown(context.Background())
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{InterruptionMode: InterruptionModeAdaptive})
+			activity := NewAgentActivity(session.Agent, session)
+			activity.adaptiveInterruptionStream = &testInterruptionStream{events: make(chan OverlappingSpeechEvent, 1)}
+			startedAt := time.Now()
+			activity.userSpeechStartedAt = startedAt
+			activity.adaptiveOverlapPending.Store(true)
+			ev := OverlappingSpeechEvent{IsInterruption: true, OverlapStartedAt: &startedAt,
+				TotalDuration: 135 * time.Millisecond, PredictionDuration: 44 * time.Millisecond,
+				DetectionDelay: 299 * time.Millisecond, Probability: 0.817}
+			if scenario != "absent" {
+				_, session.userSpeakingSpan = provider.Tracer("test").Start(context.Background(), "user_speaking")
+				session.userState = UserStateSpeaking
+			}
+			switch scenario {
+			case "ended":
+				session.UpdateUserState(UserStateListening)
+			case "vad":
+				session.Options.InterruptionMode = InterruptionModeVAD
+			case "stale":
+				stale := startedAt.Add(-time.Second)
+				ev.OverlapStartedAt = &stale
+			case "backchannel":
+				ev.IsInterruption = false
+			case "agent_ended":
+				ev.AgentEnded = true
+			}
+			activity.OnOverlapSpeechEnded(ev)
+			session.UpdateUserState(UserStateListening)
+			spans := recorder.Ended()
+			if scenario == "absent" {
+				if len(spans) != 0 {
+					t.Fatalf("unexpected spans: %v", spans)
+				}
+				return
+			}
+			if len(spans) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(spans))
+			}
+			assertInterruptionSpanDetails(t, spans[0].Attributes(), false)
+		})
 	}
 }

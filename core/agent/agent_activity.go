@@ -2020,7 +2020,7 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 	}
 	if a.Session != nil {
 		if a.adaptiveInterruptionActive() && a.adaptiveOverlapPending.Load() {
-			a.Session.markUserSpeakingInterruption(false)
+			a.Session.markUserSpeakingInterruption(false, nil)
 		}
 		stateAt := a.userSpeechStoppedAt
 		if stateAt.IsZero() {
@@ -2087,7 +2087,11 @@ func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 		a.speechBoundaryMu.Unlock()
 		return false
 	}
-	a.Session.markUserSpeakingInterruption(ev.IsInterruption)
+	var detection *OverlappingSpeechEvent
+	if a.adaptiveInterruptionActive() {
+		detection = &ev
+	}
+	a.Session.markUserSpeakingInterruption(ev.IsInterruption, detection)
 	a.overlapSpeechEnded = true
 	a.interruptionDetected = ev.IsInterruption
 	a.adaptiveOverlapPending.Store(false)
