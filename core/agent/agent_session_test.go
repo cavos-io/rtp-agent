@@ -6316,7 +6316,7 @@ func TestAgentSessionStopTreatsCloseTranscriptTimeoutAsGraceful(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.01})
-	session.Assistant = blockingCloseTranscriptFlusher{}
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	session.activity = NewAgentActivity(agent, session)
 	session.started = true
 
@@ -7804,20 +7804,6 @@ func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 func (f *fakeAvatarProvider) Close() error {
 	f.closeCalls++
 	return f.closeErr
-}
-
-type blockingCloseTranscriptFlusher struct{}
-
-func (blockingCloseTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
-
-func (blockingCloseTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
-
-func (blockingCloseTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
-}
-
-func (blockingCloseTranscriptFlusher) FlushInputTranscription(ctx context.Context, _ time.Duration) error {
-	<-ctx.Done()
-	return ctx.Err()
 }
 
 type fakeSessionMCPServer struct {

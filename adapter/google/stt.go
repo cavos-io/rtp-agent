@@ -2758,8 +2758,8 @@ func (s *googleSTTStream) Flush() error {
 			return err
 		}
 	}
-	// Google has no finalize request. Preserve the audio clock here; the turn
-	// splitter ends withheld streams, and EndInput closes the send side below.
+	// Google has no finalize request. Flush buffered audio without advancing
+	// the audio clock; EndInput closes the send side.
 	return nil
 }
 

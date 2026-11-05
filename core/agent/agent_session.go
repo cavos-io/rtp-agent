@@ -204,7 +204,6 @@ type StartOptions struct {
 
 type CommitUserTurnOptions struct {
 	TranscriptTimeout time.Duration
-	STTFlushDuration  time.Duration
 	SkipReply         bool
 	SkipRealtimeAudio bool
 }
