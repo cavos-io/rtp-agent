@@ -2620,7 +2620,7 @@ func TestPipelineAgentVADTurnDetectionIgnoresSTTEndOfSpeech(t *testing.T) {
 	}
 }
 
-func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
+func TestPipelineAgentVADEndOfSpeechDoesNotFlushSTT(t *testing.T) {
 	baseAgent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	baseAgent.TurnDetection = TurnDetectionModeVAD
 	baseAgent.VAD = &fakePipelineVAD{}
@@ -2641,12 +2641,12 @@ func TestPipelineAgentVADEndOfSpeechFinalizesActiveSTTStream(t *testing.T) {
 		events: []*vad.VADEvent{{Type: vad.VADEventEndOfSpeech, Timestamp: 1.5}},
 	})
 
-	if sttStream.flushCount != 1 {
-		t.Fatalf("STT stream Flush calls = %d, want 1 after VAD end-of-speech", sttStream.flushCount)
+	if sttStream.flushCount != 0 {
+		t.Fatalf("STT stream Flush calls = %d, want 0 after VAD end-of-speech", sttStream.flushCount)
 	}
 }
 
-func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
+func TestPipelineAgentVADStallDoesNotFlushSTT(t *testing.T) {
 	sttStream := &fakePipelineRecognizeStream{}
 	vadStream := &fakePipelineVADStream{}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -2666,22 +2666,11 @@ func TestPipelineAgentVADStallFinalizesActiveSTTStream(t *testing.T) {
 	if vadStream.flushCount != 1 {
 		t.Fatalf("VAD stream Flush calls = %d, want 1 after synthetic end-of-speech", vadStream.flushCount)
 	}
-	if sttStream.flushCount != 1 {
-		t.Fatalf("STT stream Flush calls = %d, want 1 after synthetic VAD end-of-speech", sttStream.flushCount)
+	if sttStream.flushCount != 0 {
+		t.Fatalf("STT stream Flush calls = %d, want 0 after synthetic VAD end-of-speech", sttStream.flushCount)
 	}
-	if len(sttStream.frames) != 10 {
-		t.Fatalf("STT silence frames = %d, want 10 to flush a detached audio tail", len(sttStream.frames))
-	}
-	for i, frame := range sttStream.frames {
-		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 200 {
-			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/200",
-				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
-		}
-		for _, sample := range frame.Data {
-			if sample != 0 {
-				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
-			}
-		}
+	if len(sttStream.frames) != 0 {
+		t.Fatalf("STT frames = %d, want no injected silence", len(sttStream.frames))
 	}
 }
 
@@ -2889,44 +2878,6 @@ func TestPipelineAgentSTTStartSpeechUsesProviderSpeechStartTime(t *testing.T) {
 	}
 	if got := timeToUnixSeconds(activity.userSpeechStartedAt); got != startTime {
 		t.Fatalf("userSpeechStartedAt = %v, want provider speech_start_time %v", got, startTime)
-	}
-}
-
-func TestPipelineAgentFlushInputTranscriptionPushesSilenceAndFlushesSTT(t *testing.T) {
-	stream := &fakePipelineRecognizeStream{}
-	pipeline := NewPipelineAgent(nil, nil, nil, nil, nil)
-	pipeline.sttStream = stream
-	pipeline.lastSTTFrame = &model.AudioFrame{
-		SampleRate:        1000,
-		NumChannels:       1,
-		SamplesPerChannel: 20,
-	}
-
-	if err := pipeline.FlushInputTranscription(context.Background(), 450*time.Millisecond); err != nil {
-		t.Fatalf("FlushInputTranscription error = %v, want nil", err)
-	}
-	if stream.flushCount != 1 {
-		t.Fatalf("Flush calls = %d, want 1", stream.flushCount)
-	}
-	if len(stream.frames) != 3 {
-		t.Fatalf("silence frames = %d, want 3", len(stream.frames))
-	}
-	wantSamples := []uint32{200, 200, 200}
-	var totalSamples uint32
-	for i, frame := range stream.frames {
-		if frame.SampleRate != 1000 || frame.NumChannels != 1 || frame.SamplesPerChannel != wantSamples[i] {
-			t.Fatalf("silence frame %d shape = rate %d channels %d samples %d, want 1000/1/%d",
-				i, frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel, wantSamples[i])
-		}
-		totalSamples += frame.SamplesPerChannel
-		for _, sample := range frame.Data {
-			if sample != 0 {
-				t.Fatalf("silence frame %d contains non-zero data byte %d", i, sample)
-			}
-		}
-	}
-	if totalSamples != 600 {
-		t.Fatalf("total silence samples = %d, want 600", totalSamples)
 	}
 }
 
@@ -3277,13 +3228,14 @@ func TestPipelineAgentStartsWithoutVAD(t *testing.T) {
 	receivePipelineClosed(t, sttClosed, "STT")
 }
 
-func TestStreamableSTTWrapsStreamingProviderWithTurnSplitting(t *testing.T) {
-	wrapped, err := streamableSTT(&fakePipelineSTT{}, nil)
+func TestStreamableSTTReturnsStreamingProvider(t *testing.T) {
+	provider := &fakePipelineSTT{}
+	got, err := streamableSTT(provider, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := wrapped.(*stt.TurnSplittingSTT); !ok {
-		t.Fatalf("streamableSTT returned %T, want *stt.TurnSplittingSTT", wrapped)
+	if got != provider {
+		t.Fatalf("streamableSTT returned %T, want original provider", got)
 	}
 }
 

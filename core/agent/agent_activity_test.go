@@ -4662,12 +4662,15 @@ func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *
 	}
 }
 
-func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T) {
+func TestAgentActivityCommitUserTurnWaitsForFinalWithoutFlushing(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
-	session.Assistant = flusher
+	stream := &fakePipelineRecognizeStream{}
+	pipeline := NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
+	pipeline.sttStream = stream
+	pipeline.lastSTTFrame = &model.AudioFrame{SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}
+	session.Assistant = pipeline
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
@@ -4676,7 +4679,6 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 	go func() {
 		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 			TranscriptTimeout: 100 * time.Millisecond,
-			STTFlushDuration:  20 * time.Millisecond,
 		})
 		if err != nil {
 			errCh <- err
@@ -4685,15 +4687,11 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 		done <- transcript
 	}()
 
-	select {
-	case <-flusher.flushed:
-	case <-time.After(time.Second):
-		t.Fatal("CommitUserTurn did not flush input transcription before waiting for final transcript")
-	}
+	waitForTranscriptCommit(t, activity, 1)
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
-			Text:       "flushed final",
+			Text:       "provider final",
 			Language:   "en",
 			Confidence: 0.92,
 		}},
@@ -4703,17 +4701,14 @@ func TestAgentActivityCommitUserTurnFlushesSTTBeforeWaitingForFinal(t *testing.T
 	case err := <-errCh:
 		t.Fatalf("CommitUserTurn error = %v, want nil", err)
 	case transcript := <-done:
-		if transcript != "flushed final" {
-			t.Fatalf("CommitUserTurn transcript = %q, want flushed final", transcript)
+		if transcript != "provider final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want provider final", transcript)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("CommitUserTurn did not return after flushed final transcript")
+		t.Fatal("CommitUserTurn did not return after provider final transcript")
 	}
-	if flusher.calls != 1 {
-		t.Fatalf("FlushInputTranscription calls = %d, want 1", flusher.calls)
-	}
-	if flusher.flushDuration != 20*time.Millisecond {
-		t.Fatalf("FlushInputTranscription duration = %v, want 20ms", flusher.flushDuration)
+	if stream.flushCount != 0 || len(stream.frames) != 0 {
+		t.Fatalf("manual commit flushed STT %d times and injected %d frames", stream.flushCount, len(stream.frames))
 	}
 }
 
@@ -4816,12 +4811,11 @@ func TestAgentActivityCommitUserTurnPreservesNewSpeechTiming(t *testing.T) {
 	}
 }
 
-func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
+func TestAgentActivityCommitUserTurnDefaultsWaitForFinal(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
-	session.Assistant = flusher
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
@@ -4836,19 +4830,11 @@ func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
 		done <- transcript
 	}()
 
-	select {
-	case <-flusher.flushed:
-	case transcript := <-done:
-		t.Fatalf("CommitUserTurn returned %q before default STT flush and final transcript", transcript)
-	case <-time.After(time.Second):
-		t.Fatal("CommitUserTurn did not flush input transcription with default options")
-	}
-	if flusher.flushDuration != 2*time.Second {
-		t.Fatalf("FlushInputTranscription duration = %v, want reference default 2s", flusher.flushDuration)
-	}
+	waitForTranscriptCommit(t, activity, 1)
+
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
-			Text:       "default flushed final",
+			Text:       "default provider final",
 			Language:   "en",
 			Confidence: 0.92,
 		}},
@@ -4858,11 +4844,11 @@ func TestAgentActivityCommitUserTurnDefaultsFlushAndWaitForFinal(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("CommitUserTurn error = %v, want nil", err)
 	case transcript := <-done:
-		if transcript != "default flushed final" {
-			t.Fatalf("CommitUserTurn transcript = %q, want default flushed final", transcript)
+		if transcript != "default provider final" {
+			t.Fatalf("CommitUserTurn transcript = %q, want default provider final", transcript)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("CommitUserTurn did not return after default flushed final transcript")
+		t.Fatal("CommitUserTurn did not return after default provider final transcript")
 	}
 }
 
@@ -4870,8 +4856,7 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 2)}
-	session.Assistant = flusher
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
@@ -4880,7 +4865,6 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 	go func() {
 		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 			TranscriptTimeout: 500 * time.Millisecond,
-			STTFlushDuration:  20 * time.Millisecond,
 		})
 		if err != nil {
 			firstErr <- err
@@ -4889,18 +4873,13 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 		firstDone <- transcript
 	}()
 
-	select {
-	case <-flusher.flushed:
-	case <-time.After(time.Second):
-		t.Fatal("first CommitUserTurn did not start waiting for a transcript")
-	}
+	waitForTranscriptCommit(t, activity, 1)
 
 	secondDone := make(chan string, 1)
 	secondErr := make(chan error, 1)
 	go func() {
 		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 			TranscriptTimeout: 500 * time.Millisecond,
-			STTFlushDuration:  20 * time.Millisecond,
 		})
 		if err != nil {
 			secondErr <- err
@@ -4919,11 +4898,7 @@ func TestAgentActivityCommitUserTurnSupersedesPendingCommit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first CommitUserTurn was not canceled by the newer commit")
 	}
-	select {
-	case <-flusher.flushed:
-	case <-time.After(time.Second):
-		t.Fatal("second CommitUserTurn did not start waiting for a transcript")
-	}
+	waitForTranscriptCommit(t, activity, 2)
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -5155,12 +5130,11 @@ func TestAgentActivityManualCommitAcceptsPreflightWhileHookActive(t *testing.T) 
 	}
 }
 
-func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
+func TestAgentActivityCommitUserTurnWaitsWhenLastFinalIsStale(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
-	session.Assistant = flusher
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
@@ -5177,7 +5151,6 @@ func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
 	go func() {
 		transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 			TranscriptTimeout: 500 * time.Millisecond,
-			STTFlushDuration:  20 * time.Millisecond,
 		})
 		if err != nil {
 			errCh <- err
@@ -5186,13 +5159,7 @@ func TestAgentActivityCommitUserTurnFlushesWhenLastFinalIsStale(t *testing.T) {
 		done <- transcript
 	}()
 
-	select {
-	case <-flusher.flushed:
-	case transcript := <-done:
-		t.Fatalf("CommitUserTurn returned %q before flushing stale final transcript", transcript)
-	case <-time.After(time.Second):
-		t.Fatal("CommitUserTurn did not flush after stale final transcript")
-	}
+	waitForTranscriptCommit(t, activity, 1)
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -5217,8 +5184,7 @@ func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	flusher := &recordingTranscriptFlusher{flushed: make(chan struct{}, 1)}
-	session.Assistant = flusher
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
 
@@ -5240,7 +5206,6 @@ func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.
 	started := time.Now()
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 		TranscriptTimeout: 100 * time.Millisecond,
-		STTFlushDuration:  20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("CommitUserTurn error = %v, want nil", err)
@@ -5248,9 +5213,7 @@ func TestAgentActivityCommitUserTurnTreatsPreflightAsFreshTranscript(t *testing.
 	if transcript != "old final preflight final" {
 		t.Fatalf("CommitUserTurn transcript = %q, want old final preflight final", transcript)
 	}
-	if flusher.calls != 0 {
-		t.Fatalf("FlushInputTranscription calls = %d, want 0 after fresh preflight transcript", flusher.calls)
-	}
+
 	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
 		t.Fatalf("CommitUserTurn elapsed = %v, want no transcript timeout wait after fresh preflight transcript", elapsed)
 	}
@@ -7828,27 +7791,23 @@ func (a *turnCompletedAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *l
 	return nil
 }
 
-type recordingTranscriptFlusher struct {
-	calls         int
-	flushDuration time.Duration
-	flushed       chan struct{}
-}
-
-func (r *recordingTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
-
-func (r *recordingTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
-
-func (r *recordingTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
-}
-
-func (r *recordingTranscriptFlusher) FlushInputTranscription(_ context.Context, duration time.Duration) error {
-	r.calls++
-	r.flushDuration = duration
-	select {
-	case r.flushed <- struct{}{}:
-	default:
+// Wait until CommitUserTurn has registered its cancellable commit.
+func waitForTranscriptCommit(t *testing.T, activity *AgentActivity, seq uint64) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		activity.commitUserTurnMu.Lock()
+		active := activity.commitUserTurnActive > 0 && activity.commitUserTurnSeq >= seq
+		activity.commitUserTurnMu.Unlock()
+		if active {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("commit did not start")
+		case <-time.After(time.Millisecond):
+		}
 	}
-	return nil
 }
 
 type recordingInputTranscriptionClearer struct {

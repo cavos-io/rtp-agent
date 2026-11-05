@@ -271,10 +271,6 @@ type resolvedEmptyUserTurn struct {
 	span       trace.Span
 }
 
-type inputTranscriptionFlusher interface {
-	FlushInputTranscription(context.Context, time.Duration) error
-}
-
 type inputTranscriptionClearer interface {
 	ClearInputTranscription() error
 }
@@ -3208,6 +3204,14 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 			}
 		}
 	}
+	hasSTT := false
+	if a.Session != nil {
+		a.Session.mu.Lock()
+		if pipeline, ok := a.Session.Assistant.(*PipelineAgent); ok {
+			hasSTT = pipeline.stt != nil
+		}
+		a.Session.mu.Unlock()
+	}
 	if opts.TranscriptTimeout > 0 {
 		a.userTurnMu.Lock()
 		present := a.pendingUserTranscriptPresent
@@ -3215,36 +3219,24 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		hasInterim := a.pendingInterimTranscript != ""
 		a.userTurnMu.Unlock()
 		needNewFinal := present && !lastFinalTranscriptTime.IsZero() && time.Since(lastFinalTranscriptTime) > 500*time.Millisecond
-		if !present || needNewFinal {
-			flusher, ok := a.inputTranscriptionFlusher()
-			if ok {
-				flushDuration := opts.STTFlushDuration
-				if flushDuration == 0 {
-					flushDuration = 2 * time.Second
+		if (hasSTT || hasInterim) && (!present || needNewFinal) {
+			deadline := time.NewTimer(opts.TranscriptTimeout)
+			defer deadline.Stop()
+			for {
+				a.userTurnMu.Lock()
+				present := a.pendingUserTranscriptPresent
+				currentFinalTime := a.lastFinalTranscriptTime
+				ch := a.userTurnUpdatedCh
+				a.userTurnMu.Unlock()
+				if present && (!needNewFinal || currentFinalTime.After(lastFinalTranscriptTime)) {
+					break
 				}
-				if err := flusher.FlushInputTranscription(ctx, flushDuration); err != nil {
-					return "", err
-				}
-			}
-			if ok || hasInterim {
-				deadline := time.NewTimer(opts.TranscriptTimeout)
-				defer deadline.Stop()
-				for {
-					a.userTurnMu.Lock()
-					present := a.pendingUserTranscriptPresent
-					currentFinalTime := a.lastFinalTranscriptTime
-					ch := a.userTurnUpdatedCh
-					a.userTurnMu.Unlock()
-					if present && (!needNewFinal || currentFinalTime.After(lastFinalTranscriptTime)) {
-						break
-					}
-					select {
-					case <-ch:
-					case <-deadline.C:
-						goto collect
-					case <-ctx.Done():
-						return "", ctx.Err()
-					}
+				select {
+				case <-ch:
+				case <-deadline.C:
+					goto collect
+				case <-ctx.Done():
+					return "", ctx.Err()
 				}
 			}
 		}
@@ -3396,17 +3388,6 @@ func (a *AgentActivity) shouldIgnoreManualCommittedSTT(evType stt.SpeechEventTyp
 	activeHook := a.userTurnHookActive > 0
 	a.commitUserTurnMu.Unlock()
 	return !activeHook
-}
-
-func (a *AgentActivity) inputTranscriptionFlusher() (inputTranscriptionFlusher, bool) {
-	if a == nil || a.Session == nil {
-		return nil, false
-	}
-	a.Session.mu.Lock()
-	assistant := a.Session.Assistant
-	a.Session.mu.Unlock()
-	flusher, ok := assistant.(inputTranscriptionFlusher)
-	return flusher, ok
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {

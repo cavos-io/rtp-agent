@@ -179,37 +179,6 @@ func (va *PipelineAgent) SetAudioInputHook(hook AudioInputHook) {
 	va.audioInputHook.Store(&hook)
 }
 
-func (va *PipelineAgent) FlushInputTranscription(ctx context.Context, duration time.Duration) error {
-	if va == nil {
-		return nil
-	}
-	va.mu.Lock()
-	stream := va.sttStream
-	shape := va.lastSTTFrame
-	va.mu.Unlock()
-	if stream == nil {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if duration > 0 && shape != nil && shape.SampleRate > 0 && shape.NumChannels > 0 {
-		const silenceChunk = 200 * time.Millisecond
-		for remaining := duration; remaining > 0; remaining -= silenceChunk {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			frame := audio.SilenceFrame(silenceChunk.Seconds(), shape.SampleRate, shape.NumChannels)
-			if err := stream.PushFrame(frame); err != nil {
-				return err
-			}
-		}
-	}
-	return stream.Flush()
-}
-
 func (va *PipelineAgent) ClearInputTranscription() error {
 	if va == nil {
 		return nil
@@ -253,12 +222,12 @@ func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
 		return nil, nil
 	}
 	if sttObj.Capabilities().Streaming {
-		return stt.NewTurnSplittingSTT(sttObj, 0), nil
+		return sttObj, nil
 	}
 	if vadObj == nil {
 		return nil, fmt.Errorf("the STT (%s) does not support streaming, add a VAD to the AgentTask/VoiceAgent to enable streaming. Or manually wrap your STT in a stt.StreamAdapter", sttObj.Label())
 	}
-	return stt.NewTurnSplittingSTT(stt.NewStreamAdapter(sttObj, vadObj), 0), nil
+	return stt.NewStreamAdapter(sttObj, vadObj), nil
 }
 
 func seedSTTStreamTiming(stream stt.RecognizeStream) {
@@ -532,7 +501,6 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			va.finalizeActiveSTTStream(0)
 			if activity != nil {
 				activity.OnEndOfSpeech(ev)
 				if !session.isTearingDown() && (ctx == nil || ctx.Err() == nil) {
@@ -553,35 +521,6 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 				activity.OnVADInferenceDone(ev)
 			}
 		}
-	}
-}
-
-func (va *PipelineAgent) finalizeActiveSTTStream(silenceDuration time.Duration) {
-	if va == nil {
-		return
-	}
-	va.mu.Lock()
-	stream := va.sttStream
-	sttObj := va.stt
-	ctx := va.ctx
-	va.mu.Unlock()
-	if stream == nil {
-		return
-	}
-	var err error
-	if silenceDuration > 0 {
-		err = va.FlushInputTranscription(ctx, silenceDuration)
-	} else {
-		err = stream.Flush()
-	}
-
-	if err != nil && !isSpeechStreamShutdownError(va.session, err) {
-		va.logSTTError("failed to finalize STT stream after VAD end-of-speech", err, sttObj, "stt_stream_finalize")
-		label := "stt"
-		if sttObj != nil {
-			label = sttObj.Label()
-		}
-		va.emitError(stt.NewSTTError(label, err, false), sttObj)
 	}
 }
 
@@ -654,7 +593,6 @@ func (va *PipelineAgent) onVADStall() {
 			va.emitError(err, va.vad)
 		}
 	}
-	va.finalizeActiveSTTStream(2 * time.Second)
 	if activity := session.currentActivity(); activity != nil && !session.isTearingDown() {
 		activity.onSyntheticEndOfSpeech()
 		return

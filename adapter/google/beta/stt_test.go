@@ -519,35 +519,3 @@ func TestGeminiModelRateAndOptionCopies(t *testing.T) {
 		t.Fatalf("options: %+v", setup)
 	}
 }
-
-func TestGeminiTurnSplittingDrainsRetiredFinal(t *testing.T) {
-	p := fakeLive(t, func(c *websocket.Conn) {
-		for {
-			var msg map[string]any
-			if c.ReadJSON(&msg) != nil {
-				return
-			}
-			if msg["realtimeInput"].(map[string]any)["audioStreamEnd"] == true {
-				_ = c.WriteJSON(map[string]any{"serverContent": map[string]any{"inputTranscription": map[string]any{"text": "retired final"}, "turnComplete": true}})
-				return
-			}
-		}
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	s, err := stt.NewTurnSplittingSTT(p, time.Millisecond).Stream(ctx, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if err = s.PushFrame(&model.AudioFrame{Data: []byte{0x40, 0x1f}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	ev, err := s.Next()
-	if err != nil || ev.Alternatives[0].Text != "retired final" {
-		t.Fatalf("%+v %v", ev, err)
-	}
-}
