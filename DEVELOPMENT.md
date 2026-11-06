@@ -140,6 +140,12 @@ Provider integrations belong in `adapter/<provider>` and follow the contracts in
 - Cite the authoritative provider reference path in parity tests or manifest cases.
 - Add integration tests only when deterministic and safe.
 
+For adaptive interruption providers, use the
+[adapter implementation guide](docs/features/adaptive-interruption-adapters.md).
+It includes the detector contract, lifecycle rules, offline verification checklist,
+and a reusable implementation prompt. The repository skill
+`rtp-agent-adaptive-interruption` routes coding agents to that guide.
+
 ## Test integrity and dead code
 
 Do not delete, skip, weaken, or rewrite tests merely to make a change pass. Do not add meaningless assertions or fake references to silence tooling.
