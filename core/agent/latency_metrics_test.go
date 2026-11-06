@@ -164,7 +164,7 @@ func TestLatencyTTFTIgnoresMetadata(t *testing.T) {
 }
 func TestLatencySTTModeKeepsWordEndTimestamp(t *testing.T) {
 	a := NewAgent("review")
-	a.STT = &fakePipelineSTT{}
+	a.STT = &alignedInterruptionSTT{}
 	a.TurnDetection = TurnDetectionModeSTT
 	session := NewAgentSession(a, nil, AgentSessionOptions{MinEndpointingDelay: 60, MaxEndpointingDelay: 60})
 	activity := NewAgentActivity(a, session)

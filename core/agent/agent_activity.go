@@ -196,15 +196,18 @@ type AgentActivity struct {
 	userTurnExceededMu     sync.Mutex
 	userTurnExceededLocked bool
 
-	preemptiveMu              sync.Mutex
-	preemptiveGeneration      *preemptiveGeneration
-	preemptiveGenerationCount int
-	userTurnStartedAt         time.Time
-	userSpeechStartedAt       time.Time
-	userSpeechStoppedAt       time.Time
-	ignoreUserTranscriptUntil time.Time
-	heldSTTEvents             []*stt.SpeechEvent
-	holdSTTWhileAgentSpeaking bool
+	preemptiveMu                 sync.Mutex
+	preemptiveGeneration         *preemptiveGeneration
+	preemptiveGenerationCount    int
+	userTurnStartedAt            time.Time
+	userSpeechStartedAt          time.Time
+	userSpeechStoppedAt          time.Time
+	ignoreUserTranscriptUntil    time.Time
+	heldSTTEvents                []*stt.SpeechEvent
+	holdSTTWhileAgentSpeaking    bool
+	adaptiveAgentSpeechStartedAt time.Time
+	adaptiveActiveVADStartedAt   time.Time
+	adaptiveVADOwned             atomic.Bool
 
 	backchannelBoundaryMu    sync.Mutex
 	backchannelBoundaryUntil time.Time
@@ -1137,6 +1140,10 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		a.turnTelemetry.finishCurrent("dropped", time.Time{})
 		a.cancelPendingEOUDetection()
 		a.Session.turnStream.invalidate(a)
+		if a.adaptiveInterruptionActive() && !a.InterruptionEnabled() {
+			a.releaseAdaptiveTranscripts(time.Time{}, time.Time{})
+			a.restoreAudioActivityInterruption()
+		}
 	}
 	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
 	if !ok {
@@ -1866,10 +1873,16 @@ func (a *AgentActivity) OnSTTStartOfSpeech(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64) {
+	a.processStartOfSpeech(ev, sttStartedAt, false)
+}
+
+func (a *AgentActivity) processStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64, replay bool) {
 	// The user speaking again is the last chance to act on speech parked by
 	// holdSTTEventWhileAgentSpeaking. Drain — decide, then reset — before the new turn
 	// overwrites userSpeechStartedAt, or a replayed transcript gets the new turn's timestamp.
-	a.drainHeldUserTranscriptWindow()
+	if !a.adaptiveInterruptionActive() {
+		a.drainHeldUserTranscriptWindow()
+	}
 
 	a.speechBoundaryMu.Lock()
 	if ev != nil {
@@ -1878,12 +1891,16 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	wasSpeaking := a.setSpeaking(true)
 	a.sttEOSReceived = false
 	a.manualTurnCommitted = false
-	a.interruptionDetected = false
-	a.overlapSpeechEnded = false
+	if !replay {
+		a.interruptionDetected = false
+		a.overlapSpeechEnded = false
+	}
 	a.setInterimCommittedTurn(false)
 	if !wasSpeaking {
-		a.adaptiveOverlapPending.Store(false)
-		a.adaptiveBackchannelConfirmed.Store(false)
+		if !replay {
+			a.adaptiveOverlapPending.Store(false)
+			a.adaptiveBackchannelConfirmed.Store(false)
+		}
 		a.falseInterruptionMu.Lock()
 		a.userTurnSeq++
 		a.falseInterruptionMu.Unlock()
@@ -1912,6 +1929,9 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	}
 	a.userTurnMu.Lock()
 	a.userSpeechStoppedAt = time.Time{}
+	if ev != nil {
+		a.adaptiveActiveVADStartedAt = vadSpeechStartedAt(ev)
+	}
 	a.syntheticEOU = false
 	a.syntheticEOUNotBefore = time.Time{}
 	a.userTurnMu.Unlock()
@@ -1936,17 +1956,11 @@ func (a *AgentActivity) onStartOfSpeech(ev *vad.VADEvent, sttStartedAt *float64)
 	a.turnTelemetry.finishCurrent("user_resumed", a.userSpeechStartedAt)
 	a.cancelPendingEOUDetection()
 
-	if a.adaptiveInterruptionActive() && a.Session.AgentStateValue() == AgentStateSpeaking && !a.backchannelBoundaryActive(time.Now()) {
-		if err := a.adaptiveStream().StartOverlap(a.userSpeechStartedAt); err != nil {
-			a.fallbackAdaptiveInterruption()
-		} else {
-			a.userTurnMu.Lock()
-			a.holdSTTWhileAgentSpeaking = true
-			a.userTurnMu.Unlock()
-			a.adaptiveOverlapPending.Store(true)
-			a.adaptiveOverlapStartedAt.Store(a.userSpeechStartedAt.UnixNano())
-			return
-		}
+	if replay {
+		return
+	}
+	if a.startAdaptiveOverlap(a.userSpeechStartedAt) {
+		return
 	}
 	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
 	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
@@ -2008,6 +2022,9 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		}
 	}
 	a.userSpeechStoppedAt = stoppedAt
+	if ev != nil {
+		a.adaptiveActiveVADStartedAt = time.Time{}
+	}
 	a.syntheticEOU = synthetic
 	if synthetic {
 		a.syntheticEOUNotBefore = time.Now().Add(time.Duration(a.maxEndpointingDelay() * float64(time.Second)))
@@ -2079,7 +2096,7 @@ func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 	}
 	a.speechBoundaryMu.Lock()
 	if a.adaptiveInterruptionActive() && ev.OverlapStartedAt != nil &&
-		(!a.adaptiveOverlapPending.Load() || !ev.OverlapStartedAt.Equal(a.userSpeechStartedAt)) {
+		(!a.adaptiveOverlapPending.Load() || ev.OverlapStartedAt.UnixNano() != a.adaptiveOverlapStartedAt.Load()) {
 		a.speechBoundaryMu.Unlock()
 		return false
 	}
@@ -2099,10 +2116,7 @@ func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 	a.finishDeferredEndpointing(!ev.IsInterruption)
 	if a.adaptiveInterruptionActive() && !ev.IsInterruption {
 		a.adaptiveBackchannelConfirmed.Store(true)
-		a.holdUserTranscriptsUntil(ev.DetectedAt.Add(a.heldTranscriptEndCooldown()))
-		a.userTurnMu.Lock()
-		a.heldSTTEvents = nil
-		a.userTurnMu.Unlock()
+		a.trimAdaptiveTranscripts(ev.DetectedAt, a.activeAdaptiveVADStart())
 		a.finishBackchannelUserTurn()
 		a.Session.turnStream.discardBackchannel(a)
 	}
@@ -2119,9 +2133,14 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	a.interruptionDetected = true
 	a.restoreAudioActivityInterruption()
 	ignoreUntil := overlappingSpeechIgnoreUntil(ev)
-	a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
-	a.onAgentSpeechEnded(ignoreUntil)
-	a.flushHeldSTTEvents()
+	if a.adaptiveInterruptionActive() {
+		a.releaseAdaptiveTranscripts(ev.DetectedAt, ignoreUntil)
+		a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
+	} else {
+		a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
+		a.onAgentSpeechEnded(ignoreUntil)
+		a.flushHeldSTTEvents()
+	}
 	if a.adaptiveInterruptionActive() && !a.isUserSpeaking() {
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
@@ -2167,6 +2186,10 @@ func (a *AgentActivity) updateVADInferenceTiming(ev *vad.VADEvent) {
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
+	a.processInterimTranscript(ev, false)
+}
+
+func (a *AgentActivity) processInterimTranscript(ev *stt.SpeechEvent, replay bool) {
 	if a.Session == nil {
 		return
 	}
@@ -2180,7 +2203,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.shouldIgnoreManualCommittedSTT(evType) {
 		return
 	}
-	if a.holdSTTEventWhileAgentSpeaking(ev) {
+	if !replay && a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
 	transcript := ""
@@ -2242,13 +2265,17 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
+	a.processFinalTranscript(ev, false)
+}
+
+func (a *AgentActivity) processFinalTranscript(ev *stt.SpeechEvent, replay bool) {
 	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
 	if a.shouldIgnoreManualCommittedSTT(stt.SpeechEventFinalTranscript) {
 		return
 	}
-	if a.holdSTTEventWhileAgentSpeaking(ev) {
+	if !replay && a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
 	transcript := ""
@@ -2263,6 +2290,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 	if transcript == "" {
 		return
+	}
+	if !replay && a.adaptiveInterruptionActive() && a.Session.AgentStateValue() == AgentStateSpeaking {
+		a.adaptiveVADOwned.Store(true)
+		a.restoreAudioActivityInterruption()
 	}
 	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
 		a.Session.Logger().Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
@@ -2401,7 +2432,9 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 	}
 	a.backchannelBoundaryMu.Unlock()
 	a.userTurnMu.Lock()
-	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled()
+	a.holdSTTWhileAgentSpeaking = a.InterruptionEnabled() && !a.adaptiveInterruptionActive()
+	a.adaptiveAgentSpeechStartedAt = startedAt
+	a.adaptiveVADOwned.Store(false)
 	a.userTurnMu.Unlock()
 	if a.adaptiveInterruptionActive() {
 		if err := a.adaptiveStream().StartAgentSpeech(); err != nil {
@@ -2409,13 +2442,8 @@ func (a *AgentActivity) armBackchannelBoundary(startedAt time.Time) {
 			return
 		}
 	}
-	if a.adaptiveInterruptionActive() && a.isUserSpeaking() && !a.backchannelBoundaryActive(startedAt) {
-		if err := a.adaptiveStream().StartOverlap(a.userSpeechStartedAt); err != nil {
-			go a.fallbackAdaptiveInterruption()
-		} else {
-			a.adaptiveOverlapPending.Store(true)
-			a.adaptiveOverlapStartedAt.Store(a.userSpeechStartedAt.UnixNano())
-		}
+	if a.adaptiveInterruptionActive() && a.isUserSpeaking() {
+		a.startAdaptiveOverlap(startedAt)
 	}
 }
 
@@ -2442,7 +2470,12 @@ func (a *AgentActivity) onAgentSpeechEnded(endedAt time.Time) {
 		}
 	}
 	a.cancelBackchannelBoundary()
-	if a.InterruptionEnabled() {
+	if a.adaptiveInterruptionActive() {
+		a.trimAdaptiveTranscripts(endedAt, a.activeAdaptiveVADStart())
+		a.userTurnMu.Lock()
+		a.adaptiveAgentSpeechStartedAt = time.Time{}
+		a.userTurnMu.Unlock()
+	} else if a.InterruptionEnabled() {
 		a.holdUserTranscriptsUntil(endedAt)
 	}
 	a.userTurnMu.Lock()
@@ -2494,6 +2527,9 @@ func (a *AgentActivity) audioActivityInterruptionDisabled(now time.Time) bool {
 	}
 	if a.Session.Options.InterruptionMode == InterruptionModeAdaptive &&
 		(a.adaptiveInterruptionFailed.Load() || (a.adaptivePipeline != nil && a.adaptivePipeline.adaptiveFailed.Load()) || a.adaptiveStream() == nil) {
+		return false
+	}
+	if a.adaptiveInterruptionActive() && a.adaptiveVADOwned.Load() {
 		return false
 	}
 	if a.adaptiveInterruptionActive() && !a.interruptionDetected && a.Session.AgentState() == AgentStateSpeaking && !a.backchannelBoundaryActive(now) {
@@ -2598,6 +2634,10 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 	if a == nil || a.Session == nil || ev == nil || a.Session.AgentStateValue() != AgentStateSpeaking {
 		return false
 	}
+	if a.adaptiveInterruptionActive() && !a.InterruptionEnabled() {
+		a.releaseAdaptiveTranscripts(time.Time{}, time.Time{})
+		return false
+	}
 	switch ev.Type {
 	case "", stt.SpeechEventStartOfSpeech, stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech:
 	default:
@@ -2608,7 +2648,11 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 		a.userTurnMu.Unlock()
 		return false
 	}
-	a.heldSTTEvents = append(a.heldSTTEvents, cloneSpeechEvent(ev))
+	held := cloneSpeechEvent(ev)
+	if held.ReceivedAt.IsZero() {
+		held.ReceivedAt = time.Now()
+	}
+	a.heldSTTEvents = append(a.heldSTTEvents, held)
 	a.userTurnMu.Unlock()
 	return true
 }
@@ -2627,13 +2671,19 @@ func (a *AgentActivity) flushHeldSTTEvents() {
 		}
 		switch ev.Type {
 		case stt.SpeechEventStartOfSpeech:
-			a.OnSTTStartOfSpeech(ev)
+			if !a.adaptiveInterruptionActive() {
+				a.OnSTTStartOfSpeech(ev)
+			} else if a.turnDetectionMode() == TurnDetectionModeSTT {
+				a.processStartOfSpeech(nil, ev.SpeechStartTime, true)
+			}
 		case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
-			a.OnInterimTranscript(ev)
+			a.processInterimTranscript(ev, true)
 		case stt.SpeechEventEndOfSpeech:
-			a.OnSTTEndOfSpeech(ev)
+			if !a.adaptiveInterruptionActive() || a.turnDetectionMode() == TurnDetectionModeSTT {
+				a.OnSTTEndOfSpeech(ev)
+			}
 		default:
-			a.OnFinalTranscript(ev)
+			a.processFinalTranscript(ev, true)
 		}
 	}
 }
@@ -2650,6 +2700,9 @@ func cloneSpeechEvent(ev *stt.SpeechEvent) *stt.SpeechEvent {
 }
 
 func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a.adaptiveInterruptionActive() {
+		return false
+	}
 	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
 		return false
 	}
@@ -2674,6 +2727,9 @@ func (a *AgentActivity) shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev *stt.Sp
 }
 
 func (a *AgentActivity) shouldDropInterimTranscriptBeforeAgentSpeechEnd(ev *stt.SpeechEvent) bool {
+	if a.adaptiveInterruptionActive() {
+		return false
+	}
 	if a == nil || ev == nil || len(ev.Alternatives) == 0 || a.userSpeechStartedAt.IsZero() {
 		return false
 	}

@@ -153,8 +153,9 @@ func TestAdaptiveBackchannelDoesNotAdvanceEndpointing(t *testing.T) {
 	if endpointing.endCount != 1 || !endpointing.lastShouldIgnore {
 		t.Fatalf("endpointing end=%d ignore=%v, want ignored backchannel", endpointing.endCount, endpointing.lastShouldIgnore)
 	}
-	if len(activity.heldSTTEvents) != 0 {
-		t.Fatal("backchannel transcript retained")
+	// Recent events remain behind the gate until a later boundary resolves them.
+	if len(activity.heldSTTEvents) != 1 || !activity.holdSTTWhileAgentSpeaking {
+		t.Fatal("recent backchannel was not retained behind the transcript gate")
 	}
 	activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "late backchannel transcript", Confidence: 0.9}}})
 	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
@@ -395,6 +396,7 @@ func TestAdaptiveAgentEndedUsageIsNotBackchannel(t *testing.T) {
 func TestAdaptiveBackchannelClosesUserTurn(t *testing.T) {
 	activity, recorder := newBackchannelTurnActivity(t)
 	base := time.Now().Add(-30 * time.Second)
+	activity.armBackchannelBoundary(base)
 	var starts, ends []time.Time
 	for _, offset := range []time.Duration{15157 * time.Millisecond, 18464 * time.Millisecond} {
 		started := timeToUnixSeconds(base.Add(offset))
@@ -407,7 +409,7 @@ func TestAdaptiveBackchannelClosesUserTurn(t *testing.T) {
 		if activity.Session.userTurnSpan != nil || !activity.userTurnStartedAt.IsZero() {
 			t.Fatal("confirmed backchannel retained its turn span or start timestamp")
 		}
-		activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "uh huh"}}})
+		activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, ReceivedAt: ends[len(ends)-1], Alternatives: []stt.SpeechData{{Text: "uh huh"}}})
 	}
 	started := timeToUnixSeconds(base.Add(21624 * time.Millisecond))
 	activity.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &started})
@@ -508,7 +510,7 @@ func newBackchannelTurnActivity(t *testing.T) (*AgentActivity, *tracetest.SpanRe
 	t.Cleanup(func() { _ = observability.Shutdown(context.Background()) })
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
-	session := NewAgentSession(agent, nil, AgentSessionOptions{InterruptionMode: InterruptionModeAdaptive, TurnDetection: TurnDetectionModeManual, DisableUserAwayTimeout: true})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{InterruptionMode: InterruptionModeAdaptive, TurnDetection: TurnDetectionModeSTT, DisableUserAwayTimeout: true, MinEndpointingDelay: 60, MaxEndpointingDelay: 60})
 	session.runCtx = observability.Context(context.Background())
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity

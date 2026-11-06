@@ -627,7 +627,15 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				activity.noteSTTRequestID(ev.RequestID)
 			}
 		}
-		ev = stt.AlignSpeechEventTiming(ev, stream)
+		// Only aligned providers may turn relative transcript offsets into
+		// absolute speech anchors. All providers retain their receipt timestamp.
+		var timingStream stt.RecognizeStream
+		va.mu.Lock()
+		if va.stt != nil && va.stt.Capabilities().AlignedTranscript != "" {
+			timingStream = stream
+		}
+		va.mu.Unlock()
+		ev = stt.AlignSpeechEventTiming(ev, timingStream)
 
 		if ev.Type == stt.SpeechEventRecognitionUsage {
 			va.emitSTTMetrics(ev)

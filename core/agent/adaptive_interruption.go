@@ -48,8 +48,8 @@ func validateAdaptiveInterruption(opts AgentSessionOptions, vadModel vad.VAD, st
 		if vadModel == nil {
 			return fmt.Errorf("adaptive interruption requires VAD")
 		}
-		if sttModel == nil || sttModel.Capabilities().AlignedTranscript == "" {
-			return fmt.Errorf("adaptive interruption requires STT with aligned transcripts")
+		if sttModel == nil {
+			return fmt.Errorf("adaptive interruption requires STT")
 		}
 		if opts.HalfDuplexSTTWhileSpeaking {
 			return fmt.Errorf("adaptive interruption requires STT audio while the agent speaks")
@@ -198,4 +198,80 @@ func (va *PipelineAgent) fallbackAdaptiveInterruption(err error) {
 	}
 	va.session.Logger().Warnw("adaptive interruption failed; falling back to VAD", err)
 	va.emitError(err, va)
+}
+
+// startAdaptiveOverlap mirrors the reference's audio-activity ownership for an
+// entire audible agent interval when an overlap begins inside the start cooldown.
+func (a *AgentActivity) startAdaptiveOverlap(startedAt time.Time) bool {
+	if !a.adaptiveInterruptionActive() || !a.InterruptionEnabled() || a.Session.AgentStateValue() != AgentStateSpeaking {
+		return false
+	}
+	a.userTurnMu.Lock()
+	agentStart := a.adaptiveAgentSpeechStartedAt
+	a.userTurnMu.Unlock()
+	boundary := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
+	inBoundary := boundary > 0 && !agentStart.IsZero() && !startedAt.After(agentStart.Add(boundary))
+	if a.adaptiveVADOwned.Load() || inBoundary || a.backchannelBoundaryActive(time.Now()) {
+		a.adaptiveVADOwned.Store(true)
+		a.restoreAudioActivityInterruption()
+		a.releaseAdaptiveTranscripts(time.Time{}, time.Time{})
+		return false
+	}
+	a.userTurnMu.Lock()
+	a.holdSTTWhileAgentSpeaking = true
+	a.userTurnMu.Unlock()
+	a.adaptiveOverlapStartedAt.Store(startedAt.UnixNano())
+	a.adaptiveOverlapPending.Store(true)
+	if err := a.adaptiveStream().StartOverlap(startedAt); err != nil {
+		a.fallbackAdaptiveInterruption()
+		return false
+	}
+	return true
+}
+
+func (a *AgentActivity) activeAdaptiveVADStart() time.Time {
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	return a.adaptiveActiveVADStartedAt
+}
+
+// trimAdaptiveTranscripts retains a provider-ordered suffix. Relative word
+// timestamps are deliberately ignored here: ingress has already normalized any
+// supported timing against the originating stream, before events were buffered.
+func (a *AgentActivity) trimAdaptiveTranscripts(resolvedAt, vadStartedAt time.Time) {
+	if resolvedAt.IsZero() {
+		return
+	}
+	cutoff := resolvedAt.Add(-a.heldTranscriptEndCooldown())
+	if !vadStartedAt.IsZero() && vadStartedAt.Before(cutoff) {
+		cutoff = vadStartedAt
+	}
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+	agentStart := a.adaptiveAgentSpeechStartedAt
+	if !agentStart.IsZero() && agentStart.After(cutoff) {
+		cutoff = agentStart
+	}
+	for len(a.heldSTTEvents) > 0 {
+		ev := a.heldSTTEvents[0]
+		drop := ev.ReceivedAt.Before(cutoff)
+		if ev.SpeechEndTime != nil {
+			end := unixSecondsToTime(*ev.SpeechEndTime)
+			drop = end.Before(cutoff) && (agentStart.IsZero() || end.After(agentStart))
+		}
+		if !drop {
+			break
+		}
+		a.heldSTTEvents[0] = nil
+		a.heldSTTEvents = a.heldSTTEvents[1:]
+	}
+}
+
+func (a *AgentActivity) releaseAdaptiveTranscripts(resolvedAt, vadStartedAt time.Time) {
+	a.userTurnMu.Lock()
+	a.holdSTTWhileAgentSpeaking = false
+	a.ignoreUserTranscriptUntil = time.Time{}
+	a.userTurnMu.Unlock()
+	a.trimAdaptiveTranscripts(resolvedAt, vadStartedAt)
+	a.flushHeldSTTEvents()
 }

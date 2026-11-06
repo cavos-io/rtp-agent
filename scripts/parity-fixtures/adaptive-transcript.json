@@ -1,0 +1,151 @@
+{
+  "contract": "adaptive-transcript-gate",
+  "cases": [
+    {
+      "name": "receipt fallback",
+      "action": "release",
+      "agent": 2,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "old",
+          "received": 8
+        },
+        {
+          "id": "recent",
+          "received": 9.5
+        }
+      ]
+    },
+    {
+      "name": "active VAD",
+      "action": "release",
+      "agent": 2,
+      "vad": 5,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "old",
+          "received": 4
+        },
+        {
+          "id": "onset",
+          "received": 5
+        },
+        {
+          "id": "end",
+          "received": 9.5
+        }
+      ]
+    },
+    {
+      "name": "agent clamp",
+      "action": "trim",
+      "agent": 8,
+      "vad": 5,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "before",
+          "received": 7.5
+        },
+        {
+          "id": "during",
+          "received": 8
+        }
+      ]
+    },
+    {
+      "name": "prior speech",
+      "action": "release",
+      "agent": 8,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "prior",
+          "received": 8.5,
+          "end": 7.5
+        }
+      ]
+    },
+    {
+      "name": "late backchannel",
+      "action": "release",
+      "agent": 8,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "ack",
+          "received": 9.5,
+          "end": 8.5
+        }
+      ]
+    },
+    {
+      "name": "provider ordered suffix",
+      "action": "release",
+      "agent": 2,
+      "resolved": 10,
+      "events": [
+        {
+          "id": "keep",
+          "received": 9.5
+        },
+        {
+          "id": "suffix",
+          "received": 8
+        }
+      ]
+    },
+    {
+      "name": "no overlap",
+      "action": "start",
+      "agent": 2
+    },
+    {
+      "name": "rearm overlap",
+      "action": "rearm",
+      "agent": 2,
+      "resolved": 6
+    },
+    {
+      "name": "start cooldown ownership",
+      "action": "cooldown",
+      "agent": 2
+    },
+    {
+      "name": "true interruption releases suffix",
+      "action": "interruption",
+      "agent": 2,
+      "resolved": 10,
+      "overlap": 8,
+      "events": [
+        {
+          "id": "old",
+          "received": 7
+        },
+        {
+          "id": "stop",
+          "received": 9.5
+        }
+      ]
+    },
+    {
+      "name": "backchannel retains recent suffix behind gate",
+      "action": "backchannel",
+      "agent": 2,
+      "resolved": 10,
+      "overlap": 8,
+      "events": [
+        {
+          "id": "old",
+          "received": 7
+        },
+        {
+          "id": "ack",
+          "received": 9.5
+        }
+      ]
+    }
+  ]
+}
