@@ -2867,9 +2867,6 @@ func (s *AgentSession) updateAgentState(state AgentState, spanCtx context.Contex
 		if endpointing != nil {
 			endpointing.OnStartOfAgentSpeech(now)
 		}
-		if activity != nil {
-			activity.armBackchannelBoundary(nowTime)
-		}
 		s.armAgentSpeakingStallTimerLocked()
 	} else if oldState == AgentStateSpeaking {
 		if endpointing != nil {
@@ -2882,6 +2879,11 @@ func (s *AgentSession) updateAgentState(state AgentState, spanCtx context.Contex
 		s.stopAgentSpeakingStallTimerLocked()
 	}
 	s.mu.Unlock()
+	// Starting audible speech can release a held transcript during the cooldown.
+	// Replay calls back into the session and must run outside its mutex.
+	if state == AgentStateSpeaking && activity != nil {
+		activity.armBackchannelBoundary(nowTime)
+	}
 	if endedSpeakingSpan != nil {
 		endedSpeakingSpan.End()
 	}
