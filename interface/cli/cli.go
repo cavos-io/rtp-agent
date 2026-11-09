@@ -45,6 +45,7 @@ type CliArgs struct {
 }
 
 type ConnectArgs struct {
+	Record              bool
 	RoomName            string
 	ParticipantIdentity string
 	LogLevel            string
@@ -449,7 +450,7 @@ func printUsage() {
 	fmt.Println("Subcommands:")
 	fmt.Println("  start           Run the worker in production mode")
 	fmt.Println("  dev             Run the worker in development mode (with auto-reload)")
-	fmt.Println("  connect         Connect to a room and execute a local job")
+	fmt.Println("  connect         Connect to a room and execute a local job (--record enables Insights capture)")
 	fmt.Println("  console         Run the worker in console mode for interactive testing")
 	fmt.Println("  download-files  Download required files for all registered plugins")
 	fmt.Println("  eval            Run configured evaluation judges against the current session context")
@@ -553,7 +554,7 @@ func runWorkerLifecycle(ctx context.Context, server workerLifecycle, devMode boo
 func runConnect(server *worker.AgentServer) error {
 	args, err := parseConnectArgs(os.Args)
 	if err != nil {
-		fmt.Println("Usage: worker connect <room_name> [participant_identity]")
+		fmt.Println("Usage: worker connect <room_name> [participant_identity] [--record]")
 		return err
 	}
 	if err := applyConnectArgs(server, args); err != nil {
@@ -573,6 +574,14 @@ func runConnect(server *worker.AgentServer) error {
 		return err
 	}
 
+	localOptions, err := connectLocalJobOptions(args, roomInfo)
+	if err != nil {
+		logger.Logger.Errorw("Failed to prepare connect recording", err)
+		return err
+	}
+	if args.Record {
+		logger.Logger.Infow("connect recording enabled", "directory", localOptions.SessionDirectory, "report", localOptions.SessionReportPath)
+	}
 	jobDone := make(chan error, 1)
 	server.OnWorkerStarted(func() {
 		go func() {
@@ -580,7 +589,7 @@ func runConnect(server *worker.AgentServer) error {
 				ctx,
 				args.RoomName,
 				args.ParticipantIdentity,
-				worker.LocalJobOptions{FakeJob: false, RoomInfo: roomInfo},
+				localOptions,
 			)
 			stop()
 		}()
@@ -595,6 +604,28 @@ func runConnect(server *worker.AgentServer) error {
 		return err
 	}
 	return nil
+}
+
+// connectLocalJobOptions configures capture before the job initializes tracing.
+// Keep local artifacts under the repository's ignored .tmp directory for inspection
+// after Cloud upload; normal connect mode retains its existing behavior.
+func connectLocalJobOptions(args ConnectArgs, room *livekit.Room) (worker.LocalJobOptions, error) {
+	opts := worker.LocalJobOptions{FakeJob: false, RoomInfo: room}
+	if !args.Record {
+		return opts, nil
+	}
+	root := filepath.Join(".tmp", "connect-recordings")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return opts, err
+	}
+	directory, err := os.MkdirTemp(root, "session-")
+	if err != nil {
+		return opts, err
+	}
+	opts.SessionDirectory = directory
+	opts.SessionReportPath = filepath.Join(directory, "session_report.json")
+	opts.RecordingOptions = agent.RecordingOptions{Audio: true, Transcript: true, Traces: true, Logs: true}
+	return opts, nil
 }
 
 func ensureConnectRoom(ctx context.Context, roomService liveKitRoomService, roomName string) (*livekit.Room, error) {
@@ -616,6 +647,8 @@ func parseConnectArgs(argv []string) (ConnectArgs, error) {
 	positional := 0
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
+		case "--record":
+			args.Record = true
 		case "--room":
 			i++
 			if i >= len(argv) {
