@@ -759,6 +759,9 @@ type AppConfig struct {
 	STTPreSpeechPadFrames                   *int
 	STTNumInitialIgnoredFrames              *int
 	STTPreferCurrentSpeaker                 *bool
+	InterruptionProvider                    string
+	BargeInGRPCAddr                         string
+	BargeInDumpDir                          string
 	VADProvider                             string
 	VADMinSpeechDuration                    *float64
 	VADMinSilenceDuration                   *float64
@@ -1158,6 +1161,9 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPreSpeechPadFrames:                   getenvOptionalInt("RTP_AGENT_STT_PRE_SPEECH_PAD_FRAMES"),
 		STTNumInitialIgnoredFrames:              getenvOptionalInt("RTP_AGENT_STT_NUM_INITIAL_IGNORED_FRAMES"),
 		STTPreferCurrentSpeaker:                 getenvOptionalBool("RTP_AGENT_STT_PREFER_CURRENT_SPEAKER"),
+		InterruptionProvider:                    normalizedEnv("RTP_AGENT_INTERRUPTION_PROVIDER"),
+		BargeInGRPCAddr:                         os.Getenv("RTP_AGENT_BARGEIN_GRPC_ADDR"),
+		BargeInDumpDir:                          os.Getenv("RTP_AGENT_BARGEIN_DUMP_DIR"),
 		VADProvider:                             normalizedEnv("RTP_AGENT_VAD_PROVIDER"),
 		VADMinSpeechDuration:                    getenvOptionalFloat("RTP_AGENT_VAD_MIN_SPEECH_DURATION"),
 		VADMinSilenceDuration:                   getenvOptionalFloat("RTP_AGENT_VAD_MIN_SILENCE_DURATION"),
@@ -1424,6 +1430,20 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	session := agent.NewAgentSession(sessionAgent, nil, sessionOptions)
+	if sessionOptions.InterruptionMode == agent.InterruptionModeAdaptive {
+		// Observe core's final playback outcome; a model verdict alone is not
+		// evidence that playback was interrupted. Avoid logging transcript text.
+		session.On("conversation_item_added", func(event agent.Event) {
+			added, ok := event.(*agent.ConversationItemAddedEvent)
+			if !ok {
+				return
+			}
+			msg, ok := added.Item.(*llm.ChatMessage)
+			if ok && msg.Role == llm.ChatRoleAssistant {
+				logutil.Logger.Infow("bargein.playback_result", "message_id", msg.ID, "interrupted", msg.Interrupted)
+			}
+		})
+	}
 	if baseAgent.ChatCtx != nil {
 		session.ChatCtx = baseAgent.ChatCtx.Copy()
 	}
@@ -7602,6 +7622,20 @@ func normalizeProvider(provider string) string {
 
 func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, error) {
 	opts := agent.AgentSessionOptions{}
+	switch normalizeProvider(cfg.InterruptionProvider) {
+	case "":
+	case providerCavos:
+		opts.InterruptionMode = agent.InterruptionModeAdaptive
+		opts.InterruptionDetector = cavos.NewAdaptiveInterruptionDetector(
+			cavos.WithAdaptiveInterruptionAddr(cfg.BargeInGRPCAddr),
+			cavos.WithAdaptiveInterruptionDumpDir(cfg.BargeInDumpDir),
+		)
+		// Raw-audio local V2 trial: allow overlaps immediately after playback starts.
+		opts.AECWarmupDuration = 0
+		opts.AECWarmupDurationSet = true
+	default:
+		return opts, fmt.Errorf("unsupported RTP_AGENT_INTERRUPTION_PROVIDER %q", cfg.InterruptionProvider)
+	}
 	if cfg.TTSStreamPacerEnabled {
 		pacer := coretts.SentenceStreamPacerOptions{}
 		if cfg.TTSStreamPacerMinRemainingAudioMS != nil {
