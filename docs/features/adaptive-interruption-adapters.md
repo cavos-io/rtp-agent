@@ -158,6 +158,13 @@ cadence, threshold, deadlines, quota, and overlap-end policy from its authoritat
 documentation or implementation, recording the revision used. An elapsed audio
 window can include silence; it does not promise that duration of voiced speech.
 
+## Cavos V2 local trial
+
+The Cavos Anura gRPC adapter uses a one-shot onset + 1 s window and supports
+environment selection, correlated logs, and optional audio dumps.
+Unlike the LiveKit example, it retains user audio across agent intervals and waits
+past user speech end to include the real silence required by its model.
+
 ## Compose and enable a detector
 
 This helper uses the existing LiveKit implementation and returns options for a
