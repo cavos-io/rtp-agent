@@ -8969,6 +8969,71 @@ func overlappingFinal(activity *AgentActivity, text string) {
 	})
 }
 
+func TestGateGovernsWithoutAudioTurnDetector(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "backchannel_suppressed",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+
+	overlappingFinal(activity, "Yeah")
+
+	if audioOutput.pauseCount != 0 {
+		t.Fatalf("PauseAudioOutput calls = %d, want 0: the gate governs without a Smart Turn detector", audioOutput.pauseCount)
+	}
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1: a backchannel must be woven, not answered", len(cps))
+	}
+}
+
+func TestGateDropsBackchannelFinalHeardOverAgentWithoutVADOnset(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "backchannel_suppressed",
+		backchannels: map[string]bool{"Yeah": true},
+	}
+	activity, _, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+	activity.agentSpeakingSince = time.Now().Add(-5 * time.Second)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Yeah", Confidence: 0.9}},
+		ReceivedAt:   time.Now().Add(-time.Second),
+	})
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1: VAD missed the onset but the final arrived while the agent spoke", len(cps))
+	}
+	if activity.pendingFinalTranscriptPresent() {
+		t.Fatal("backchannel left pending; it would be committed as a user turn")
+	}
+}
+
+func TestGateKeepsAgentSpeakingOnBackchannelInterimWithoutVADOnset(t *testing.T) {
+	decider := &classifyingBargeInDecider{
+		decision:     BargeInIgnore,
+		reason:       "speech_too_short",
+		backchannels: map[string]bool{"Iya.": true},
+	}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	defer current.MarkDone()
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Iya.", Confidence: 0.9}},
+	})
+
+	if audioOutput.pauseCount != 0 || current.IsInterrupted() {
+		t.Fatalf("agent paused (%d) or interrupted on a backchannel interim VAD missed", audioOutput.pauseCount)
+	}
+}
+
 // go93.log: "Android" (419ms) got Ignore/speech_too_short and was destroyed, so the caller had
 // to repeat it. It is not a backchannel, so it must reach the LLM while the agent plays on.
 func TestGateIgnoreNonBackchannelCommitsTurnAndSparesAgent(t *testing.T) {
@@ -9652,5 +9717,136 @@ func TestAgentActivitySyntheticEndLateFinalDoesNotRestartEndpointing(t *testing.
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("late final restarted endpointing despite speech ending over 250ms ago")
+	}
+}
+
+func TestAgentActivityHoldsSTTSpeechBoundariesOnlyForSTTTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	session.agentState = AgentStateSpeaking
+	activity := NewAgentActivity(agent, session)
+	activity.holdSTTWhileAgentSpeaking = true
+
+	for _, kind := range []stt.SpeechEventType{stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech} {
+		if activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{Type: kind}) {
+			t.Fatalf("%s held in vad turn detection; replaying it would end the VAD turn", kind)
+		}
+	}
+	if !activity.holdSTTEventWhileAgentSpeaking(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "iya"}}}) {
+		t.Fatal("final transcript not held while agent speaks")
+	}
+}
+
+func seedClosedEpoch(a *AgentActivity, startedAt time.Time, overlap bool) {
+	a.appendSpeechEpoch(startedAt, overlap)
+	a.stampEpochStopped(startedAt.Add(200 * time.Millisecond))
+}
+
+func newEpochTestActivity(t *testing.T, endpointing bool) (*AgentActivity, *recordingAudioOutputController, *SpeechHandle) {
+	t.Helper()
+	decider := &classifyingBargeInDecider{decision: BargeInIgnore, reason: "speech_too_short", backchannels: map[string]bool{"Oke.": true, "Iya.": true}}
+	activity, audioOutput, current := newClassifyingGateActivity(t, decider)
+	activity.Agent.AudioTurnDetector = nil
+	activity.Agent.STT = &fakePipelineSTT{endpointing: endpointing}
+	return activity, audioOutput, current
+}
+
+func TestEpochCorrelationFinalSpansSegmentsWithProviderEndpointing(t *testing.T) {
+	now := time.Now()
+	activity, _, current := newEpochTestActivity(t, true)
+	defer current.MarkDone()
+	seedClosedEpoch(activity, now.Add(-10*time.Second), false)
+	seedClosedEpoch(activity, now.Add(-8*time.Second), false)
+	seedClosedEpoch(activity, now.Add(-2*time.Second), true)
+
+	activity.userTurnMu.Lock()
+	got, ok := activity.consumeEpochForFinalLocked()
+	_, more := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+
+	if !ok || !got.overlap || !got.startedAt.Equal(now.Add(-2*time.Second)) {
+		t.Fatalf("epoch = %+v ok=%v, want the newest closed segment", got, ok)
+	}
+	if more {
+		t.Fatal("older closed segments stayed correlatable and would poison the next final")
+	}
+}
+
+func TestEpochCorrelationKeepsOpenSegmentForNextFinalWithProviderEndpointing(t *testing.T) {
+	now := time.Now()
+	activity, _, current := newEpochTestActivity(t, true)
+	defer current.MarkDone()
+	seedClosedEpoch(activity, now.Add(-3*time.Second), true)
+	activity.appendSpeechEpoch(now.Add(-time.Second), false)
+
+	activity.userTurnMu.Lock()
+	first, _ := activity.consumeEpochForFinalLocked()
+	second, ok := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+
+	if !first.overlap {
+		t.Fatalf("first = %+v, want the closed segment", first)
+	}
+	if !ok || second.overlap || !second.stoppedAt.IsZero() {
+		t.Fatalf("second = %+v ok=%v, want the still-open segment", second, ok)
+	}
+}
+
+func TestEpochCorrelationStaysOldestFirstWithoutProviderEndpointing(t *testing.T) {
+	now := time.Now()
+	activity, _, current := newEpochTestActivity(t, false)
+	defer current.MarkDone()
+	seedClosedEpoch(activity, now.Add(-8*time.Second), false)
+	seedClosedEpoch(activity, now.Add(-2*time.Second), true)
+
+	activity.userTurnMu.Lock()
+	first, _ := activity.consumeEpochForFinalLocked()
+	second, ok := activity.consumeEpochForFinalLocked()
+	activity.userTurnMu.Unlock()
+
+	if first.overlap || !ok || !second.overlap {
+		t.Fatalf("first = %+v second = %+v, want one final per segment, oldest first", first, second)
+	}
+}
+
+// Call 134853: a stale segment from the previous answer made a backchannel look non-overlapping.
+func TestLeftoverSegmentDoesNotInterruptAgentWithProviderEndpointing(t *testing.T) {
+	now := time.Now()
+	activity, audioOutput, current := newEpochTestActivity(t, true)
+	defer current.MarkDone()
+	seedClosedEpoch(activity, now.Add(-10*time.Second), false)
+	seedClosedEpoch(activity, now.Add(-2*time.Second), true)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Oke.", Confidence: 1}},
+		ReceivedAt:   now,
+	})
+
+	if audioOutput.pauseCount != 0 || current.IsInterrupted() {
+		t.Fatalf("agent paused (%d) or interrupted by a backchannel", audioOutput.pauseCount)
+	}
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 1 {
+		t.Fatalf("parked %d checkpoints, want 1", len(cps))
+	}
+}
+
+func TestNoiseOverAgentDoesNotSwallowRealAnswerWithProviderEndpointing(t *testing.T) {
+	now := time.Now()
+	activity, _, current := newEpochTestActivity(t, true)
+	defer current.MarkDone()
+	activity.Session.agentState = AgentStateListening
+	seedClosedEpoch(activity, now.Add(-5*time.Second), true)
+	seedClosedEpoch(activity, now.Add(-time.Second), false)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Type:         stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{Text: "Iya.", Confidence: 1}},
+		ReceivedAt:   now,
+	})
+
+	if cps := current.takeBackchannelCheckpoints(); len(cps) != 0 {
+		t.Fatalf("parked %d checkpoints: a real answer after the agent stopped was dropped as a backchannel", len(cps))
 	}
 }

@@ -17,7 +17,22 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
+	"google.golang.org/genai"
 )
+
+func TestGeminiParsesWireVoiceActivity(t *testing.T) {
+	msg, err := parseServerMessage([]byte(`{"voiceActivity":{"type":"ACTIVITY_START","audioOffset":"7.120s"}}`))
+	if err != nil || msg.VoiceActivity == nil || msg.VoiceActivity.VoiceActivityType != genai.VoiceActivityTypeActivityStart || msg.VoiceActivity.AudioOffset != 7120*time.Millisecond {
+		t.Fatalf("voice activity = %+v, err %v", msg.VoiceActivity, err)
+	}
+	msg, err = parseServerMessage([]byte(`{"serverContent":{"interimInputTranscription":{"text":"halo"}}}`))
+	if err != nil || msg.VoiceActivity != nil || msg.ServerContent.InterimInputTranscription.Text != "halo" {
+		t.Fatalf("message = %+v, err %v", msg, err)
+	}
+	if _, err = parseServerMessage([]byte(`{"error":{"code":403}}`)); err == nil {
+		t.Fatal("error message must fail")
+	}
+}
 
 // Reference: refs/agents/livekit-plugins/livekit-plugins-google/livekit/plugins/google/beta/gemini_stt.py
 // and refs/agents/livekit-agents/livekit/agents/stt/stt.py at 31c6026df14eebb71975c16ca6a422ce68644b71.
@@ -96,6 +111,7 @@ func TestGeminiReferenceLifecycle(t *testing.T) {
 			t.Fatal(ev.Type)
 		}
 	}
+	expectEndOfSpeech(t, s)
 	if err := s.(stt.InputEnding).EndInput(); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +119,7 @@ func TestGeminiReferenceLifecycle(t *testing.T) {
 	if err != nil || ev.Alternatives[0].Text != "final tail" {
 		t.Fatalf("tail: %+v %v", ev, err)
 	}
+	expectEndOfSpeech(t, s)
 	if _, err = s.Next(); err != io.EOF {
 		t.Fatalf("end: %v", err)
 	}
@@ -218,23 +235,160 @@ func TestGeminiInterimOnlyAndMultipleTurns(t *testing.T) {
 		_ = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""))
 	})
 	s := streamForTest(t, p)
-	for i, want := range []string{"hel", "hello", "hello", "next"} {
+	want := []struct {
+		kind stt.SpeechEventType
+		text string
+	}{
+		{stt.SpeechEventInterimTranscript, "hel"},
+		{stt.SpeechEventInterimTranscript, "hello"},
+		{stt.SpeechEventFinalTranscript, "hello"},
+		{stt.SpeechEventEndOfSpeech, ""},
+		{stt.SpeechEventFinalTranscript, "next"},
+		{stt.SpeechEventEndOfSpeech, ""},
+	}
+	for i, w := range want {
 		ev, e := s.Next()
 		if e != nil {
 			t.Fatal(e)
 		}
-		if ev.Alternatives[0].Text != want {
+		if ev.Type != w.kind {
+			t.Fatalf("%d: type %s, want %s", i, ev.Type, w.kind)
+		}
+		if w.kind == stt.SpeechEventEndOfSpeech {
+			continue
+		}
+		if ev.Alternatives[0].Text != w.text {
 			t.Fatalf("%d: %+v", i, ev)
 		}
-		if i >= 2 && ev.Type != stt.SpeechEventFinalTranscript {
-			t.Fatalf("%d: %s", i, ev.Type)
-		}
-		if i == 3 && ev.Alternatives[0].Language != "en-US" {
+		if i == 4 && ev.Alternatives[0].Language != "en-US" {
 			t.Fatal("language did not reset")
 		}
 	}
 	if _, e := s.Next(); e != io.EOF {
 		t.Fatal(e)
+	}
+}
+
+func TestGeminiVoiceActivityEvents(t *testing.T) {
+	script := func(c *websocket.Conn) {
+		for _, m := range []map[string]any{
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_START", "audioOffset": "0s"}},
+			{"serverContent": map[string]any{"interimInputTranscription": map[string]any{"text": "halo"}}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_END", "audioOffset": "1s"}},
+			{"serverContent": map[string]any{"inputTranscription": map[string]any{"text": "halo"}}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_START", "audioOffset": "2s"}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_END", "audioOffset": "3s"}},
+		} {
+			_ = c.WriteJSON(m)
+		}
+		_ = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""))
+	}
+	for name, tc := range map[string]struct {
+		enabled bool
+		want    []stt.SpeechEventType
+	}{
+		"enabled": {true, []stt.SpeechEventType{
+			stt.SpeechEventStartOfSpeech, stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech,
+			stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech,
+		}},
+		"disabled": {false, []stt.SpeechEventType{
+			stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := fakeLive(t, script)
+			WithSTTVoiceActivity(tc.enabled)(p)
+			if p.Capabilities().VoiceActivity != tc.enabled {
+				t.Fatalf("VoiceActivity capability = %v, want %v", p.Capabilities().VoiceActivity, tc.enabled)
+			}
+			s := streamForTest(t, p)
+			for i, kind := range tc.want {
+				ev, err := s.Next()
+				if err != nil {
+					t.Fatalf("%d: %v", i, err)
+				}
+				if ev.Type != kind {
+					t.Fatalf("%d: type %s, want %s", i, ev.Type, kind)
+				}
+				if kind == stt.SpeechEventStartOfSpeech && (ev.SpeechStartTime == nil || *ev.SpeechStartTime <= 0) {
+					t.Fatalf("%d: start of speech without a start time: %+v", i, ev)
+				}
+			}
+			if _, err := s.Next(); err != io.EOF {
+				t.Fatalf("extra event or error: %v", err)
+			}
+		})
+	}
+}
+
+func TestGeminiDeclaresProviderEndpointing(t *testing.T) {
+	p, err := NewSTT("key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Capabilities().ProviderEndpointing {
+		t.Fatal("Gemini finals end the user turn; ProviderEndpointing must be declared")
+	}
+}
+
+func TestGeminiFinalizesPendingInterimWhenServerCloses(t *testing.T) {
+	p := fakeLive(t, func(c *websocket.Conn) {
+		_ = c.WriteJSON(map[string]any{"serverContent": map[string]any{"interimInputTranscription": map[string]any{"text": "jadi gini mbak"}}})
+		_ = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""))
+	})
+	expectPendingFinalized(t, streamForTest(t, p), "jadi gini mbak")
+}
+
+func TestGeminiFinalizesPendingInterimWhenInputEnds(t *testing.T) {
+	p := fakeLive(t, func(c *websocket.Conn) {
+		_ = c.WriteJSON(map[string]any{"serverContent": map[string]any{"interimInputTranscription": map[string]any{"text": "orang tua saya sakit"}}})
+		for {
+			var msg map[string]any
+			if c.ReadJSON(&msg) != nil {
+				return
+			}
+			if msg["realtimeInput"].(map[string]any)["audioStreamEnd"] == true {
+				_ = c.WriteJSON(map[string]any{"serverContent": map[string]any{"inputTranscription": map[string]any{"finished": true}}})
+				return
+			}
+		}
+	})
+	s := streamForTest(t, p)
+	if ev, e := s.Next(); e != nil || ev.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("%+v %v", ev, e)
+	}
+	if e := s.(stt.InputEnding).EndInput(); e != nil {
+		t.Fatal(e)
+	}
+	expectPendingFinalized(t, s, "orang tua saya sakit")
+}
+
+func expectEndOfSpeech(t *testing.T, s stt.RecognizeStream) {
+	t.Helper()
+	if ev, err := s.Next(); err != nil || ev.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("want end of speech after final: %+v %v", ev, err)
+	}
+}
+
+func expectPendingFinalized(t *testing.T, s stt.RecognizeStream, text string) {
+	t.Helper()
+	var got []stt.SpeechEventType
+	for {
+		ev, e := s.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		got = append(got, ev.Type)
+		if ev.Type == stt.SpeechEventFinalTranscript && ev.Alternatives[0].Text != text {
+			t.Fatalf("final %q, want %q", ev.Alternatives[0].Text, text)
+		}
+	}
+	n := len(got)
+	if n < 2 || got[n-2] != stt.SpeechEventFinalTranscript || got[n-1] != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("events %v, want pending interim finalized then end of speech", got)
 	}
 }
 
@@ -302,6 +456,7 @@ func TestGeminiRetryAndSanitizedErrors(t *testing.T) {
 		if e != nil || ev.Alternatives[0].Text != want {
 			t.Fatalf("%+v %v", ev, e)
 		}
+		expectEndOfSpeech(t, s)
 	}
 	_, e := s.Next()
 	var status *llm.APIStatusError

@@ -38,17 +38,19 @@ type PipelineAgent struct {
 
 	ttsStreamPacer *tts.SentenceStreamPacerOptions
 
-	audioInCh        chan *model.AudioFrame
-	audioInputHook   atomic.Pointer[AudioInputHook]
-	mu               sync.Mutex
-	session          *AgentSession
-	vadStream        vad.VADStream
-	vadSpeechStarted bool
-	vadStallTimeout  time.Duration
-	vadStallTimer    *time.Timer
-	sttStream        stt.RecognizeStream
-	lastSTTFrame     *model.AudioFrame
-	recovery         *sttRecoveryCoordinator
+	audioInCh           chan *model.AudioFrame
+	audioInputHook      atomic.Pointer[AudioInputHook]
+	mu                  sync.Mutex
+	session             *AgentSession
+	vadStream           vad.VADStream
+	vadSpeechStarted    bool
+	vadProvisionalStart time.Time
+	sttSpeechOpen       bool
+	vadStallTimeout     time.Duration
+	vadStallTimer       *time.Timer
+	sttStream           stt.RecognizeStream
+	lastSTTFrame        *model.AudioFrame
+	recovery            *sttRecoveryCoordinator
 
 	rootCtx context.Context
 	ctx     context.Context
@@ -123,6 +125,51 @@ func (va *PipelineAgent) resetGenerationCtxLocked() {
 		parent = context.Background()
 	}
 	va.ctx, va.cancel = context.WithCancel(parent)
+}
+
+const sttSpeechStartBorrowWindow = 500 * time.Millisecond
+
+func (va *PipelineAgent) sttDecidesSpeechStart() bool {
+	va.mu.Lock()
+	session, model := va.session, va.stt
+	va.mu.Unlock()
+	return session != nil && session.Options.SpeechStartFromSTT && model != nil && model.Capabilities().VoiceActivity
+}
+
+func (va *PipelineAgent) vadSpeechUnconfirmed(activity *AgentActivity) bool {
+	if !va.sttDecidesSpeechStart() {
+		return false
+	}
+	va.mu.Lock()
+	open := va.sttSpeechOpen
+	va.mu.Unlock()
+	return !open && (activity == nil || !activity.isUserSpeaking())
+}
+
+func (va *PipelineAgent) trackSTTSpeech(ev *stt.SpeechEvent) *stt.SpeechEvent {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	if ev.Type == stt.SpeechEventEndOfSpeech {
+		va.sttSpeechOpen = false
+		return ev
+	}
+	va.sttSpeechOpen = true
+	provisional := va.vadProvisionalStart
+	va.vadProvisionalStart = time.Time{}
+	if provisional.IsZero() {
+		return ev
+	}
+	reference := time.Now()
+	if ev.SpeechStartTime != nil {
+		reference = unixSecondsToTime(*ev.SpeechStartTime)
+	}
+	if provisional.After(reference) || reference.Sub(provisional) > sttSpeechStartBorrowWindow {
+		return ev
+	}
+	clone := cloneSpeechEvent(ev)
+	start := float64(provisional.UnixNano()) / 1e9
+	clone.SpeechStartTime = &start
+	return clone
 }
 
 func (va *PipelineAgent) resetGenerationCtxUnlessPaused() {
@@ -227,6 +274,9 @@ func (va *PipelineAgent) ClearInputTranscription() error {
 func streamableSTT(sttObj stt.STT, vadObj vad.VAD) (stt.STT, error) {
 	if sttObj == nil {
 		return nil, nil
+	}
+	if caps := sttObj.Capabilities(); caps.Streaming && caps.ProviderEndpointing {
+		return sttObj, nil
 	}
 	if sttObj.Capabilities().Streaming {
 		return stt.NewTurnSplittingSTT(sttObj, 0), nil
@@ -467,11 +517,18 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		activity := session.currentActivity()
 
 		if ev.Type == vad.VADEventStartOfSpeech {
-			va.session.Logger().Infow("User started speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = true
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
+			if va.vadSpeechUnconfirmed(activity) {
+				va.mu.Lock()
+				va.vadProvisionalStart = vadSpeechStartedAt(ev)
+				va.mu.Unlock()
+				va.session.Logger().Debugw("VAD start of speech awaiting STT voice activity")
+				continue
+			}
+			va.session.Logger().Infow("User started speaking")
 			if activity != nil {
 				activity.OnStartOfSpeech(ev)
 			} else if va.session != nil {
@@ -480,11 +537,17 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 			va.resetGenerationCtxUnlessPaused()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
-			va.session.Logger().Infow("User stopped speaking")
 			va.mu.Lock()
 			va.vadSpeechStarted = false
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
+			if va.vadSpeechUnconfirmed(activity) {
+				va.mu.Lock()
+				va.vadProvisionalStart = time.Time{}
+				va.mu.Unlock()
+				continue
+			}
+			va.session.Logger().Infow("User stopped speaking")
 			va.finalizeActiveSTTStream(0)
 			if activity != nil {
 				activity.OnEndOfSpeech(ev)
@@ -502,7 +565,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Lock()
 			va.resetVADStallTimerLocked()
 			va.mu.Unlock()
-			if activity != nil {
+			if activity != nil && !va.vadSpeechUnconfirmed(activity) {
 				activity.OnVADInferenceDone(ev)
 			}
 		}
@@ -550,6 +613,9 @@ func (va *PipelineAgent) endActiveVADSpeechOnStreamExit() {
 		return
 	}
 	if session == nil || session.isTearingDown() || (ctx != nil && ctx.Err() != nil) {
+		return
+	}
+	if va.vadSpeechUnconfirmed(session.currentActivity()) {
 		return
 	}
 	if activity := session.currentActivity(); activity != nil {
@@ -607,6 +673,9 @@ func (va *PipelineAgent) onVADStall() {
 			va.emitError(err, va.vad)
 		}
 	}
+	if va.vadSpeechUnconfirmed(session.currentActivity()) {
+		return
+	}
 	va.finalizeActiveSTTStream(2 * time.Second)
 	if activity := session.currentActivity(); activity != nil && !session.isTearingDown() {
 		activity.onSyntheticEndOfSpeech()
@@ -652,12 +721,20 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			va.mu.Lock()
 			session := va.session
 			va.mu.Unlock()
+			sttDecides := va.sttDecidesSpeechStart()
+			if sttDecides {
+				ev = va.trackSTTSpeech(ev)
+			}
 			activity := session.currentActivity()
 			if activity != nil {
-				if activity.holdSTTEventWhileAgentSpeaking(ev) {
+				if !sttDecides && activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
 				}
-				if activity.turnDetectionMode() == TurnDetectionModeSTT {
+				if sttDecides && ev.Type == stt.SpeechEventStartOfSpeech && !activity.isUserSpeaking() {
+					va.session.Logger().Infow("User started speaking", "source", "stt")
+					activity.OnSTTStartOfSpeech(ev)
+					va.resetGenerationCtxUnlessPaused()
+				} else if activity.turnDetectionMode() == TurnDetectionModeSTT {
 					if ev.Type == stt.SpeechEventStartOfSpeech {
 						activity.OnSTTStartOfSpeech(ev)
 					} else {
