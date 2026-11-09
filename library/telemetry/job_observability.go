@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -35,13 +38,16 @@ const (
 )
 
 type JobObservabilityConfig struct {
-	EndpointURL string
-	Headers     map[string]string
-	HTTPClient  *http.Client
-	JobID       string
-	RoomID      string
-	RoomName    string
-	AgentName   string
+	EndpointURL          string
+	// EnableProcessMetrics uses the process meter when no job endpoint is configured.
+	// RTP_AGENT_PROCESS_METRICS_ENABLED overrides this setting when set.
+	EnableProcessMetrics bool
+	Headers              map[string]string
+	HTTPClient           *http.Client
+	JobID                string
+	RoomID               string
+	RoomName             string
+	AgentName            string
 	// TracerProvider replaces the LiveKit Cloud trace exporter when set. The
 	// JobObservability takes ownership after successful creation unless borrowed.
 	TracerProvider *sdktrace.TracerProvider
@@ -77,6 +83,15 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 	endpoint := strings.TrimRight(config.EndpointURL, "/")
 	if endpoint == "" && config.TracerProvider == nil {
 		return nil, errors.New("job observability endpoint URL is required")
+	}
+	if endpoint == "" {
+		if raw := strings.TrimSpace(os.Getenv("RTP_AGENT_PROCESS_METRICS_ENABLED")); raw != "" {
+			enabled, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, fmt.Errorf("RTP_AGENT_PROCESS_METRICS_ENABLED must be a boolean: %w", err)
+			}
+			config.EnableProcessMetrics = enabled
+		}
 	}
 
 	attrs := []attribute.KeyValue{
@@ -170,6 +185,9 @@ func NewJobObservability(ctx context.Context, config JobObservabilityConfig) (*J
 	chatLogger := noopLoggerProvider.Logger("chat_history")
 	evalLogger := noopLoggerProvider.Logger("evaluations")
 	meter := metricnoop.NewMeterProvider().Meter(jobObservabilityScope)
+	if config.EnableProcessMetrics && endpoint == "" {
+		meter = otel.Meter(jobObservabilityScope)
+	}
 	var loggerProvider *sdklog.LoggerProvider
 	var meterProvider *sdkmetric.MeterProvider
 	if endpoint != "" {

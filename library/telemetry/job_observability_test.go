@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	collectlogsv1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -24,6 +27,114 @@ import (
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestJobObservabilityFallsBackToProcessMeterWithoutEndpoint(t *testing.T) {
+	t.Setenv("RTP_AGENT_PROCESS_METRICS_ENABLED", "")
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	traceProvider := sdktrace.NewTracerProvider()
+	defer traceProvider.Shutdown(context.Background())
+	job, err := NewJobObservability(context.Background(), JobObservabilityConfig{
+		TracerProvider: traceProvider, BorrowTracerProvider: true, EnableProcessMetrics: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := job.Context(context.Background())
+	RecordOTelTurnMetricsWithContext(ctx, map[string]any{"e2e_latency": 0.75})
+	if err := job.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("process meter unavailable after job shutdown: %v", err)
+	}
+	assertFloatHistogramPoint(t, rm, "lk.agents.turn.e2e_latency", attribute.NewSet(), 0.75)
+}
+
+func TestJobObservabilityProcessMetricsSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name, env  string
+		flag, want bool
+	}{
+		{name: "off by default"},
+		{name: "environment enables", env: "true", want: true},
+		{name: "environment disables flag", env: "false", flag: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_PROCESS_METRICS_ENABLED", tc.env)
+			reader := sdkmetric.NewManualReader()
+			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(provider)
+			t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+			traceProvider := sdktrace.NewTracerProvider()
+			defer traceProvider.Shutdown(context.Background())
+			job, err := NewJobObservability(context.Background(), JobObservabilityConfig{
+				TracerProvider: traceProvider, BorrowTracerProvider: true, EnableProcessMetrics: tc.flag,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			RecordOTelTurnMetricsWithContext(job.Context(context.Background()), map[string]any{"e2e_latency": 0.75})
+			var rm metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &rm); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want {
+				assertFloatHistogramPoint(t, rm, "lk.agents.turn.e2e_latency", attribute.NewSet(), 0.75)
+			} else if len(rm.ScopeMetrics) != 0 {
+				t.Fatalf("process meter received disabled job metrics: %#v", rm.ScopeMetrics)
+			}
+		})
+	}
+}
+
+func TestJobObservabilityRejectsInvalidProcessMetricsOverride(t *testing.T) {
+	t.Setenv("RTP_AGENT_PROCESS_METRICS_ENABLED", "sometimes")
+	traceProvider := sdktrace.NewTracerProvider()
+	defer traceProvider.Shutdown(context.Background())
+	if _, err := NewJobObservability(context.Background(), JobObservabilityConfig{TracerProvider: traceProvider}); err == nil {
+		t.Fatal("accepted invalid process metrics override")
+	}
+}
+
+func TestJobObservabilityWithEndpointDoesNotMirrorToProcessMeter(t *testing.T) {
+	t.Setenv("RTP_AGENT_PROCESS_METRICS_ENABLED", "true")
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() { otel.SetMeterProvider(previous) })
+
+	collector := newJobOTLPCollector(t)
+	defer collector.Close()
+	job, err := NewJobObservability(context.Background(), JobObservabilityConfig{
+		EndpointURL: collector.URL(), Headers: map[string]string{"Authorization": "Bearer test-token"}, HTTPClient: collector.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	RecordOTelTurnMetricsWithContext(job.Context(context.Background()), map[string]any{"e2e_latency": 0.75})
+	if err := job.ForceFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := collector.ItemCount(jobMetricOTLPPath); got != 1 {
+		t.Fatalf("job metric count = %d, want 1", got)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	if len(rm.ScopeMetrics) != 0 {
+		t.Fatalf("process meter received job metrics: %#v", rm.ScopeMetrics)
+	}
+}
 
 func TestJobObservabilityUsesCustomTraceProviderExclusively(t *testing.T) {
 	collector := newJobOTLPCollector(t)
