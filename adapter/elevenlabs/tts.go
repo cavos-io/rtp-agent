@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,6 +36,161 @@ const (
 	defaultElevenLabsStreamTimeout     = 0
 	defaultElevenLabsSynthesizeTimeout = 30 * time.Second
 )
+
+var (
+	elevenLabsDialogueKeepAliveInterval = 10 * time.Second
+	elevenLabsPrewarmRetryDelay         = time.Second
+	elevenLabsPrewarmMaxRetryDelay      = 30 * time.Second
+)
+
+func isElevenLabsDialogueModel(model string) bool {
+	return strings.HasPrefix(model, "eleven_v3") || strings.HasPrefix(model, "eleven_v4")
+}
+
+func elevenLabsDialogueIgnoredOptions(t *TTS) []string {
+	if !isElevenLabsDialogueModel(t.modelID) {
+		return nil
+	}
+	var ignored []string
+	if len(t.chunkLengthSchedule) > 0 {
+		ignored = append(ignored, "chunk_length_schedule")
+	}
+	if t.streamingLatency != nil {
+		ignored = append(ignored, "streaming_latency")
+	}
+	if t.enableSSMLParsing {
+		ignored = append(ignored, "enable_ssml_parsing")
+	}
+	if t.applyLanguageTextNormalization != nil {
+		ignored = append(ignored, "apply_language_text_normalization")
+	}
+	if settings := t.voiceSettings; settings != nil {
+		ignored = append(ignored, "voice_settings.similarity_boost")
+		if settings.Style != nil {
+			ignored = append(ignored, "voice_settings.style")
+		}
+		if settings.Speed != nil {
+			ignored = append(ignored, "voice_settings.speed")
+		}
+		if settings.UseSpeakerBoost != nil {
+			ignored = append(ignored, "voice_settings.use_speaker_boost")
+		}
+	}
+	return ignored
+}
+
+func warnIfElevenLabsDialogueModelIgnoresOptions(t *TTS) {
+	if ignored := elevenLabsDialogueIgnoredOptions(t); len(ignored) > 0 {
+		logger.Logger.Warnw("ElevenLabs text-to-dialogue model ignores unsupported options", nil,
+			"model", t.modelID, "ignored", strings.Join(ignored, ", "))
+	}
+}
+
+type elevenLabsDialogueClock struct {
+	offsetMs float64
+	oggTail  []byte
+}
+
+func (c *elevenLabsDialogueClock) advance(encoding string, sampleRate int, audio []byte, alignment *elevenLabsAlignment) {
+	if len(audio) == 0 {
+		return
+	}
+	format := strings.Split(encoding, "_")
+	if format[0] == "pcm" && sampleRate > 0 {
+		c.offsetMs += float64(len(audio)) / float64(2*sampleRate) * 1000
+		return
+	}
+	if format[0] == "mp3" && len(format) == 3 {
+		if kbps, err := strconv.Atoi(format[2]); err == nil && kbps > 0 {
+			c.offsetMs += float64(len(audio)) * 8 / float64(kbps)
+			return
+		}
+	}
+	if starts, durations := alignment.starts(), alignment.durations(); len(starts) > 0 && len(durations) > 0 {
+		c.offsetMs += float64(starts[len(starts)-1] + durations[len(durations)-1])
+	}
+	if format[0] == "opus" {
+		endMs, found, tail := elevenLabsOggEndMs(append(c.oggTail, audio...))
+		c.oggTail = tail
+		if found && endMs > c.offsetMs {
+			c.offsetMs = endMs
+		}
+	}
+}
+
+func elevenLabsOggEndMs(data []byte) (float64, bool, []byte) {
+	endMs, found := 0.0, false
+	pos := 0
+	for len(data)-pos >= 27 {
+		headerLen := 27 + int(data[pos+26])
+		if len(data)-pos < headerLen {
+			break
+		}
+		pageLen := headerLen
+		for _, segment := range data[pos+27 : pos+headerLen] {
+			pageLen += int(segment)
+		}
+		if len(data)-pos < pageLen {
+			break
+		}
+		// opus granule positions count 48 kHz samples
+		if granule := int64(binary.LittleEndian.Uint64(data[pos+6 : pos+14])); granule > 0 {
+			endMs, found = float64(granule)/48, true
+		}
+		pos += pageLen
+	}
+	return endMs, found, append([]byte(nil), data[pos:]...)
+}
+
+func (t *TTS) Prewarm() {
+	if t == nil || validateElevenLabsAPIKey(t.apiKey) != nil {
+		return
+	}
+	t.mu.Lock()
+	ctx := t.streamConnCtx
+	if t.closed || t.prewarming || ctx == nil {
+		t.mu.Unlock()
+		return
+	}
+	t.prewarming = true
+	t.mu.Unlock()
+	go t.runPrewarm(ctx)
+}
+
+func (t *TTS) runPrewarm(ctx context.Context) {
+	defer func() {
+		t.mu.Lock()
+		t.prewarming = false
+		t.mu.Unlock()
+	}()
+	delay := elevenLabsPrewarmRetryDelay
+	for ctx.Err() == nil {
+		conn := t.currentConnection(ctx, buildElevenLabsStreamURL(t), t.streamHeader())
+		if _, err := conn.wait(ctx); err != nil {
+			var statusErr *inference.APIStatusError
+			if errors.As(err, &statusErr) && !statusErr.Retryable {
+				logger.Logger.Warnw("ElevenLabs prewarm stopped after non-retryable API error", err, "status_code", statusErr.StatusCode)
+				return
+			}
+		} else {
+			if !isElevenLabsDialogueModel(t.modelID) {
+				return
+			}
+			openedAt := time.Now()
+			<-conn.ctx.Done()
+			if time.Since(openedAt) >= delay {
+				delay = elevenLabsPrewarmRetryDelay
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, elevenLabsPrewarmMaxRetryDelay)
+	}
+}
 
 type TTS struct {
 	tts.MetricsEmitter
@@ -67,6 +223,7 @@ type TTS struct {
 	currentStreamConn              *elevenLabsTTSConnection
 	streamConnCtx                  context.Context
 	streamConnCancel               context.CancelFunc
+	prewarming                     bool
 	closed                         bool
 }
 
@@ -258,6 +415,7 @@ func NewTTS(apiKey string, voiceID string, modelID string, opts ...TTSOption) (*
 		autoMode := len(provider.chunkLengthSchedule) == 0
 		provider.autoMode = &autoMode
 	}
+	warnIfElevenLabsDialogueModelIgnoresOptions(provider)
 	return provider, nil
 }
 
@@ -383,6 +541,9 @@ func (t *TTS) UpdateOptions(opts ...TTSOption) {
 		opt(t)
 	}
 	after := t.connectionKey()
+	if before.modelID != after.modelID {
+		warnIfElevenLabsDialogueModelIgnoresOptions(t)
+	}
 	refresh := t.streamConnectionRefresh
 	t.streamConnectionRefresh = false
 	if refresh || before != after {
@@ -516,6 +677,9 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 }
 
 func buildElevenLabsSynthesizeRequest(t *TTS, text string) (string, []byte) {
+	if isElevenLabsDialogueModel(t.modelID) {
+		return buildElevenLabsDialogueSynthesizeRequest(t, text)
+	}
 	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?output_format=%s&enable_logging=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.encoding), strconv.FormatBool(t.enableLogging))
 	if t.streamingLatency != nil {
 		apiURL += "&optimize_streaming_latency=" + strconv.Itoa(*t.streamingLatency)
@@ -534,6 +698,26 @@ func buildElevenLabsSynthesizeRequest(t *TTS, text string) (string, []byte) {
 	}
 	if t.applyLanguageTextNormalization != nil {
 		body["apply_language_text_normalization"] = *t.applyLanguageTextNormalization
+	}
+	jsonBody, _ := json.Marshal(body)
+	return apiURL, jsonBody
+}
+
+func buildElevenLabsDialogueSynthesizeRequest(t *TTS, text string) (string, []byte) {
+	apiURL := fmt.Sprintf("%s/text-to-dialogue/stream?output_format=%s&enable_logging=%s", strings.TrimRight(t.baseURL, "/"), url.QueryEscape(t.encoding), strconv.FormatBool(t.enableLogging))
+	body := map[string]interface{}{
+		"inputs":                   []map[string]interface{}{{"text": text, "voice_id": t.voiceID}},
+		"model_id":                 t.modelID,
+		"apply_text_normalization": t.applyTextNormalization,
+	}
+	if settings := elevenLabsDialogueVoiceSettingsPayload(t.voiceSettings); settings != nil {
+		body["settings"] = settings
+	}
+	if language := elevenLabsBaseLanguage(t.language); language != "" {
+		body["language_code"] = language
+	}
+	if len(t.pronunciationDictionaries) > 0 {
+		body["pronunciation_dictionary_locators"] = elevenLabsPronunciationDictionaryLocatorsPayload(t.pronunciationDictionaries)
 	}
 	jsonBody, _ := json.Marshal(body)
 	return apiURL, jsonBody
@@ -928,9 +1112,6 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 
-	header := make(http.Header)
-	header.Set("xi-api-key", t.apiKey)
-
 	contextID := "ctx_" + uuid.NewString()[:12]
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
@@ -950,12 +1131,14 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 		autoMode:                  t.autoMode != nil && *t.autoMode,
 		responseTimeout:           t.streamResponseTimeout,
+		dialogue:                  isElevenLabsDialogueModel(t.modelID),
+		voiceID:                   t.voiceID,
 	}
 
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
 	}
-	conn := t.currentConnection(ctx, buildElevenLabsStreamURL(t), header)
+	conn := t.currentConnection(ctx, buildElevenLabsStreamURL(t), t.streamHeader())
 	stream.sharedConn = conn
 	conn.registerStream(stream)
 	return stream, nil
@@ -976,12 +1159,45 @@ func (t *TTS) currentConnection(ctx context.Context, streamURL string, header ht
 	return conn
 }
 
-func buildElevenLabsStreamURL(t *TTS) string {
+func (t *TTS) streamHeader() http.Header {
+	header := make(http.Header)
+	header.Set("xi-api-key", t.apiKey)
+	return header
+}
+
+func elevenLabsWebsocketBaseURL(t *TTS) string {
 	streamBaseURL := strings.TrimRight(t.baseURL, "/")
 	if strings.HasPrefix(streamBaseURL, "http://") || strings.HasPrefix(streamBaseURL, "https://") {
 		streamBaseURL = strings.Replace(streamBaseURL, "http", "ws", 1)
 	}
-	parsed, err := url.Parse(streamBaseURL + fmt.Sprintf("/text-to-speech/%s/multi-stream-input", t.voiceID))
+	return streamBaseURL
+}
+
+func buildElevenLabsDialogueStreamURL(t *TTS) string {
+	parsed, err := url.Parse(elevenLabsWebsocketBaseURL(t) + "/text-to-dialogue/multi-stream-input")
+	if err != nil {
+		parsed = &url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: "/v1/text-to-dialogue/multi-stream-input"}
+	}
+	q := parsed.Query()
+	q.Set("model_id", t.modelID)
+	q.Set("output_format", t.encoding)
+	if language := elevenLabsBaseLanguage(t.language); language != "" {
+		q.Set("language_code", language)
+	}
+	q.Set("enable_logging", strconv.FormatBool(t.enableLogging))
+	q.Set("apply_text_normalization", t.applyTextNormalization)
+	if t.syncAlignment {
+		q.Set("sync_alignment", "true")
+	}
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
+}
+
+func buildElevenLabsStreamURL(t *TTS) string {
+	if isElevenLabsDialogueModel(t.modelID) {
+		return buildElevenLabsDialogueStreamURL(t)
+	}
+	parsed, err := url.Parse(elevenLabsWebsocketBaseURL(t) + fmt.Sprintf("/text-to-speech/%s/multi-stream-input", t.voiceID))
 	if err != nil {
 		u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/multi-stream-input", t.voiceID)}
 		parsed = &u
@@ -1074,14 +1290,22 @@ type elevenLabsStream struct {
 	responseTimeout time.Duration
 	responseTimer   *time.Timer
 	responseTimerID uint64
+
+	dialogue      bool
+	voiceID       string
+	dialogueClock elevenLabsDialogueClock
+	keepAlive     *time.Timer
+	keepAliveID   uint64
 }
 
 type elevenLabsAlignment struct {
-	Chars             []string `json:"chars"`
-	CharStartTimesMs  []int    `json:"charStartTimesMs"`
-	CharsStartTimesMs []int    `json:"charsStartTimesMs"`
-	CharDurationsMs   []int    `json:"charDurationsMs"`
-	CharsDurationsMs  []int    `json:"charsDurationsMs"`
+	Chars                 []string `json:"chars"`
+	CharStartTimesMs      []int    `json:"charStartTimesMs"`
+	CharsStartTimesMs     []int    `json:"charsStartTimesMs"`
+	CharDurationsMs       []int    `json:"charDurationsMs"`
+	CharsDurationsMs      []int    `json:"charsDurationsMs"`
+	CharStartTimesMsSnake []int    `json:"char_start_times_ms"`
+	CharDurationsMsSnake  []int    `json:"char_durations_ms"`
 }
 
 func (a *elevenLabsAlignment) starts() []int {
@@ -1091,7 +1315,10 @@ func (a *elevenLabsAlignment) starts() []int {
 	if len(a.CharStartTimesMs) > 0 {
 		return a.CharStartTimesMs
 	}
-	return a.CharsStartTimesMs
+	if len(a.CharsStartTimesMs) > 0 {
+		return a.CharsStartTimesMs
+	}
+	return a.CharStartTimesMsSnake
 }
 
 func (a *elevenLabsAlignment) durations() []int {
@@ -1101,7 +1328,10 @@ func (a *elevenLabsAlignment) durations() []int {
 	if len(a.CharDurationsMs) > 0 {
 		return a.CharDurationsMs
 	}
-	return a.CharsDurationsMs
+	if len(a.CharsDurationsMs) > 0 {
+		return a.CharsDurationsMs
+	}
+	return a.CharDurationsMsSnake
 }
 
 type elWSResponse struct {
@@ -1181,11 +1411,14 @@ func (c *elevenLabsTTSConnection) matches(streamURL string) bool {
 func (c *elevenLabsTTSConnection) connect() {
 	defer close(c.ready)
 
-	conn, _, err := c.dialer.DialContext(c.ctx, c.streamURL, c.header)
+	conn, resp, err := c.dialer.DialContext(c.ctx, c.streamURL, c.header)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
 			err = inference.NewAPITimeoutError(err.Error())
-		} else {
+		case resp != nil:
+			err = inference.NewAPIStatusError("could not connect to ElevenLabs", resp.StatusCode, "", err.Error())
+		default:
 			err = inference.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
 		}
 		c.fail(err)
@@ -1389,6 +1622,7 @@ func (s *elevenLabsStream) failConnection(err error) {
 		s.inputErr = io.ErrClosedPipe
 		s.connectErr = err
 		s.cancelResponseTimeoutLocked()
+		s.stopKeepAliveLocked()
 	}
 	s.mu.Unlock()
 	s.sendError(err)
@@ -1415,6 +1649,9 @@ func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
 		logger.Logger.Errorw("ElevenLabs WebSocket returned error", nil, "error", resp.Error)
 		s.sendError(inference.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
 		return true
+	}
+	if s.dialogue {
+		resp = s.applyDialogueClock(resp)
 	}
 	deltaText := s.deltaText(resp)
 	timedTranscript := s.timedTranscriptFromAlignment(resp)
@@ -1481,6 +1718,28 @@ func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
 	}
 	s.resetResponseTimeout()
 	return false
+}
+
+func (s *elevenLabsStream) applyDialogueClock(resp elWSResponse) elWSResponse {
+	resp.NormalizedAlignment = nil
+	alignment := resp.Alignment
+	if starts := alignment.starts(); len(starts) > 0 {
+		shifted := make([]int, len(starts))
+		for i, start := range starts {
+			shifted[i] = int(math.Round(s.dialogueClock.offsetMs + float64(start)))
+		}
+		resp.Alignment = &elevenLabsAlignment{
+			Chars:            alignment.Chars,
+			CharStartTimesMs: shifted,
+			CharDurationsMs:  alignment.durations(),
+		}
+	}
+	var audio []byte
+	if resp.Audio != "" {
+		audio, _ = decodeElevenLabsBase64Audio(resp.Audio)
+	}
+	s.dialogueClock.advance(s.encoding, s.sampleRate, audio, alignment)
+	return resp
 }
 
 func elevenLabsTTSSynthesisStatusError(err error) error {
@@ -2187,12 +2446,44 @@ func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
 		return err
 	}
 	tts.MarkSynthesisStarted(s.ctx)
-	if err := s.writeJSONLocked(elevenLabsTextPayload(s.contextID, text, flush)); err != nil {
+	payload := elevenLabsTextPayload(s.contextID, text, flush)
+	if s.dialogue {
+		payload = elevenLabsDialogueTextPayload(s.contextID, s.voiceID, text+" ", flush)
+	}
+	if err := s.writeJSONLocked(payload); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
 	s.armResponseTimeoutLocked()
+	s.armKeepAliveLocked()
 	return nil
+}
+
+func (s *elevenLabsStream) armKeepAliveLocked() {
+	if !s.dialogue {
+		return
+	}
+	s.stopKeepAliveLocked()
+	id := s.keepAliveID
+	s.keepAlive = time.AfterFunc(elevenLabsDialogueKeepAliveInterval, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if id != s.keepAliveID || s.closed || s.inputEnd || s.finished {
+			return
+		}
+		if err := s.writeJSONLocked(map[string]interface{}{"context_id": s.contextID, "keep_alive": true}); err != nil {
+			return
+		}
+		s.armKeepAliveLocked()
+	})
+}
+
+func (s *elevenLabsStream) stopKeepAliveLocked() {
+	if s.keepAlive != nil {
+		s.keepAlive.Stop()
+		s.keepAlive = nil
+	}
+	s.keepAliveID++
 }
 
 func (s *elevenLabsStream) Flush() error {
@@ -2222,7 +2513,11 @@ func (s *elevenLabsStream) EndInput() error {
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
-	if err := s.writeJSONLocked(elevenLabsFlushPayload(s.contextID)); err != nil {
+	flushPayload := elevenLabsFlushPayload(s.contextID)
+	if s.dialogue {
+		flushPayload = elevenLabsDialogueTextPayload(s.contextID, s.voiceID, "", true)
+	}
+	if err := s.writeJSONLocked(flushPayload); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -2231,6 +2526,7 @@ func (s *elevenLabsStream) EndInput() error {
 		return err
 	}
 	s.armResponseTimeoutLocked()
+	s.stopKeepAliveLocked()
 	s.inputEnd = true
 	return nil
 }
@@ -2293,14 +2589,50 @@ func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{
 		}
 	}
 	if len(dictionaries) > 0 {
-		locators := make([]map[string]interface{}, 0, len(dictionaries))
-		for _, locator := range dictionaries {
-			locators = append(locators, map[string]interface{}{
-				"pronunciation_dictionary_id": locator.PronunciationDictionaryID,
-				"version_id":                  locator.VersionID,
-			})
-		}
-		payload["pronunciation_dictionary_locators"] = locators
+		payload["pronunciation_dictionary_locators"] = elevenLabsPronunciationDictionaryLocatorsPayload(dictionaries)
+	}
+	return payload
+}
+
+func elevenLabsPronunciationDictionaryLocatorsPayload(dictionaries []ElevenLabsPronunciationDictionaryLocator) []map[string]interface{} {
+	locators := make([]map[string]interface{}, 0, len(dictionaries))
+	for _, locator := range dictionaries {
+		locators = append(locators, map[string]interface{}{
+			"pronunciation_dictionary_id": locator.PronunciationDictionaryID,
+			"version_id":                  locator.VersionID,
+		})
+	}
+	return locators
+}
+
+func elevenLabsDialogueInitPayload(contextID string, voiceID string, settings *ElevenLabsVoiceSettings, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {
+	payload := map[string]interface{}{
+		"context_id": contextID,
+		"voices":     []string{voiceID},
+	}
+	if voiceSettings := elevenLabsDialogueVoiceSettingsPayload(settings); voiceSettings != nil {
+		payload["voice_settings"] = voiceSettings
+	}
+	if len(dictionaries) > 0 {
+		payload["pronunciation_dictionary_locators"] = elevenLabsPronunciationDictionaryLocatorsPayload(dictionaries)
+	}
+	return payload
+}
+
+func elevenLabsDialogueVoiceSettingsPayload(settings *ElevenLabsVoiceSettings) map[string]interface{} {
+	if settings == nil {
+		return nil
+	}
+	return map[string]interface{}{"stability": settings.Stability}
+}
+
+func elevenLabsDialogueTextPayload(contextID string, voiceID string, text string, flush bool) map[string]interface{} {
+	payload := map[string]interface{}{
+		"context_id": contextID,
+		"inputs":     []map[string]interface{}{{"text": text, "voice_id": voiceID}},
+	}
+	if flush {
+		payload["flush"] = true
 	}
 	return payload
 }
@@ -2366,7 +2698,11 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	if err := s.waitConnectionLocked(); err != nil {
 		return err
 	}
-	if err := s.writeJSONLocked(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule, s.pronunciationDictionaries)); err != nil {
+	initPayload := elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule, s.pronunciationDictionaries)
+	if s.dialogue {
+		initPayload = elevenLabsDialogueInitPayload(s.contextID, s.voiceID, s.voiceSettings, s.pronunciationDictionaries)
+	}
+	if err := s.writeJSONLocked(initPayload); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
@@ -2442,6 +2778,7 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	s.inputErr = io.ErrClosedPipe
 	s.sendError(err)
 	s.cancelResponseTimeoutLocked()
+	s.stopKeepAliveLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -2469,6 +2806,7 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.closed = true
 	s.cancelResponseTimeoutLocked()
+	s.stopKeepAliveLocked()
 	s.cancel()
 	if s.mp3Decoder != nil {
 		if s.mp3Input != nil && !s.mp3InputClosed {
