@@ -727,7 +727,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			}
 			activity := session.currentActivity()
 			if activity != nil {
-				if activity.holdSTTEventWhileAgentSpeaking(ev) {
+				if !sttDecides && activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
 				}
 				if sttDecides && ev.Type == stt.SpeechEventStartOfSpeech && !activity.isUserSpeaking() {

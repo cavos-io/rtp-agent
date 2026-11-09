@@ -115,6 +115,27 @@ func TestSTTStartActsInVADTurnModeWhenSTTDecides(t *testing.T) {
 	}
 }
 
+func TestSTTSpeechBoundariesBypassHoldWhileAgentSpeaking(t *testing.T) {
+	pipeline, session, activity := newSpeechStartPipeline(TurnDetectionModeSTT, true, true)
+	session.agentState = AgentStateSpeaking
+	activity.holdSTTWhileAgentSpeaking = true
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{events: []*stt.SpeechEvent{sttStart(time.Now())}})
+
+	if !activity.isUserSpeaking() {
+		t.Fatal("an STT start while the agent speaks must start user speech, not wait in the hold buffer")
+	}
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{events: []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}})
+
+	if activity.isUserSpeaking() {
+		t.Fatal("an STT end while the agent speaks must end user speech")
+	}
+	if held := len(activity.heldSTTEvents); held != 0 {
+		t.Fatalf("held STT events = %d, want speech boundaries never held when the STT decides", held)
+	}
+}
+
 func TestSileroDecidesWithoutSTTVoiceActivity(t *testing.T) {
 	for name, tc := range map[string]struct{ fromSTT, voiceActivity bool }{
 		"option off":            {false, true},
