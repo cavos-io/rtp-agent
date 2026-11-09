@@ -2386,10 +2386,21 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 			a.Session.Room = ctx.Room
 			if roomIO == nil {
 				roomIO = workerlivekit.NewRoomIO(ctx.Room, a.Session, roomOptions)
+				// Workers prepare a room handle before entrypoint execution; a
+				// non-nil handle does not mean it has joined LiveKit yet.
+				ctx.AddRoomCallback(roomIO.GetCallback())
+				if err := ctx.ConnectPreparedRoom(sessionCtx, ctx.Room); err != nil {
+					_ = roomIO.Close()
+					return fmt.Errorf("connect prepared room: %w", err)
+				}
 				roomIO.ReconcileParticipants()
 			}
 			a.RoomIO = roomIO
 			ctx.SetPrimaryRoomIO(roomIO)
+			if observability := ctx.Observability(); observability != nil {
+				sessionCtx = observability.Context(sessionCtx)
+				roomIO.SetTraceContext(sessionCtx)
+			}
 			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
 				return err
 			}
