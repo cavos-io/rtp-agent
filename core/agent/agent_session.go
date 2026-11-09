@@ -107,6 +107,7 @@ type AgentSessionOptions struct {
 	SessionCloseTranscriptTimeout            float64
 	SessionCloseTranscriptTimeoutSet         bool
 	TurnDetection                            TurnDetectionMode
+	SpeechStartFromSTT                       bool
 	IVRDetection                             bool
 	IVRSilenceDuration                       time.Duration
 	VideoSampler                             *VoiceActivityVideoSampler

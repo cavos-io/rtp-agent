@@ -147,6 +147,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		Diarization:         true,
 		OfflineRecognize:    true,
 		ProviderEndpointing: true,
+		VoiceActivity:       true,
 	}
 	if len(wrapped) > 0 {
 		capabilities.AlignedTranscript = wrapped[0].Capabilities().AlignedTranscript
@@ -157,6 +158,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		capabilities.InterimResults = capabilities.InterimResults && sttCapabilities.InterimResults
 		capabilities.Diarization = capabilities.Diarization && sttCapabilities.Diarization
 		capabilities.ProviderEndpointing = capabilities.ProviderEndpointing && sttCapabilities.ProviderEndpointing
+		capabilities.VoiceActivity = capabilities.VoiceActivity && sttCapabilities.VoiceActivity
 		if sttCapabilities.AlignedTranscript == "" {
 			capabilities.AlignedTranscript = ""
 		}

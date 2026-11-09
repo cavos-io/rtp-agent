@@ -17,7 +17,22 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
+	"google.golang.org/genai"
 )
+
+func TestGeminiParsesWireVoiceActivity(t *testing.T) {
+	msg, err := parseServerMessage([]byte(`{"voiceActivity":{"type":"ACTIVITY_START","audioOffset":"7.120s"}}`))
+	if err != nil || msg.VoiceActivity == nil || msg.VoiceActivity.VoiceActivityType != genai.VoiceActivityTypeActivityStart || msg.VoiceActivity.AudioOffset != 7120*time.Millisecond {
+		t.Fatalf("voice activity = %+v, err %v", msg.VoiceActivity, err)
+	}
+	msg, err = parseServerMessage([]byte(`{"serverContent":{"interimInputTranscription":{"text":"halo"}}}`))
+	if err != nil || msg.VoiceActivity != nil || msg.ServerContent.InterimInputTranscription.Text != "halo" {
+		t.Fatalf("message = %+v, err %v", msg, err)
+	}
+	if _, err = parseServerMessage([]byte(`{"error":{"code":403}}`)); err == nil {
+		t.Fatal("error message must fail")
+	}
+}
 
 // Reference: refs/agents/livekit-plugins/livekit-plugins-google/livekit/plugins/google/beta/gemini_stt.py
 // and refs/agents/livekit-agents/livekit/agents/stt/stt.py at 31c6026df14eebb71975c16ca6a422ce68644b71.
@@ -251,6 +266,58 @@ func TestGeminiInterimOnlyAndMultipleTurns(t *testing.T) {
 	}
 	if _, e := s.Next(); e != io.EOF {
 		t.Fatal(e)
+	}
+}
+
+func TestGeminiVoiceActivityEvents(t *testing.T) {
+	script := func(c *websocket.Conn) {
+		for _, m := range []map[string]any{
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_START", "audioOffset": "0s"}},
+			{"serverContent": map[string]any{"interimInputTranscription": map[string]any{"text": "halo"}}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_END", "audioOffset": "1s"}},
+			{"serverContent": map[string]any{"inputTranscription": map[string]any{"text": "halo"}}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_START", "audioOffset": "2s"}},
+			{"voiceActivity": map[string]any{"type": "ACTIVITY_END", "audioOffset": "3s"}},
+		} {
+			_ = c.WriteJSON(m)
+		}
+		_ = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, ""))
+	}
+	for name, tc := range map[string]struct {
+		enabled bool
+		want    []stt.SpeechEventType
+	}{
+		"enabled": {true, []stt.SpeechEventType{
+			stt.SpeechEventStartOfSpeech, stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech,
+			stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech,
+		}},
+		"disabled": {false, []stt.SpeechEventType{
+			stt.SpeechEventInterimTranscript, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech,
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := fakeLive(t, script)
+			WithSTTVoiceActivity(tc.enabled)(p)
+			if p.Capabilities().VoiceActivity != tc.enabled {
+				t.Fatalf("VoiceActivity capability = %v, want %v", p.Capabilities().VoiceActivity, tc.enabled)
+			}
+			s := streamForTest(t, p)
+			for i, kind := range tc.want {
+				ev, err := s.Next()
+				if err != nil {
+					t.Fatalf("%d: %v", i, err)
+				}
+				if ev.Type != kind {
+					t.Fatalf("%d: type %s, want %s", i, ev.Type, kind)
+				}
+				if kind == stt.SpeechEventStartOfSpeech && (ev.SpeechStartTime == nil || *ev.SpeechStartTime <= 0) {
+					t.Fatalf("%d: start of speech without a start time: %+v", i, ev)
+				}
+			}
+			if _, err := s.Next(); err != io.EOF {
+				t.Fatalf("extra event or error: %v", err)
+			}
+		})
 	}
 }
 

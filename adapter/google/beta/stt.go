@@ -3,6 +3,7 @@ package beta
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/gorilla/websocket"
 	"google.golang.org/genai"
 )
@@ -37,6 +39,7 @@ type STT struct {
 	sampleRate                        uint32
 	options                           llm.APIConnectOptions
 	finalizeTimeout                   time.Duration
+	voiceActivity                     bool
 }
 
 type STTOption func(*STT)
@@ -56,6 +59,8 @@ func WithSTTCustomVocabulary(values []string) STTOption {
 	return func(s *STT) { s.vocabulary = append([]string(nil), values...) }
 }
 func WithSTTSampleRate(value uint32) STTOption { return func(s *STT) { s.sampleRate = value } }
+
+func WithSTTVoiceActivity(value bool) STTOption { return func(s *STT) { s.voiceActivity = value } }
 func WithSTTConnectOptions(value llm.APIConnectOptions) STTOption {
 	return func(s *STT) { s.options = value }
 }
@@ -95,7 +100,7 @@ func (s *STT) Model() string           { return s.model }
 func (s *STT) Provider() string        { return "google" }
 func (s *STT) InputSampleRate() uint32 { return s.sampleRate }
 func (s *STT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, ProviderEndpointing: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, ProviderEndpointing: true, VoiceActivity: s.voiceActivity}
 }
 func (s *STT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
 	return nil, errors.New("gemini STT only supports streaming recognition")
@@ -151,7 +156,9 @@ type recognizeStream struct {
 	inputRate uint32
 	resampler *audio.StreamingResampler
 	finals    atomic.Uint64
-	err       error // Written before done/events close; read only after events is closed.
+	// Samples sent on the current connection; Gemini's audio offsets restart per connection.
+	sentSamples atomic.Int64
+	err         error // Written before done/events close; read only after events is closed.
 }
 
 func (s *recognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -354,20 +361,51 @@ func (s *recognizeStream) connect() (*websocket.Conn, error) {
 
 type serverMessage struct {
 	genai.LiveServerMessage
+	// The wire sends "type", while genai.VoiceActivity decodes "voiceActivityType".
+	VoiceActivity *struct {
+		Type        genai.VoiceActivityType `json:"type"`
+		AudioOffset string                  `json:"audioOffset"`
+	} `json:"voiceActivity,omitempty"`
 	Error *struct {
 		Code int `json:"code"`
 	} `json:"error,omitempty"`
 }
 
 func readMessage(c *websocket.Conn) (*genai.LiveServerMessage, error) {
+	_, data, err := c.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	return parseServerMessage(data)
+}
+
+func parseServerMessage(data []byte) (*genai.LiveServerMessage, error) {
 	var msg serverMessage
-	if err := c.ReadJSON(&msg); err != nil {
+	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil, err
 	}
 	if msg.Error != nil {
 		return nil, inference.NewAPIStatusError("Gemini STT request failed", msg.Error.Code, "", nil)
 	}
+	if va := msg.VoiceActivity; va != nil {
+		offset, _ := time.ParseDuration(va.AudioOffset)
+		msg.LiveServerMessage.VoiceActivity = &genai.VoiceActivity{VoiceActivityType: va.Type, AudioOffset: offset}
+	}
 	return &msg.LiveServerMessage, nil
+}
+
+func (s *recognizeStream) voiceActivityAt(va *genai.VoiceActivity) float64 {
+	now := time.Now()
+	sent := time.Duration(s.sentSamples.Load()) * time.Second / time.Duration(s.owner.sampleRate)
+	at := float64(now.Add(va.AudioOffset-sent).UnixNano()) / 1e9
+	logger.Logger.Debugw("gemini.voice_activity",
+		"type", string(va.VoiceActivityType),
+		"audio_offset_s", va.AudioOffset.Seconds(),
+		"sent_audio_s", sent.Seconds(),
+		"speech_unix", at,
+		"arrival_unix", float64(now.UnixNano())/1e9,
+	)
+	return at
 }
 
 func (s *recognizeStream) attempt() (ended bool, connectedFor time.Duration, resultErr error) {
@@ -376,6 +414,7 @@ func (s *recognizeStream) attempt() (ended bool, connectedFor time.Duration, res
 		return false, 0, err
 	}
 	connectedAt := time.Now()
+	s.sentSamples.Store(0)
 	defer func() { connectedFor = time.Since(connectedAt) }()
 	ctx, cancel := context.WithCancel(s.ctx)
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
@@ -421,6 +460,9 @@ func (s *recognizeStream) send(ctx context.Context, cancel context.CancelFunc, c
 				_ = c.Close()
 				return normalizeError(err, false)
 			}
+			if input.audio != nil {
+				s.sentSamples.Add(int64(len(input.audio.Data) / 2))
+			}
 			if input.end {
 				timer := time.NewTimer(s.owner.finalizeTimeout)
 				defer timer.Stop()
@@ -440,6 +482,7 @@ func (s *recognizeStream) send(ctx context.Context, cancel context.CancelFunc, c
 
 func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEnd *atomic.Bool) error {
 	pending := ""
+	heard := false
 	language := s.language
 	if language == "" {
 		language = "en-US"
@@ -482,6 +525,22 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 		if msg.GoAway != nil {
 			goAway = true
 		}
+		if va := msg.VoiceActivity; va != nil && s.owner.voiceActivity {
+			at := s.voiceActivityAt(va)
+			switch va.VoiceActivityType {
+			case genai.VoiceActivityTypeActivityStart:
+				heard = false
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, SpeechStartTime: &at}:
+				}
+			case genai.VoiceActivityTypeActivityEnd:
+				if !heard && pending == "" && !emit(stt.SpeechEventEndOfSpeech, "") {
+					return ctx.Err()
+				}
+			}
+		}
 		sc := msg.ServerContent
 		if sc == nil {
 			continue
@@ -491,6 +550,7 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 				language = tr.LanguageCode
 			}
 			if text := strings.TrimSpace(tr.Text); text != "" {
+				heard = true
 				pending = text
 				if !emit(stt.SpeechEventInterimTranscript, text) {
 					return ctx.Err()
@@ -502,6 +562,7 @@ func (s *recognizeStream) receive(ctx context.Context, c *websocket.Conn, sentEn
 				language = tr.LanguageCode
 			}
 			if text := strings.TrimSpace(tr.Text); text != "" {
+				heard = true
 				if !final(text) {
 					return ctx.Err()
 				}

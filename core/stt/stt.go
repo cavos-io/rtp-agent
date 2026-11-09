@@ -228,6 +228,7 @@ type STTCapabilities struct {
 	AlignedTranscript   string `json:"aligned_transcript"`
 	OfflineRecognize    bool   `json:"offline_recognize"`
 	ProviderEndpointing bool   `json:"-"`
+	VoiceActivity       bool   `json:"-"`
 }
 
 func (c STTCapabilities) MarshalJSON() ([]byte, error) {
