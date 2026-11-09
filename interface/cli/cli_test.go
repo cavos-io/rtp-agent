@@ -1705,3 +1705,50 @@ func (f *fakeWorkerLifecycle) Drain(context.Context) error {
 	f.drainCalls++
 	return f.drainErr
 }
+
+func TestConnectRecordingCreatesPersistentSessionOutput(t *testing.T) {
+	args, err := parseConnectArgs([]string{"worker", "connect", "room-a", "--record"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := &livekit.Room{Sid: "RM_test", Name: "room-a"}
+	opts, err := connectLocalJobOptions(args, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.FakeJob || opts.RoomInfo != room {
+		t.Fatal("recording must preserve real Cloud room/job")
+	}
+	if opts.RecordingOptions != (agent.RecordingOptions{Audio: true, Transcript: true, Traces: true, Logs: true}) {
+		t.Fatalf("recording options=%+v", opts.RecordingOptions)
+	}
+	if opts.SessionDirectory == "" || opts.SessionReportPath != filepath.Join(opts.SessionDirectory, "session_report.json") {
+		t.Fatal("missing persistent recording/report paths")
+	}
+	if info, err := os.Stat(opts.SessionDirectory); err != nil || !info.IsDir() {
+		t.Fatalf("output directory missing: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(opts.SessionDirectory) })
+	other, err := connectLocalJobOptions(args, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(other.SessionDirectory) })
+	if other.SessionDirectory == opts.SessionDirectory {
+		t.Fatal("recording sessions share output directory")
+	}
+}
+
+func TestConnectWithoutRecordKeepsPreviousDefaults(t *testing.T) {
+	args, err := parseConnectArgs([]string{"worker", "connect", "room-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := connectLocalJobOptions(args, &livekit.Room{Name: "room-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.SessionDirectory != "" || opts.SessionReportPath != "" || opts.RecordingOptions != (agent.RecordingOptions{}) || opts.FakeJob {
+		t.Fatalf("changed defaults: %+v", opts)
+	}
+}
