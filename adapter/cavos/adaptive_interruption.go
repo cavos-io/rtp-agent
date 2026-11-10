@@ -75,6 +75,8 @@ type cavosOverlap struct {
 	ctx                                 context.Context
 	cancel                              context.CancelFunc
 	pcm                                 []byte
+	queuedAt                            time.Time
+	maxFrameGap                         time.Duration
 }
 type cavosInterruptionStream struct {
 	mu                       sync.Mutex
@@ -96,6 +98,7 @@ type cavosInterruptionStream struct {
 	done                     chan struct{}
 	events                   []agent.OverlappingSpeechEvent // bounded to eight; overflow fails to VAD
 	failure                  error
+	lastFrameAt              time.Time
 }
 
 func newCavosInterruptionStream(ctx context.Context, client spec.BargeInServiceV1Client, conn *grpc.ClientConn, dumpDir string) *cavosInterruptionStream {
@@ -125,6 +128,11 @@ func (s *cavosInterruptionStream) PushFrame(f *model.AudioFrame) error {
 	if f.SampleRate == 0 || f.NumChannels == 0 || f.SamplesPerChannel == 0 || uint64(len(f.Data)) != uint64(f.SamplesPerChannel)*uint64(f.NumChannels)*2 {
 		return errors.New("cavos barge-in: invalid PCM16 frame format or sample count")
 	}
+	now := s.now()
+	if o := s.overlap; o != nil && !o.queued && !o.terminal && !s.lastFrameAt.IsZero() {
+		o.maxFrameGap = max(o.maxFrameGap, now.Sub(s.lastFrameAt))
+	}
+	s.lastFrameAt = now
 	if s.inputRate != 0 && (s.inputRate != f.SampleRate || s.inputChannels != f.NumChannels) {
 		return errors.New("cavos barge-in: audio format changed within stream")
 	}
@@ -283,6 +291,10 @@ func (s *cavosInterruptionStream) queueLocked(o *cavosOverlap) {
 		binary.LittleEndian.PutUint16(o.pcm[(i-start)*2:], uint16(s.ring[i%bargeHistorySamples]))
 	}
 	o.queued = true
+	o.queuedAt = s.now()
+	logger.Logger.Debugw("bargein.window_ready", "overlap_started_at", o.startedAt.UnixNano(),
+		"window_ready_ms", float64(o.queuedAt.Sub(o.startedAt))/float64(time.Millisecond),
+		"trigger_sample", o.trigger, "total_samples", s.total, "window_samples", len(o.pcm)/2)
 	s.pending = o
 	select {
 	case s.ready <- struct{}{}:
@@ -313,7 +325,11 @@ func (s *cavosInterruptionStream) run() {
 		o.sent = true
 		pcm := o.pcm
 		o.pcm = nil
-		logger.Logger.Infow("bargein.request", "overlap_started_at", o.startedAt.UnixNano(), "window_samples", len(pcm)/2, "padded_ms", float64(bargeWindowSamples-len(pcm)/2)/16, "trigger_wall_ms", float64(s.now().Sub(o.startedAt))/float64(time.Millisecond), "speech_ended", o.speechEnded)
+		logger.Logger.Infow("bargein.request", "overlap_started_at", o.startedAt.UnixNano(), "window_samples", len(pcm)/2, "padded_ms", float64(bargeWindowSamples-len(pcm)/2)/16, "trigger_wall_ms", float64(s.now().Sub(o.startedAt))/float64(time.Millisecond), "speech_ended", o.speechEnded,
+			"window_ready_ms", float64(o.queuedAt.Sub(o.startedAt))/float64(time.Millisecond),
+			"dispatch_delay_ms", float64(s.now().Sub(o.queuedAt))/float64(time.Millisecond),
+			"max_input_frame_gap_ms", float64(o.maxFrameGap)/float64(time.Millisecond),
+			"input_rate", s.inputRate, "input_channels", s.inputChannels)
 		ctx, cancel := context.WithTimeout(o.ctx, bargeTimeout)
 		s.mu.Unlock()
 		s.infer(ctx, cancel, o, pcm)

@@ -1588,6 +1588,23 @@ func TestPipelineAgentSpeakingSpanUsesAgentTurnContext(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentInputQueueDiagnosticsCountOnlyDroppedFrames(t *testing.T) {
+	pipeline := NewPipelineAgent(nil, nil, nil, nil, nil)
+	frame := &model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	for i := 0; i < cap(pipeline.audioInCh)+3; i++ {
+		pipeline.OnAudioFrame(context.Background(), frame)
+	}
+	if got := pipeline.audioInputDropped.Load(); got != 3 {
+		t.Fatalf("dropped frames = %d, want 3", got)
+	}
+	if got := pipeline.audioInputReceived.Load(); got != uint64(cap(pipeline.audioInCh)+3) {
+		t.Fatalf("received frames = %d", got)
+	}
+	if len(pipeline.audioInCh) != cap(pipeline.audioInCh) {
+		t.Fatal("diagnostics changed queue admission")
+	}
+}
+
 func TestPipelineAgentCanceledTTSForwardingClearsPlayback(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	playback := &fakePipelinePlaybackController{}
