@@ -10,13 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -6061,5 +6064,756 @@ func TestElevenLabsTTSStreamDoesNotEmitProviderBaselineMetricsOnEarlyClose(t *te
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+type elevenLabsDialogueTestServer struct {
+	server   *httptest.Server
+	urls     chan *url.URL
+	conns    chan *websocket.Conn
+	messages chan map[string]any
+}
+
+func newElevenLabsDialogueTestServer(t *testing.T) *elevenLabsDialogueTestServer {
+	t.Helper()
+	s := &elevenLabsDialogueTestServer{
+		urls:     make(chan *url.URL, 16),
+		conns:    make(chan *websocket.Conn, 16),
+		messages: make(chan map[string]any, 256),
+	}
+	upgrader := websocket.Upgrader{}
+	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		s.urls <- r.URL
+		s.conns <- conn
+		for {
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			s.messages <- msg
+		}
+	}))
+	t.Cleanup(s.server.Close)
+	return s
+}
+
+func (s *elevenLabsDialogueTestServer) baseURL() string {
+	return s.server.URL + "/v1"
+}
+
+func waitElevenLabsDialogueMessage(t *testing.T, messages <-chan map[string]any, match func(map[string]any) bool) map[string]any {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-messages:
+			if match(msg) {
+				return msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for ElevenLabs dialogue websocket message")
+			return nil
+		}
+	}
+}
+
+func assertElevenLabsJSONEqual(t *testing.T, got any, want string) {
+	t.Helper()
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal got: %v", err)
+	}
+	var wantValue any
+	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
+		t.Fatalf("unmarshal want: %v", err)
+	}
+	wantJSON, _ := json.Marshal(wantValue)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("payload = %s, want %s", gotJSON, wantJSON)
+	}
+}
+
+func setElevenLabsDialogueKeepAliveInterval(t *testing.T, interval time.Duration) {
+	t.Helper()
+	old := elevenLabsDialogueKeepAliveInterval
+	elevenLabsDialogueKeepAliveInterval = interval
+	t.Cleanup(func() { elevenLabsDialogueKeepAliveInterval = old })
+}
+
+func setElevenLabsPrewarmRetryDelays(t *testing.T, initial time.Duration, max time.Duration) {
+	t.Helper()
+	oldInitial, oldMax := elevenLabsPrewarmRetryDelay, elevenLabsPrewarmMaxRetryDelay
+	elevenLabsPrewarmRetryDelay, elevenLabsPrewarmMaxRetryDelay = initial, max
+	t.Cleanup(func() {
+		elevenLabsPrewarmRetryDelay, elevenLabsPrewarmMaxRetryDelay = oldInitial, oldMax
+	})
+}
+
+func elevenLabsDialogueAlignment(t *testing.T, raw string) *elevenLabsAlignment {
+	t.Helper()
+	var alignment elevenLabsAlignment
+	if err := json.Unmarshal([]byte(raw), &alignment); err != nil {
+		t.Fatalf("unmarshal alignment: %v", err)
+	}
+	return &alignment
+}
+
+func TestElevenLabsIsDialogueModelMatchesReference(t *testing.T) {
+	cases := map[string]bool{
+		"eleven_v3":                true,
+		"eleven_v3_conversational": true,
+		"eleven_v4":                true,
+		"eleven_v4_turbo":          true,
+		"eleven_turbo_v2_5":        false,
+		"eleven_flash_v2_5":        false,
+	}
+	for model, want := range cases {
+		if got := isElevenLabsDialogueModel(model); got != want {
+			t.Errorf("isElevenLabsDialogueModel(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+func TestElevenLabsDialogueStreamURLOmitsRegularTTSOnlyParamsLikeReference(t *testing.T) {
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v3_conversational",
+		WithElevenLabsEnableSSMLParsing(true),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120}),
+		WithElevenLabsApplyLanguageTextNormalization(true),
+		WithElevenLabsLanguage("id-ID"),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+
+	streamURL := buildElevenLabsStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Scheme != "wss" || parsed.Path != "/v1/text-to-dialogue/multi-stream-input" {
+		t.Fatalf("stream url = %q, want wss text-to-dialogue multi-stream-input", streamURL)
+	}
+	if strings.Contains(streamURL, "voice-1") {
+		t.Fatalf("stream url = %q, want voice only in the context registration", streamURL)
+	}
+	query := parsed.Query()
+	want := map[string]string{
+		"model_id":                 "eleven_v3_conversational",
+		"output_format":            "mp3_22050_32",
+		"language_code":            "id",
+		"enable_logging":           "true",
+		"apply_text_normalization": "auto",
+		"sync_alignment":           "true",
+	}
+	for key, value := range want {
+		if query.Get(key) != value {
+			t.Errorf("%s = %q, want %q", key, query.Get(key), value)
+		}
+	}
+	for _, key := range []string{"enable_ssml_parsing", "inactivity_timeout", "auto_mode", "apply_language_text_normalization"} {
+		if query.Has(key) {
+			t.Errorf("stream url has %s, want regular-TTS-only param omitted", key)
+		}
+	}
+}
+
+func TestElevenLabsDialogueSynthesizeRequestMatchesReference(t *testing.T) {
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v3_conversational",
+		WithElevenLabsStreamingLatency(3),
+		WithElevenLabsLanguage("id-ID"),
+		WithElevenLabsPronunciationDictionaries([]ElevenLabsPronunciationDictionaryLocator{
+			{PronunciationDictionaryID: "dict-1", VersionID: "v1"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+
+	apiURL, body := buildElevenLabsSynthesizeRequest(provider, "hello there")
+	if !strings.HasPrefix(apiURL, defaultElevenLabsBaseURL+"/text-to-dialogue/stream?") {
+		t.Fatalf("synthesize url = %q, want text-to-dialogue stream endpoint", apiURL)
+	}
+	if strings.Contains(apiURL, "voice-1") || strings.Contains(apiURL, "optimize_streaming_latency") {
+		t.Fatalf("synthesize url = %q, want no voice id or streaming latency", apiURL)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	assertElevenLabsJSONEqual(t, payload, `{
+		"inputs": [{"text": "hello there", "voice_id": "voice-1"}],
+		"model_id": "eleven_v3_conversational",
+		"apply_text_normalization": "auto",
+		"language_code": "id",
+		"pronunciation_dictionary_locators": [{"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}]
+	}`)
+}
+
+func TestElevenLabsDialogueSynthesizeRequestKeepsOnlyStabilityLikeReference(t *testing.T) {
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v3_conversational",
+		WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{Stability: 0.5, SimilarityBoost: 0.75}),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+
+	_, body := buildElevenLabsSynthesizeRequest(provider, "hello there")
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	assertElevenLabsJSONEqual(t, payload["settings"], `{"stability": 0.5}`)
+	if _, ok := payload["voice_settings"]; ok {
+		t.Fatalf("body = %s, want settings instead of voice_settings", body)
+	}
+}
+
+func TestElevenLabsDialogueIgnoredOptionsMatchReference(t *testing.T) {
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v3_conversational",
+		WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{Stability: 0.5, SimilarityBoost: 0.75}),
+		WithElevenLabsChunkLengthSchedule([]int{80}),
+		WithElevenLabsStreamingLatency(2),
+		WithElevenLabsEnableSSMLParsing(true),
+		WithElevenLabsApplyLanguageTextNormalization(true),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	got := strings.Join(elevenLabsDialogueIgnoredOptions(provider), ",")
+	want := "chunk_length_schedule,streaming_latency,enable_ssml_parsing,apply_language_text_normalization,voice_settings.similarity_boost"
+	if got != want {
+		t.Fatalf("ignored options = %q, want %q", got, want)
+	}
+
+	regular, err := NewTTS("test-key", "voice-1", "eleven_flash_v2_5", WithElevenLabsChunkLengthSchedule([]int{80}))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	if ignored := elevenLabsDialogueIgnoredOptions(regular); len(ignored) != 0 {
+		t.Fatalf("regular model ignored options = %v, want none", ignored)
+	}
+}
+
+func TestElevenLabsDialogueStreamSendsReferenceContextProtocol(t *testing.T) {
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo",
+		WithElevenLabsBaseURL(srv.baseURL()),
+		WithElevenLabsAutoMode(true),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120}),
+		WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{Stability: 0.5, SimilarityBoost: 0.75}),
+		WithElevenLabsPronunciationDictionaries([]ElevenLabsPronunciationDictionaryLocator{
+			{PronunciationDictionaryID: "dict-1", VersionID: "v1"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	handshake := receiveElevenLabsTestValue(t, srv.urls)
+	if handshake.Path != "/v1/text-to-dialogue/multi-stream-input" || handshake.Query().Get("model_id") != "eleven_v4_turbo" {
+		t.Fatalf("handshake url = %q, want dialogue multi-stream-input for eleven_v4_turbo", handshake.String())
+	}
+
+	init := readElevenLabsTTSStreamMessage(t, srv.messages)
+	contextID, _ := init["context_id"].(string)
+	if contextID == "" {
+		t.Fatalf("init = %#v, want context_id", init)
+	}
+	assertElevenLabsJSONEqual(t, init, `{
+		"context_id": "`+contextID+`",
+		"voices": ["voice-1"],
+		"voice_settings": {"stability": 0.5},
+		"pronunciation_dictionary_locators": [{"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}]
+	}`)
+	assertElevenLabsJSONEqual(t, readElevenLabsTTSStreamMessage(t, srv.messages), `{
+		"context_id": "`+contextID+`",
+		"inputs": [{"text": "Hello there. ", "voice_id": "voice-1"}],
+		"flush": true
+	}`)
+	assertElevenLabsJSONEqual(t, readElevenLabsTTSStreamMessage(t, srv.messages), `{
+		"context_id": "`+contextID+`",
+		"inputs": [{"text": "", "voice_id": "voice-1"}],
+		"flush": true
+	}`)
+	assertElevenLabsJSONEqual(t, readElevenLabsTTSStreamMessage(t, srv.messages), `{
+		"context_id": "`+contextID+`",
+		"close_context": true
+	}`)
+}
+
+func TestElevenLabsDialogueStreamSendsKeepAliveForIdleContextLikeReference(t *testing.T) {
+	setElevenLabsDialogueKeepAliveInterval(t, 50*time.Millisecond)
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo", WithElevenLabsBaseURL(srv.baseURL()))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there, how are you today? Still thinking"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+
+	init := readElevenLabsTTSStreamMessage(t, srv.messages)
+	contextID := init["context_id"]
+	waitElevenLabsDialogueMessage(t, srv.messages, func(msg map[string]any) bool {
+		return msg["context_id"] == contextID && msg["keep_alive"] == true
+	})
+}
+
+func TestElevenLabsDialogueStreamKeepsIdleContextAliveDuringOtherTrafficLikeReference(t *testing.T) {
+	setElevenLabsDialogueKeepAliveInterval(t, 50*time.Millisecond)
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo", WithElevenLabsBaseURL(srv.baseURL()))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	idle, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer idle.Close()
+	if err := idle.PushText("Hello there, how are you today? Still"); err != nil {
+		t.Fatalf("idle PushText() error = %v", err)
+	}
+	idleContextID := readElevenLabsTTSStreamMessage(t, srv.messages)["context_id"]
+
+	busy, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer busy.Close()
+	for i := 0; i < 20; i++ {
+		if err := busy.PushText("This busy sentence is long enough to send. "); err != nil {
+			t.Fatalf("busy PushText() error = %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	waitElevenLabsDialogueMessage(t, srv.messages, func(msg map[string]any) bool {
+		return msg["context_id"] == idleContextID && msg["keep_alive"] == true
+	})
+}
+
+func TestElevenLabsDialogueStreamStopsKeepAliveOnceContextClosesLikeReference(t *testing.T) {
+	setElevenLabsDialogueKeepAliveInterval(t, 50*time.Millisecond)
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo", WithElevenLabsBaseURL(srv.baseURL()))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	contextID := readElevenLabsTTSStreamMessage(t, srv.messages)["context_id"]
+	waitElevenLabsDialogueMessage(t, srv.messages, func(msg map[string]any) bool {
+		return msg["context_id"] == contextID && msg["close_context"] == true
+	})
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case msg := <-srv.messages:
+			if msg["keep_alive"] == true {
+				t.Fatalf("keep_alive sent after close_context: %#v", msg)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+func TestElevenLabsDialogueStreamOffsetsChunkRelativeAlignmentLikeReference(t *testing.T) {
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo",
+		WithElevenLabsBaseURL(srv.baseURL()),
+		WithElevenLabsEncoding("pcm_24000"),
+	)
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hi there you."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	contextID := readElevenLabsTTSStreamMessage(t, srv.messages)["context_id"]
+	conn := receiveElevenLabsTestValue(t, srv.conns)
+
+	pcm := func(ms int) string {
+		return base64.StdEncoding.EncodeToString(make([]byte, 2*24000*ms/1000))
+	}
+	chunk := func(text string, audioMs int) map[string]any {
+		starts := make([]int, len(text))
+		durations := make([]int, len(text))
+		chars := make([]string, len(text))
+		for i := range text {
+			starts[i] = i * 100
+			durations[i] = 100
+			chars[i] = string(text[i])
+		}
+		return map[string]any{
+			"context_id": contextID,
+			"audio":      pcm(audioMs),
+			"alignment": map[string]any{
+				"chars":               chars,
+				"char_start_times_ms": starts,
+				"char_durations_ms":   durations,
+			},
+		}
+	}
+	for _, msg := range []map[string]any{
+		{"context_id": contextID, "audio": pcm(500)},
+		chunk("hi there ", 900),
+		chunk("you ", 400),
+		{"context_id": contextID, "is_final": true},
+	} {
+		if err := conn.WriteJSON(msg); err != nil {
+			t.Fatalf("server WriteJSON() error = %v", err)
+		}
+	}
+
+	var words []tts.TimedString
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		words = append(words, audio.TimedTranscript...)
+		if audio.IsFinal {
+			break
+		}
+	}
+	want := []tts.TimedString{
+		{Text: "hi ", StartTime: 0.5, EndTime: 0.8},
+		{Text: "there ", StartTime: 0.8, EndTime: 1.4},
+		{Text: "you ", StartTime: 1.4, EndTime: 1.8},
+	}
+	if len(words) != len(want) {
+		t.Fatalf("timed words = %#v, want %#v", words, want)
+	}
+	for i := range want {
+		if words[i].Text != want[i].Text || math.Abs(words[i].StartTime-want[i].StartTime) > 1e-9 || math.Abs(words[i].EndTime-want[i].EndTime) > 1e-9 {
+			t.Fatalf("timed word %d = %#v, want %#v", i, words[i], want[i])
+		}
+	}
+}
+
+func elevenLabsTestOggPage(granule int64, payload []byte) []byte {
+	segments := make([]byte, 0, len(payload)/255+1)
+	for i := 0; i < len(payload)/255; i++ {
+		segments = append(segments, 255)
+	}
+	segments = append(segments, byte(len(payload)%255))
+	page := []byte("OggS\x00\x00")
+	page = binary.LittleEndian.AppendUint64(page, uint64(granule))
+	page = append(page, make([]byte, 12)...)
+	page = append(page, byte(len(segments)))
+	page = append(page, segments...)
+	return append(page, payload...)
+}
+
+func TestElevenLabsDialogueClockAdvancesLikeReference(t *testing.T) {
+	var clock elevenLabsDialogueClock
+	clock.advance("pcm_24000", 24000, make([]byte, 2*24000/2), nil)
+	if clock.offsetMs != 500 {
+		t.Fatalf("pcm offset = %v, want 500", clock.offsetMs)
+	}
+	clock.advance("pcm_24000", 24000, nil, nil)
+	if clock.offsetMs != 500 {
+		t.Fatalf("offset after empty audio = %v, want unchanged 500", clock.offsetMs)
+	}
+
+	clock = elevenLabsDialogueClock{}
+	clock.advance("mp3_22050_32", 22050, make([]byte, 4000), nil)
+	if clock.offsetMs != 1000 {
+		t.Fatalf("constant bitrate mp3 offset = %v, want 1000", clock.offsetMs)
+	}
+
+	clock = elevenLabsDialogueClock{}
+	clock.advance("ulaw_8000", 8000, []byte{1}, elevenLabsDialogueAlignment(t, `{"chars":["a","b"],"char_start_times_ms":[0,100],"char_durations_ms":[100,150]}`))
+	if clock.offsetMs != 250 {
+		t.Fatalf("alignment span offset = %v, want 250", clock.offsetMs)
+	}
+
+	header := append(elevenLabsTestOggPage(0, append([]byte("OpusHead"), make([]byte, 11)...)), elevenLabsTestOggPage(0, append([]byte("OpusTags"), make([]byte, 8)...))...)
+	first := append(header, elevenLabsTestOggPage(24000, make([]byte, 300))...)
+	second := elevenLabsTestOggPage(24000+43200, make([]byte, 900))
+	hiThere := elevenLabsDialogueAlignment(t, `{"chars":["h","i"," ","t","h","e","r","e"," "],"char_start_times_ms":[0,100,200,300,400,500,600,700,800],"char_durations_ms":[100,100,100,100,100,100,100,100,100]}`)
+
+	clock = elevenLabsDialogueClock{}
+	steps := []struct {
+		audio     []byte
+		alignment *elevenLabsAlignment
+		want      float64
+	}{
+		{first, nil, 500},
+		{second[:400], hiThere, 1400},
+		{second[400:], nil, 1400},
+		{elevenLabsTestOggPage(67200+19200, make([]byte, 400)), elevenLabsDialogueAlignment(t, `{"chars":["y","o","u"," "],"char_start_times_ms":[0,100,200,300],"char_durations_ms":[100,100,100,100]}`), 1800},
+	}
+	for i, step := range steps {
+		clock.advance("opus_48000_32", 48000, step.audio, step.alignment)
+		if clock.offsetMs != step.want {
+			t.Fatalf("opus step %d offset = %v, want %v", i, clock.offsetMs, step.want)
+		}
+	}
+}
+
+func TestElevenLabsTTSPrewarmOpensConnectionLikeReference(t *testing.T) {
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_flash_v2_5", WithElevenLabsBaseURL(srv.baseURL()))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	provider.Prewarm()
+	select {
+	case handshake := <-srv.urls:
+		if handshake.Path != "/v1/text-to-speech/voice-1/multi-stream-input" {
+			t.Fatalf("prewarm handshake path = %q, want regular multi-stream-input", handshake.Path)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Prewarm() did not open the websocket connection")
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	readElevenLabsTTSStreamMessage(t, srv.messages)
+	select {
+	case handshake := <-srv.urls:
+		t.Fatalf("Stream() opened a second connection %q, want prewarmed connection reused", handshake.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestElevenLabsDialoguePrewarmReconnectsWhenIdleSocketClosesLikeReference(t *testing.T) {
+	setElevenLabsPrewarmRetryDelays(t, 20*time.Millisecond, 100*time.Millisecond)
+	srv := newElevenLabsDialogueTestServer(t)
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4", WithElevenLabsBaseURL(srv.baseURL()))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	provider.Prewarm()
+	receiveElevenLabsTestValue(t, srv.urls)
+	first := receiveElevenLabsTestValue(t, srv.conns)
+	time.Sleep(50 * time.Millisecond)
+	_ = first.Close()
+
+	select {
+	case handshake := <-srv.urls:
+		if handshake.Path != "/v1/text-to-dialogue/multi-stream-input" {
+			t.Fatalf("reconnect handshake path = %q, want dialogue multi-stream-input", handshake.Path)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Prewarm() did not reconnect after the idle dialogue socket closed")
+	}
+}
+
+func TestElevenLabsTTSPrewarmStopsOnNonRetryableHandshakeErrorLikeReference(t *testing.T) {
+	setElevenLabsPrewarmRetryDelays(t, 10*time.Millisecond, 40*time.Millisecond)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4", WithElevenLabsBaseURL(server.URL+"/v1"))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	provider.Prewarm()
+	deadline := time.Now().Add(2 * time.Second)
+	for attempts.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("prewarm attempts = %d, want 1 after non-retryable 401", got)
+	}
+}
+
+func TestElevenLabsTTSPrewarmRetriesWithExponentialBackoffLikeReference(t *testing.T) {
+	setElevenLabsPrewarmRetryDelays(t, 20*time.Millisecond, time.Second)
+	var mu sync.Mutex
+	var attemptTimes []time.Time
+	upgrader := websocket.Upgrader{}
+	upgraded := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attemptTimes = append(attemptTimes, time.Now())
+		attempt := len(attemptTimes)
+		mu.Unlock()
+		if attempt <= 3 {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		upgraded <- struct{}{}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_flash_v2_5", WithElevenLabsBaseURL(server.URL+"/v1"))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	provider.Prewarm()
+	select {
+	case <-upgraded:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Prewarm() did not connect after retryable failures")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attemptTimes) != 4 {
+		t.Fatalf("prewarm attempts = %d, want 4", len(attemptTimes))
+	}
+	for i, minGap := range []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond} {
+		if gap := attemptTimes[i+1].Sub(attemptTimes[i]); gap < minGap {
+			t.Fatalf("retry gap %d = %v, want at least %v", i, gap, minGap)
+		}
+	}
+}
+
+func TestElevenLabsTTSStreamReturnsAPIStatusErrorOnHandshakeRejectionLikeReference(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo", WithElevenLabsBaseURL(server.URL+"/v1"))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	pushErr := stream.PushText("Hello there. Next")
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(pushErr, &statusErr) {
+		_, nextErr := stream.Next()
+		if !errors.As(nextErr, &statusErr) {
+			t.Fatalf("PushText error = %v, Next error = %v, want APIStatusError", pushErr, nextErr)
+		}
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized || statusErr.Retryable {
+		t.Fatalf("status error = %#v, want non-retryable 401", statusErr)
+	}
+}
+
+func receiveElevenLabsTestValue[T any](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ElevenLabs test server")
+		var zero T
+		return zero
+	}
+}
+
+func TestElevenLabsDialoguePrewarmBacksOffWhenSocketClosesImmediately(t *testing.T) {
+	setElevenLabsPrewarmRetryDelays(t, 50*time.Millisecond, 200*time.Millisecond)
+	var handshakes atomic.Int32
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		handshakes.Add(1)
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Invalid API key"))
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	provider, err := NewTTS("test-key", "voice-1", "eleven_v4_turbo", WithElevenLabsBaseURL(server.URL+"/v1"))
+	if err != nil {
+		t.Fatalf("NewTTS() error = %v", err)
+	}
+	defer provider.Close()
+
+	provider.Prewarm()
+	time.Sleep(400 * time.Millisecond)
+	if got := handshakes.Load(); got > 6 {
+		t.Fatalf("prewarm handshakes in 400ms = %d, want backoff instead of an immediate reconnect loop", got)
 	}
 }
