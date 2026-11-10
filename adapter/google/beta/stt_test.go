@@ -184,7 +184,7 @@ func TestGeminiSetupCancellation(t *testing.T) {
 	}
 }
 
-func fakeLive(t *testing.T, handler func(*websocket.Conn)) *STT {
+func fakeLive(t *testing.T, handler func(*websocket.Conn), opts ...STTOption) *STT {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -202,7 +202,8 @@ func fakeLive(t *testing.T, handler func(*websocket.Conn)) *STT {
 		handler(c)
 	}))
 	t.Cleanup(server.Close)
-	p, e := NewSTT("key", WithSTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, Timeout: time.Second, RetryInterval: time.Millisecond}))
+	opts = append([]STTOption{WithSTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, Timeout: time.Second, RetryInterval: time.Millisecond})}, opts...)
+	p, e := NewSTT("key", opts...)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -704,5 +705,127 @@ func TestGeminiTurnSplittingDrainsRetiredFinal(t *testing.T) {
 	ev, err := s.Next()
 	if err != nil || ev.Alternatives[0].Text != "retired final" {
 		t.Fatalf("%+v %v", ev, err)
+	}
+}
+
+func speechFrame(amplitude int16) *model.AudioFrame {
+	data := make([]byte, 640)
+	for i := 0; i < len(data); i += 2 {
+		data[i], data[i+1] = byte(amplitude), byte(amplitude>>8)
+	}
+	return &model.AudioFrame{Data: data, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 320}
+}
+
+func streamEndRecorder(t *testing.T, connections *atomic.Int32, wire chan<- string) func(*websocket.Conn) {
+	t.Helper()
+	return func(c *websocket.Conn) {
+		connections.Add(1)
+		for {
+			var msg map[string]any
+			if c.ReadJSON(&msg) != nil {
+				return
+			}
+			input := msg["realtimeInput"].(map[string]any)
+			if input["audioStreamEnd"] == true {
+				wire <- "end"
+				_ = c.WriteJSON(map[string]any{"serverContent": map[string]any{"inputTranscription": map[string]any{"text": "selesai"}}})
+				continue
+			}
+			wire <- "audio"
+		}
+	}
+}
+
+func nextWire(t *testing.T, wire <-chan string, want string) {
+	t.Helper()
+	for {
+		select {
+		case got := <-wire:
+			if got == want {
+				return
+			}
+			if want == "audio" {
+				t.Fatalf("wire sent %q, want %q", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("wire never sent %q", want)
+		}
+	}
+}
+
+func TestGeminiFlushSendsStreamEndOnSameSession(t *testing.T) {
+	var connections atomic.Int32
+	wire := make(chan string, 64)
+	p := fakeLive(t, streamEndRecorder(t, &connections, wire), WithSTTStreamEndOnFlush(0))
+	s := streamForTest(t, p)
+
+	if err := s.PushFrame(speechFrame(8000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	nextWire(t, wire, "end")
+	if ev, err := s.Next(); err != nil || ev.Type != stt.SpeechEventFinalTranscript || ev.Alternatives[0].Text != "selesai" {
+		t.Fatalf("final after stream end: %+v %v", ev, err)
+	}
+	expectEndOfSpeech(t, s)
+
+	if err := s.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PushFrame(speechFrame(8000)); err != nil {
+		t.Fatal(err)
+	}
+	nextWire(t, wire, "audio")
+	select {
+	case got := <-wire:
+		t.Fatalf("flush without new audio sent %q", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if n := connections.Load(); n != 1 {
+		t.Fatalf("connections = %d, want the session kept open after stream end", n)
+	}
+}
+
+func TestGeminiDelayedStreamEndCancelledBySpeech(t *testing.T) {
+	var connections atomic.Int32
+	wire := make(chan string, 64)
+	p := fakeLive(t, streamEndRecorder(t, &connections, wire), WithSTTStreamEndOnFlush(150*time.Millisecond))
+	s := streamForTest(t, p)
+
+	if err := s.PushFrame(speechFrame(8000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PushFrame(speechFrame(8000)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(300 * time.Millisecond)
+	for waiting := true; waiting; {
+		select {
+		case got := <-wire:
+			if got == "end" {
+				t.Fatal("speech during the delay must cancel the stream end")
+			}
+		case <-deadline:
+			waiting = false
+		}
+	}
+
+	start := time.Now()
+	if err := s.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PushFrame(speechFrame(0)); err != nil {
+		t.Fatal(err)
+	}
+	if ev, err := s.Next(); err != nil || ev.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("final after delayed stream end: %+v %v", ev, err)
+	}
+	if waited := time.Since(start); waited < 150*time.Millisecond {
+		t.Fatalf("stream end after %v, want the 150ms delay", waited)
 	}
 }

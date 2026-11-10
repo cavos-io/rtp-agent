@@ -3,6 +3,7 @@ package beta
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,8 @@ type STT struct {
 	options                           llm.APIConnectOptions
 	finalizeTimeout                   time.Duration
 	voiceActivity                     bool
+	streamEndOnFlush                  bool
+	streamEndDelay                    time.Duration
 }
 
 type STTOption func(*STT)
@@ -61,6 +64,10 @@ func WithSTTCustomVocabulary(values []string) STTOption {
 func WithSTTSampleRate(value uint32) STTOption { return func(s *STT) { s.sampleRate = value } }
 
 func WithSTTVoiceActivity(value bool) STTOption { return func(s *STT) { s.voiceActivity = value } }
+
+func WithSTTStreamEndOnFlush(delay time.Duration) STTOption {
+	return func(s *STT) { s.streamEndOnFlush, s.streamEndDelay = true, delay }
+}
 func WithSTTConnectOptions(value llm.APIConnectOptions) STTOption {
 	return func(s *STT) { s.options = value }
 }
@@ -140,8 +147,9 @@ func (s *STT) Close() error {
 }
 
 type inputMessage struct {
-	audio *genai.Blob
-	end   bool
+	audio     *genai.Blob
+	end       bool
+	streamEnd bool
 }
 type recognizeStream struct {
 	owner     *STT
@@ -159,6 +167,9 @@ type recognizeStream struct {
 	// Samples sent on the current connection; Gemini's audio offsets restart per connection.
 	sentSamples atomic.Int64
 	err         error // Written before done/events close; read only after events is closed.
+
+	audioSinceStreamEnd bool
+	streamEndTimer      *time.Timer
 }
 
 func (s *recognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -177,6 +188,10 @@ func (s *recognizeStream) PushFrame(frame *model.AudioFrame) error {
 		return errors.New("gemini STT input sample rate changed")
 	}
 	s.inputRate = frame.SampleRate
+	if s.streamEndTimer != nil && loudPCM(frame.Data) {
+		s.streamEndTimer.Stop()
+		s.streamEndTimer = nil
+	}
 	if frame.SampleRate != s.owner.sampleRate {
 		if s.resampler == nil {
 			var err error
@@ -221,6 +236,7 @@ func (s *recognizeStream) pushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	s.audioSinceStreamEnd = true
 	return s.enqueue(inputMessage{audio: &genai.Blob{Data: append([]byte(nil), frame.Data...), MIMEType: fmt.Sprintf("audio/pcm;rate=%d", s.owner.sampleRate)}})
 }
 func (s *recognizeStream) flush() error {
@@ -230,15 +246,59 @@ func (s *recognizeStream) flush() error {
 	return nil
 }
 
-// Flush drains resampled audio but does not finalize a Gemini turn, matching
-// the Python base stream plus the Gemini plugin's ignored flush sentinel.
+// Flush drains resampled audio. Only WithSTTStreamEndOnFlush makes it finalize
+// the Gemini turn; by default it matches the Python plugin's ignored flush sentinel.
 func (s *recognizeStream) Flush() error {
 	s.inputMu.Lock()
 	defer s.inputMu.Unlock()
 	if err := s.checkInput(); err != nil {
 		return err
 	}
-	return s.flush()
+	if err := s.flush(); err != nil {
+		return err
+	}
+	if !s.owner.streamEndOnFlush || !s.audioSinceStreamEnd {
+		return nil
+	}
+	if s.owner.streamEndDelay <= 0 {
+		return s.endAudioStream()
+	}
+	if s.streamEndTimer != nil {
+		s.streamEndTimer.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(s.owner.streamEndDelay, func() {
+		s.inputMu.Lock()
+		defer s.inputMu.Unlock()
+		if s.streamEndTimer != timer || s.checkInput() != nil {
+			return
+		}
+		_ = s.endAudioStream()
+	})
+	s.streamEndTimer = timer
+	return nil
+}
+
+func (s *recognizeStream) endAudioStream() error {
+	s.streamEndTimer = nil
+	s.audioSinceStreamEnd = false
+	logger.Logger.Debugw("gemini.audio_stream_end")
+	return s.enqueue(inputMessage{streamEnd: true})
+}
+
+const speechFloorMeanSquare = 327.68 * 327.68 // -40 dBFS
+
+func loudPCM(data []byte) bool {
+	n := len(data) / 2
+	if n == 0 {
+		return false
+	}
+	var sum float64
+	for i := 0; i+1 < len(data); i += 2 {
+		v := float64(int16(binary.LittleEndian.Uint16(data[i:])))
+		sum += v * v
+	}
+	return sum/float64(n) > speechFloorMeanSquare
 }
 func (s *recognizeStream) EndInput() error {
 	s.inputMu.Lock()
@@ -451,7 +511,7 @@ func (s *recognizeStream) send(ctx context.Context, cancel context.CancelFunc, c
 				} `json:"realtimeInput"`
 			}{}
 			payload.RealtimeInput.Audio = input.audio
-			payload.RealtimeInput.AudioStreamEnd = input.end
+			payload.RealtimeInput.AudioStreamEnd = input.end || input.streamEnd
 			if input.end {
 				sentEnd.Store(true)
 			}
