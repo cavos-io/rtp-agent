@@ -2142,6 +2142,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 		a.flushHeldSTTEvents()
 	}
 	if a.adaptiveInterruptionActive() && !a.isUserSpeaking() {
+		a.startFalseInterruptionTimer()
 		a.runEOUDetection(a.pendingFinalEndOfTurnInfo())
 	}
 }
