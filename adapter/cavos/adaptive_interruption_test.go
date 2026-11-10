@@ -81,6 +81,12 @@ func TestAdaptiveV2WaitsForExactTriggerAndKeepsShortSpeechSilence(t *testing.T) 
 	if err := s.PushFrame(bargeFrame(31999, 100)); err != nil {
 		t.Fatal(err)
 	}
+	s.mu.Lock()
+	queuedAt := s.overlap.queuedAt
+	s.mu.Unlock()
+	if !queuedAt.Equal(now) {
+		t.Fatalf("window readiness timestamp = %v, want trigger timestamp %v", queuedAt, now)
+	}
 	select {
 	case pcm := <-requests:
 		if len(pcm) != 64000 {
