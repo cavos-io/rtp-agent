@@ -3209,6 +3209,45 @@ func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamPreservesCancellationCause(t *testing.T) {
+	for _, emitted := range []bool{false, true} {
+		name := "before_text"
+		if emitted {
+			name = "after_text"
+		}
+		t.Run(name, func(t *testing.T) {
+			cause := &url.Error{Op: "read", URL: "https://example.test", Err: context.Canceled}
+			body := io.Reader(failingReadCloser{err: cause})
+			if emitted {
+				body = io.MultiReader(strings.NewReader("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n"), body)
+			}
+			response := openAITestResponse(http.StatusOK, "")
+			response.Body = io.NopCloser(body)
+			config := openaisdk.DefaultConfig("test-key")
+			config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{response}}
+			model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+			stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			if emitted {
+				chunk, err := stream.Next()
+				if err != nil || chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+					t.Fatalf("first chunk = %#v, error = %v", chunk, err)
+				}
+			}
+			_, err = stream.Next()
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Next error = %T %v, want cancellation cause preserved", err, err)
+			}
+			if openAIShouldRetryError(err) {
+				t.Fatal("cancellation must not be retried")
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := newBlockingReadErrorAfterClose()
 	config := openaisdk.DefaultConfig("test-key")
