@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -601,6 +602,7 @@ func typeName(v any) string {
 }
 
 type TTSGenerationData struct {
+	audioReceivedNanos atomic.Int64
 	AudioCh            chan *model.AudioFrame
 	TimedTextCh        chan tts.TimedString
 	TTFB               time.Duration
@@ -1019,6 +1021,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					audio = &copy
 				}
 				metrics.observeAudio(audio)
+				if audio.Frame.SampleRate > 0 {
+					data.audioReceivedNanos.Add(int64(float64(audio.Frame.SamplesPerChannel) / float64(audio.Frame.SampleRate) * float64(time.Second)))
+				}
 				if !data.TTFBSet {
 					anchor := startTime
 					if !audio.SynthesisStartedAt.IsZero() && !audio.SynthesisStartedAt.After(time.Now()) {
@@ -1229,6 +1234,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 					audio = &copy
 				}
 				metrics.observeAudio(audio)
+				if audio.Frame.SampleRate > 0 {
+					data.audioReceivedNanos.Add(int64(float64(audio.Frame.SamplesPerChannel) / float64(audio.Frame.SampleRate) * float64(time.Second)))
+				}
 				if !firstAudioObserved {
 					firstAudioObserved = true
 					if ttfb, ok := timeSinceStart(audio.SynthesisStartedAt); ok {
