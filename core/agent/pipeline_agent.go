@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2280,6 +2281,13 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 }
 
 func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
+	if speech != nil {
+		speech.mu.Lock()
+		if !slices.Contains(speech.ttsGenerations, ttsGen) {
+			speech.ttsGenerations = append(speech.ttsGenerations, ttsGen)
+		}
+		speech.mu.Unlock()
+	}
 	startedSpeaking := false
 	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
 	ttsGen.playbackTiming = playbackTiming
@@ -2330,6 +2338,11 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					va.flushAssistantPlayback(session)
 				}
 				return ttsGen, err
+			}
+			if speech != nil {
+				speech.mu.Lock()
+				speech.audioPublishCompleted += time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
+				speech.mu.Unlock()
 			}
 		}
 		ttsGen.ForwardedAudio = true
