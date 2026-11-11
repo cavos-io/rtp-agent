@@ -1970,7 +1970,7 @@ func (a *AgentActivity) processStartOfSpeech(ev *vad.VADEvent, sttStartedAt *flo
 	// pause priority: on ANY barge-in during agent speech, pause immediately regardless of
 	// duration or transcript (bypasses MinInterruptionDuration + the backchannel-boundary window).
 	if a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking {
-		if a.pauseSpeechForFalseInterruption(time.Time{}) {
+		if a.pauseSpeechForFalseInterruption(time.Time{}, "speech onset") {
 			return
 		}
 	}
@@ -2154,7 +2154,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	if a.adaptiveInterruptionActive() {
 		a.requestSTTFinalization()
 		a.releaseAdaptiveTranscripts(ev.DetectedAt, ignoreUntil)
-		a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
+		a.interruptByAudioActivity("adaptive model verdict", "detected_at", ev.DetectedAt, ignoreUntil)
 	} else {
 		a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
 		a.onAgentSpeechEnded(ignoreUntil)
@@ -2322,7 +2322,7 @@ func (a *AgentActivity) processFinalTranscript(ev *stt.SpeechEvent, replay bool)
 		return
 	}
 	if !replay && a.adaptiveInterruptionActive() && a.Session.AgentStateValue() == AgentStateSpeaking {
-		a.adaptiveVADOwned.Store(true)
+		a.noteAdaptiveVADOwnership("final_transcript", time.Now())
 		a.restoreAudioActivityInterruption()
 	}
 	if a.shouldDropFinalTranscriptBeforeAgentSpeechEnd(ev) {
@@ -2838,20 +2838,23 @@ func (a *AgentActivity) interruptByAudioActivity(reason string, key string, valu
 	if a.audioActivityInterruptionDisabled(time.Now()) {
 		return
 	}
-	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil) {
+	if a.pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil, reason) {
 		return
 	}
-	if _, err := a.interruptHandles(false, false); err != nil {
+	if handles, err := a.interruptHandles(false, false); err != nil {
 		a.Session.Logger().Warnw("failed to interrupt speech for "+reason, err, key, value)
+	} else if len(handles) > 0 {
+		a.Session.Logger().Infow("bargein.interrupted", "trigger", reason,
+			"adaptive_vad_owned", a.adaptiveVADOwned.Load(), "handles", len(handles))
 	}
 }
 
-func (a *AgentActivity) pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil time.Time) bool {
+func (a *AgentActivity) pauseSpeechForFalseInterruption(ignoreUserTranscriptUntil time.Time, trigger ...string) bool {
 	if a == nil || a.Session == nil {
 		return false
 	}
 	opts := a.Session.Options
-	if !a.pauseCurrentSpeechForFalseInterruption(time.Duration(opts.FalseInterruptionTimeout*float64(time.Second)), true, false) {
+	if !a.pauseCurrentSpeechForFalseInterruption(time.Duration(opts.FalseInterruptionTimeout*float64(time.Second)), true, false, trigger...) {
 		return false
 	}
 	if ignoreUserTranscriptUntil.IsZero() {
@@ -2865,10 +2868,10 @@ func (a *AgentActivity) pauseThinkingSpeechForFalseInterruption() bool {
 	if a == nil || a.Session == nil || a.Session.AgentState() == AgentStateSpeaking {
 		return false
 	}
-	return a.pauseCurrentSpeechForFalseInterruption(0, false, true)
+	return a.pauseCurrentSpeechForFalseInterruption(0, false, true, "speech onset while thinking")
 }
 
-func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Duration, updateAgentState bool, skipIfPaused bool) bool {
+func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Duration, updateAgentState bool, skipIfPaused bool, trigger ...string) bool {
 	if a == nil || a.Session == nil {
 		return false
 	}
@@ -2916,7 +2919,13 @@ func (a *AgentActivity) pauseCurrentSpeechForFalseInterruption(timeout time.Dura
 	a.falseInterruptionMu.Unlock()
 
 	controller.PauseAudioOutput()
-	a.Session.Logger().Infow("false_interruption.paused", "timeout", timeout.Seconds(), "handle", current.ID, "agent_state", a.Session.AgentState())
+	source := "other"
+	if len(trigger) > 0 {
+		source = trigger[0]
+	}
+	a.Session.Logger().Infow("false_interruption.paused", "timeout", timeout.Seconds(), "handle", current.ID,
+		"agent_state", a.Session.AgentState(), "trigger", source,
+		"adaptive_vad_owned", a.adaptiveVADOwned.Load(), "adaptive_active", a.adaptiveInterruptionActive())
 	if updateAgentState {
 		a.Session.UpdateAgentState(AgentStateListening)
 	}
