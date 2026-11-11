@@ -3195,7 +3195,7 @@ func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 
-	want := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US"><voice name="en-US-AvaNeural"><lexicon uri="https://example.com/lexicon.xml"/><mstts:express-as style="cheerful" styledegree="1.5"><prosody rate="fast" volume="loud" pitch="high">hello</prosody></mstts:express-as></voice></speak>`
+	want := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US"><voice name="en-US-AvaNeural"><mstts:silence type="Leading-exact" value="0ms"/><mstts:silence type="Tailing-exact" value="0ms"/><lexicon uri="https://example.com/lexicon.xml"/><mstts:express-as style="cheerful" styledegree="1.5"><prosody rate="fast" volume="loud" pitch="high">hello</prosody></mstts:express-as></voice></speak>`
 	if string(body) != want {
 		t.Fatalf("SSML = %q, want %q", string(body), want)
 	}
