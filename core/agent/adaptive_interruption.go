@@ -213,7 +213,7 @@ func (a *AgentActivity) startAdaptiveOverlap(startedAt time.Time) bool {
 	boundary := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
 	inBoundary := boundary > 0 && !agentStart.IsZero() && !startedAt.After(agentStart.Add(boundary))
 	if a.adaptiveVADOwned.Load() || inBoundary || a.backchannelBoundaryActive(time.Now()) {
-		a.adaptiveVADOwned.Store(true)
+		a.noteAdaptiveVADOwnership("start_cooldown", startedAt)
 		a.restoreAudioActivityInterruption()
 		a.releaseAdaptiveTranscripts(time.Time{}, time.Time{})
 		return false
@@ -380,4 +380,22 @@ func (a *AgentActivity) discardAdaptiveBackchannelTranscripts() {
 			IsFinal: ev.Type == stt.SpeechEventFinalTranscript || ev.Type == "",
 		})
 	}
+}
+
+// Record only the ownership transition; ownership still lasts for the same
+// audible agent interval as before.
+func (a *AgentActivity) noteAdaptiveVADOwnership(trigger string, at time.Time) {
+	if a.adaptiveVADOwned.Swap(true) {
+		return
+	}
+	a.userTurnMu.Lock()
+	agentStart := a.adaptiveAgentSpeechStartedAt
+	a.userTurnMu.Unlock()
+	var offset any
+	if !agentStart.IsZero() {
+		offset = float64(at.Sub(agentStart)) / float64(time.Millisecond)
+	}
+	a.Session.Logger().Infow("bargein.vad_owned", "trigger", trigger,
+		"offset_from_agent_start_ms", offset, "agent_speech_started_at", agentStart,
+		"overlap_pending", a.adaptiveOverlapPending.Load())
 }
