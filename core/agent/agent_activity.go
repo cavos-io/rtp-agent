@@ -207,6 +207,7 @@ type AgentActivity struct {
 	holdSTTWhileAgentSpeaking    bool
 	adaptiveAgentSpeechStartedAt time.Time
 	adaptiveActiveVADStartedAt   time.Time
+	adaptiveBackchannelSegments  []adaptiveBackchannelSegment
 	adaptiveVADOwned             atomic.Bool
 
 	backchannelBoundaryMu    sync.Mutex
@@ -2022,6 +2023,12 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 		}
 	}
 	a.userSpeechStoppedAt = stoppedAt
+	for i := range a.adaptiveBackchannelSegments {
+		segment := &a.adaptiveBackchannelSegments[i]
+		if segment.end.IsZero() {
+			segment.end = stoppedAt
+		}
+	}
 	if ev != nil {
 		a.adaptiveActiveVADStartedAt = time.Time{}
 	}
@@ -2116,6 +2123,12 @@ func (a *AgentActivity) onOverlapSpeechEnded(ev OverlappingSpeechEvent) bool {
 	a.finishDeferredEndpointing(!ev.IsInterruption)
 	if a.adaptiveInterruptionActive() && !ev.IsInterruption {
 		a.adaptiveBackchannelConfirmed.Store(true)
+		a.userTurnMu.Lock()
+		a.adaptiveBackchannelSegments = append(a.adaptiveBackchannelSegments, adaptiveBackchannelSegment{
+			start: a.userSpeechStartedAt, end: a.userSpeechStoppedAt,
+		})
+		a.userTurnMu.Unlock()
+		a.discardAdaptiveBackchannelTranscripts()
 		a.trimAdaptiveTranscripts(ev.DetectedAt, a.activeAdaptiveVADStart())
 		a.finishBackchannelUserTurn()
 		a.Session.turnStream.discardBackchannel(a)
@@ -2204,6 +2217,10 @@ func (a *AgentActivity) processInterimTranscript(ev *stt.SpeechEvent, replay boo
 	if a.shouldIgnoreManualCommittedSTT(evType) {
 		return
 	}
+	ev, backchannelFiltered := a.filterAdaptiveBackchannelTranscript(ev)
+	if ev == nil && backchannelFiltered {
+		return
+	}
 	if !replay && a.holdSTTEventWhileAgentSpeaking(ev) {
 		return
 	}
@@ -2245,12 +2262,14 @@ func (a *AgentActivity) processInterimTranscript(ev *stt.SpeechEvent, replay boo
 	a.pendingPreflightConfidence = preflightConfidence
 	a.userTurnMu.Unlock()
 
-	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
-		Language:   language,
-		Transcript: transcript,
-		IsFinal:    false,
-		SpeakerID:  speakerID,
-	})
+	if !backchannelFiltered {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language:   language,
+			Transcript: transcript,
+			IsFinal:    false,
+			SpeakerID:  speakerID,
+		})
+	}
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
 		if !a.shortInterruptionTranscript(transcript) {
@@ -2274,6 +2293,10 @@ func (a *AgentActivity) processFinalTranscript(ev *stt.SpeechEvent, replay bool)
 		return
 	}
 	if a.shouldIgnoreManualCommittedSTT(stt.SpeechEventFinalTranscript) {
+		return
+	}
+	ev, backchannelFiltered := a.filterAdaptiveBackchannelTranscript(ev)
+	if ev == nil && backchannelFiltered {
 		return
 	}
 	if !replay && a.holdSTTEventWhileAgentSpeaking(ev) {
@@ -2300,7 +2323,7 @@ func (a *AgentActivity) processFinalTranscript(ev *stt.SpeechEvent, replay bool)
 		a.Session.Logger().Debugw("dropping stale final transcript before agent speech end", "transcript", transcript)
 		return
 	}
-	if a.Session != nil {
+	if a.Session != nil && !backchannelFiltered {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   language,
 			Transcript: transcript,

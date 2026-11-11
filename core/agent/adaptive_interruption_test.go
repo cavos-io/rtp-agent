@@ -251,9 +251,9 @@ func TestAdaptiveBackchannelDoesNotAdvanceEndpointing(t *testing.T) {
 	if endpointing.endCount != 1 || !endpointing.lastShouldIgnore {
 		t.Fatalf("endpointing end=%d ignore=%v, want ignored backchannel", endpointing.endCount, endpointing.lastShouldIgnore)
 	}
-	// Recent events remain behind the gate until a later boundary resolves them.
-	if len(activity.heldSTTEvents) != 1 || !activity.holdSTTWhileAgentSpeaking {
-		t.Fatal("recent backchannel was not retained behind the transcript gate")
+	// Confirmed BC text is removed; the gate still waits for the next verdict.
+	if len(activity.heldSTTEvents) != 0 || !activity.holdSTTWhileAgentSpeaking {
+		t.Fatal("confirmed backchannel was retained for a later user turn")
 	}
 	activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "late backchannel transcript", Confidence: 0.9}}})
 	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
@@ -265,8 +265,11 @@ func TestAdaptiveBackchannelDoesNotAdvanceEndpointing(t *testing.T) {
 	}
 	select {
 	case ev := <-userEvents:
-		t.Fatalf("backchannel transcript escaped: %#v", ev)
+		if ev.Transcript != "uh huh" {
+			t.Fatalf("display transcript = %q", ev.Transcript)
+		}
 	default:
+		t.Fatal("backchannel transcript missing from display")
 	}
 }
 
