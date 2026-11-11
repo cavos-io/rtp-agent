@@ -414,6 +414,8 @@ func buildAzureTTSSSML(t *TTS, language string, text string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
 	b.WriteString(fmt.Sprintf(`<voice name="%s">`, t.voice))
+	// Each sentence is synthesized separately; omit Azure's default boundary padding.
+	b.WriteString(`<mstts:silence type="Leading-exact" value="0ms"/><mstts:silence type="Tailing-exact" value="0ms"/>`)
 	if t.lexiconURISet {
 		b.WriteString(fmt.Sprintf(`<lexicon uri="%s"/>`, t.lexiconURI))
 	}
