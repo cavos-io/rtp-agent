@@ -917,10 +917,11 @@ func (r *dgRecognitionResponse) UnmarshalJSON(data []byte) error {
 }
 
 type dgResponse struct {
-	Type        string `json:"type"`
-	IsFinal     bool   `json:"is_final"`
-	SpeechFinal bool   `json:"speech_final"`
-	Channel     struct {
+	Type         string `json:"type"`
+	IsFinal      bool   `json:"is_final"`
+	SpeechFinal  bool   `json:"speech_final"`
+	FromFinalize bool   `json:"from_finalize"`
+	Channel      struct {
 		Alternatives []dgAlternative `json:"alternatives"`
 	} `json:"channel"`
 	Start    float64 `json:"start"`
@@ -938,10 +939,11 @@ type dgResponse struct {
 
 func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Type        string `json:"type"`
-		IsFinal     bool   `json:"is_final"`
-		SpeechFinal bool   `json:"speech_final"`
-		Channel     struct {
+		Type         string `json:"type"`
+		IsFinal      bool   `json:"is_final"`
+		SpeechFinal  bool   `json:"speech_final"`
+		FromFinalize bool   `json:"from_finalize"`
+		Channel      struct {
 			Alternatives []dgAlternative `json:"alternatives"`
 		} `json:"channel"`
 		Start    float64 `json:"start"`
@@ -969,6 +971,7 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	r.Type = raw.Type
 	r.IsFinal = raw.IsFinal
 	r.SpeechFinal = raw.SpeechFinal
+	r.FromFinalize = raw.FromFinalize
 	r.Channel = raw.Channel
 	r.Start = raw.Start
 	r.Duration = raw.Duration
@@ -1243,9 +1246,14 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 				s.sendEvent(event)
 			}
 
-			if resp.SpeechFinal && s.speaking {
+			if (resp.SpeechFinal && s.speaking) || resp.FromFinalize {
 				s.speaking = false
-				s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
+				event := &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+				if resp.FromFinalize {
+					end := s.StartTime() + s.StartTimeOffset() + resp.Start + resp.Duration
+					event.SpeechEndTime = &end
+				}
+				s.sendEvent(event)
 			}
 		}
 	}
@@ -1445,6 +1453,16 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *deepgramStream) Flush() error {
+	return s.flush(false)
+}
+
+// Finalize requests a server result even when local audio chunks are already
+// drained. Flush retains its existing no-op behavior for an empty local buffer.
+func (s *deepgramStream) Finalize() error {
+	return s.flush(true)
+}
+
+func (s *deepgramStream) flush(finalize bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputEnded {
@@ -1477,7 +1495,7 @@ func (s *deepgramStream) Flush() error {
 			s.sendRecognitionUsage(chunk)
 		}
 	}
-	if !flushedFrame {
+	if !flushedFrame && !finalize {
 		return nil
 	}
 	s.flushRecognitionUsageLocked()

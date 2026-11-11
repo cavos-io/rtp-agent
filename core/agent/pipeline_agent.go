@@ -743,6 +743,9 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				if !sttDecides && activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
 				}
+				if ev.Type == stt.SpeechEventEndOfSpeech && activity.vadBasedTurnDetection() {
+					activity.finishSTTFinalization(ev)
+				}
 				if sttDecides && ev.Type == stt.SpeechEventStartOfSpeech && !activity.isUserSpeaking() {
 					va.session.Logger().Infow("User started speaking", "source", "stt")
 					activity.OnSTTStartOfSpeech(ev)
