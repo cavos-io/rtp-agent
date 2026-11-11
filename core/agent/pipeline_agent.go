@@ -665,6 +665,9 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				if activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
 				}
+				if ev.Type == stt.SpeechEventEndOfSpeech && activity.vadBasedTurnDetection() {
+					activity.finishSTTFinalization(ev)
+				}
 				if activity.turnDetectionMode() == TurnDetectionModeSTT {
 					if ev.Type == stt.SpeechEventStartOfSpeech {
 						activity.OnSTTStartOfSpeech(ev)

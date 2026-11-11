@@ -500,6 +500,14 @@ func streamStartTimeNow() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
 
+// Finalizing is optional. Finalize requests pending recognition results while
+// keeping the input stream open for subsequent utterances. Completion is
+// delivered as EndOfSpeech after the corresponding final transcripts, with
+// SpeechEndTime identifying the absolute processed-audio boundary.
+type Finalizing interface {
+	Finalize() error
+}
+
 type InputEnding interface {
 	EndInput() error
 }

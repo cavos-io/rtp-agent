@@ -172,6 +172,8 @@ type AgentActivity struct {
 	pendingTranscriptConfidenceCount int
 	pendingUserTranscriptPresent     bool
 	lastFinalTranscriptTime          time.Time
+	sttFinalizeRequestedAt           time.Time
+	sttFinalizeDeadline              time.Time
 	lastUserLanguage                 string
 	pendingStartedSpeakingAt         *float64
 	pendingStoppedSpeakingAt         *float64
@@ -1919,6 +1921,8 @@ func (a *AgentActivity) processStartOfSpeech(ev *vad.VADEvent, sttStartedAt *flo
 		}
 		a.userTurnMu.Lock()
 		a.finishResolvedEmptyUserTurn(startedAt)
+		a.sttFinalizeRequestedAt = time.Time{}
+		a.sttFinalizeDeadline = time.Time{}
 		a.userSpeechStartedAt = startedAt
 		if a.userTurnStartedAt.IsZero() {
 			a.userTurnStartedAt = startedAt
@@ -2082,6 +2086,7 @@ func (a *AgentActivity) onEndOfSpeechAt(ev *vad.VADEvent, synthetic bool, sttEve
 	}
 	a.Session.Logger().Infow("End of speech detected")
 
+	a.requestSTTFinalization()
 	turnDetection := a.turnDetectionMode()
 	if a.vadBasedTurnDetection() || (turnDetection == TurnDetectionModeSTT && a.pendingFinalTranscriptPresent()) {
 		// Trigger EOU detection
@@ -2147,6 +2152,7 @@ func (a *AgentActivity) OnInterruption(ev OverlappingSpeechEvent) {
 	a.restoreAudioActivityInterruption()
 	ignoreUntil := overlappingSpeechIgnoreUntil(ev)
 	if a.adaptiveInterruptionActive() {
+		a.requestSTTFinalization()
 		a.releaseAdaptiveTranscripts(ev.DetectedAt, ignoreUntil)
 		a.interruptByAudioActivity("overlapping speech", "detected_at", ev.DetectedAt, ignoreUntil)
 	} else {
@@ -2703,6 +2709,9 @@ func (a *AgentActivity) flushHeldSTTEvents() {
 		case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
 			a.processInterimTranscript(ev, true)
 		case stt.SpeechEventEndOfSpeech:
+			if a.vadBasedTurnDetection() {
+				a.finishSTTFinalization(ev)
+			}
 			if !a.adaptiveInterruptionActive() || a.turnDetectionMode() == TurnDetectionModeSTT {
 				a.OnSTTEndOfSpeech(ev)
 			}
@@ -4163,6 +4172,9 @@ func (a *AgentActivity) pendingFinalEndOfTurnInfo() EndOfTurnInfo {
 		return EndOfTurnInfo{}
 	}
 	info.endpointingNotBefore = a.syntheticEOUNotBefore
+	if a.sttFinalizeDeadline.After(info.endpointingNotBefore) {
+		info.endpointingNotBefore = a.sttFinalizeDeadline
+	}
 
 	info.sttRequestIDs = append([]string(nil), a.pendingSTTRequestIDs...)
 	if info.StartedSpeakingAt == nil && (!a.userTurnStartedAt.IsZero() || !a.userSpeechStartedAt.IsZero()) {

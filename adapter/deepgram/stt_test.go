@@ -4521,3 +4521,89 @@ type deepgramRoundTripFunc func(*http.Request) (*http.Response, error)
 func (f deepgramRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
+
+func TestDeepgramSTTFinalizeKeepsInputOpen(t *testing.T) {
+	for _, samples := range []int{0, 800, 1000} {
+		t.Run(fmt.Sprint(samples), func(t *testing.T) {
+			var messages []string
+			stream := &deepgramStream{
+				sampleRate: 16000, numChannels: 1,
+				writeBinary: func([]byte) error { return nil },
+				writeText:   func(payload string) error { messages = append(messages, payload); return nil },
+			}
+			if samples > 0 {
+				if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, samples*2), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: uint32(samples)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			finalizer, ok := any(stream).(interface{ Finalize() error })
+			if !ok {
+				t.Fatal("stream lacks finalize-only operation")
+			}
+			if err := finalizer.Finalize(); err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 || messages[0] != deepgramSTTFinalizeMessage {
+				t.Fatalf("messages = %v, want only Finalize", messages)
+			}
+			if err := stream.PushFrame(&model.AudioFrame{Data: make([]byte, 1600), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 800}); err != nil {
+				t.Fatalf("input closed after Finalize: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeepgramSTTFinalizeResponseEndsRecognitionWithoutClosing(t *testing.T) {
+	client, server := net.Pipe()
+	ready, finish := make(chan struct{}), make(chan struct{})
+	serverErr := make(chan error, 1)
+	go func() {
+		defer server.Close()
+		reader := bufio.NewReader(server)
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_, err = fmt.Fprintf(server, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(request.Header.Get("Sec-WebSocket-Key")))
+		if err == nil {
+			err = readDeepgramSTTInitialKeepAlive(server, reader)
+		}
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		<-ready
+		for _, transcript := range []string{"tail", ""} {
+			message := fmt.Sprintf(`{"type":"Results","is_final":true,"speech_final":false,"from_finalize":true,"start":1,"duration":2,"metadata":{"request_id":"test"},"channel":{"alternatives":[{"transcript":%q,"confidence":1,"words":[]}]}}`, transcript)
+			if err := writeDeepgramTestWebsocketFrame(server, websocket.TextMessage, []byte(message)); err != nil {
+				serverErr <- err
+				return
+			}
+		}
+		<-finish
+		serverErr <- nil
+	}()
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil }}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	defer close(finish)
+	stt.SetStreamStartTime(stream.(stt.StreamTiming), 100)
+	stt.SetStreamStartTimeOffset(stream.(stt.StreamTiming), 7)
+	close(ready)
+	for _, kind := range []stt.SpeechEventType{stt.SpeechEventStartOfSpeech, stt.SpeechEventFinalTranscript, stt.SpeechEventEndOfSpeech, stt.SpeechEventEndOfSpeech} {
+		event := nextDeepgramTestSpeechEvent(t, stream)
+		if event.Type != kind {
+			t.Fatalf("event type = %s, want %s", event.Type, kind)
+		}
+		if kind == stt.SpeechEventEndOfSpeech && (event.SpeechEndTime == nil || *event.SpeechEndTime != 110) {
+			t.Fatalf("end time = %v, want absolute processed-audio boundary 110", event.SpeechEndTime)
+		}
+	}
+}
