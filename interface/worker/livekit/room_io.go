@@ -404,6 +404,7 @@ type RoomIO struct {
 	nextRoomEventListenerID      uint64
 
 	audioOutputPaused        bool
+	audioOutputLastResumedAt time.Time
 	audioOutputWaiters       []chan audioOutputWaitResult
 	audioOutputCarry         []byte
 	audioOutputDeadline      time.Time
@@ -2552,11 +2553,24 @@ func (rio *RoomIO) CanPauseAudioOutput() bool {
 	return rio != nil && !rio.Options.DisableAudioOutput
 }
 
+// AudioOutputState provides a diagnostic snapshot without changing playback.
+func (rio *RoomIO) AudioOutputState() (bool, time.Time) {
+	if rio == nil {
+		return false, time.Time{}
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioOutputPaused, rio.audioOutputLastResumedAt
+}
+
 func (rio *RoomIO) ResumeAudioOutput() {
 	if rio == nil {
 		return
 	}
 	rio.mu.Lock()
+	if rio.audioOutputPaused {
+		rio.audioOutputLastResumedAt = time.Now()
+	}
 	rio.audioOutputPaused = false
 	waiters := append([]chan audioOutputWaitResult{}, rio.audioOutputWaiters...)
 	rio.audioOutputWaiters = nil
