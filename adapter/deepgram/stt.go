@@ -763,6 +763,9 @@ func deepgramBaseURL(s *STT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
+	clock          stt.AudioClock
+	audioOffset    float64
+	audioSent      float64
 	provider       *STT
 	conn           *websocket.Conn
 	streamURL      string
@@ -1413,6 +1416,14 @@ func (s *deepgramStream) SetStartTime(startTime float64) {
 	s.start = startTime
 }
 
+func (s *deepgramStream) WallTimeAtStart(offset float64) (time.Time, bool) {
+	return s.clock.WallTimeAtStart(offset)
+}
+
+func (s *deepgramStream) WallTimeAt(offset float64) (time.Time, bool) {
+	return s.clock.WallTimeAt(offset)
+}
+
 func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -1442,6 +1453,9 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if s.audioBStream == nil {
 		s.audioBStream = newDeepgramSTTAudioByteStream(s)
 	}
+	duration := audio.CalculateFrameDuration(normalizedFrame)
+	s.clock.Record(s.offset+s.audioOffset, duration, time.Now())
+	s.audioOffset += duration
 	for _, chunk := range s.audioBStream.Push(normalizedFrame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
@@ -1473,6 +1487,9 @@ func (s *deepgramStream) flush(finalize bool) error {
 	}
 	flushedFrame := false
 	if tail := s.inputAudio.flush(); tail != nil {
+		duration := audio.CalculateFrameDuration(tail)
+		s.clock.Record(s.offset+s.audioOffset, duration, time.Now())
+		s.audioOffset += duration
 		if s.audioBStream == nil {
 			s.audioBStream = newDeepgramSTTAudioByteStream(s)
 		}
@@ -1619,6 +1636,9 @@ func (s *deepgramStream) EndInput() error {
 	}
 	flushedFrame := false
 	if tail := s.inputAudio.flush(); tail != nil {
+		duration := audio.CalculateFrameDuration(tail)
+		s.clock.Record(s.offset+s.audioOffset, duration, time.Now())
+		s.audioOffset += duration
 		if s.audioBStream == nil {
 			s.audioBStream = newDeepgramSTTAudioByteStream(s)
 		}
@@ -1783,6 +1803,8 @@ func (s *deepgramStream) reconnectLocked() error {
 		return err
 	}
 	oldConn := s.conn
+	s.advanceTimingForReconnectLocked()
+	s.audioBStream = nil
 	s.conn = conn
 	s.sendConnectionUsageRemainderLocked()
 	s.connStart = time.Now()
@@ -1798,8 +1820,6 @@ func (s *deepgramStream) reconnectAfterUnexpectedClose(conn *websocket.Conn) err
 	if s.closed || s.inputEnded || conn != s.conn {
 		return nil
 	}
-	s.advanceTimingForReconnectLocked(time.Now())
-	s.audioBStream = nil
 	if err := s.reconnectLocked(); err != nil {
 		s.closed = true
 		if s.cancel != nil {
@@ -1812,12 +1832,13 @@ func (s *deepgramStream) reconnectAfterUnexpectedClose(conn *websocket.Conn) err
 	return nil
 }
 
-func (s *deepgramStream) advanceTimingForReconnectLocked(now time.Time) {
-	nowSeconds := float64(now.UnixNano()) / 1e9
-	if s.start > 0 && nowSeconds > s.start {
-		s.offset += nowSeconds - s.start
-	}
-	s.start = nowSeconds
+func (s *deepgramStream) advanceTimingForReconnectLocked() {
+	// Provider offsets restart at zero; retain the original wall origin and
+	// advance only by audio actually accepted, not elapsed wall time.
+	s.offset += s.audioSent
+	s.audioOffset = 0
+	s.audioSent = 0
+	s.inputAudio.reset()
 }
 
 func (s *deepgramStream) reconnectNow() {
@@ -1856,13 +1877,25 @@ func newDeepgramSTTAudioByteStream(s *deepgramStream) *audio.AudioByteStream {
 }
 
 func (s *deepgramStream) writeBinaryData(data []byte) error {
+	var err error
 	if s.writeBinary != nil {
-		return s.writeBinary(data)
-	}
-	if s.conn == nil {
+		err = s.writeBinary(data)
+	} else if s.conn == nil {
 		return io.ErrClosedPipe
+	} else {
+		err = s.conn.WriteMessage(websocket.BinaryMessage, data)
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+	if err == nil {
+		rate, channels := s.sampleRate, s.numChannels
+		if rate == 0 {
+			rate = 16000
+		}
+		if channels == 0 {
+			channels = 1
+		}
+		s.audioSent += float64(len(data)) / float64(2*rate*channels)
+	}
+	return err
 }
 
 func (s *deepgramStream) writeJSONData(payload any) error {

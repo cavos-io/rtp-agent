@@ -4607,3 +4607,31 @@ func TestDeepgramSTTFinalizeResponseEndsRecognitionWithoutClosing(t *testing.T) 
 		}
 	}
 }
+
+func TestDeepgramClockTracksFramesAcrossReconnect(t *testing.T) {
+	s := &deepgramStream{sampleRate: 16000, start: 100, writeBinary: func([]byte) error { return nil }}
+	frame := &model.AudioFrame{Data: make([]byte, 1600), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 800}
+	before := time.Now()
+	if err := s.PushFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.WallTimeAt(0.025)
+	if !ok || got.Before(before.Add(-50*time.Millisecond)) || got.After(time.Now()) {
+		t.Fatalf("frame wall mapping missing: %v %v", got, ok)
+	}
+	tail := &model.AudioFrame{Data: make([]byte, 640), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 320}
+	if err := s.PushFrame(tail); err != nil {
+		t.Fatal(err)
+	}
+	s.advanceTimingForReconnectLocked()
+	s.audioBStream = nil
+	if s.start != 100 || s.offset != 0.05 {
+		t.Fatalf("reconnect advanced by wall time: start=%v offset=%v", s.start, s.offset)
+	}
+	if err := s.PushFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.WallTimeAt(0.075); !ok {
+		t.Fatal("reconnected audio offset not mapped")
+	}
+}

@@ -319,7 +319,11 @@ func (a *AgentActivity) filterAdaptiveBackchannelTranscriptLocked(ev *stt.Speech
 		origin := *ev.SpeechStartTime - data.StartTime
 		words := make([]stt.TimedString, 0, len(data.Words))
 		for _, word := range data.Words {
-			if !contains(origin + (word.StartTime+word.EndTime)/2) {
+			midpoint := origin + (word.StartTime+word.EndTime)/2
+			if word.SpeechMidTime != nil {
+				midpoint = *word.SpeechMidTime
+			}
+			if !contains(midpoint) {
 				words = append(words, word)
 			}
 		}
@@ -340,6 +344,12 @@ func (a *AgentActivity) filterAdaptiveBackchannelTranscriptLocked(ev *stt.Speech
 		filtered.Alternatives[0].EndTime = words[len(words)-1].EndTime
 		start, end := origin+words[0].StartTime, origin+words[len(words)-1].EndTime
 		filtered.SpeechStartTime, filtered.SpeechEndTime = &start, &end
+		if words[0].SpeechStartTime != nil {
+			filtered.SpeechStartTime = words[0].SpeechStartTime
+		}
+		if words[len(words)-1].SpeechEndTime != nil {
+			filtered.SpeechEndTime = words[len(words)-1].SpeechEndTime
+		}
 		return filtered, true
 	}
 	if ev.SpeechStartTime != nil && contains(*ev.SpeechStartTime) &&

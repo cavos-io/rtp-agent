@@ -61,6 +61,11 @@ func (a *AgentActivity) finishSTTFinalization(ev *stt.SpeechEvent) {
 	a.userTurnMu.Lock()
 	ready := !a.sttFinalizeDeadline.IsZero() && !a.isUserSpeaking() &&
 		ev.SpeechEndTime != nil && *ev.SpeechEndTime >= timeToUnixSeconds(a.userSpeechStoppedAt)
+	var delta any
+	if ev.SpeechEndTime != nil {
+		delta = *ev.SpeechEndTime - timeToUnixSeconds(a.userSpeechStoppedAt)
+	}
+	a.Session.Logger().Debugw("stt.finalization_clock", "speech_end_time", ev.SpeechEndTime, "user_speech_stopped_at", a.userSpeechStoppedAt, "delta_s", delta, "ready", ready)
 	if ready {
 		a.sttFinalizeDeadline = time.Time{}
 	}
