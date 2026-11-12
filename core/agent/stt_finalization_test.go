@@ -193,3 +193,48 @@ func TestHeldFinalizationBoundaryFollowsHeldTranscripts(t *testing.T) {
 	}
 	a.cancelPendingEOUDetection()
 }
+
+type clockMappedAgentStream struct {
+	fakePipelineRecognizeStream
+	clock stt.AudioClock
+}
+
+func (*clockMappedAgentStream) StartTime() float64         { return 100 }
+func (*clockMappedAgentStream) SetStartTime(float64)       {}
+func (*clockMappedAgentStream) StartTimeOffset() float64   { return 0 }
+func (*clockMappedAgentStream) SetStartTimeOffset(float64) {}
+func (s *clockMappedAgentStream) WallTimeAtStart(offset float64) (time.Time, bool) {
+	return s.clock.WallTimeAtStart(offset)
+}
+func (s *clockMappedAgentStream) WallTimeAt(offset float64) (time.Time, bool) {
+	return s.clock.WallTimeAt(offset)
+}
+
+func TestClockGapFinalizationAndBackchannelAttribution(t *testing.T) {
+	a := newAdaptiveTranscriptActivity(t)
+	defer a.Stop()
+	a.Session.agentState = AgentStateListening
+	a.userSpeechStoppedAt = time.Unix(163, 0)
+	a.sttFinalizeRequestedAt = time.Now()
+	a.sttFinalizeDeadline = time.Now().Add(time.Second)
+	a.adaptiveBackchannelSegments = []adaptiveBackchannelSegment{{start: time.Unix(131, 0), end: time.Unix(132, 0)}}
+	s := &clockMappedAgentStream{}
+	s.clock.Record(0, 1, time.Unix(101, 0))
+	s.clock.Record(1, 1, time.Unix(132, 0))
+	s.clock.Record(2, 1, time.Unix(163, 0))
+	event := stt.AlignSpeechEventTiming(&stt.SpeechEvent{ReceivedAt: time.Unix(170, 0), Alternatives: []stt.SpeechData{{StartTime: 0, EndTime: 3, Text: "please ok stop", Words: []stt.TimedString{{Text: "please", StartTime: 0.1, EndTime: 0.9}, {Text: "ok", StartTime: 1.1, EndTime: 1.9}, {Text: "stop", StartTime: 2, EndTime: 2.9}}}}}, s)
+	filtered, changed := a.filterAdaptiveBackchannelTranscriptLocked(event)
+	if !changed || filtered == nil || filtered.Alternatives[0].Text != "please stop" {
+		t.Fatalf("wrong word attribution: %+v", filtered)
+	}
+	if *filtered.Alternatives[0].Words[1].SpeechStartTime != 162 {
+		t.Fatalf("word starts before gap: %v", *filtered.Alternatives[0].Words[1].SpeechStartTime)
+	}
+	end := 103.0
+	boundary := stt.AlignSpeechEventTiming(&stt.SpeechEvent{ReceivedAt: time.Unix(170, 0), SpeechEndTime: &end}, s)
+	a.finishSTTFinalization(boundary)
+	if !a.sttFinalizeDeadline.IsZero() {
+		t.Fatal("mapped provider completion did not release finalize hold")
+	}
+	a.cancelPendingEOUDetection()
+}
