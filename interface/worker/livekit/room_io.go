@@ -404,6 +404,7 @@ type RoomIO struct {
 	nextRoomEventListenerID      uint64
 
 	audioOutputPaused        bool
+	audioOutputLastResumedAt time.Time
 	audioOutputWaiters       []chan audioOutputWaitResult
 	audioOutputCarry         []byte
 	audioOutputDeadline      time.Time
@@ -1995,17 +1996,47 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote, generation uint64
 	}
 	defer rio.releaseAudioBuffer(buffer)
 
+	diagnosticStart := time.Now()
+	var previousTimestamp uint32
+	var previousSequence uint16
+	var previousArrival time.Time
+	var packets, maxTimestampStep, maxSequenceStep uint64
+	var maxArrivalGap time.Duration
 	for rio.audioInputTrackActive(generation) {
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			buffer.stop(errors.Is(err, io.EOF))
 			return
 		}
+		now := time.Now()
+		if !previousArrival.IsZero() {
+			// Ignore backwards timestamps (reordering); uint32 subtraction handles wrap.
+			step := pkt.Timestamp - previousTimestamp
+			if step < 1<<31 {
+				maxTimestampStep = max(maxTimestampStep, uint64(step))
+			}
+			if sequenceStep := pkt.SequenceNumber - previousSequence; sequenceStep < 1<<15 {
+				maxSequenceStep = max(maxSequenceStep, uint64(sequenceStep))
+			}
+			maxArrivalGap = max(maxArrivalGap, now.Sub(previousArrival))
+		}
+		previousTimestamp, previousArrival = pkt.Timestamp, now
+		previousSequence = pkt.SequenceNumber
+		packets++
+		if elapsed := now.Sub(diagnosticStart); elapsed >= time.Second && track.Codec().ClockRate > 0 {
+			rio.logger().Debugw("audio.rtp_input", "track_id", track.ID(), "interval_ms", elapsed.Milliseconds(),
+				"packets", packets, "max_sequence_step", maxSequenceStep, "max_arrival_gap_ms", float64(maxArrivalGap)/float64(time.Millisecond),
+				"max_timestamp_step_ms", float64(maxTimestampStep)*1000/float64(track.Codec().ClockRate))
+			diagnosticStart, packets, maxTimestampStep, maxArrivalGap = now, 0, 0, 0
+			maxSequenceStep = 0
+		}
 		buffer.Push(pkt)
 	}
 }
 
 func (rio *RoomIO) newAudioInputBuffer(generation uint64, clockRate uint32, inputStream *audio.AudioByteStream, converter *roomIOInputConverter) *roomIOAudioBuffer {
+	diagnosticStart := time.Now()
+	var decodedSamples uint64
 	return newRoomIOAudioBuffer(func(payload []byte) {
 		// Track handlers and timer callbacks share the room's primary decoder.
 		// Its use and closure must be serialized with track generation changes.
@@ -2018,9 +2049,17 @@ func (rio *RoomIO) newAudioInputBuffer(generation uint64, clockRate uint32, inpu
 		if rio.decoder != nil {
 			if decoded, err := rio.decoder.Decode(payload); err == nil {
 				pcm = decoded
+				decodedSamples += uint64(len(decoded) / 2)
+			} else {
+				rio.logger().Debugw("audio.input_decode_error", "error", err.Error(), "payload_bytes", len(payload))
 			}
 		}
 		rio.mu.Unlock()
+		if elapsed := time.Since(diagnosticStart); elapsed >= time.Second && clockRate > 0 {
+			rio.logger().Debugw("audio.decoded_input", "generation", generation, "interval_ms", elapsed.Milliseconds(),
+				"decoded_audio_ms", float64(decodedSamples)*1000/float64(clockRate), "clock_rate", clockRate)
+			diagnosticStart, decodedSamples = time.Now(), 0
+		}
 
 		frame := converter.Convert(roomIOInputFrameFromPCM(pcm, clockRate, 1))
 		if frame != nil && rio.audioInputTrackActive(generation) {
@@ -2514,11 +2553,24 @@ func (rio *RoomIO) CanPauseAudioOutput() bool {
 	return rio != nil && !rio.Options.DisableAudioOutput
 }
 
+// AudioOutputState provides a diagnostic snapshot without changing playback.
+func (rio *RoomIO) AudioOutputState() (bool, time.Time) {
+	if rio == nil {
+		return false, time.Time{}
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioOutputPaused, rio.audioOutputLastResumedAt
+}
+
 func (rio *RoomIO) ResumeAudioOutput() {
 	if rio == nil {
 		return
 	}
 	rio.mu.Lock()
+	if rio.audioOutputPaused {
+		rio.audioOutputLastResumedAt = time.Now()
+	}
 	rio.audioOutputPaused = false
 	waiters := append([]chan audioOutputWaitResult{}, rio.audioOutputWaiters...)
 	rio.audioOutputWaiters = nil

@@ -6273,3 +6273,36 @@ func TestRoomIOShouldRecordAuxTrack(t *testing.T) {
 		})
 	}
 }
+
+func TestRoomIOAudioOutputStateTracksActualResume(t *testing.T) {
+	rio := &RoomIO{}
+	state, ok := any(rio).(interface{ AudioOutputState() (bool, time.Time) })
+	if !ok {
+		t.Fatal("output exposes no pause/resume diagnostic state")
+	}
+	paused, resumedAt := state.AudioOutputState()
+	if paused || !resumedAt.IsZero() {
+		t.Fatal("unused output has pause/resume history")
+	}
+	rio.ResumeAudioOutput()
+	_, resumedAt = state.AudioOutputState()
+	if !resumedAt.IsZero() {
+		t.Fatal("resume without pause created false history")
+	}
+	rio.PauseAudioOutput()
+	paused, _ = state.AudioOutputState()
+	if !paused {
+		t.Fatal("paused output reported active")
+	}
+	before := time.Now()
+	rio.ResumeAudioOutput()
+	paused, resumedAt = state.AudioOutputState()
+	if paused || resumedAt.Before(before) {
+		t.Fatal("actual resume was not recorded")
+	}
+	rio.ResumeAudioOutput()
+	_, unchanged := state.AudioOutputState()
+	if !unchanged.Equal(resumedAt) {
+		t.Fatal("redundant resume overwrote actual resume time")
+	}
+}

@@ -1379,6 +1379,9 @@ func mapOpenAIError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError("")
 	}

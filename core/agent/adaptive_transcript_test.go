@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -375,6 +376,111 @@ func TestAdaptiveSessionStartsWithUnalignedSTT(t *testing.T) {
 			if err := session.Stop(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+		})
+	}
+}
+
+// A verdict must survive both playback ending and delayed provider delivery.
+func TestAdaptiveBackchannelTranscriptDoesNotLeak(t *testing.T) {
+	for _, delivery := range []string{"buffered", "late", "after-next-onset", "mixed-final", "next-bargein", "verdict-before-end", "late-interim", "late-preflight"} {
+		t.Run(delivery, func(t *testing.T) {
+			a := newAdaptiveTranscriptActivity(t)
+			a.Session.Options.TurnDetection = TurnDetectionModeSTT
+			a.Session.Options.MinEndpointingDelay = 60
+			a.Session.Options.MaxEndpointingDelay = 60
+			base := time.Now().Add(-10 * time.Second)
+			a.armBackchannelBoundary(base)
+			start := timeToUnixSeconds(base.Add(2 * time.Second))
+			a.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &start})
+			end := base.Add(2500 * time.Millisecond)
+			if delivery != "verdict-before-end" {
+				a.userSpeechStoppedAt = end
+				a.OnEndOfSpeech(nil)
+			}
+			if !a.adaptiveOverlapPending.Load() {
+				t.Fatal("test did not start an adaptive overlap")
+			}
+			event := timedGateEvent("Yeah.", timeToUnixSeconds(base.Add(4*time.Second)), floatPtr(timeToUnixSeconds(end)))
+			event.SpeechStartTime = floatPtr(start)
+			if delivery == "late-interim" {
+				event.Type = stt.SpeechEventInterimTranscript
+			}
+			if delivery == "late-preflight" {
+				event.Type = stt.SpeechEventPreflightTranscript
+			}
+			if delivery == "buffered" {
+				a.OnFinalTranscript(event)
+			}
+			events := a.Session.UserInputTranscribedEvents()
+			a.OnOverlapSpeechEnded(OverlappingSpeechEvent{OverlapStartedAt: &a.userSpeechStartedAt, DetectedAt: base.Add(3200 * time.Millisecond)})
+			if delivery == "verdict-before-end" {
+				a.userSpeechStoppedAt = end
+				a.OnEndOfSpeech(nil)
+			}
+			if delivery != "next-bargein" {
+				a.onAgentSpeechEnded(base.Add(3300 * time.Millisecond))
+				a.Session.agentState = AgentStateListening
+				a.flushHeldSTTEvents()
+			}
+			want := ""
+			if delivery == "after-next-onset" || delivery == "mixed-final" || delivery == "next-bargein" {
+				next := timeToUnixSeconds(base.Add(5 * time.Second))
+				a.OnSTTStartOfSpeech(&stt.SpeechEvent{SpeechStartTime: &next})
+				if delivery == "mixed-final" {
+					event.Alternatives[0].Text = "Yeah. Stop."
+					event.Alternatives[0].StartTime = 2
+					event.Alternatives[0].EndTime = 5.5
+					event.Alternatives[0].Words = []stt.TimedString{{Text: "Yeah.", StartTime: 2, EndTime: 2.5}, {Text: "Stop.", StartTime: 5, EndTime: 5.5}}
+					event.SpeechEndTime = floatPtr(timeToUnixSeconds(base.Add(5500 * time.Millisecond)))
+					want = "Stop."
+				}
+			}
+			if delivery != "buffered" {
+				if event.Type == stt.SpeechEventFinalTranscript {
+					a.OnFinalTranscript(event)
+				} else {
+					a.OnInterimTranscript(event)
+				}
+			}
+			if delivery == "next-bargein" {
+				a.OnFinalTranscript(timedGateEvent("Stop.", timeToUnixSeconds(base.Add(6*time.Second)), nil))
+				verdict := OverlappingSpeechEvent{IsInterruption: true, OverlapStartedAt: &a.userSpeechStartedAt, DetectedAt: base.Add(6 * time.Second)}
+				a.OnOverlapSpeechEnded(verdict)
+				a.OnInterruption(verdict)
+				want = "Stop."
+			}
+			if got := a.pendingFinalEndOfTurnInfo().NewTranscript; got != want {
+				t.Fatalf("accepted transcript = %q, want %q", got, want)
+			}
+			if len(a.Agent.ChatCtx.Items) != 0 {
+				t.Fatal("backchannel added to conversation history")
+			}
+			select {
+			case ev := <-events:
+				if ev.Transcript != event.Alternatives[0].Text {
+					t.Fatalf("display transcript = %q", ev.Transcript)
+				}
+			default:
+				t.Fatal("transcript missing from display events")
+			}
+			text, err := a.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true, TranscriptTimeout: -1})
+			if err != nil || text != want {
+				t.Fatalf("commit = %q, %v, want %q", text, err, want)
+			}
+			items := a.Agent.ChatCtx.Items
+			if want == "" && len(items) != 0 {
+				t.Fatal("backchannel was committed to history")
+			}
+			if want != "" {
+				if len(items) != 1 {
+					t.Fatalf("history has %d items, want one user turn", len(items))
+				}
+				message, ok := items[0].(*llm.ChatMessage)
+				if !ok || message.TextContent() != want {
+					t.Fatalf("history contains backchannel: %#v", items)
+				}
+			}
+			a.cancelPendingEOUDetection()
 		})
 	}
 }

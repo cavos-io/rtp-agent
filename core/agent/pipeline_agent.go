@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,8 @@ type PipelineAgent struct {
 
 	audioInCh          chan *model.AudioFrame
 	audioInputHook     atomic.Pointer[AudioInputHook]
+	audioInputReceived atomic.Uint64
+	audioInputDropped  atomic.Uint64
 	mu                 sync.Mutex
 	session            *AgentSession
 	vadStream          vad.VADStream
@@ -347,11 +350,24 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		go va.sttLoop(sttStream)
 	}
 
+	diagnosticStart := time.Now()
+	var processedAudioMS float64
+	var processedFrames uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case frame := <-va.audioInCh:
+			processedFrames++
+			if frame != nil && frame.SampleRate > 0 {
+				processedAudioMS += float64(frame.SamplesPerChannel) * 1000 / float64(frame.SampleRate)
+			}
+			if elapsed := time.Since(diagnosticStart); elapsed >= time.Second && va.session != nil {
+				va.session.Logger().Debugw("audio.pipeline_input", "interval_ms", elapsed.Milliseconds(),
+					"processed_frames", processedFrames, "processed_audio_ms", processedAudioMS,
+					"queue_frames", len(va.audioInCh), "dropped_frames_total", va.audioInputDropped.Load())
+				diagnosticStart, processedAudioMS, processedFrames = time.Now(), 0, 0
+			}
 			if hookPtr := va.audioInputHook.Load(); hookPtr != nil {
 				frame = (*hookPtr)(ctx, frame)
 			}
@@ -649,6 +665,9 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			if activity != nil {
 				if activity.holdSTTEventWhileAgentSpeaking(ev) {
 					continue
+				}
+				if ev.Type == stt.SpeechEventEndOfSpeech && activity.vadBasedTurnDetection() {
+					activity.finishSTTFinalization(ev)
 				}
 				if activity.turnDetectionMode() == TurnDetectionModeSTT {
 					if ev.Type == stt.SpeechEventStartOfSpeech {
@@ -2262,6 +2281,13 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 }
 
 func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
+	if speech != nil {
+		speech.mu.Lock()
+		if !slices.Contains(speech.ttsGenerations, ttsGen) {
+			speech.ttsGenerations = append(speech.ttsGenerations, ttsGen)
+		}
+		speech.mu.Unlock()
+	}
 	startedSpeaking := false
 	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
 	ttsGen.playbackTiming = playbackTiming
@@ -2312,6 +2338,11 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 					va.flushAssistantPlayback(session)
 				}
 				return ttsGen, err
+			}
+			if speech != nil {
+				speech.mu.Lock()
+				speech.audioPublishCompleted += time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
+				speech.mu.Unlock()
 			}
 		}
 		ttsGen.ForwardedAudio = true
@@ -2665,9 +2696,16 @@ func formatPythonStringRepr(value string) string {
 }
 
 func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	va.audioInputReceived.Add(1)
 	select {
 	case va.audioInCh <- frame:
 	default:
+		count := va.audioInputDropped.Add(1)
+		// Log the first loss and powers of two without flooding the input callback.
+		if va.session != nil && count&(count-1) == 0 {
+			va.session.Logger().Warnw("audio.input_queue_drop", nil, "dropped_frames_total", count,
+				"received_frames_total", va.audioInputReceived.Load(), "queue_capacity", cap(va.audioInCh))
+		}
 	}
 }
 

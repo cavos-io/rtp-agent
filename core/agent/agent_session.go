@@ -3091,8 +3091,8 @@ func (s *AgentSession) onAgentSpeakingStall() {
 	timeout := s.Options.AgentSpeakingStallTimeout
 	s.mu.Unlock()
 
-	s.Logger().Warnw("agent speaking stalled; interrupting stuck reply to recover", nil,
-		"timeout_seconds", timeout)
+	fields := append([]any{"timeout_seconds", timeout}, s.speakingStallDiagnostics()...)
+	s.Logger().Warnw("agent speaking stalled; interrupting stuck reply to recover", nil, fields...)
 
 	if err := s.Interrupt(true); err != nil {
 		s.Logger().Warnw("failed to interrupt stalled agent speech", err)

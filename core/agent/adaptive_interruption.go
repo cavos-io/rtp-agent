@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -212,7 +213,7 @@ func (a *AgentActivity) startAdaptiveOverlap(startedAt time.Time) bool {
 	boundary := time.Duration(a.Session.Options.BackchannelBoundaryStart * float64(time.Second))
 	inBoundary := boundary > 0 && !agentStart.IsZero() && !startedAt.After(agentStart.Add(boundary))
 	if a.adaptiveVADOwned.Load() || inBoundary || a.backchannelBoundaryActive(time.Now()) {
-		a.adaptiveVADOwned.Store(true)
+		a.noteAdaptiveVADOwnership("start_cooldown", startedAt)
 		a.restoreAudioActivityInterruption()
 		a.releaseAdaptiveTranscripts(time.Time{}, time.Time{})
 		return false
@@ -274,4 +275,137 @@ func (a *AgentActivity) releaseAdaptiveTranscripts(resolvedAt, vadStartedAt time
 	a.userTurnMu.Unlock()
 	a.trimAdaptiveTranscripts(resolvedAt, vadStartedAt)
 	a.flushHeldSTTEvents()
+}
+
+// Guarded by userTurnMu. Keep resolved segments for finals delivered after the
+// next onset or after playback ends; receipt time cannot identify those finals.
+type adaptiveBackchannelSegment struct {
+	start, end time.Time
+}
+
+func (a *AgentActivity) filterAdaptiveBackchannelTranscript(ev *stt.SpeechEvent) (*stt.SpeechEvent, bool) {
+	if ev == nil || len(ev.Alternatives) == 0 {
+		return ev, false
+	}
+	a.userTurnMu.Lock()
+	filtered, changed := a.filterAdaptiveBackchannelTranscriptLocked(ev)
+	a.userTurnMu.Unlock()
+	if changed {
+		data := ev.Alternatives[0]
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language: data.Language, Transcript: data.Text, SpeakerID: data.SpeakerID,
+			IsFinal: ev.Type == stt.SpeechEventFinalTranscript || ev.Type == "",
+		})
+	}
+	return filtered, changed
+}
+
+func (a *AgentActivity) filterAdaptiveBackchannelTranscriptLocked(ev *stt.SpeechEvent) (*stt.SpeechEvent, bool) {
+	if len(a.adaptiveBackchannelSegments) == 0 {
+		return ev, false
+	}
+	contains := func(at float64) bool {
+		for _, segment := range a.adaptiveBackchannelSegments {
+			if at >= timeToUnixSeconds(segment.start) && (segment.end.IsZero() || at <= timeToUnixSeconds(segment.end)) {
+				return true
+			}
+		}
+		return false
+	}
+	data := ev.Alternatives[0]
+	if ev.SpeechStartTime != nil && len(data.Words) > 0 {
+		// Ingress supplies an absolute anchor; provider word offsets stay relative
+		// to the original STT stream, including across reconnects.
+		origin := *ev.SpeechStartTime - data.StartTime
+		words := make([]stt.TimedString, 0, len(data.Words))
+		for _, word := range data.Words {
+			midpoint := origin + (word.StartTime+word.EndTime)/2
+			if word.SpeechMidTime != nil {
+				midpoint = *word.SpeechMidTime
+			}
+			if !contains(midpoint) {
+				words = append(words, word)
+			}
+		}
+		if len(words) == len(data.Words) {
+			return ev, false
+		}
+		if len(words) == 0 {
+			return nil, true
+		}
+		filtered := cloneSpeechEvent(ev)
+		parts := make([]string, len(words))
+		for i, word := range words {
+			parts[i] = word.Text
+		}
+		filtered.Alternatives[0].Text = strings.Join(parts, " ")
+		filtered.Alternatives[0].Words = words
+		filtered.Alternatives[0].StartTime = words[0].StartTime
+		filtered.Alternatives[0].EndTime = words[len(words)-1].EndTime
+		start, end := origin+words[0].StartTime, origin+words[len(words)-1].EndTime
+		filtered.SpeechStartTime, filtered.SpeechEndTime = &start, &end
+		if words[0].SpeechStartTime != nil {
+			filtered.SpeechStartTime = words[0].SpeechStartTime
+		}
+		if words[len(words)-1].SpeechEndTime != nil {
+			filtered.SpeechEndTime = words[len(words)-1].SpeechEndTime
+		}
+		return filtered, true
+	}
+	if ev.SpeechStartTime != nil && contains(*ev.SpeechStartTime) &&
+		(ev.SpeechEndTime == nil || contains(*ev.SpeechEndTime)) {
+		return nil, true
+	}
+	// Unaligned providers cannot distinguish a delayed old final after a new
+	// onset. Only discard while the current speech epoch is confirmed BC.
+	if ev.SpeechStartTime == nil && a.adaptiveBackchannelConfirmed.Load() {
+		return nil, true
+	}
+	return ev, false
+}
+
+func (a *AgentActivity) discardAdaptiveBackchannelTranscripts() {
+	a.userTurnMu.Lock()
+	var displayed []*stt.SpeechEvent
+	kept := a.heldSTTEvents[:0]
+	for _, ev := range a.heldSTTEvents {
+		if ev == nil || len(ev.Alternatives) == 0 {
+			kept = append(kept, ev)
+			continue
+		}
+		filtered, changed := a.filterAdaptiveBackchannelTranscriptLocked(ev)
+		if changed {
+			displayed = append(displayed, ev)
+		}
+		if filtered != nil {
+			kept = append(kept, filtered)
+		}
+	}
+	a.heldSTTEvents = kept
+	a.userTurnMu.Unlock()
+	for _, ev := range displayed {
+		data := ev.Alternatives[0]
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language: data.Language, Transcript: data.Text, SpeakerID: data.SpeakerID,
+			IsFinal: ev.Type == stt.SpeechEventFinalTranscript || ev.Type == "",
+		})
+	}
+}
+
+// Record only the ownership transition; ownership still lasts for the same
+// audible agent interval as before.
+func (a *AgentActivity) noteAdaptiveVADOwnership(trigger string, at time.Time) {
+	if a.adaptiveVADOwned.Swap(true) {
+		return
+	}
+	a.userTurnMu.Lock()
+	agentStart := a.adaptiveAgentSpeechStartedAt
+	a.userTurnMu.Unlock()
+	var offset any
+	if !agentStart.IsZero() {
+		offset = float64(at.Sub(agentStart)) / float64(time.Millisecond)
+	}
+	a.Session.Logger().Infow("bargein.vad_owned", "trigger", trigger,
+		"offset_from_agent_start_ms", offset, "agent_speech_started_at", agentStart,
+		"overlap_pending", a.adaptiveOverlapPending.Load())
 }

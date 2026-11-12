@@ -124,12 +124,16 @@ func (u *RecognitionUsage) UnmarshalJSON(data []byte) error {
 }
 
 type TimedString struct {
-	Text            string  `json:"text"`
-	StartTime       float64 `json:"start_time"`
-	EndTime         float64 `json:"end_time"`
-	Confidence      float64 `json:"confidence"`
-	StartTimeOffset float64 `json:"start_time_offset"`
-	SpeakerID       string  `json:"speaker_id"`
+	// Wall anchors are internal; provider-relative offsets remain unchanged.
+	SpeechStartTime *float64 `json:"-"`
+	SpeechEndTime   *float64 `json:"-"`
+	SpeechMidTime   *float64 `json:"-"`
+	Text            string   `json:"text"`
+	StartTime       float64  `json:"start_time"`
+	EndTime         float64  `json:"end_time"`
+	Confidence      float64  `json:"confidence"`
+	StartTimeOffset float64  `json:"start_time_offset"`
+	SpeakerID       string   `json:"speaker_id"`
 }
 
 func (s TimedString) String() string {
@@ -189,6 +193,7 @@ type SpeechEvent struct {
 	SpeechEndTime    *float64          `json:"speech_end_time,omitempty"`
 	ReceivedAt       time.Time         `json:"-"`
 	Interrupted      bool              `json:"-"`
+	timingAligned    bool
 }
 
 func (e SpeechEvent) MarshalJSON() ([]byte, error) {
@@ -498,6 +503,14 @@ func SetStreamStartTime(stream StreamTiming, startTime float64) {
 
 func streamStartTimeNow() float64 {
 	return float64(time.Now().UnixNano()) / float64(time.Second)
+}
+
+// Finalizing is optional. Finalize requests pending recognition results while
+// keeping the input stream open for subsequent utterances. Completion is
+// delivered as EndOfSpeech after the corresponding final transcripts, with
+// SpeechEndTime identifying the absolute processed-audio boundary.
+type Finalizing interface {
+	Finalize() error
 }
 
 type InputEnding interface {

@@ -158,6 +158,32 @@ cadence, threshold, deadlines, quota, and overlap-end policy from its authoritat
 documentation or implementation, recording the revision used. An elapsed audio
 window can include silence; it does not promise that duration of voiced speech.
 
+## Cavos V2 local trial
+
+The Cavos Anura gRPC adapter uses a one-shot onset + 1 s window and supports
+environment selection, correlated logs, and optional audio dumps.
+Unlike the LiveKit example, it retains user audio across agent intervals and waits
+past user speech end to include the real silence required by its model.
+
+### Local Cloud Insights capture
+
+Use `connect <room> --record` to collect audio, transcripts, traces, and logs.
+Recording is opt-in and uses a unique directory under
+`.tmp/connect-recordings/`, with `recording.ogg` and `session_report.json` retained
+for inspection. The directory is logged at startup. At shutdown, the existing
+worker lifecycle finalizes the recorder and uploads the report to LiveKit Cloud.
+Use the default build: `-tags ffmpeg` disables Cloud recording uploads.
+
+For the Cavos detector, run through `cmd/main.go` (the `app` composition), with
+`RTP_AGENT_INTERRUPTION_PROVIDER=cavos`, an STT pipeline, and VAD configured.
+`examples/starter` can record with `--record`, but does not select this detector.
+After the browser call, press Ctrl+C once in the local agent terminal and wait
+for upload/cleanup to finish. Debug logs report `finished uploading session report
+to LiveKit Cloud`, including HTTP status and `audioBytes`; a successful call alone
+does not prove the recording upload succeeded. Confirm audio, Transcript, and
+Traces in Agent Insights after processing. Adaptive verdicts are required to
+measure backchannels; ordinary VAD pause/resume is not backchannel classification.
+
 ## Compose and enable a detector
 
 This helper uses the existing LiveKit implementation and returns options for a

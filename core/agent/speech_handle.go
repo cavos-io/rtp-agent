@@ -85,6 +85,8 @@ type SpeechHandle struct {
 	runFinalOutputSet      bool
 	precomputedLLM         *LLMGenerationData
 	precomputedTTS         *TTSGenerationData
+	ttsGenerations         []*TTSGenerationData
+	audioPublishCompleted  time.Duration
 	precomputedTTSSegments <-chan precomputedTTSSegment
 	precomputeCancel       context.CancelFunc
 	agentTurnCtx           context.Context
