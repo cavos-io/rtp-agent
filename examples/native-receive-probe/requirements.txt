@@ -1,0 +1,5 @@
+livekit==1.1.21
+aiofiles==25.1.0
+numpy==2.5.4
+protobuf==7.36.2
+types-protobuf==7.35.1.20260906
