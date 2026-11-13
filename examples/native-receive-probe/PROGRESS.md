@@ -16,3 +16,17 @@
 - Native and Python stream produce frames before publisher RTP begins. Startup now explicitly means subscription-to-first-frame; content latency measured independently by markers.
 - Corrected pilot (pilot-3): all three scenarios delivered 29.000s in the common 29s window and 8.000s in the interior 8s silence window, in both runtimes. All 20 ordered markers detected. DTX silence sent 33 packets vs 500 continuously; loss injected 25 missing packets. These are pilot measurements, separate from final ten-run results.
 - Focused Go tests, Go race tests, go vet, Python analyzer tests and Python syntax checks passed.
+- Checkpoint committed: 778dcc7ce. Commit hooks passed architecture and test-integrity checks. Root targeted-test hook cannot discover a nested module; the prototype's tests were run directly instead.
+- Connection-refused plus three connected cancellation cycles passed with normal and race-instrumented binaries.
+- Manual review found two harness defects: protobuf scalar maps could panic during recursive ownership traversal; cleanup could stop after one hung process. Added failing regressions, then fixes. Added an explicit error on missing disconnect callback.
+- Full 30-run experiment keeps the original checkpoint executable unchanged (SHA-256 6a297e3c59b54e5069b73820fc66c1fef816dda43c0ed4f132a2c1b5e8d1656a). Review fixes do not change receive/playout behavior; they will receive a separate live regression run with a distinct binary.
+- No subagent review tool is available in this environment; review is local source/diff inspection, not independent review.
+- Full-run dtx-03 is a real failed content check, retained: both runtimes produced marker 8 twice. Publisher packet 402 was 453.805ms late; Python delivery had a 476.084ms gap, while Go native callback cadence stayed below 56ms. This demonstrates why duration matching alone is insufficient. The cause of host scheduling disturbance is not established.
+- Reviewed race-instrumented binary passed refused connection, cancellation during a stalled WebSocket connection, and three connected shutdown cycles.
+- Full-run scheduling disturbance is retained as a failed gate, not reclassified as DTX or packet loss. No acceptance tolerance was relaxed.
+- Added packet-evidence checks to the analyzer so continuous silence, DTX omission, and the 25-packet loss interval must actually be observed.
+- Native opaque heap/thread leak freedom remains unproven. Available evidence covers disconnect/dispose completion and child-process exit, including race-instrumented lifecycle checks.
+- Started the unfiltered repository parity gate, then stopped it after >10 minutes still enumerating 9,434 unrelated manifest cases. This isolated nested module has no manifest row and makes no production parity change. No full-repository parity pass is claimed; focused native/Python experiments and direct nested-module tests are the evidence for this task.
+- Final 30-run results: continuous PCM in all scenarios; one shared DTX marker duplication and a continuous-silence onset p95 difference of 50.32ms against a 50ms gate. Both failures retained.
+- Reviewed race build: all three additional scenario checks passed; Go callback-to-consumer p95 0.49–0.54ms, max 1.41ms; explicit retained handle releases succeeded.
+- Resource limitation: immediate Go goroutine count after native dispose was 6–8 vs baseline 3. No leak diagnosis is made from count alone, and the no-outstanding-goroutines acceptance condition is not established. All subprocesses exited; no race report.

@@ -1,0 +1,74 @@
+[
+  {
+    "run": "continuous-00",
+    "checks": {
+      "scenario_verified": true,
+      "duration_difference": true,
+      "sustained_deficit": true,
+      "content": true,
+      "shutdown": true,
+      "no_wrapper_errors": true
+    },
+    "relative_latency_pass": true,
+    "callback_to_consumer_p95_ms": 0.4911999999999999,
+    "callback_to_consumer_max_ms": 0.958,
+    "shutdown": {
+      "at": 1589629457875000,
+      "disconnect_callback": true,
+      "duration_ns": 4798000,
+      "event": "shutdown",
+      "go_goroutines_after": 7,
+      "go_goroutines_before": 3,
+      "overflow": false,
+      "retained_handles_released": true
+    }
+  },
+  {
+    "run": "dtx-00",
+    "checks": {
+      "scenario_verified": true,
+      "duration_difference": true,
+      "sustained_deficit": true,
+      "content": true,
+      "shutdown": true,
+      "no_wrapper_errors": true
+    },
+    "relative_latency_pass": true,
+    "callback_to_consumer_p95_ms": 0.543,
+    "callback_to_consumer_max_ms": 1.062,
+    "shutdown": {
+      "at": 1589664795511000,
+      "disconnect_callback": true,
+      "duration_ns": 4435000,
+      "event": "shutdown",
+      "go_goroutines_after": 6,
+      "go_goroutines_before": 3,
+      "overflow": false,
+      "retained_handles_released": true
+    }
+  },
+  {
+    "run": "loss-00",
+    "checks": {
+      "scenario_verified": true,
+      "duration_difference": true,
+      "sustained_deficit": true,
+      "content": true,
+      "shutdown": true,
+      "no_wrapper_errors": true
+    },
+    "relative_latency_pass": true,
+    "callback_to_consumer_p95_ms": 0.5301000000000001,
+    "callback_to_consumer_max_ms": 1.407,
+    "shutdown": {
+      "at": 1589700719052000,
+      "disconnect_callback": true,
+      "duration_ns": 4562000,
+      "event": "shutdown",
+      "go_goroutines_after": 8,
+      "go_goroutines_before": 3,
+      "overflow": false,
+      "retained_handles_released": true
+    }
+  }
+]

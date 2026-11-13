@@ -53,6 +53,7 @@ def receiver(path,name,start,packets):
     pcm=np.fromfile(path/f'{name}.pcm',dtype='<i2')
     if len(pcm)!=sum(f['samples'] for f in frames):
         raise ValueError('PCM file length differs from recorded sample count')
+    callback_delays=[(f['delivered_at']-f['at'])/1e6 for f in frames if 'delivered_at' in f]
     markers=find_markers(pcm)
     offsets=np.array([f['offset']+f['samples'] for f in frames])
     by_index={p['index']:p for p in packets}
@@ -81,6 +82,8 @@ def receiver(path,name,start,packets):
         first_content_ms=next((m['latency_ms'] for m in markers if m['id']==0),None),join_ms=(ready['at']-connect['at'])/1e6,
         second_onset_ms=second,markers=markers,marker_ids=[m['id'] for m in markers],
         shutdown_ms=shutdown['duration_ns']/1e6,shutdown=shutdown,
+        callback_to_consumer_p95_ms=float(np.percentile(callback_delays,95)) if callback_delays else None,
+        callback_to_consumer_max_ms=max(callback_delays) if callback_delays else None,
         errors=[e for e in events if e['event']=='error'])
 
 def analyze(root):
@@ -96,7 +99,15 @@ def analyze(root):
         go=receiver(path,'go',start['at'],packets)
         py=receiver(path,'python',start['at'],packets)
         silence=[p for p in packets if 500<=p['index']<1000]
-        checks=dict(duration_difference=abs(go['window_pcm_s']-py['window_pcm_s'])<=.050001,
+        observed=packet_summary(observation)
+        constructed=(len(packets)==1500 and len(observation)>0)
+        if start['scenario']=='continuous':
+            constructed &= sum(p['sent'] for p in silence)==500 and observed['missing_sequences']==0
+        elif start['scenario']=='dtx':
+            constructed &= 0<sum(p['sent'] for p in silence)<500 and all(p['in_dtx'] and p['bytes']<=2 for p in silence if p['dtx_skip']) and observed['missing_sequences']==0 and observed['timestamp_gaps']>0
+        else:
+            constructed &= sum(p['loss'] for p in packets)==25 and observed['missing_sequences']==25
+        checks=dict(scenario_verified=bool(constructed),duration_difference=abs(go['window_pcm_s']-py['window_pcm_s'])<=.050001,
           sustained_deficit=max(go['deficit_ms'],py['deficit_ms'])<=100.001,
           content=go['marker_ids']==py['marker_ids']==list(range(20)),
           shutdown=max(go['shutdown_ms'],py['shutdown_ms'])<=2000 and go['shutdown'].get('disconnect_callback',False),
@@ -111,7 +122,7 @@ def analyze(root):
     for scenario in sorted({r['scenario'] for r in rows}):
         runs=[r for r in rows if r['scenario']==scenario]
         entry=dict(runs=len(runs),failed_runs=[r['run'] for r in runs if not all(r['checks'].values())])
-        for metric in ['startup_ms','second_onset_ms','callback_gap_p95_ms','shutdown_ms']:
+        for metric in ['startup_ms','second_onset_ms','callback_gap_p95_ms','shutdown_ms','first_content_ms']:
             vals={name:[r[name][metric] for r in runs] for name in ['go','python']}
             for name in vals:
                 entry[f'{name}_{metric}_p95']=None if None in vals[name] else float(np.percentile(vals[name],95))

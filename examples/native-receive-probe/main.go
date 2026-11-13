@@ -64,7 +64,7 @@ func (r *recorder) frame(at int64, f *model.AudioFrame) error {
 	if _, err := r.pcm.Write(f.Data); err != nil {
 		return err
 	}
-	if err := r.enc.Encode(map[string]any{"event": "frame", "at": at, "samples": f.SamplesPerChannel, "rate": f.SampleRate, "offset": r.offset}); err != nil {
+	if err := r.enc.Encode(map[string]any{"event": "frame", "at": at, "delivered_at": nowNS(), "samples": f.SamplesPerChannel, "rate": f.SampleRate, "offset": r.offset}); err != nil {
 		return err
 	}
 	r.offset += int64(f.SamplesPerChannel)

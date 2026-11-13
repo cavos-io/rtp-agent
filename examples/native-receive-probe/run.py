@@ -35,9 +35,20 @@ def stop(proc):
             proc.wait()
             raise RuntimeError('shutdown exceeded three seconds; process killed')
 
+def stop_all(processes):
+    failures = []
+    for proc in processes:
+        try:
+            stop(proc)
+        except Exception as exc:
+            failures.append(exc)
+    if failures:
+        raise ExceptionGroup('process cleanup failed', failures)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repetitions', type=int, default=10)
+    parser.add_argument('--binary', default='./probe')
     parser.add_argument('--scenarios', nargs='+', default=['continuous', 'dtx', 'loss'], choices=['continuous','dtx','loss'])
     parser.add_argument('--output', default='results/full')
     args = parser.parse_args()
@@ -73,18 +84,18 @@ def main():
                 dest = out / f'{scenario}-{rep:02}'
                 dest.mkdir()
                 room = f'probe-{scenario}-{rep}-{os.getpid()}'
-                jwt = subprocess.check_output(['./probe','-mode','token','-room',room], env=env, text=True).strip()
+                jwt = subprocess.check_output([args.binary,'-mode','token','-room',room], env=env, text=True).strip()
                 run_env = dict(env, PROBE_TOKEN=jwt)
                 children = []
                 for name, command in [
-                    ('go',['./probe','-room',room,'-out',str(dest)]),
+                    ('go',[args.binary,'-room',room,'-out',str(dest)]),
                     ('python',['.venv/bin/python','reference.py','--out',str(dest)])]:
                     log = open(dest / f'{name}.log','w'); logs.append(log)
                     proc = subprocess.Popen(command, env=run_env, stdout=log, stderr=subprocess.STDOUT)
                     children.append(proc)
                     wait_ready(proc,dest / f'{name}.jsonl')
                 log = open(dest / 'publisher.log','w');logs.append(log)
-                pub = subprocess.Popen(['./probe','-mode','publish','-room',room,'-scenario',scenario,'-out',str(dest)],env=env,stdout=log,stderr=subprocess.STDOUT)
+                pub = subprocess.Popen([args.binary,'-mode','publish','-room',room,'-scenario',scenario,'-out',str(dest)],env=env,stdout=log,stderr=subprocess.STDOUT)
                 children.append(pub)
                 code = pub.wait(timeout=45)
                 if code:
@@ -96,11 +107,11 @@ def main():
                 children = []
                 print(f'{scenario} {rep+1}/{args.repetitions} captured',flush=True)
     finally:
-        for proc in children:
-            stop(proc)
-        stop(server)
-        for log in logs:
-            log.close()
+        try:
+            stop_all([*reversed(children), server])
+        finally:
+            for log in logs:
+                log.close()
 
 if __name__ == '__main__':
     main()

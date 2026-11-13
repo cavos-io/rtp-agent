@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -60,7 +61,14 @@ func ownedHandles(m protoreflect.Message) []uint64 {
 		if f.Kind() != protoreflect.MessageKind {
 			return true
 		}
-		if f.IsList() {
+		if f.IsMap() {
+			if f.MapValue().Kind() == protoreflect.MessageKind {
+				v.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
+					ids = append(ids, ownedHandles(item.Message())...)
+					return true
+				})
+			}
+		} else if f.IsList() {
 			for i := 0; i < v.List().Len(); i++ {
 				ids = append(ids, ownedHandles(v.List().Get(i).Message())...)
 			}
@@ -108,12 +116,14 @@ func nativeReceive(ctx context.Context, url, token string, sink *recorder) (err 
 	if e := C.probe_load(path); e != nil {
 		return errors.New(C.GoString(e))
 	}
+	baselineGoroutines := runtime.NumGoroutine()
 	C.probe_init()
 	var room, stream, track uint64
 	defer func() {
 		start := nowNS()
+		releasesOK := true
 		if stream != 0 {
-			C.probe_drop(C.uint64_t(stream))
+			releasesOK = bool(C.probe_drop(C.uint64_t(stream))) && releasesOK
 		}
 		disconnected := room == 0
 		if room != 0 {
@@ -146,16 +156,22 @@ func nativeReceive(ctx context.Context, url, token string, sink *recorder) (err 
 			}
 			deadline.Stop()
 			if track != 0 {
-				C.probe_drop(C.uint64_t(track))
+				releasesOK = bool(C.probe_drop(C.uint64_t(track))) && releasesOK
 			}
-			C.probe_drop(C.uint64_t(room))
+			releasesOK = bool(C.probe_drop(C.uint64_t(room))) && releasesOK
 		}
 		// Also destroys handles from queued callbacks after disconnect or overflow.
 		C.probe_dispose()
+		if !releasesOK && err == nil {
+			err = errors.New("retained handle release failed")
+		}
+		if !disconnected && err == nil {
+			err = errors.New("disconnect callback timed out")
+		}
 		if callbacks.overflow.Load() && err == nil {
 			err = errors.New("native callback queue overflow")
 		}
-		sink.event(map[string]any{"event": "shutdown", "at": nowNS(), "duration_ns": nowNS() - start, "disconnect_callback": disconnected, "overflow": callbacks.overflow.Load()})
+		sink.event(map[string]any{"event": "shutdown", "at": nowNS(), "duration_ns": nowNS() - start, "disconnect_callback": disconnected, "overflow": callbacks.overflow.Load(), "retained_handles_released": releasesOK, "go_goroutines_before": baselineGoroutines, "go_goroutines_after": runtime.NumGoroutine()})
 	}()
 	sink.event(map[string]any{"event": "connect_start", "at": nowNS()})
 	_, err = request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(url), Token: proto.String(token), Options: &pb.RoomOptions{AutoSubscribe: proto.Bool(true)}, RequestAsyncId: proto.Uint64(1)}}})

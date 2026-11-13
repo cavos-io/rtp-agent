@@ -4,7 +4,7 @@ This is an isolated Go experiment, not a production transport change. Native Liv
 
 ## Reproduce (macOS ARM64)
 
-Prerequisites already present on the tested host: Go, CGO/Clang, protoc, protoc-gen-go, libopus/pkg-config, FFmpeg, uv, and livekit-server. Setup does not install system dependencies. Check before installing anything missing.
+Prerequisites already present on the tested host: Go, CGO/Clang, protoc, protoc-gen-go, libopus and libopusfile/pkg-config, FFmpeg, uv, and livekit-server. Setup does not install system dependencies. Check before installing anything missing.
 
 ```sh
 cd examples/native-receive-probe
@@ -52,3 +52,28 @@ Native release assets exist for macOS, Linux and Windows ARM64/x86-64 plus mobil
 Distribute the native artifact's LICENSE.md and applicable Apache-2.0/WebRTC BSD/third-party notices. This does not make the internal FFI a supported Go API: schema and binary must move together, upgrades need lifecycle and audio measurements, and the wrapper is maintained by RTP Agent.
 
 A future integration belongs in `interface/worker/livekit`, delivering provider-neutral audio frames to core. Native RTC must either replace Pion's room/media ownership or connect as a second participant. Worker control-plane/job ownership is a separate integration decision; this experiment does not change it.
+
+Additional checks while the test server is running:
+
+```sh
+.venv/bin/python lifecycle.py
+```
+
+This checks a refused connection, cancellation during a stalled WebSocket handshake, and three independent empty-room connect/cancel cycles. `PROBE_BINARY` and `PROBE_LIFECYCLE_OUT` select a separate race-instrumented binary and result directory. `run.py --binary .cache/probe-reviewed` can exercise a separately built binary without replacing a running experiment's executable.
+
+The native artifact is approximately 17 MiB; the combined Go publisher/observer/receiver harness is approximately 41 MiB. Its macOS dynamic dependencies are system libraries/frameworks; no separately built WebRTC is needed. The pinned source declares libwebrtc 0.3.49, webrtc-sys 0.3.46 and prebuilt WebRTC tag `webrtc-89d790b`.
+
+The combined harness also links Homebrew libopus/libopusfile for its publisher. Those are harness dependencies; the native receiver uses the codecs bundled in LiveKit FFI. No custom Opus receive decoder is used.
+
+## Upstream evidence
+
+- [Python RTC 1.1.21](https://github.com/livekit/python-sdks/tree/rtc-v1.1.21/livekit-rtc) pins the Rust SDK revision used here. Its `audio_stream.py` explicitly requests an unbounded native queue.
+- [Pinned FFI C ABI](https://github.com/livekit/rust-sdks/blob/5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb/livekit-ffi/src/cabi.rs) defines initialize/request/drop/dispose and callback memory lifetime. The shipped header lists only request/drop, so those two declarations alone are insufficient.
+- [Pinned native stream](https://github.com/livekit/rust-sdks/blob/5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb/libwebrtc/src/native/audio_stream.rs) attaches a sink to a native audio track. [Synthetic audio device](https://github.com/livekit/rust-sdks/blob/5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb/webrtc-sys/src/synthetic_audio_device.cpp) requests playout every 10ms. These are source facts, not by themselves continuity measurements.
+- [Go SDK v2.19.0 PCMRemoteTrack](https://github.com/livekit/server-sdk-go/blob/v2.19.0/pkg/media/pcmremotetrack.go) still runs RTP packets through a decoder/writer and retains `TODO: handle concealment`.
+- GitHub repository searches `neteq language:Go` and `livekit ffi language:Go` returned zero matches during this investigation. Broader NetEq results included TaoistKing/AudioPlc (last push 2021), zhougang123456/AudioNeteq-Cmake (2023), and StephensCheng/neteq (2023). This is bounded discovery evidence, not proof that no binding exists anywhere.
+- Inspected NetEq headers expose `SetCodecs`, `InsertPacket` with RTP headers/arrival timing, and `GetAudio` for clocked decoded output. No verified maintained Go wrapper or packaged standalone receive engine emerged from that search. Local CLI WebRTC/APM headers are not a usable NetEq integration by themselves.
+
+The reference framework checkout was `ff962a019b6500e08f8f1fcd7f55673361bd9e91`; its room input calls `rtc.AudioStream.from_track` and defaults to 24kHz/50ms. No framework STT/LLM/TTS was started. The previously inspected Rust revision `81d3f267...` and Python 1.1.13 are not used for this experiment.
+
+Resource evidence is bounded: the harness observes disconnect completion, native disposal returning, receiver process exit, and race-detector results. It does not expose the Rust handle table or establish absence of native heap/thread leaks in a long-lived worker. Production adoption still needs that audit, bounded backpressure design, Linux packaging validation, and worker/room lifecycle integration.

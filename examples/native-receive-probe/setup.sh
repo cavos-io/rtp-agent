@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-for tool in go protoc protoc-gen-go uv ffmpeg curl tar unzip; do command -v "$tool" >/dev/null || { echo "Missing tool: $tool (install separately)" >&2; exit 1; }; done
+for tool in go protoc protoc-gen-go uv ffmpeg curl tar unzip pkg-config; do command -v "$tool" >/dev/null || { echo "Missing tool: $tool (install separately)" >&2; exit 1; }; done
 [[ "$(uname -s)-$(uname -m)" == Darwin-arm64 ]] || { echo 'Bootstrap currently verified only on macOS ARM64.' >&2; exit 1; }
+pkg-config --exists opus opusfile
 mkdir -p .cache
 revision=5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb
 [[ -f .cache/source.tar.gz ]] || curl -fL --retry 2 "https://github.com/livekit/rust-sdks/archive/$revision.tar.gz" -o .cache/source.tar.gz

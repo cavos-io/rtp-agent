@@ -30,3 +30,14 @@ func TestCallbackQueueCopiesAndFailsOnOverflow(t *testing.T) {
 		t.Fatal("overflow not reported")
 	}
 }
+
+func TestOwnedHandlesIgnoresParticipantAttributes(t *testing.T) {
+	participant := &pb.OwnedParticipant{
+		Handle: &pb.FfiOwnedHandle{Id: proto.Uint64(7)},
+		Info:   &pb.ParticipantInfo{Attributes: map[string]string{"test": "value"}},
+	}
+	ids := ownedHandles(participant.ProtoReflect())
+	if len(ids) != 1 || ids[0] != 7 {
+		t.Fatalf("handles %v", ids)
+	}
+}
