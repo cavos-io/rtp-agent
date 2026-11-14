@@ -135,7 +135,7 @@ func startNative() error {
 	return nil
 }
 func disposeNative() { C.probe_dispose() }
-func nativeReceive(ctx context.Context, url, token string, sink *recorder) error {
+func nativeReceive(ctx context.Context, url, token string, sink nativeSink) error {
 	baseline := runtime.NumGoroutine()
 	if err := startNative(); err != nil {
 		return err
@@ -145,7 +145,7 @@ func nativeReceive(ctx context.Context, url, token string, sink *recorder) error
 
 // nativeRoom owns only its room/track/stream. Process-runtime tests dispose once
 // after all cycles; the original receive command still disposes at room exit.
-func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose bool, baselineGoroutines int) (err error) {
+func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose bool, baselineGoroutines int) (err error) {
 	var room, stream, track uint64
 	defer func() {
 		start := nowNS()
@@ -284,7 +284,7 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 				if fail := r.GetTrackSubscriptionFailed(); fail != nil {
 					return errors.New(fail.GetError())
 				}
-				if tr := r.GetTrackSubscribed(); tr != nil && stream == 0 {
+				if tr := r.GetTrackSubscribed(); tr != nil && stream == 0 && acceptsNativeTrack(sink, tr) {
 					track = tr.GetTrack().GetHandle().GetId()
 					res, e := request(&pb.FfiRequest{Message: &pb.FfiRequest_NewAudioStream{NewAudioStream: &pb.NewAudioStreamRequest{TrackHandle: proto.Uint64(tr.GetTrack().GetHandle().GetId()), Type: pb.AudioStreamType_AUDIO_STREAM_NATIVE.Enum(), SampleRate: proto.Uint32(24000), NumChannels: proto.Uint32(1), FrameSizeMs: proto.Uint32(50), QueueSizeFrames: proto.Uint32(0)}}})
 					if e != nil {
@@ -295,6 +295,17 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 						return errors.New("missing audio stream handle")
 					}
 					sink.event(map[string]any{"event": "subscribed", "at": raw.at})
+					if helper, ok := sink.(*helperSink); ok && helper.subscribed != nil {
+						helper.subscribed()
+					}
+				}
+				if selected, ok := sink.(*helperSink); ok {
+					if p := r.GetParticipantDisconnected(); p != nil && p.GetParticipantIdentity() == selected.participant {
+						return errors.New("selected participant disconnected")
+					}
+					if t := r.GetTrackUnsubscribed(); t != nil && t.GetTrackSid() == selected.trackSID {
+						return errors.New("selected track unsubscribed")
+					}
 				}
 				if r.GetDisconnected() != nil {
 					return errors.New("unexpected room disconnect")
@@ -319,4 +330,11 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 			}
 		}
 	}
+}
+
+func acceptsNativeTrack(sink nativeSink, track *pb.TrackSubscribed) bool {
+	if selected, ok := sink.(*helperSink); ok {
+		return selected.acceptTrack(track)
+	}
+	return true // Preserve the controlled probe's existing single-track behavior.
 }

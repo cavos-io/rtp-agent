@@ -81,7 +81,7 @@ func token(room, id string) (string, error) {
 }
 
 func main() {
-	mode := flag.String("mode", "receive", "receive, publish, or token")
+	mode := flag.String("mode", "receive", "receive, publish, token, or helper")
 	url := flag.String("url", "ws://127.0.0.1:18991", "local test server")
 	room := flag.String("room", "native-receive-probe", "test room")
 	scenario := flag.String("scenario", "continuous", "continuous, dtx, loss")
@@ -98,6 +98,13 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if *mode == "helper" {
+		if err := runHelper(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	name := "go"
 	if *mode == "publish" {
 		name = "publisher"

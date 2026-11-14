@@ -58,3 +58,7 @@
 - Native buffer recovery (pre-stall median +20ms for two seconds) began at median9.558s Go (10/10 confirmed), median9.129s Python (8/10 confirmed); Python02/03 remain unconfirmed at about18.2s observation end. Target-delay recovery usually preceded buffer recovery.
 - PCM marker recovery confirmed in10/10 Go and9/10 Python trials; no markers exist during silence, so earliest content observation is about8.23s after the stall. All original content/order gates remain passed.
 - Corrected supplemental counter-roundoff comparison with a failing regression; initial sidecars retained, corrected outputs use v2. Verified2899 prior hashes and identical original acceptance summaries. Report: RECOVERY.md.
+
+- Approved starter integration: opt-in Go helper process and hidden receive-only participant; Pion continues worker/output ownership. Exact caller/audio-track selection, versioned PCM pipe, bounded backlog/error handling and process cleanup. Default StartSession path unchanged.
+- Provider-free local starter tests passed under race instrumentation for default input, native input and selected-track unpublish shutdown. Native mode left Pion subscriptions disabled. PCM tone energy reached the actual session input hook.
+- lk2.19.4 CLI/source verified: echo track publishes before dispatch; no startup/greeting dependency cycle. Paid provider load test not run. Commands: ../starter/NATIVE_RECEIVE.md.

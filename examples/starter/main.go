@@ -62,6 +62,11 @@ func main() {
 	}
 	lksdk.SetLogger(zapLogger.WithName("lksdk"))
 
+	nativeConfig, err := nativeReceiveFromEnv()
+	if err != nil {
+		logger.Logger.Errorw("invalid experimental native receive configuration", err)
+		os.Exit(1)
+	}
 	config := app.DefaultConfigFromEnv()
 	config.Instructions = instructions
 	config.WorkerOptions.PrometheusPort = 8083
@@ -99,7 +104,7 @@ func main() {
 			ctx := context.Background()
 
 			session := agent.NewAgentSession(baseAgent, jobContext.Room, agent.AgentSessionOptions{})
-			if err := jobContext.StartSession(ctx, session); err != nil {
+			if err := startStarterSession(ctx, jobContext, session, server, nativeConfig); err != nil {
 				logger.Logger.Errorw("failed to start session", err)
 				return err
 			}

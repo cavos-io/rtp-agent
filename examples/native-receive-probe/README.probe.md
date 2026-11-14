@@ -87,3 +87,5 @@ Synchronized native receive statistics and socket-arrival traces are reported in
 The runner now waits for both native track subscriptions before sending fixture packets. The controlled baseline/stall rerun and preserved startup failure are documented in [BARRIER.md](BARRIER.md).
 
 Post-stall native-buffer and PCM-marker recovery measurements from the preserved barrier captures are documented in [RECOVERY.md](RECOVERY.md), including unconfirmed recovery bounds.
+
+The optional `-mode helper` serves live PCM to the starter over a local pipe, reusing the same native receive engine. See [starter integration commands and limitations](../starter/NATIVE_RECEIVE.md). Normal probe modes and existing evidence remain separate.
