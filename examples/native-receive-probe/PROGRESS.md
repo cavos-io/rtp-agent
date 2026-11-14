@@ -53,3 +53,8 @@
 - Ten baseline and ten stall reruns passed unchanged per-run and relative-latency gates. Every trace contains packet0 and all 1500 packets; both subscriptions precede source start in all 20 runs. All 20 ordered markers retained by both runtimes.
 - Second onset p95: baseline Go79.367/Python81.247ms; stall Go305.230/Python304.176ms. Elevated absolute stall latency remains; historical failures are unchanged.
 - Verified all 2523 preserved artifact hashes. Go race tests/vet, 12 Python tests and syntax checks passed. Details: BARRIER.md and BARRIER-SUMMARY.json.
+
+- Recovery follow-up analyzes the existing 20 barrier captures; no new media or receive code. Supplemental recovery definitions frozen before scoring, original acceptance gates unchanged.
+- Native buffer recovery (pre-stall median +20ms for two seconds) began at median9.558s Go (10/10 confirmed), median9.129s Python (8/10 confirmed); Python02/03 remain unconfirmed at about18.2s observation end. Target-delay recovery usually preceded buffer recovery.
+- PCM marker recovery confirmed in10/10 Go and9/10 Python trials; no markers exist during silence, so earliest content observation is about8.23s after the stall. All original content/order gates remain passed.
+- Corrected supplemental counter-roundoff comparison with a failing regression; initial sidecars retained, corrected outputs use v2. Verified2899 prior hashes and identical original acceptance summaries. Report: RECOVERY.md.

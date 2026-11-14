@@ -85,3 +85,5 @@ The remaining content and latency failures were investigated with controlled sen
 Synchronized native receive statistics and socket-arrival traces are reported in [ARRIVAL.md](ARRIVAL.md). This follow-up retains the original failures and identifies frame-phase/native-buffer variation plus a separate startup subscription race.
 
 The runner now waits for both native track subscriptions before sending fixture packets. The controlled baseline/stall rerun and preserved startup failure are documented in [BARRIER.md](BARRIER.md).
+
+Post-stall native-buffer and PCM-marker recovery measurements from the preserved barrier captures are documented in [RECOVERY.md](RECOVERY.md), including unconfirmed recovery bounds.

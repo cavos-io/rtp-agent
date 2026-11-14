@@ -1,0 +1,2998 @@
+{
+  "evidence": "Post-hoc analysis of 20 existing live paired captures; no new capture or receive changes",
+  "preservation": {
+    "count": 2899,
+    "manifest": "results/recovery-preserved.json",
+    "sha256": "7971a736bba08428ab9b51fa5e01b4830f06afaf7b36a8dab2b3dcee9340820c",
+    "mismatches": []
+  },
+  "batches": {
+    "baseline": {
+      "analysis_sha256": "0f2adfd3284602659a2c9ad886949391487c69de83fcaf49d0f32361db71ff3b",
+      "input_manifest_sha256": "30f7e26963adbc1281caffb8bf9f1424bec2605ba1f3e16d85e30bb98c743650",
+      "root": "results/barrier-baseline",
+      "original_summary": {
+        "continuous": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 49.363499999999995,
+          "python_startup_ms_p95": 47.44515,
+          "go_second_onset_ms_p95": 79.367,
+          "python_second_onset_ms_p95": 81.24695,
+          "go_callback_gap_p95_ms_p95": 52.2681025,
+          "python_callback_gap_p95_ms_p95": 52.8536175,
+          "go_shutdown_ms_p95": 7.442199999999995,
+          "python_shutdown_ms_p95": 14.467949999999998,
+          "go_first_content_ms_p95": 48.95284999999999,
+          "python_first_content_ms_p95": 48.33125,
+          "relative_latency_pass": true
+        }
+      },
+      "runs": [
+        {
+          "run": "continuous-00",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.06234200000000101,
+              "confirmed_s": 2.162892000000001,
+              "observation_end_s": 18.161969,
+              "peak_ms": 30.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.06234200000000101,
+              "confirmed_s": 2.162892000000001,
+              "observation_end_s": 18.161969,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 83.7179,
+              "threshold_ms": 133.7179,
+              "first_marker": 10,
+              "observed_by_s": 8.231321999999999,
+              "confirmed_at_marker_s": 10.230764,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.06234400000000129,
+              "confirmed_s": 2.1622660000000007,
+              "observation_end_s": 18.161951000000002,
+              "peak_ms": 30.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.06234400000000129,
+              "confirmed_s": 2.1622660000000007,
+              "observation_end_s": 18.161951000000002,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 75.6495,
+              "threshold_ms": 125.6495,
+              "first_marker": 10,
+              "observed_by_s": 8.231321999999999,
+              "confirmed_at_marker_s": 10.230764,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-01",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.060907000000000266,
+              "confirmed_s": 2.1611659999999997,
+              "observation_end_s": 18.16083,
+              "peak_ms": 30.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.060907000000000266,
+              "confirmed_s": 2.1611659999999997,
+              "observation_end_s": 18.16083,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 75.28705,
+              "threshold_ms": 125.28705,
+              "first_marker": 10,
+              "observed_by_s": 8.231008,
+              "confirmed_at_marker_s": 10.230373,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.0612440000000003,
+              "confirmed_s": 2.161638,
+              "observation_end_s": 18.160834,
+              "peak_ms": 30.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.0612440000000003,
+              "confirmed_s": 2.161638,
+              "observation_end_s": 18.160834,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 40.107749999999996,
+              "threshold_ms": 90.10775,
+              "first_marker": 10,
+              "observed_by_s": 8.231008,
+              "confirmed_at_marker_s": 10.230373,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-02",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 32.00000000000007,
+              "threshold_ms": 52.00000000000007,
+              "begin_s": 0.01178300000000121,
+              "confirmed_s": 2.0124449999999996,
+              "observation_end_s": 18.212242,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.01178300000000121,
+              "confirmed_s": 2.0124449999999996,
+              "observation_end_s": 18.212242,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 82.84375,
+              "threshold_ms": 132.84375,
+              "first_marker": 10,
+              "observed_by_s": 8.230936,
+              "confirmed_at_marker_s": 10.230544000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 32.000000000000455
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 32.00000000000008
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 33.000000000000306
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 35.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 33.999999999999396
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 36.999999999999886,
+              "threshold_ms": 56.999999999999886,
+              "begin_s": 0.01185850000000066,
+              "confirmed_s": 2.0124545000000005,
+              "observation_end_s": 18.2122885,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.01185850000000066,
+              "confirmed_s": 2.0124545000000005,
+              "observation_end_s": 18.2122885,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 83.04985,
+              "threshold_ms": 133.04985,
+              "first_marker": 10,
+              "observed_by_s": 8.230936,
+              "confirmed_at_marker_s": 10.230544000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 36.00000000000023
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 36.9999999999997
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 37.999999999998785
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-03",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 37.99999999999974,
+              "threshold_ms": 57.99999999999974,
+              "begin_s": 0.07068100000000044,
+              "confirmed_s": 2.170285,
+              "observation_end_s": 18.170252,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.07068100000000044,
+              "confirmed_s": 2.170285,
+              "observation_end_s": 18.170252,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 72.64455,
+              "threshold_ms": 122.64455,
+              "first_marker": 10,
+              "observed_by_s": 8.231532999999999,
+              "confirmed_at_marker_s": 10.231121000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 35.99999999999985
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 35.99999999999985
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 37.999999999999545
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 37.999999999999545
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 38.000000000000306
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 35.999999999999844
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.07041749999999958,
+              "confirmed_s": 2.070567500000001,
+              "observation_end_s": 18.1702505,
+              "peak_ms": 30.000000000000757,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.07041749999999958,
+              "confirmed_s": 2.070567500000001,
+              "observation_end_s": 18.1702505,
+              "peak_ms": 20.000000000000284,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 74.3818,
+              "threshold_ms": 124.3818,
+              "first_marker": 10,
+              "observed_by_s": 8.231532999999999,
+              "confirmed_at_marker_s": 10.231121000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-04",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.028896500000000103,
+              "confirmed_s": 2.029386500000001,
+              "observation_end_s": 18.2294355,
+              "peak_ms": 30.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.028896500000000103,
+              "confirmed_s": 2.029386500000001,
+              "observation_end_s": 18.2294355,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 45.5264,
+              "threshold_ms": 95.5264,
+              "first_marker": 10,
+              "observed_by_s": 8.231527,
+              "confirmed_at_marker_s": 10.230499000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.028906499999999724,
+              "confirmed_s": 2.0291595000000004,
+              "observation_end_s": 18.2292485,
+              "peak_ms": 30.000000000000757,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.028906499999999724,
+              "confirmed_s": 2.0291595000000004,
+              "observation_end_s": 18.2292485,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 44.5032,
+              "threshold_ms": 94.50319999999999,
+              "first_marker": 10,
+              "observed_by_s": 8.231527,
+              "confirmed_at_marker_s": 10.230499000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-05",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 34.00000000000015,
+              "threshold_ms": 54.00000000000015,
+              "begin_s": 0.01794100000000043,
+              "confirmed_s": 2.018454,
+              "observation_end_s": 18.217331,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.01794100000000043,
+              "confirmed_s": 2.018454,
+              "observation_end_s": 18.217331,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 41.8878,
+              "threshold_ms": 91.8878,
+              "first_marker": 10,
+              "observed_by_s": 8.231200999999999,
+              "confirmed_at_marker_s": 10.230941999999999,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 36.9999999999997
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 34.00000000000015
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 34.00000000000015
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 35.99999999999985
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 35.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 34.000000000000156
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.01737100000000069,
+              "confirmed_s": 2.018388,
+              "observation_end_s": 18.218107,
+              "peak_ms": 30.000000000000757,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.01737100000000069,
+              "confirmed_s": 2.018388,
+              "observation_end_s": 18.218107,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 46.1138,
+              "threshold_ms": 96.1138,
+              "first_marker": 10,
+              "observed_by_s": 8.231200999999999,
+              "confirmed_at_marker_s": 10.230941999999999,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-06",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 37.99999999999993,
+              "threshold_ms": 57.99999999999993,
+              "begin_s": 8.758947,
+              "confirmed_s": 10.759038,
+              "observation_end_s": 18.158266,
+              "peak_ms": 100.0,
+              "later_excursions": 1,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 8.558948000000001,
+              "confirmed_s": 10.658895000000001,
+              "observation_end_s": 18.158266,
+              "peak_ms": 100.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 81.28,
+              "threshold_ms": 131.28,
+              "first_marker": 10,
+              "observed_by_s": 8.233335,
+              "confirmed_at_marker_s": 10.230993000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 99.00000000000014
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 95.99999999999986
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 98.0000000000003
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 77.00000000000045
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 71.16666666666623
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 55.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 37.999999999998785
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 8.759034,
+              "confirmed_s": 10.858549,
+              "observation_end_s": 18.157914,
+              "peak_ms": 100.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 8.558917000000001,
+              "confirmed_s": 10.658381000000002,
+              "observation_end_s": 18.157914,
+              "peak_ms": 100.00000000000075,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 81.3884,
+              "threshold_ms": 131.3884,
+              "first_marker": 10,
+              "observed_by_s": 8.233335,
+              "confirmed_at_marker_s": 10.230993000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 99.00000000000014
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 98.0000000000003
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 98.0000000000003
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 76.00000000000061
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 73.16666666666669
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 55.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 37.999999999998785
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-07",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.010455000000000325,
+              "confirmed_s": 2.011082,
+              "observation_end_s": 18.209695,
+              "peak_ms": 34.00000000000091,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.010455000000000325,
+              "confirmed_s": 2.011082,
+              "observation_end_s": 18.209695,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 70.95125,
+              "threshold_ms": 120.95125,
+              "first_marker": 10,
+              "observed_by_s": 8.231628,
+              "confirmed_at_marker_s": 10.230537000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 32.00000000000007,
+              "threshold_ms": 52.00000000000007,
+              "begin_s": 0.011093000000000686,
+              "confirmed_s": 2.110442000000001,
+              "observation_end_s": 18.210527,
+              "peak_ms": 38.000000000000306,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.011093000000000686,
+              "confirmed_s": 2.110442000000001,
+              "observation_end_s": 18.210527,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 71.234,
+              "threshold_ms": 121.234,
+              "first_marker": 10,
+              "observed_by_s": 8.231628,
+              "confirmed_at_marker_s": 10.230537000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.99999999999985
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 32.000000000000455
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-08",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 0.08955049999999964,
+              "confirmed_s": 2.090431500000001,
+              "observation_end_s": 18.1891275,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 0.08955049999999964,
+              "confirmed_s": 2.090431500000001,
+              "observation_end_s": 18.1891275,
+              "peak_ms": 40.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 53.9657,
+              "threshold_ms": 103.9657,
+              "first_marker": 10,
+              "observed_by_s": 8.232441999999999,
+              "confirmed_at_marker_s": 10.231745,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 32.00000000000007,
+              "threshold_ms": 52.00000000000007,
+              "begin_s": 0.08965350000000072,
+              "confirmed_s": 2.0903545,
+              "observation_end_s": 18.1891515,
+              "peak_ms": 34.00000000000091,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.08965350000000072,
+              "confirmed_s": 2.0903545,
+              "observation_end_s": 18.1891515,
+              "peak_ms": 20.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 50.08365,
+              "threshold_ms": 100.08365,
+              "first_marker": 10,
+              "observed_by_s": 8.232441999999999,
+              "confirmed_at_marker_s": 10.231745,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 32.00000000000008
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 31.999999999999698
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.99999999999985
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-09",
+          "stall_end_source_s": 11.77,
+          "controlled_stall": false,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 0.08553500000000014,
+              "confirmed_s": 2.086209,
+              "observation_end_s": 18.187356,
+              "peak_ms": 50.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.08553500000000014,
+              "confirmed_s": 2.086209,
+              "observation_end_s": 18.187356,
+              "peak_ms": 60.0,
+              "later_excursions": 21,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 64.8008,
+              "threshold_ms": 114.8008,
+              "first_marker": 10,
+              "observed_by_s": 8.231051,
+              "confirmed_at_marker_s": 10.230292000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 39.99999999999962
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 39.99999999999962
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 0.08678450000000026,
+              "confirmed_s": 2.088955500000001,
+              "observation_end_s": 18.1854365,
+              "peak_ms": 50.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 0.08678450000000026,
+              "confirmed_s": 2.088955500000001,
+              "observation_end_s": 18.1854365,
+              "peak_ms": 60.0,
+              "later_excursions": 21,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 66.22059999999999,
+              "threshold_ms": 116.22059999999999,
+              "first_marker": 10,
+              "observed_by_s": 8.231051,
+              "confirmed_at_marker_s": 10.230292000000002,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "stall": {
+      "analysis_sha256": "4e14534d360b04635a1e24580864c4d51a8092c94649afcb7356ca387a9b1213",
+      "input_manifest_sha256": "fb62355fc1c901f7524891034a55ebfce7e054160e7780a9306659059505dce5",
+      "root": "results/barrier-stall",
+      "original_summary": {
+        "continuous": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 49.7836,
+          "python_startup_ms_p95": 49.1339,
+          "go_second_onset_ms_p95": 305.2301999999999,
+          "python_second_onset_ms_p95": 304.1761499999999,
+          "go_callback_gap_p95_ms_p95": 52.7197925,
+          "python_callback_gap_p95_ms_p95": 53.36662,
+          "go_shutdown_ms_p95": 3.8042,
+          "python_shutdown_ms_p95": 15.669799999999999,
+          "go_first_content_ms_p95": 59.1258,
+          "python_first_content_ms_p95": 56.1846,
+          "relative_latency_pass": true
+        }
+      },
+      "runs": [
+        {
+          "run": "continuous-00",
+          "stall_end_source_s": 11.771291,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.83977,
+              "confirmed_s": 10.841809,
+              "observation_end_s": 18.142186000000002,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.839754000000001,
+              "confirmed_s": 6.840301999999999,
+              "observation_end_s": 18.142186000000002,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 67.34315000000001,
+              "threshold_ms": 117.34315000000001,
+              "first_marker": 10,
+              "observed_by_s": 8.229502000000002,
+              "confirmed_at_marker_s": 10.229794,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 417.9999999999999
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 69.85714285714451
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.8402325,
+              "confirmed_s": 10.8421285,
+              "observation_end_s": 18.1413545,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.8403285,
+              "confirmed_s": 6.940197500000002,
+              "observation_end_s": 18.1413545,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 76.64295,
+              "threshold_ms": 126.64295,
+              "first_marker": 10,
+              "observed_by_s": 8.229502000000002,
+              "confirmed_at_marker_s": 10.229794,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 417.9999999999999
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 69.85714285714451
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-01",
+          "stall_end_source_s": 11.771302,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 16.170217,
+              "confirmed_s": 18.170422000000002,
+              "observation_end_s": 18.170422000000002,
+              "peak_ms": 463.99999999999943,
+              "later_excursions": 0,
+              "invalid_intervals": 3
+            },
+            "target_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 4.7711190000000006,
+              "confirmed_s": 6.872185,
+              "observation_end_s": 18.170422000000002,
+              "peak_ms": 480.0000000000008,
+              "later_excursions": 36,
+              "invalid_intervals": 3
+            },
+            "content": {
+              "reference_p95_ms": 61.2061,
+              "threshold_ms": 111.20609999999999,
+              "first_marker": 11,
+              "observed_by_s": 9.231104,
+              "confirmed_at_marker_s": 11.229358,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 442.00000000000006
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 461.8333333333329
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.9999999999991
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 163.57142857142944
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 70.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 32.00000000000007,
+              "threshold_ms": 52.00000000000007,
+              "begin_s": 16.169874999999998,
+              "confirmed_s": 18.171431,
+              "observation_end_s": 18.171431,
+              "peak_ms": 470.0,
+              "later_excursions": 0,
+              "invalid_intervals": 3
+            },
+            "target_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 4.771140000000001,
+              "confirmed_s": 6.872155999999999,
+              "observation_end_s": 18.171431,
+              "peak_ms": 480.00000000000114,
+              "later_excursions": 36,
+              "invalid_intervals": 3
+            },
+            "content": {
+              "reference_p95_ms": 62.76045,
+              "threshold_ms": 112.76044999999999,
+              "first_marker": 11,
+              "observed_by_s": 9.231104,
+              "confirmed_at_marker_s": 11.229358,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 434.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 464.5000000000002
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 462.6666666666675
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 464.4999999999992
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 168.14285714285862
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 73.9999999999994
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 43.00000000000182
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-02",
+          "stall_end_source_s": 11.771299,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 9.9824425,
+              "confirmed_s": 12.081825499999999,
+              "observation_end_s": 18.1828145,
+              "peak_ms": 460.00000000000233,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.782059500000001,
+              "confirmed_s": 6.8815185,
+              "observation_end_s": 18.1828145,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 44.63025,
+              "threshold_ms": 94.63024999999999,
+              "first_marker": 15,
+              "observed_by_s": 13.229807,
+              "confirmed_at_marker_s": 15.231383,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 439.9999999999996
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 459.16666666666663
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 179.16666666666768
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 50.25000000000091
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 35.49999999999996,
+              "threshold_ms": 55.49999999999996,
+              "begin_s": null,
+              "confirmed_s": null,
+              "observation_end_s": 18.181892499999996,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": null,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.780853499999997,
+              "confirmed_s": 6.784424499999998,
+              "observation_end_s": 18.181892499999996,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 43.18435,
+              "threshold_ms": 93.18435,
+              "first_marker": null,
+              "observed_by_s": null,
+              "confirmed_at_marker_s": null
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 436.2499999999998
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 456.00000000000057
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 457.7499999999998
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 451.2500000000008
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 176.8333333333324
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 57.75000000000166
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 54.99999999999672
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-03",
+          "stall_end_source_s": 11.771345,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 15.217770999999999,
+              "confirmed_s": 17.218516,
+              "observation_end_s": 18.217912,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.817335,
+              "confirmed_s": 6.818276000000001,
+              "observation_end_s": 18.217912,
+              "peak_ms": 460.00000000000034,
+              "later_excursions": 53,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 58.03995,
+              "threshold_ms": 108.03995,
+              "first_marker": 17,
+              "observed_by_s": 15.229303999999999,
+              "confirmed_at_marker_s": 17.231814,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 404.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 72.08333333333155
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 60.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": null,
+              "confirmed_s": null,
+              "observation_end_s": 18.218045,
+              "peak_ms": 460.00000000000153,
+              "later_excursions": null,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.818705000000001,
+              "confirmed_s": 6.917978999999999,
+              "observation_end_s": 18.218045,
+              "peak_ms": 460.00000000000034,
+              "later_excursions": 53,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 56.3077,
+              "threshold_ms": 106.3077,
+              "first_marker": 11,
+              "observed_by_s": 9.230953,
+              "confirmed_at_marker_s": 11.229427999999999,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 404.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 93.85714285714346
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 60.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 60.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-04",
+          "stall_end_source_s": 11.771944,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 34.00000000000015,
+              "threshold_ms": 54.00000000000015,
+              "begin_s": 9.045423999999999,
+              "confirmed_s": 11.145928,
+              "observation_end_s": 18.145814,
+              "peak_ms": 468.0000000000018,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.746115000000001,
+              "confirmed_s": 6.845964,
+              "observation_end_s": 18.145814,
+              "peak_ms": 480.00000000000017,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 82.09325,
+              "threshold_ms": 132.09325,
+              "first_marker": 10,
+              "observed_by_s": 8.230763000000001,
+              "confirmed_at_marker_s": 10.230289,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 425.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 465.9999999999999
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 463.99999999999943
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 465.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 96.49999999999838
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 26.000000000000604
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 26.000000000000604
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 9.145669500000002,
+              "confirmed_s": 11.2460015,
+              "observation_end_s": 18.1450915,
+              "peak_ms": 462.5,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.846097500000001,
+              "confirmed_s": 6.945572499999999,
+              "observation_end_s": 18.1450915,
+              "peak_ms": 480.00000000000017,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 80.38045,
+              "threshold_ms": 130.38045,
+              "first_marker": 10,
+              "observed_by_s": 8.230763000000001,
+              "confirmed_at_marker_s": 10.230289,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 417.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 101.25000000000077
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.999999999997577
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-05",
+          "stall_end_source_s": 11.773503,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 11.72864,
+              "confirmed_s": 13.826853000000002,
+              "observation_end_s": 18.127423999999998,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.827095999999999,
+              "confirmed_s": 6.827385000000001,
+              "observation_end_s": 18.127423999999998,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "content": {
+              "reference_p95_ms": 45.14815,
+              "threshold_ms": 95.14815,
+              "first_marker": 11,
+              "observed_by_s": 9.227648,
+              "confirmed_at_marker_s": 11.227291,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 419.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 8,
+                "median_ms": 108.9999999999999
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 11.027791500000001,
+              "confirmed_s": 13.0285505,
+              "observation_end_s": 18.1277915,
+              "peak_ms": 472.00000000000114,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.8268985,
+              "confirmed_s": 6.827412499999999,
+              "observation_end_s": 18.1277915,
+              "peak_ms": 480.00000000000017,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "content": {
+              "reference_p95_ms": 39.26,
+              "threshold_ms": 89.25999999999999,
+              "first_marker": 11,
+              "observed_by_s": 9.227648,
+              "confirmed_at_marker_s": 11.227291,
+              "later_excursions": 2
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 422.49999999999966
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 470.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 470.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 470.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 8,
+                "median_ms": 101.66666666666515
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-06",
+          "stall_end_source_s": 11.771413,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.768901999999999,
+              "confirmed_s": 10.866459,
+              "observation_end_s": 18.166345999999997,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.866594000000001,
+              "confirmed_s": 6.966178999999999,
+              "observation_end_s": 18.166345999999997,
+              "peak_ms": 460.00000000000233,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 78.4111,
+              "threshold_ms": 128.4111,
+              "first_marker": 10,
+              "observed_by_s": 8.230081,
+              "confirmed_at_marker_s": 10.229006,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 434.9999999999999
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 65.71428571428572
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.7696485,
+              "confirmed_s": 10.8663325,
+              "observation_end_s": 18.1671895,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.866626500000001,
+              "confirmed_s": 6.867020500000001,
+              "observation_end_s": 18.1671895,
+              "peak_ms": 460.00000000000233,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 78.4341,
+              "threshold_ms": 128.4341,
+              "first_marker": 10,
+              "observed_by_s": 8.230081,
+              "confirmed_at_marker_s": 10.229006,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 434.9999999999999
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 65.71428571428572
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-07",
+          "stall_end_source_s": 11.771388,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 12.169125,
+              "confirmed_s": 14.169381,
+              "observation_end_s": 18.171151000000002,
+              "peak_ms": 460.00000000000153,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 11.568544999999999,
+              "confirmed_s": 13.568980999999999,
+              "observation_end_s": 18.171151000000002,
+              "peak_ms": 460.0000000000004,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 56.10645,
+              "threshold_ms": 106.10645,
+              "first_marker": 14,
+              "observed_by_s": 12.230186999999999,
+              "confirmed_at_marker_s": 14.230474,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 440.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 459.9999999999999
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 325.4166666666669
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 12.1705485,
+              "confirmed_s": 14.270710500000002,
+              "observation_end_s": 18.170931500000002,
+              "peak_ms": 460.00000000000097,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 40.0,
+              "threshold_ms": 60.0,
+              "begin_s": 11.5694745,
+              "confirmed_s": 13.6690305,
+              "observation_end_s": 18.170931500000002,
+              "peak_ms": 460.0000000000004,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 56.15625,
+              "threshold_ms": 106.15625,
+              "first_marker": 14,
+              "observed_by_s": 12.230186999999999,
+              "confirmed_at_marker_s": 14.230474,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 439.9999999999996
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 458.9999999999994
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 322.9166666666654
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 50.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-08",
+          "stall_end_source_s": 11.772163,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 33.99999999999977,
+              "threshold_ms": 53.99999999999977,
+              "begin_s": 9.134026999999998,
+              "confirmed_s": 11.134765,
+              "observation_end_s": 18.135089,
+              "peak_ms": 480.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.834687999999998,
+              "confirmed_s": 6.934122,
+              "observation_end_s": 18.135089,
+              "peak_ms": 480.00000000000153,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 81.21665,
+              "threshold_ms": 131.21665000000002,
+              "first_marker": 10,
+              "observed_by_s": 8.230178999999998,
+              "confirmed_at_marker_s": 10.229111999999999,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 420.75
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 473.99999999999943
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 474.00000000000165
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 473.99999999999943
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 102.99999999999878
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 35.99999999999758
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 32.000000000001215
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.6340895,
+              "confirmed_s": 10.6342975,
+              "observation_end_s": 18.133863499999997,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.834846499999999,
+              "confirmed_s": 6.934229499999999,
+              "observation_end_s": 18.133863499999997,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 0
+            },
+            "content": {
+              "reference_p95_ms": 78.14275,
+              "threshold_ms": 128.14275,
+              "first_marker": 10,
+              "observed_by_s": 8.230178999999998,
+              "confirmed_at_marker_s": 10.229111999999999,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 417.9999999999999
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 61.24999999999734
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 10,
+                "median_ms": 30.0
+              }
+            ]
+          }
+        },
+        {
+          "run": "continuous-09",
+          "stall_end_source_s": 11.770838,
+          "controlled_stall": true,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "go": {
+            "buffer_ms": {
+              "reference_ms": 30.0,
+              "threshold_ms": 50.0,
+              "begin_s": 8.912673,
+              "confirmed_s": 10.913798000000002,
+              "observation_end_s": 18.213922000000004,
+              "peak_ms": 460.0,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.812817000000001,
+              "confirmed_s": 6.813177999999999,
+              "observation_end_s": 18.213922000000004,
+              "peak_ms": 460.0000000000004,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "content": {
+              "reference_p95_ms": 34.7115,
+              "threshold_ms": 84.7115,
+              "first_marker": 11,
+              "observed_by_s": 9.230473000000002,
+              "confirmed_at_marker_s": 11.230051999999999,
+              "later_excursions": 1
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 404.0000000000001
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 460.0
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 459.0000000000009
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 97.99999999999878
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 40.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 8,
+                "median_ms": 20.0
+              }
+            ]
+          },
+          "python": {
+            "buffer_ms": {
+              "reference_ms": 33.99999999999977,
+              "threshold_ms": 53.99999999999977,
+              "begin_s": 9.112698,
+              "confirmed_s": 11.112839,
+              "observation_end_s": 18.213950000000004,
+              "peak_ms": 470.0,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "target_ms": {
+              "reference_ms": 20.0,
+              "threshold_ms": 40.0,
+              "begin_s": 4.813011000000001,
+              "confirmed_s": 6.912735,
+              "observation_end_s": 18.213950000000004,
+              "peak_ms": 480.0000000000004,
+              "later_excursions": 0,
+              "invalid_intervals": 2
+            },
+            "content": {
+              "reference_p95_ms": 82.01305,
+              "threshold_ms": 132.01305000000002,
+              "first_marker": 10,
+              "observed_by_s": 8.231288000000001,
+              "confirmed_at_marker_s": 10.230517,
+              "later_excursions": 0
+            },
+            "buffer_trajectory": [
+              {
+                "after_stall_s": 0,
+                "valid_samples": 10,
+                "median_ms": 410.0
+              },
+              {
+                "after_stall_s": 1,
+                "valid_samples": 10,
+                "median_ms": 464.0000000000001
+              },
+              {
+                "after_stall_s": 2,
+                "valid_samples": 10,
+                "median_ms": 465.9999999999999
+              },
+              {
+                "after_stall_s": 4,
+                "valid_samples": 10,
+                "median_ms": 462.00000000000114
+              },
+              {
+                "after_stall_s": 8,
+                "valid_samples": 10,
+                "median_ms": 103.00000000000182
+              },
+              {
+                "after_stall_s": 12,
+                "valid_samples": 10,
+                "median_ms": 35.0
+              },
+              {
+                "after_stall_s": 16,
+                "valid_samples": 8,
+                "median_ms": 35.99999999999758
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
