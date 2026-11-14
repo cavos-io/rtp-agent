@@ -8,3 +8,4 @@ bool probe_drop(uint64_t);
 void probe_dispose(void);
 int64_t probe_now(void);
 void* probe_pointer(uint64_t);
+int probe_flush_packet_trace(void);

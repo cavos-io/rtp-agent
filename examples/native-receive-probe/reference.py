@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from livekit import rtc
 from livekit.rtc._ffi_client import FfiClient
@@ -51,6 +52,11 @@ async def run(args):
     with open(args.out / 'python.jsonl', 'w', buffering=1) as log, open(args.out / 'python.pcm', 'wb') as pcm:
         def event(**data):
             log.write(json.dumps(data) + '\n')
+        def clock_anchor():
+            before=now_ns();realtime=time.time_ns();after=now_ns()
+            event(event='clock_anchor',before=before,realtime=realtime,after=after)
+        if os.environ.get('PROBE_STATS_EPOCH_NS'):
+            clock_anchor()
         @room.on('track_subscribed')
         def subscribed(track, publication, participant):
             stream = rtc.AudioStream.from_track(track=track, sample_rate=24000, num_channels=1, frame_size_ms=50)
@@ -60,11 +66,19 @@ async def run(args):
                 from google.protobuf.json_format import MessageToDict
                 async def poll_stats():
                     try:
+                        epoch=int(os.environ.get('PROBE_STATS_EPOCH_NS','0'))
+                        period=100_000_000 if epoch else 1_000_000_000
+                        due=epoch or now_ns()+period
                         while not stop.is_set():
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(max(0,(due-now_ns())/1e9))
+                            requested_at=now_ns()
                             stats = await asyncio.wait_for(track.get_stats(), 2)
-                            event(event='native_stats', at=now_ns(), stats={'stats':[
+                            event(event='native_stats', at=now_ns(), requested_at=requested_at,
+                                scheduled=due, slot=(due-epoch)//period, stats={'stats':[
                                 MessageToDict(s, preserving_proto_field_name=True) for s in stats]})
+                            due+=period
+                            if due<now_ns():
+                                due+=((now_ns()-due)//period+1)*period
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
@@ -105,6 +119,11 @@ async def run(args):
                 queue.put = original_put
                 (args.out / 'python-callbacks.json').write_text(json.dumps(callback_trace))
                 (args.out / 'python-heartbeat.json').write_text(json.dumps(heartbeat_trace))
+            if os.environ.get('PROBE_STATS_EPOCH_NS'):
+                clock_anchor()
+            if os.environ.get('PROBE_PACKET_TRACE'):
+                if libc.probe_packet_trace_flush()!=0:
+                    raise RuntimeError('packet trace flush failed')
             event(event='shutdown', at=now_ns(), duration_ns=now_ns()-start, errors=errors)
         if errors:
             raise RuntimeError(errors)

@@ -43,3 +43,8 @@
 - Three 450ms publisher stalls before DTX packet 402 reproduced split marker 8 in both native receivers. Native concealment/buffer counters establish real playout disruption; detector duplicate IDs alone do not prove complete speech replay.
 - Three stalls before continuous packet 566 reproduced buffer buildup and elevated absolute onset latency, but not the original Go-over-Python relative-latency failure. Original host/blocking trigger and per-instance latency differential remain unresolved.
 - Focused Go race tests, vet, seven Python tests and syntax checks passed. Original content and latency failures remain unchanged; no production transport change or original-incident fix claimed.
+
+- Synchronized follow-up: 23 paired local trials (pilot, two controls, ten baseline, ten publisher stalls); original relative-latency gates passed, original historical failure not reproduced.
+- Socket traces localize new variation after packet delivery: stall08 marker-arrival skew 0.152ms, native buffer difference 74.5ms. Frame position contributes to raw onset differences; adjusted estimates do not replace acceptance metrics.
+- Retained stall00 content failure: both native tracks subscribed after publishing began, missing packets 0–10 and marker 0. Full trace attribution remains failed. Shared stall04 onset latency 433.728/439.917ms also retained.
+- All 774 prior artifact checksums verified unchanged. No production transport or custom playout policy changes. Detailed evidence, limits and reproducible commands: ARRIVAL.md and ARRIVAL-SUMMARY.json.

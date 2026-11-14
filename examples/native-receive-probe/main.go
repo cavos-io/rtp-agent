@@ -106,6 +106,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	if os.Getenv("PROBE_STATS_EPOCH_NS") != "" {
+		clockAnchor(sink)
+	}
 	var finishDiagnostics func() error
 	if os.Getenv("PROBE_DIAGNOSTICS") == "1" {
 		finishDiagnostics = startHeartbeat(*out, name)
@@ -128,6 +131,10 @@ func main() {
 	if finishDiagnostics != nil {
 		err = errors.Join(err, finishDiagnostics())
 	}
+	if os.Getenv("PROBE_STATS_EPOCH_NS") != "" {
+		clockAnchor(sink)
+	}
+	err = errors.Join(err, flushPacketTrace())
 	err = errors.Join(err, sink.close())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

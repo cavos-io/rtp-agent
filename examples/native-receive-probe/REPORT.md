@@ -48,3 +48,5 @@ Passed: focused Go tests with `-race`, `go vet`, Python analyzer/cleanup tests, 
 Recommendation remains provisional: retain this prototype and validate Linux packaging, broader worker/concurrent-room lifecycles, native resource ownership, and latency/content behavior on a controlled host before proposing any production transport change.
 
 A subsequent [controlled investigation](CONTROLLED.md) reproduced split-marker content and native buffer buildup using publisher-only stalls. All 26 uninjected follow-up trials passed their original gates; the original Go/Python differential outlier remains unreproduced. This does not replace the original failed results or establish their exact host-level trigger.
+
+Synchronized native receive statistics and socket-arrival traces are reported in [ARRIVAL.md](ARRIVAL.md). This follow-up retains the original failures and identifies frame-phase/native-buffer variation plus a separate startup subscription race.

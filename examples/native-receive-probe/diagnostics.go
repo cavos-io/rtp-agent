@@ -35,3 +35,11 @@ func startHeartbeat(dir, name string) func() error {
 		return os.WriteFile(filepath.Join(dir, name+"-heartbeat.json"), data, 0600)
 	}
 }
+
+// Explicitly calibrate native RTC report realtime timestamps to the trace clock.
+func clockAnchor(sink *recorder) {
+	before := nowNS()
+	realtime := time.Now().UnixNano()
+	after := nowNS()
+	sink.event(map[string]any{"event": "clock_anchor", "before": before, "realtime": realtime, "after": after})
+}

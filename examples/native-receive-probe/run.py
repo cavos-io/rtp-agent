@@ -48,6 +48,8 @@ def stop_all(processes):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--diagnostics', action='store_true')
+    parser.add_argument('--sync-stats', action='store_true')
+    parser.add_argument('--packet-trace', action='store_true')
     parser.add_argument('--native-stats', action='store_true')
     parser.add_argument('--stall-packet', type=int, default=-1)
     parser.add_argument('--repetitions', type=int, default=10)
@@ -59,6 +61,10 @@ def main():
         parser.error('positive repetitions and stall-packet in -1..1499 required')
     if (args.native_stats or args.stall_packet != -1) and not args.diagnostics:
         parser.error('stats and fault injection require --diagnostics')
+    if (args.sync_stats or args.packet_trace) and not (args.native_stats and args.diagnostics):
+        parser.error('synchronized stats/traces require --diagnostics --native-stats')
+    if args.packet_trace and (not args.sync_stats or os.uname().sysname != 'Darwin'):
+        parser.error('packet tracing requires synchronized stats on macOS')
     os.chdir(ROOT)
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -71,6 +77,8 @@ def main():
     env = dict(os.environ, LIVEKIT_LIB_PATH=str(ROOT / '.cache/native/liblivekit_ffi.dylib'))
     if os.uname().sysname == 'Linux':
         env['LIVEKIT_LIB_PATH'] = str(ROOT / '.cache/native/liblivekit_ffi.so')
+    env.pop('PROBE_STATS_EPOCH_NS',None)
+    env.pop('PROBE_PACKET_TRACE',None)
     env['PROBE_DIAGNOSTICS'] = '1' if args.diagnostics else '0'
     env['PROBE_NATIVE_STATS'] = '1' if args.native_stats else '0'
     env['PROBE_STALL_PACKET'] = str(args.stall_packet)
@@ -80,7 +88,7 @@ def main():
         (out / 'run-manifest.json').write_text(json.dumps(dict(arguments=vars(args),
             platform=platform.platform(), load=os.getloadavg(),
             hashes={str(p):hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in
-                [args.binary, env['LIVEKIT_LIB_PATH'], '.cache/speech.pcm', 'reference.py', 'run.py', 'diagnostics.py', 'analyze.py']}
+                [args.binary, env['LIVEKIT_LIB_PATH'], '.cache/speech.pcm', 'reference.py', 'run.py', 'diagnostics.py', 'analyze.py'] + (['.cache/receive_trace.dylib','trace/receive.c'] if args.packet_trace else [])}
         ), indent=2))
     finish_monitor = None
     logs = []
@@ -107,12 +115,23 @@ def main():
                 room = f'probe-{scenario}-{rep}-{os.getpid()}'
                 jwt = subprocess.check_output([args.binary,'-mode','token','-room',room], env=env, text=True).strip()
                 run_env = dict(env, PROBE_TOKEN=jwt)
+                if args.sync_stats:
+                    from diagnostics import now_ns
+                    run_env['PROBE_STATS_EPOCH_NS']=str(now_ns()+3_000_000_000)
+                (dest/'run-config.json').write_text(json.dumps(dict(stats_epoch=run_env.get('PROBE_STATS_EPOCH_NS'),receiver_order='python-first' if args.sync_stats and rep%2 else 'go-first')))
                 children = []
-                for name, command in [
+                receivers = [
                     ('go',[args.binary,'-room',room,'-out',str(dest)]),
-                    ('python',['.venv/bin/python','reference.py','--out',str(dest)])]:
+                    ('python',['.venv/bin/python','reference.py','--out',str(dest)])]
+                if args.sync_stats and rep%2:
+                    receivers.reverse()
+                for name, command in receivers:
                     log = open(dest / f'{name}.log','w'); logs.append(log)
-                    proc = subprocess.Popen(command, env=run_env, stdout=log, stderr=subprocess.STDOUT)
+                    receiver_env=dict(run_env)
+                    if args.packet_trace:
+                        receiver_env['DYLD_INSERT_LIBRARIES']=str(ROOT/'.cache/receive_trace.dylib')
+                        receiver_env['PROBE_PACKET_TRACE']=str(dest/(name+'-arrivals.jsonl'))
+                    proc = subprocess.Popen(command, env=receiver_env, stdout=log, stderr=subprocess.STDOUT)
                     children.append(proc)
                     wait_ready(proc,dest / f'{name}.jsonl')
                 log = open(dest / 'publisher.log','w');logs.append(log)

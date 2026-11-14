@@ -26,3 +26,7 @@ bool probe_drop(uint64_t h){return drop(h);}
 void probe_dispose(void){dispose();} // Keep library loaded until process exit: no callback into unloaded code.
 int64_t probe_now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000000+t.tv_nsec;}
 void* probe_pointer(uint64_t p){return (void*)(uintptr_t)p;}
+int probe_flush_packet_trace(void) {
+ int (*flush)(void)=dlsym(RTLD_DEFAULT,"probe_packet_trace_flush");
+ return flush ? flush() : -1;
+}

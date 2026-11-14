@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -57,6 +58,12 @@ func goEvent(p *C.uint8_t, n C.size_t) {
 	callbacks.push(unsafe.Slice((*byte)(unsafe.Pointer(p)), int(n)), at)
 }
 func nowNS() int64 { return int64(C.probe_now()) }
+func flushPacketTrace() error {
+	if os.Getenv("PROBE_PACKET_TRACE") != "" && C.probe_flush_packet_trace() != 0 {
+		return errors.New("packet tracer absent or flush failed")
+	}
+	return nil
+}
 
 func ownedHandles(m protoreflect.Message) []uint64 {
 	var ids []uint64
@@ -201,11 +208,25 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 	if err != nil {
 		return err
 	}
+	// Optional observation grid; it never gates audio or packet processing.
 	var statsTick <-chan time.Time
+	var statsTimer *time.Timer
+	statsPeriod := int64(time.Second)
+	statsEpoch := int64(0)
+	statsDue := int64(0)
 	if os.Getenv("PROBE_NATIVE_STATS") == "1" {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		statsTick = ticker.C
+		statsDue = nowNS() + statsPeriod
+		if value := os.Getenv("PROBE_STATS_EPOCH_NS"); value != "" {
+			statsEpoch, err = strconv.ParseInt(value, 10, 64)
+			if err != nil || statsEpoch <= 0 {
+				return errors.New("invalid stats epoch")
+			}
+			statsPeriod = 100_000_000
+			statsDue = statsEpoch
+		}
+		statsTimer = time.NewTimer(time.Duration(max(0, statsDue-nowNS())))
+		defer statsTimer.Stop()
+		statsTick = statsTimer.C
 	}
 	statsID := uint64(100)
 	for {
@@ -216,8 +237,17 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 		case <-ctx.Done():
 			return nil
 		case <-statsTick:
+			due := statsDue
+			statsDue += statsPeriod
+			current := nowNS()
+			if statsDue < current {
+				statsDue += ((current-statsDue)/statsPeriod + 1) * statsPeriod
+			}
+			statsTimer.Reset(time.Duration(max(0, statsDue-nowNS())))
 			if track != 0 {
 				statsID++
+				requestedAt := nowNS()
+				sink.event(map[string]any{"event": "native_stats_request", "at": requestedAt, "scheduled": due, "slot": (due - statsEpoch) / statsPeriod, "async_id": statsID})
 				if _, e := request(&pb.FfiRequest{Message: &pb.FfiRequest_GetStats{GetStats: &pb.GetStatsRequest{TrackHandle: proto.Uint64(track), RequestAsyncId: proto.Uint64(statsID)}}}); e != nil {
 					return e
 				}

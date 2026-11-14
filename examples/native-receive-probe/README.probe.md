@@ -81,3 +81,5 @@ Resource evidence is bounded: the harness observes disconnect completion, native
 Post-dispose goroutine counts and 100-cycle same-process connect/disconnect results are documented in [CYCLES.md](CYCLES.md), including the retained failed plateau check and native-thread evidence.
 
 The remaining content and latency failures were investigated with controlled sender stalls and native statistics: [CONTROLLED.md](CONTROLLED.md). Original failed results and thresholds remain unchanged.
+
+Synchronized native receive statistics and socket-arrival traces are reported in [ARRIVAL.md](ARRIVAL.md). This follow-up retains the original failures and identifies frame-phase/native-buffer variation plus a separate startup subscription race.
