@@ -47,11 +47,18 @@ def stop_all(processes):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--diagnostics', action='store_true')
+    parser.add_argument('--native-stats', action='store_true')
+    parser.add_argument('--stall-packet', type=int, default=-1)
     parser.add_argument('--repetitions', type=int, default=10)
     parser.add_argument('--binary', default='./probe')
     parser.add_argument('--scenarios', nargs='+', default=['continuous', 'dtx', 'loss'], choices=['continuous','dtx','loss'])
     parser.add_argument('--output', default='results/full')
     args = parser.parse_args()
+    if args.repetitions < 1 or not -1 <= args.stall_packet < 1500:
+        parser.error('positive repetitions and stall-packet in -1..1499 required')
+    if (args.native_stats or args.stall_packet != -1) and not args.diagnostics:
+        parser.error('stats and fault injection require --diagnostics')
     os.chdir(ROOT)
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -64,11 +71,25 @@ def main():
     env = dict(os.environ, LIVEKIT_LIB_PATH=str(ROOT / '.cache/native/liblivekit_ffi.dylib'))
     if os.uname().sysname == 'Linux':
         env['LIVEKIT_LIB_PATH'] = str(ROOT / '.cache/native/liblivekit_ffi.so')
+    env['PROBE_DIAGNOSTICS'] = '1' if args.diagnostics else '0'
+    env['PROBE_NATIVE_STATS'] = '1' if args.native_stats else '0'
+    env['PROBE_STALL_PACKET'] = str(args.stall_packet)
+    if args.diagnostics:
+        import hashlib, platform
+        from diagnostics import monitor
+        (out / 'run-manifest.json').write_text(json.dumps(dict(arguments=vars(args),
+            platform=platform.platform(), load=os.getloadavg(),
+            hashes={str(p):hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in
+                [args.binary, env['LIVEKIT_LIB_PATH'], '.cache/speech.pcm', 'reference.py', 'run.py', 'diagnostics.py', 'analyze.py']}
+        ), indent=2))
+    finish_monitor = None
     logs = []
     server_log = open(out / 'server.log', 'w'); logs.append(server_log)
     server = subprocess.Popen(['livekit-server', '--config', str(config)], stdout=server_log, stderr=subprocess.STDOUT, env=env)
     children = []
     try:
+        if args.diagnostics:
+            finish_monitor = monitor(out / 'host-heartbeat.json')
         for _ in range(100):
             if server.poll() is not None:
                 raise RuntimeError('local server exited')
@@ -112,6 +133,8 @@ def main():
         finally:
             for log in logs:
                 log.close()
+            if finish_monitor is not None:
+                finish_monitor()
 
 if __name__ == '__main__':
     main()

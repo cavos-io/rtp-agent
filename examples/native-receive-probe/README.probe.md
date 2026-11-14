@@ -79,3 +79,5 @@ The reference framework checkout was `ff962a019b6500e08f8f1fcd7f55673361bd9e91`;
 Resource evidence is bounded: the harness observes disconnect completion, native disposal returning, receiver process exit, and race-detector results. It does not expose the Rust handle table or establish absence of native heap/thread leaks in a long-lived worker. Production adoption still needs that audit, bounded backpressure design, Linux packaging validation, and worker/room lifecycle integration.
 
 Post-dispose goroutine counts and 100-cycle same-process connect/disconnect results are documented in [CYCLES.md](CYCLES.md), including the retained failed plateau check and native-thread evidence.
+
+The remaining content and latency failures were investigated with controlled sender stalls and native statistics: [CONTROLLED.md](CONTROLLED.md). Original failed results and thresholds remain unchanged.

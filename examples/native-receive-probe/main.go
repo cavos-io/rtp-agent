@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -105,6 +106,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	var finishDiagnostics func() error
+	if os.Getenv("PROBE_DIAGNOSTICS") == "1" {
+		finishDiagnostics = startHeartbeat(*out, name)
+	}
 	switch *mode {
 	case "receive":
 		var jwt string
@@ -119,6 +124,9 @@ func main() {
 	}
 	if err != nil {
 		sink.event(map[string]any{"event": "error", "error": err.Error(), "at": nowNS()})
+	}
+	if finishDiagnostics != nil {
+		err = errors.Join(err, finishDiagnostics())
 	}
 	err = errors.Join(err, sink.close())
 	if err != nil {
@@ -202,6 +210,18 @@ func publish(ctx context.Context, url, roomName, scenario, fixture string, sink 
 	pcm := make([]int16, 960)
 	buf := make([]byte, 4000)
 	seq := uint16(1000)
+	diagnostic := os.Getenv("PROBE_DIAGNOSTICS") == "1"
+	stallIndex := -1
+	if v := os.Getenv("PROBE_STALL_PACKET"); v != "" {
+		stallIndex, err = strconv.Atoi(v)
+		if err != nil {
+			return err
+		}
+	}
+	var source []byte
+	if diagnostic {
+		source = make([]byte, 0, 1500*960*2)
+	}
 	for i := 0; i < 1500; i++ {
 		deadline := start + int64(i)*20_000_000
 		if delay := deadline - nowNS(); delay > 0 {
@@ -212,6 +232,12 @@ func publish(ctx context.Context, url, roomName, scenario, fixture string, sink 
 				return ctx.Err()
 			case <-timer.C:
 			}
+		}
+		awake := nowNS()
+		if i == stallIndex {
+			injectedAt := nowNS()
+			time.Sleep(450 * time.Millisecond) // Explicit publisher fault injection; never receiver policy.
+			sink.event(map[string]any{"event": "injected_stall", "index": i, "at": injectedAt, "end": nowNS()})
 		}
 		sec := float64(i) * .02
 		for j := range pcm {
@@ -234,10 +260,12 @@ func publish(ctx context.Context, url, roomName, scenario, fixture string, sink 
 				}
 			}
 		}
+		encodeStart := nowNS()
 		n, e := enc.Encode(pcm, buf)
 		if e != nil {
 			return e
 		}
+		encodeEnd := nowNS()
 		inDTX, e := enc.InDTX()
 		if e != nil {
 			return e
@@ -252,9 +280,21 @@ func publish(ctx context.Context, url, roomName, scenario, fixture string, sink 
 				return e
 			}
 		}
+		writeEnd := nowNS()
+		if diagnostic {
+			for _, sample := range pcm {
+				source = binary.LittleEndian.AppendUint16(source, uint16(sample))
+			}
+			sink.event(map[string]any{"event": "packet_stages", "index": i, "awake": awake, "encode_start": encodeStart, "encode_end": encodeEnd, "write_end": writeEnd})
+		}
 		sink.event(map[string]any{"event": "packet", "at": at, "scheduled": deadline, "index": i, "seq": seq, "ts": timestamp, "bytes": n, "in_dtx": inDTX, "sent": sent, "loss": lost, "dtx_skip": skip})
 		if !skip {
 			seq++
+		}
+	}
+	if diagnostic {
+		if _, err = sink.pcm.Write(source); err != nil {
+			return err
 		}
 	}
 	time.Sleep(520 * time.Millisecond)

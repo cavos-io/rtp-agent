@@ -1,0 +1,785 @@
+{
+  "versions": {
+    "platform": "macOS 27.0.1 ARM64",
+    "go": "1.27.4",
+    "python_rtc": "1.1.21",
+    "ffi": "0.12.80",
+    "rust_revision": "5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb",
+    "livekit_server": "1.13.11"
+  },
+  "datasets": {
+    "controlled-baseline": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "stall_packet": -1,
+          "repetitions": 10,
+          "binary": ".cache/probe-controlled",
+          "scenarios": [
+            "continuous",
+            "dtx"
+          ],
+          "output": "results/controlled-baseline"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          3.83349609375,
+          3.98291015625,
+          4.126953125
+        ],
+        "hashes": {
+          ".cache/probe-controlled": "514225007f0d662ff86c8f1c9a6796a953e695f323e8f522bbd16dc92376eb4a",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "e5f80f5ab2b8ebe7cfc7abe53185bb53d2fc2f577df5c4c6cfb1400d55a67b2a",
+          "run.py": "d1e24340da99d339a4c0b28f7d0621109e092dcc47907536dd320bb921650426",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206"
+        }
+      },
+      "gate_summary": {
+        "continuous": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 50.457049999999995,
+          "python_startup_ms_p95": 48.7395,
+          "go_second_onset_ms_p95": 82.27395,
+          "python_second_onset_ms_p95": 78.85979999999999,
+          "go_callback_gap_p95_ms_p95": 51.805839999999996,
+          "python_callback_gap_p95_ms_p95": 51.99814,
+          "go_shutdown_ms_p95": 8.583899999999995,
+          "python_shutdown_ms_p95": 11.62495,
+          "go_first_content_ms_p95": 53.593549999999986,
+          "python_first_content_ms_p95": 52.548449999999995,
+          "relative_latency_pass": true
+        },
+        "dtx": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 48.81775,
+          "python_startup_ms_p95": 51.14695,
+          "go_second_onset_ms_p95": 49.8223,
+          "python_second_onset_ms_p95": 49.778800000000004,
+          "go_callback_gap_p95_ms_p95": 51.779522500000006,
+          "python_callback_gap_p95_ms_p95": 52.0415075,
+          "go_shutdown_ms_p95": 6.563149999999997,
+          "python_shutdown_ms_p95": 10.943649999999996,
+          "go_first_content_ms_p95": 49.539500000000004,
+          "python_first_content_ms_p95": 51.980799999999995,
+          "relative_latency_pass": true
+        }
+      },
+      "host_heartbeat": {
+        "p95_ms": 2.575,
+        "max_ms": 44.531
+      },
+      "scenarios": {
+        "continuous": {
+          "runs": 10,
+          "content_passes": 10,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 5,
+          "publisher_lateness_max_ms": 40.804,
+          "publisher_write_max_ms": 17.325,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            4.744,
+            41.919,
+            -4.159,
+            5.7,
+            -3.109,
+            3.33,
+            -6.561,
+            3.675,
+            4.01,
+            3.483
+          ],
+          "go": {
+            "onset_ms": [
+              39.448,
+              80.214,
+              48.736,
+              78.121,
+              73.135,
+              80.696,
+              39.813,
+              56.885,
+              35.557,
+              83.565
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 17.668,
+            "callback_to_consumer_p95_max_ms": 0.7151999999999988,
+            "heartbeat_max_ms": 38.746,
+            "marker8_regions": null
+          },
+          "python": {
+            "onset_ms": [
+              34.704,
+              38.295,
+              52.895,
+              72.421,
+              76.244,
+              77.366,
+              46.374,
+              53.21,
+              31.547,
+              80.082
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 15.987,
+            "callback_to_consumer_p95_max_ms": 1.1773499999999983,
+            "heartbeat_max_ms": 37.197,
+            "marker8_regions": null
+          }
+        },
+        "dtx": {
+          "runs": 10,
+          "content_passes": 10,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 4,
+          "publisher_lateness_max_ms": 40.437,
+          "publisher_write_max_ms": 37.184,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            -8.326,
+            -0.41,
+            -0.118,
+            -2.596,
+            9.445,
+            44.825,
+            -2.855,
+            -5.18,
+            -0.886,
+            -7.075
+          ],
+          "go": {
+            "onset_ms": [
+              34.288,
+              32.502,
+              42.905,
+              41.964,
+              49.12,
+              50.275,
+              42.66,
+              18.793,
+              49.269,
+              42.244
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.05
+            ],
+            "callback_to_consumer_max_ms": 17.596,
+            "callback_to_consumer_p95_max_ms": 0.5430999999999999,
+            "heartbeat_max_ms": 36.543,
+            "marker8_regions": null
+          },
+          "python": {
+            "onset_ms": [
+              42.614,
+              32.912,
+              43.023,
+              44.56,
+              39.675,
+              5.45,
+              45.515,
+              23.973,
+              50.155,
+              49.319
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 17.804,
+            "callback_to_consumer_p95_max_ms": 1.0674999999999986,
+            "heartbeat_max_ms": 40.913,
+            "marker8_regions": null
+          }
+        }
+      }
+    },
+    "controlled-stall-dtx": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "native_stats": true,
+          "stall_packet": 402,
+          "repetitions": 3,
+          "binary": ".cache/probe-stats",
+          "scenarios": [
+            "dtx"
+          ],
+          "output": "results/controlled-stall-dtx"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          3.98779296875,
+          4.60107421875,
+          4.451171875
+        ],
+        "hashes": {
+          ".cache/probe-stats": "c0e98006642bb807189cd833247a8e3b5b4344bc1fef071eb53c86f9036e2153",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "682f591143506e5001dab5bc28e7f5b1a72d5385f97c8069a1cbda09c5fec98e",
+          "run.py": "aceeb88dd23254c850d865092a4bdb1ef581d44ff30f7daaf032d2dcb1d58c5c",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206"
+        }
+      },
+      "gate_summary": {
+        "dtx": {
+          "runs": 3,
+          "failed_runs": [
+            "dtx-00",
+            "dtx-01",
+            "dtx-02"
+          ],
+          "go_startup_ms_p95": 49.4885,
+          "python_startup_ms_p95": 48.7963,
+          "go_second_onset_ms_p95": 48.2453,
+          "python_second_onset_ms_p95": 49.793899999999994,
+          "go_callback_gap_p95_ms_p95": 51.566785,
+          "python_callback_gap_p95_ms_p95": 51.537304999999996,
+          "go_shutdown_ms_p95": 5.036,
+          "python_shutdown_ms_p95": 6.0396,
+          "go_first_content_ms_p95": 51.9035,
+          "python_first_content_ms_p95": 53.8405,
+          "relative_latency_pass": true
+        }
+      },
+      "host_heartbeat": {
+        "p95_ms": 2.573,
+        "max_ms": 7.757
+      },
+      "scenarios": {
+        "dtx": {
+          "runs": 3,
+          "content_passes": 0,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 0,
+          "publisher_lateness_max_ms": 452.229,
+          "publisher_write_max_ms": 2.703,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            -1.892,
+            2.091,
+            -1.953
+          ],
+          "go": {
+            "onset_ms": [
+              2.3,
+              46.835,
+              48.402
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 5.899,
+            "callback_to_consumer_p95_max_ms": 0.4686,
+            "heartbeat_max_ms": 10.044,
+            "marker8_regions": [
+              [
+                {
+                  "start_s": 8.97,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.43,
+                  "duration_ms": 220.0
+                }
+              ],
+              [
+                {
+                  "start_s": 8.98,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.44,
+                  "duration_ms": 220.0
+                }
+              ],
+              [
+                {
+                  "start_s": 8.98,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.44,
+                  "duration_ms": 220.0
+                }
+              ]
+            ],
+            "native_peak_interval_jitter_buffer_ms": 460.00000000000017,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              13.74999999999981,
+              17.058823529411853,
+              17.36842105263134
+            ],
+            "concealed_sample_increase_near_stall": [
+              20760.0,
+              20760.0,
+              20760.0
+            ]
+          },
+          "python": {
+            "onset_ms": [
+              4.192,
+              44.744,
+              50.355
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 15.797,
+            "callback_to_consumer_p95_max_ms": 0.8358000000000002,
+            "heartbeat_max_ms": 14.251,
+            "marker8_regions": [
+              [
+                {
+                  "start_s": 8.97,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.43,
+                  "duration_ms": 220.0
+                }
+              ],
+              [
+                {
+                  "start_s": 8.98,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.44,
+                  "duration_ms": 220.0
+                }
+              ],
+              [
+                {
+                  "start_s": 8.98,
+                  "duration_ms": 150.0
+                },
+                {
+                  "start_s": 9.44,
+                  "duration_ms": 220.0
+                }
+              ]
+            ],
+            "native_peak_interval_jitter_buffer_ms": 477.3333333333332,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              14.444444444444782,
+              12.857142857143074,
+              9.999999999999432
+            ],
+            "concealed_sample_increase_near_stall": [
+              20760.0,
+              20760.0,
+              20772.0
+            ]
+          }
+        }
+      }
+    },
+    "controlled-stall-continuous": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "native_stats": true,
+          "stall_packet": 566,
+          "repetitions": 3,
+          "binary": ".cache/probe-stats",
+          "scenarios": [
+            "continuous"
+          ],
+          "output": "results/controlled-stall-continuous"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          2.1220703125,
+          3.6884765625,
+          4.10693359375
+        ],
+        "hashes": {
+          ".cache/probe-stats": "c0e98006642bb807189cd833247a8e3b5b4344bc1fef071eb53c86f9036e2153",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "682f591143506e5001dab5bc28e7f5b1a72d5385f97c8069a1cbda09c5fec98e",
+          "run.py": "aceeb88dd23254c850d865092a4bdb1ef581d44ff30f7daaf032d2dcb1d58c5c",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206"
+        }
+      },
+      "gate_summary": {
+        "continuous": {
+          "runs": 3,
+          "failed_runs": [],
+          "go_startup_ms_p95": 48.5005,
+          "python_startup_ms_p95": 49.8998,
+          "go_second_onset_ms_p95": 138.593,
+          "python_second_onset_ms_p95": 148.7815,
+          "go_callback_gap_p95_ms_p95": 51.579640000000005,
+          "python_callback_gap_p95_ms_p95": 51.81516,
+          "go_shutdown_ms_p95": 5.326,
+          "python_shutdown_ms_p95": 7.8466,
+          "go_first_content_ms_p95": 40.7081,
+          "python_first_content_ms_p95": 50.2114,
+          "relative_latency_pass": true
+        }
+      },
+      "host_heartbeat": {
+        "p95_ms": 2.576,
+        "max_ms": 41.441
+      },
+      "scenarios": {
+        "continuous": {
+          "runs": 3,
+          "content_passes": 3,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 0,
+          "publisher_lateness_max_ms": 452.29,
+          "publisher_write_max_ms": 6.757,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            -4.091,
+            0.973,
+            -11.609
+          ],
+          "go": {
+            "onset_ms": [
+              138.314,
+              138.624,
+              137.881
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 7.072,
+            "callback_to_consumer_p95_max_ms": 0.7010999999999998,
+            "heartbeat_max_ms": 42.309,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 461.3999999999999,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              89.59999999999977,
+              115.68627450980392,
+              85.96153846153868
+            ]
+          },
+          "python": {
+            "onset_ms": [
+              142.405,
+              137.651,
+              149.49
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 14.856,
+            "callback_to_consumer_p95_max_ms": 0.9706999999999993,
+            "heartbeat_max_ms": 38.213,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 467.1999999999998,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              124.42307692307715,
+              93.07692307692297,
+              121.56862745098039
+            ]
+          }
+        }
+      }
+    },
+    "controlled-stats-control": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "native_stats": true,
+          "stall_packet": -1,
+          "repetitions": 3,
+          "binary": ".cache/probe-stats",
+          "scenarios": [
+            "continuous",
+            "dtx"
+          ],
+          "output": "results/controlled-stats-control"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          2.18701171875,
+          3.1552734375,
+          3.82958984375
+        ],
+        "hashes": {
+          ".cache/probe-stats": "c0e98006642bb807189cd833247a8e3b5b4344bc1fef071eb53c86f9036e2153",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "682f591143506e5001dab5bc28e7f5b1a72d5385f97c8069a1cbda09c5fec98e",
+          "run.py": "aceeb88dd23254c850d865092a4bdb1ef581d44ff30f7daaf032d2dcb1d58c5c",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206"
+        }
+      },
+      "gate_summary": {
+        "continuous": {
+          "runs": 3,
+          "failed_runs": [],
+          "go_startup_ms_p95": 44.7502,
+          "python_startup_ms_p95": 48.0317,
+          "go_second_onset_ms_p95": 75.6416,
+          "python_second_onset_ms_p95": 42.401,
+          "go_callback_gap_p95_ms_p95": 51.58726,
+          "python_callback_gap_p95_ms_p95": 51.828779999999995,
+          "go_shutdown_ms_p95": 3.7626999999999997,
+          "python_shutdown_ms_p95": 10.167300000000001,
+          "go_first_content_ms_p95": 36.4256,
+          "python_first_content_ms_p95": 42.3838,
+          "relative_latency_pass": true
+        },
+        "dtx": {
+          "runs": 3,
+          "failed_runs": [],
+          "go_startup_ms_p95": 48.818599999999996,
+          "python_startup_ms_p95": 47.8718,
+          "go_second_onset_ms_p95": 28.6615,
+          "python_second_onset_ms_p95": 30.635599999999997,
+          "go_callback_gap_p95_ms_p95": 51.71914999999999,
+          "python_callback_gap_p95_ms_p95": 51.685379999999995,
+          "go_shutdown_ms_p95": 3.9278,
+          "python_shutdown_ms_p95": 9.6658,
+          "go_first_content_ms_p95": 58.3118,
+          "python_first_content_ms_p95": 32.6224,
+          "relative_latency_pass": true
+        }
+      },
+      "host_heartbeat": {
+        "p95_ms": 2.572,
+        "max_ms": 37.633
+      },
+      "scenarios": {
+        "continuous": {
+          "runs": 3,
+          "content_passes": 3,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 2,
+          "publisher_lateness_max_ms": 16.499,
+          "publisher_write_max_ms": 1.926,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            -9.748,
+            -3.339,
+            45.616
+          ],
+          "go": {
+            "onset_ms": [
+              32.828,
+              37.487,
+              79.881
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 18.283,
+            "callback_to_consumer_p95_max_ms": 0.43,
+            "heartbeat_max_ms": 27.487,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 41.02040816326531,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              30.0,
+              30.000000000000014,
+              30.0
+            ]
+          },
+          "python": {
+            "onset_ms": [
+              42.576,
+              40.826,
+              34.265
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 7.763,
+            "callback_to_consumer_p95_max_ms": 0.8026999999999994,
+            "heartbeat_max_ms": 31.558,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 58.19999999999999,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              35.60000000000006,
+              30.58823529411769,
+              29.999999999999986
+            ]
+          }
+        },
+        "dtx": {
+          "runs": 3,
+          "content_passes": 3,
+          "all_other_run_checks_pass": true,
+          "within_20ms_scheduling": 1,
+          "publisher_lateness_max_ms": 36.736,
+          "publisher_write_max_ms": 1.62,
+          "source_pcm_sha256": [
+            "57e34c92864bd63805ef4bee9da0269f80147de28b6746624e4f6c40b42ec44e"
+          ],
+          "paired_onset_difference_ms": [
+            -2.17,
+            -0.94,
+            -0.211
+          ],
+          "go": {
+            "onset_ms": [
+              29.402,
+              11.453,
+              21.997
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 2.013,
+            "callback_to_consumer_p95_max_ms": 0.4654000000000001,
+            "heartbeat_max_ms": 27.398,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 56.4705882352941,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              13.529411764705838,
+              12.5,
+              13.88888888888889
+            ]
+          },
+          "python": {
+            "onset_ms": [
+              31.572,
+              12.393,
+              22.208
+            ],
+            "window_pcm_s_range": [
+              29.0,
+              29.0
+            ],
+            "callback_to_consumer_max_ms": 6.937,
+            "callback_to_consumer_p95_max_ms": 0.7569499999999996,
+            "heartbeat_max_ms": 37.266,
+            "marker8_regions": null,
+            "native_peak_interval_jitter_buffer_ms": 49.800000000000026,
+            "native_final_packets_lost": [
+              0,
+              0,
+              0
+            ],
+            "native_final_packets_discarded": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "native_near_second_onset_interval_jitter_buffer_ms": [
+              12.222222222222475,
+              14.44444444444436,
+              13.333333333333208
+            ]
+          }
+        }
+      }
+    }
+  },
+  "original_hashes": {
+    "ACCEPTANCE.md": "bc1c20f8490df94aafed8946dc87f4910604cb802c276279252623beb0b06586",
+    "SUMMARY.json": "9ee02b81cb52bec8001f33ee26d438aa59762ffd7fd163579901c370aa3fde9b",
+    "MEASUREMENTS.csv": "a17eddd44bfd2eafa68515fd7bee9e23a18c9186e7cd699835fa3ea0ceb2b693",
+    "results/full/measurements.json": "d609ca859a4ee69f8f40b872ac124322ebcb8deb0ab111799f8891308d9c1964",
+    "results/full/SHA256SUMS": "cfd909ada633d0723767990b4cda8e59990c57cfd884b6465778343e10239018"
+  },
+  "original_files_reverified": 210
+}

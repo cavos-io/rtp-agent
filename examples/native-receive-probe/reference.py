@@ -25,8 +25,27 @@ async def run(args):
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
+    diagnostic = os.environ.get('PROBE_DIAGNOSTICS') == '1'
+    callback_trace, heartbeat_trace = [], []
+    queue = FfiClient.instance.queue
+    original_put = queue.put
+    if diagnostic:
+        def traced_put(event):
+            at = now_ns()
+            if event.HasField('audio_stream_event') and event.audio_stream_event.HasField('frame_received'):
+                audio = event.audio_stream_event
+                callback_trace.append(dict(at=at, stream=audio.stream_handle,
+                    samples=audio.frame_received.frame.info.samples_per_channel))
+            original_put(event)
+        queue.put = traced_put
+    async def heartbeat():
+        while not stop.is_set():
+            due = now_ns() + 10_000_000
+            await asyncio.sleep(.01)
+            heartbeat_trace.append([due, now_ns()])
+    heartbeat_task = asyncio.create_task(heartbeat()) if diagnostic else None
     room = rtc.Room()
-    streams, tasks = [], []
+    streams, tasks, stats_tasks = [], [], []
     offset = 0
     errors = []
     with open(args.out / 'python.jsonl', 'w', buffering=1) as log, open(args.out / 'python.pcm', 'wb') as pcm:
@@ -37,6 +56,21 @@ async def run(args):
             stream = rtc.AudioStream.from_track(track=track, sample_rate=24000, num_channels=1, frame_size_ms=50)
             streams.append(stream)
             event(event='subscribed', at=now_ns())
+            if os.environ.get('PROBE_NATIVE_STATS') == '1':
+                from google.protobuf.json_format import MessageToDict
+                async def poll_stats():
+                    try:
+                        while not stop.is_set():
+                            await asyncio.sleep(1)
+                            stats = await asyncio.wait_for(track.get_stats(), 2)
+                            event(event='native_stats', at=now_ns(), stats={'stats':[
+                                MessageToDict(s, preserving_proto_field_name=True) for s in stats]})
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        errors.append(str(exc))
+                        stop.set()
+                stats_tasks.append(asyncio.create_task(poll_stats()))
             async def consume():
                 nonlocal offset
                 try:
@@ -56,12 +90,21 @@ async def run(args):
             event(event='ready', at=now_ns())
             await stop.wait()
         finally:
+            stop.set()
             start = now_ns()
+            for task in stats_tasks:
+                task.cancel()
+            await asyncio.gather(*stats_tasks, return_exceptions=True)
             for stream in streams:
                 await stream.aclose()
             await asyncio.gather(*tasks)
             await room.disconnect()
             FfiClient.instance._dispose()
+            if diagnostic:
+                await heartbeat_task
+                queue.put = original_put
+                (args.out / 'python-callbacks.json').write_text(json.dumps(callback_trace))
+                (args.out / 'python-heartbeat.json').write_text(json.dumps(heartbeat_trace))
             event(event='shutdown', at=now_ns(), duration_ns=now_ns()-start, errors=errors)
         if errors:
             raise RuntimeError(errors)

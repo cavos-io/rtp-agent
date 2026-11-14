@@ -36,3 +36,10 @@
 - Opt-in macOS thread snapshots directly observed a new Go callback context on a native thread already present after the first cycle. Seven foreign contexts remained after final disposal, matching Go pthread callback retention and the pinned FFI's process-global runtimes. No per-cycle Go-owned goroutine growth observed; native heap leak freedom remains unproven.
 - Prototype lifecycle separates room cleanup from process FFI disposal and avoids repeated dlopen reference increments. Production code and original content/latency failures remain unchanged.
 - Test-integrity hook rejected t.Skip for the opt-in integration test. Moved it behind the nativecycles build tag, retained the default classifier unit test, and reran focused race tests, tagged vet and five live room cycles successfully. No hook bypass.
+
+- Controlled follow-up preserved all 210 original artifact checksums plus acceptance/summary/measurement hashes. No original score changed.
+- Added opt-in publisher stage/source capture, process/event-loop heartbeats, Python FFI-to-iterator timing, and native GetStats sampling. No receive timing policy changes.
+- Ten continuous-silence and ten DTX baseline trials passed original content/latency gates; six matched uninjected stats controls also passed. Host was shared and only 9/20 baseline plus 3/6 controls met the <=20ms scheduling attribution threshold; all trials retained.
+- Three 450ms publisher stalls before DTX packet 402 reproduced split marker 8 in both native receivers. Native concealment/buffer counters establish real playout disruption; detector duplicate IDs alone do not prove complete speech replay.
+- Three stalls before continuous packet 566 reproduced buffer buildup and elevated absolute onset latency, but not the original Go-over-Python relative-latency failure. Original host/blocking trigger and per-instance latency differential remain unresolved.
+- Focused Go race tests, vet, seven Python tests and syntax checks passed. Original content and latency failures remain unchanged; no production transport change or original-incident fix claimed.

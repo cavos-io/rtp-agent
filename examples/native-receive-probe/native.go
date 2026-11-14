@@ -8,6 +8,7 @@ package main
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,10 +17,12 @@ import (
 	"time"
 	"unsafe"
 
+	pb "native-receive-probe/internal/ffipb"
+
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	pb "native-receive-probe/internal/ffipb"
 )
 
 type callbackEvent struct {
@@ -198,6 +201,13 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 	if err != nil {
 		return err
 	}
+	var statsTick <-chan time.Time
+	if os.Getenv("PROBE_NATIVE_STATS") == "1" {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		statsTick = ticker.C
+	}
+	statsID := uint64(100)
 	for {
 		if callbacks.overflow.Load() {
 			return errors.New("native callback queue overflow")
@@ -205,10 +215,27 @@ func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose 
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-statsTick:
+			if track != 0 {
+				statsID++
+				if _, e := request(&pb.FfiRequest{Message: &pb.FfiRequest_GetStats{GetStats: &pb.GetStatsRequest{TrackHandle: proto.Uint64(track), RequestAsyncId: proto.Uint64(statsID)}}}); e != nil {
+					return e
+				}
+			}
 		case raw := <-callbacks.events:
 			ev := new(pb.FfiEvent)
 			if err = proto.Unmarshal(raw.data, ev); err != nil {
 				return err
+			}
+			if stats := ev.GetGetStats(); stats != nil {
+				if stats.GetError() != "" {
+					return errors.New(stats.GetError())
+				}
+				data, e := protojson.MarshalOptions{UseProtoNames: true}.Marshal(stats)
+				if e != nil {
+					return e
+				}
+				sink.event(map[string]any{"event": "native_stats", "at": raw.at, "stats": json.RawMessage(data)})
 			}
 			if c := ev.GetConnect(); c != nil {
 				if c.GetAsyncId() != 1 {

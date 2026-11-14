@@ -46,3 +46,5 @@ Immediate post-dispose Go goroutine counts were **6–8 versus baseline 3**. The
 Passed: focused Go tests with `-race`, `go vet`, Python analyzer/cleanup tests, Python syntax checks, repository architecture and staged test-integrity hooks; refused connection, cancellation during connection and repeated empty-room shutdown checks. The root targeted-test hook skips this nested module, so its tests were run directly. The unfiltered repository parity gate was stopped while enumerating 9,434 unrelated cases; no full-repository parity pass is claimed.
 
 Recommendation remains provisional: retain this prototype and validate Linux packaging, broader worker/concurrent-room lifecycles, native resource ownership, and latency/content behavior on a controlled host before proposing any production transport change.
+
+A subsequent [controlled investigation](CONTROLLED.md) reproduced split-marker content and native buffer buildup using publisher-only stalls. All 26 uninjected follow-up trials passed their original gates; the original Go/Python differential outlier remains unreproduced. This does not replace the original failed results or establish their exact host-level trigger.
