@@ -1,0 +1,697 @@
+{
+  "preservation": {
+    "files": 2523,
+    "manifest_sha256": "75d61b5602f166f2e7c4096bf690af80b19f85149e181735665f2509bd84dc4e",
+    "mismatches": []
+  },
+  "batches": {
+    "baseline": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "sync_stats": true,
+          "packet_trace": true,
+          "native_stats": true,
+          "stall_packet": -1,
+          "repetitions": 10,
+          "binary": ".cache/probe-barrier",
+          "scenarios": [
+            "continuous"
+          ],
+          "output": "results/barrier-baseline"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          6.3876953125,
+          5.064453125,
+          4.990234375
+        ],
+        "hashes": {
+          ".cache/probe-barrier": "3be214845e582afec9c6f4173f0c28ab5bfccca1bdbba0de0e6ac5f2597bf5af",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "e0643ef7d4f80e72c838f2cafe33dcc708ade5a720062837a8fdf6a0002cd533",
+          "run.py": "68dcc6ef592440e2f33608f537d12f0a1a4a8994e785cc0e68e3e22c7186e333",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206",
+          ".cache/receive_trace.dylib": "11756cd4d22a4f5eff0179ad8739028ad63f28edeca83f82b2730203b3dff30d",
+          "trace/receive.c": "defaea4549e78ffb1a23cec2ea2de3c5b26cbd41126d111e23e05c342833a8d0"
+        }
+      },
+      "analysis_sha256": "1972bd0c7ede6e855f537eaf8d1e36efd285a06472f0e441007876b122fbe1d2",
+      "original_summary": {
+        "continuous": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 49.363499999999995,
+          "python_startup_ms_p95": 47.44515,
+          "go_second_onset_ms_p95": 79.367,
+          "python_second_onset_ms_p95": 81.24695,
+          "go_callback_gap_p95_ms_p95": 52.2681025,
+          "python_callback_gap_p95_ms_p95": 52.8536175,
+          "go_shutdown_ms_p95": 7.442199999999995,
+          "python_shutdown_ms_p95": 14.467949999999998,
+          "go_first_content_ms_p95": 48.95284999999999,
+          "python_first_content_ms_p95": 48.33125,
+          "relative_latency_pass": true
+        }
+      },
+      "runs": [
+        {
+          "run": "continuous-00",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 15.035,
+            "python": 14.251
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 31.459,
+          "python_onset_ms": 75.595,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 287,
+            "valid": 287,
+            "max_request_skew_ms": 1.04,
+            "max_producer_skew_ms": 1.202
+          }
+        },
+        {
+          "run": "continuous-01",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 66.11,
+            "python": 61.496
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 73.13,
+          "python_onset_ms": 35.53,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 1.67,
+            "max_producer_skew_ms": 1.587
+          }
+        },
+        {
+          "run": "continuous-02",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 12.437,
+            "python": 10.925
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 80.015,
+          "python_onset_ms": 83.123,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 1.961,
+            "max_producer_skew_ms": 1.9125
+          }
+        },
+        {
+          "run": "continuous-03",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 27.336,
+            "python": 22.426
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 71.321,
+          "python_onset_ms": 74.435,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 2.134,
+            "max_producer_skew_ms": 1.4645
+          }
+        },
+        {
+          "run": "continuous-04",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 52.951,
+            "python": 51.205
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 43.241,
+          "python_onset_ms": 43.883,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 0.983,
+            "max_producer_skew_ms": 1.903
+          }
+        },
+        {
+          "run": "continuous-05",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 49.875,
+            "python": 47.407
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 41.612,
+          "python_onset_ms": 46.719,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 1.671,
+            "max_producer_skew_ms": 1.191
+          }
+        },
+        {
+          "run": "continuous-06",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 13.266,
+            "python": 11.821
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 78.575,
+          "python_onset_ms": 78.954,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 281,
+            "max_request_skew_ms": 17.822,
+            "max_producer_skew_ms": 63.191
+          }
+        },
+        {
+          "run": "continuous-07",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 27.899,
+            "python": 26.552
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 69.954,
+          "python_onset_ms": 70.459,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 3.071,
+            "max_producer_skew_ms": 3.266
+          }
+        },
+        {
+          "run": "continuous-08",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 40.864,
+            "python": 39.193
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 52.056,
+          "python_onset_ms": 48.554,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 2.048,
+            "max_producer_skew_ms": 3.405
+          }
+        },
+        {
+          "run": "continuous-09",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 27.191,
+            "python": 26.104
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 64.567,
+          "python_onset_ms": 66.635,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 2.573,
+            "max_producer_skew_ms": 3.4355
+          }
+        }
+      ]
+    },
+    "stall": {
+      "manifest": {
+        "arguments": {
+          "diagnostics": true,
+          "sync_stats": true,
+          "packet_trace": true,
+          "native_stats": true,
+          "stall_packet": 566,
+          "repetitions": 10,
+          "binary": ".cache/probe-barrier",
+          "scenarios": [
+            "continuous"
+          ],
+          "output": "results/barrier-stall"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "load": [
+          2.89208984375,
+          3.658203125,
+          4.32373046875
+        ],
+        "hashes": {
+          ".cache/probe-barrier": "3be214845e582afec9c6f4173f0c28ab5bfccca1bdbba0de0e6ac5f2597bf5af",
+          "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib": "41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735",
+          ".cache/speech.pcm": "9823777c4b7cde57a5fcbb2a2026ac7585fd0607eae57e386983a2e3d0be1c92",
+          "reference.py": "e0643ef7d4f80e72c838f2cafe33dcc708ade5a720062837a8fdf6a0002cd533",
+          "run.py": "68dcc6ef592440e2f33608f537d12f0a1a4a8994e785cc0e68e3e22c7186e333",
+          "diagnostics.py": "2e9c5cb66128b1da6a3daa0a669410d4fa88774efa51c323dfa0d23270fb3c94",
+          "analyze.py": "a64c54791240b891fde23493f1f8da45c688daea68749b7add727ec1b3db1206",
+          ".cache/receive_trace.dylib": "11756cd4d22a4f5eff0179ad8739028ad63f28edeca83f82b2730203b3dff30d",
+          "trace/receive.c": "defaea4549e78ffb1a23cec2ea2de3c5b26cbd41126d111e23e05c342833a8d0"
+        }
+      },
+      "analysis_sha256": "bbb3439f2248c75ca3a357106b6ec5bd3884a92b4a54fc2eb609e065d677a8e7",
+      "original_summary": {
+        "continuous": {
+          "runs": 10,
+          "failed_runs": [],
+          "go_startup_ms_p95": 49.7836,
+          "python_startup_ms_p95": 49.1339,
+          "go_second_onset_ms_p95": 305.2301999999999,
+          "python_second_onset_ms_p95": 304.1761499999999,
+          "go_callback_gap_p95_ms_p95": 52.7197925,
+          "python_callback_gap_p95_ms_p95": 53.36662,
+          "go_shutdown_ms_p95": 3.8042,
+          "python_shutdown_ms_p95": 15.669799999999999,
+          "go_first_content_ms_p95": 59.1258,
+          "python_first_content_ms_p95": 56.1846,
+          "relative_latency_pass": true
+        }
+      },
+      "runs": [
+        {
+          "run": "continuous-00",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 23.811,
+            "python": 22.371
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 116.821,
+          "python_onset_ms": 125.49,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 5.354,
+            "max_producer_skew_ms": 4.9025
+          }
+        },
+        {
+          "run": "continuous-01",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 31.859,
+            "python": 30.87
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 207.892,
+          "python_onset_ms": 208.192,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 282,
+            "max_request_skew_ms": 3.62,
+            "max_producer_skew_ms": 69.477
+          }
+        },
+        {
+          "run": "continuous-02",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 5.656,
+            "python": 4.193
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 244.574,
+          "python_onset_ms": 241.821,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 3.726,
+            "max_producer_skew_ms": 5.755
+          }
+        },
+        {
+          "run": "continuous-03",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 39.884,
+            "python": 38.786
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 108.574,
+          "python_onset_ms": 157.503,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 285,
+            "max_request_skew_ms": 8.807,
+            "max_producer_skew_ms": 3.961
+          }
+        },
+        {
+          "run": "continuous-04",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 64.992,
+            "python": 60.656
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 129.876,
+          "python_onset_ms": 126.212,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 286,
+            "valid": 286,
+            "max_request_skew_ms": 2.295,
+            "max_producer_skew_ms": 3.5355
+          }
+        },
+        {
+          "run": "continuous-05",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 52.569,
+            "python": 50.982
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 144.338,
+          "python_onset_ms": 137.829,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 285,
+            "valid": 284,
+            "max_request_skew_ms": 2.844,
+            "max_producer_skew_ms": 3.6545
+          }
+        },
+        {
+          "run": "continuous-06",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 19.617,
+            "python": 17.601
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 127.63,
+          "python_onset_ms": 127.989,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 284,
+            "max_request_skew_ms": 2.757,
+            "max_producer_skew_ms": 4.4105
+          }
+        },
+        {
+          "run": "continuous-07",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 40.578,
+            "python": 38.283
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 354.858,
+          "python_onset_ms": 355.194,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 283,
+            "max_request_skew_ms": 5.104,
+            "max_producer_skew_ms": 17.0335
+          }
+        },
+        {
+          "run": "continuous-08",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 18.883,
+            "python": 17.658
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 128.898,
+          "python_onset_ms": 125.496,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 289,
+            "valid": 289,
+            "max_request_skew_ms": 1.154,
+            "max_producer_skew_ms": 1.9985
+          }
+        },
+        {
+          "run": "continuous-09",
+          "subscription_barrier_pass": true,
+          "subscription_before_start_ms": {
+            "go": 15.805,
+            "python": 13.746
+          },
+          "packet_zero_in_trace": {
+            "go": true,
+            "python": true
+          },
+          "go_onset_ms": 132.529,
+          "python_onset_ms": 131.337,
+          "original_checks": {
+            "scenario_verified": true,
+            "duration_difference": true,
+            "sustained_deficit": true,
+            "content": true,
+            "shutdown": true,
+            "no_wrapper_errors": true
+          },
+          "attribution_error": null,
+          "sync": {
+            "pairs": 284,
+            "valid": 283,
+            "max_request_skew_ms": 2.261,
+            "max_producer_skew_ms": 1.929
+          }
+        }
+      ]
+    }
+  }
+}

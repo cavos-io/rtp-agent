@@ -83,3 +83,5 @@ Post-dispose goroutine counts and 100-cycle same-process connect/disconnect resu
 The remaining content and latency failures were investigated with controlled sender stalls and native statistics: [CONTROLLED.md](CONTROLLED.md). Original failed results and thresholds remain unchanged.
 
 Synchronized native receive statistics and socket-arrival traces are reported in [ARRIVAL.md](ARRIVAL.md). This follow-up retains the original failures and identifies frame-phase/native-buffer variation plus a separate startup subscription race.
+
+The runner now waits for both native track subscriptions before sending fixture packets. The controlled baseline/stall rerun and preserved startup failure are documented in [BARRIER.md](BARRIER.md).

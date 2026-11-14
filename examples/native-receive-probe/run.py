@@ -15,15 +15,26 @@ def records(path):
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
-def wait_ready(proc, path):
+def wait_ready(proc, path, event='ready'):
     until = time.monotonic() + 20
     while time.monotonic() < until:
         if proc.poll() is not None:
             raise RuntimeError(f'{path.stem} exited with {proc.returncode}')
-        if any(x.get('event') == 'ready' for x in records(path)):
+        if any(x.get('event') == event for x in records(path)):
             return
         time.sleep(.05)
-    raise TimeoutError(f'{path.stem} did not connect')
+    raise TimeoutError(f'{path.stem} did not report {event}')
+
+def release_publisher(receivers, publisher, dest):
+    for name, proc in receivers:
+        wait_ready(proc, dest / f'{name}.jsonl', 'subscribed')
+    for proc in [publisher, *(proc for _, proc in receivers)]:
+        if proc.poll() is not None:
+            raise RuntimeError('process exited before subscription barrier release')
+    # Exclusive creation in a fresh run directory prevents stale release reuse.
+    with (dest / 'subscriptions-ready').open('x'):
+        pass
+
 
 def stop(proc):
     if proc.poll() is None:
@@ -79,6 +90,7 @@ def main():
         env['LIVEKIT_LIB_PATH'] = str(ROOT / '.cache/native/liblivekit_ffi.so')
     env.pop('PROBE_STATS_EPOCH_NS',None)
     env.pop('PROBE_PACKET_TRACE',None)
+    env.pop('PROBE_START_BARRIER',None)
     env['PROBE_DIAGNOSTICS'] = '1' if args.diagnostics else '0'
     env['PROBE_NATIVE_STATS'] = '1' if args.native_stats else '0'
     env['PROBE_STALL_PACKET'] = str(args.stall_packet)
@@ -125,6 +137,7 @@ def main():
                     ('python',['.venv/bin/python','reference.py','--out',str(dest)])]
                 if args.sync_stats and rep%2:
                     receivers.reverse()
+                receiver_processes = []
                 for name, command in receivers:
                     log = open(dest / f'{name}.log','w'); logs.append(log)
                     receiver_env=dict(run_env)
@@ -133,10 +146,12 @@ def main():
                         receiver_env['PROBE_PACKET_TRACE']=str(dest/(name+'-arrivals.jsonl'))
                     proc = subprocess.Popen(command, env=receiver_env, stdout=log, stderr=subprocess.STDOUT)
                     children.append(proc)
+                    receiver_processes.append((name, proc))
                     wait_ready(proc,dest / f'{name}.jsonl')
                 log = open(dest / 'publisher.log','w');logs.append(log)
-                pub = subprocess.Popen([args.binary,'-mode','publish','-room',room,'-scenario',scenario,'-out',str(dest)],env=env,stdout=log,stderr=subprocess.STDOUT)
+                pub = subprocess.Popen([args.binary,'-mode','publish','-room',room,'-scenario',scenario,'-out',str(dest)],env=dict(env, PROBE_START_BARRIER=str(dest/'subscriptions-ready')),stdout=log,stderr=subprocess.STDOUT)
                 children.append(pub)
+                release_publisher(receiver_processes, pub, dest)
                 code = pub.wait(timeout=45)
                 if code:
                     raise RuntimeError(f'publisher failed: {code}')

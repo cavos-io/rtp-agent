@@ -207,10 +207,17 @@ func publish(ctx context.Context, url, roomName, scenario, fixture string, sink 
 	if err = enc.SetBitrate(32000); err != nil {
 		return err
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(time.Second):
+	if barrier := os.Getenv("PROBE_START_BARRIER"); barrier != "" {
+		if err := waitPublisherBarrier(ctx, barrier); err != nil {
+			return fmt.Errorf("publisher subscription barrier: %w", err)
+		}
+		sink.event(map[string]any{"event": "subscription_barrier_released", "at": nowNS()})
+	} else {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
 	start := nowNS()
 	sink.event(map[string]any{"event": "start", "at": start, "scenario": scenario, "clock": "CLOCK_MONOTONIC", "duration_s": 30})

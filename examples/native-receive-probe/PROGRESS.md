@@ -48,3 +48,8 @@
 - Socket traces localize new variation after packet delivery: stall08 marker-arrival skew 0.152ms, native buffer difference 74.5ms. Frame position contributes to raw onset differences; adjusted estimates do not replace acceptance metrics.
 - Retained stall00 content failure: both native tracks subscribed after publishing began, missing packets 0–10 and marker 0. Full trace attribution remains failed. Shared stall04 onset latency 433.728/439.917ms also retained.
 - All 774 prior artifact checksums verified unchanged. No production transport or custom playout policy changes. Detailed evidence, limits and reproducible commands: ARRIVAL.md and ARRIVAL-SUMMARY.json.
+
+- Subscription barrier follow-up: runner waits for both native subscribed events and exclusively creates a per-run release file; publisher waits after track publication, with cancellation and a 20s bound. No media or receive timing policy changes.
+- Ten baseline and ten stall reruns passed unchanged per-run and relative-latency gates. Every trace contains packet0 and all 1500 packets; both subscriptions precede source start in all 20 runs. All 20 ordered markers retained by both runtimes.
+- Second onset p95: baseline Go79.367/Python81.247ms; stall Go305.230/Python304.176ms. Elevated absolute stall latency remains; historical failures are unchanged.
+- Verified all 2523 preserved artifact hashes. Go race tests/vet, 12 Python tests and syntax checks passed. Details: BARRIER.md and BARRIER-SUMMARY.json.
