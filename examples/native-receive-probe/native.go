@@ -48,6 +48,9 @@ var callbacks = newEventQueue(4096)
 //export goEvent
 func goEvent(p *C.uint8_t, n C.size_t) {
 	at := nowNS()
+	if inspectCallbacks.Load() {
+		captureCallbackThread()
+	}
 	callbacks.push(unsafe.Slice((*byte)(unsafe.Pointer(p)), int(n)), at)
 }
 func nowNS() int64 { return int64(C.probe_now()) }
@@ -110,14 +113,29 @@ func request(req *pb.FfiRequest) (*pb.FfiResponse, error) {
 	err = proto.Unmarshal(data, res)
 	return res, err
 }
-func nativeReceive(ctx context.Context, url, token string, sink *recorder) (err error) {
+
+// startNative initializes the process-global FFI; room cycles may share it.
+func startNative() error {
 	path := C.CString(os.Getenv("LIVEKIT_LIB_PATH"))
 	defer C.free(unsafe.Pointer(path))
 	if e := C.probe_load(path); e != nil {
 		return errors.New(C.GoString(e))
 	}
-	baselineGoroutines := runtime.NumGoroutine()
 	C.probe_init()
+	return nil
+}
+func disposeNative() { C.probe_dispose() }
+func nativeReceive(ctx context.Context, url, token string, sink *recorder) error {
+	baseline := runtime.NumGoroutine()
+	if err := startNative(); err != nil {
+		return err
+	}
+	return nativeRoom(ctx, url, token, sink, true, baseline)
+}
+
+// nativeRoom owns only its room/track/stream. Process-runtime tests dispose once
+// after all cycles; the original receive command still disposes at room exit.
+func nativeRoom(ctx context.Context, url, token string, sink *recorder, dispose bool, baselineGoroutines int) (err error) {
 	var room, stream, track uint64
 	defer func() {
 		start := nowNS()
@@ -160,8 +178,10 @@ func nativeReceive(ctx context.Context, url, token string, sink *recorder) (err 
 			}
 			releasesOK = bool(C.probe_drop(C.uint64_t(room))) && releasesOK
 		}
-		// Also destroys handles from queued callbacks after disconnect or overflow.
-		C.probe_dispose()
+		// Global disposal is separate from closing a room.
+		if dispose {
+			disposeNative()
+		}
 		if !releasesOK && err == nil {
 			err = errors.New("retained handle release failed")
 		}
@@ -171,7 +191,7 @@ func nativeReceive(ctx context.Context, url, token string, sink *recorder) (err 
 		if callbacks.overflow.Load() && err == nil {
 			err = errors.New("native callback queue overflow")
 		}
-		sink.event(map[string]any{"event": "shutdown", "at": nowNS(), "duration_ns": nowNS() - start, "disconnect_callback": disconnected, "overflow": callbacks.overflow.Load(), "retained_handles_released": releasesOK, "go_goroutines_before": baselineGoroutines, "go_goroutines_after": runtime.NumGoroutine()})
+		sink.event(map[string]any{"event": "shutdown", "at": nowNS(), "duration_ns": nowNS() - start, "disconnect_callback": disconnected, "overflow": callbacks.overflow.Load(), "retained_handles_released": releasesOK, "runtime_disposed": dispose, "queued_callbacks": len(callbacks.events), "go_goroutines_before": baselineGoroutines, "go_goroutines_after": runtime.NumGoroutine()})
 	}()
 	sink.event(map[string]any{"event": "connect_start", "at": nowNS()})
 	_, err = request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(url), Token: proto.String(token), Options: &pb.RoomOptions{AutoSubscribe: proto.Bool(true)}, RequestAsyncId: proto.Uint64(1)}}})

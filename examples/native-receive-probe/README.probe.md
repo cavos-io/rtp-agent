@@ -27,9 +27,9 @@ The Go process loads the same `livekit-ffi` library as Python 1.1.21. It owns a 
 
 The FFI uses protobuf request/response buffers and asynchronous events. The wrapper copies callback bytes before returning, copies responses before releasing their handles, and copies PCM before dropping owned frame handles. A 4096-event callback queue does not block native callbacks; overflow invalidates the run. The native stream uses `queue_size_frames=0`, matching this exact Python SDK's setting. This is an experimental comparison setting, not a production backpressure recommendation.
 
-Connecting requires the native `ReadyForRoomEventRequest` handshake. Track handles must remain alive for the stream lifetime: native audio streaming watches track-handle disposal. Shutdown closes the stream, disconnects the room, releases retained track/room handles and disposes the native runtime. The dynamic library stays loaded until process exit to prevent callbacks into unloaded code.
+Connecting requires the native `ReadyForRoomEventRequest` handshake. Track handles must remain alive for the stream lifetime: native audio streaming watches track-handle disposal. Shutdown closes the stream, disconnects the room, releases retained track/room handles and disposes FFI room/handle state. Process-global native runtimes remain alive. The dynamic library stays loaded until process exit to prevent callbacks into unloaded code.
 
-No general Go RTC SDK is implemented. The prototype supports one room and one incoming audio track per process. Unhandled owned event objects are released. Callback queue contents remaining at global disposal are reclaimed by the native runtime. Reconnect, multiple tracks, publishing, encryption and production worker lifecycle are outside this prototype.
+No general Go RTC SDK is implemented. The prototype supports one active room and one incoming audio track at a time. Unhandled owned event objects are released. Callback queue contents remaining at global disposal are reclaimed by the native runtime. Sequential room reuse is exercised by the isolated [same-process lifecycle probe](CYCLES.md). Concurrent rooms, multiple tracks, publishing, encryption and production worker lifecycle remain outside this prototype.
 
 ## Measurement
 
@@ -77,3 +77,5 @@ The combined harness also links Homebrew libopus/libopusfile for its publisher. 
 The reference framework checkout was `ff962a019b6500e08f8f1fcd7f55673361bd9e91`; its room input calls `rtc.AudioStream.from_track` and defaults to 24kHz/50ms. No framework STT/LLM/TTS was started. The previously inspected Rust revision `81d3f267...` and Python 1.1.13 are not used for this experiment.
 
 Resource evidence is bounded: the harness observes disconnect completion, native disposal returning, receiver process exit, and race-detector results. It does not expose the Rust handle table or establish absence of native heap/thread leaks in a long-lived worker. Production adoption still needs that audit, bounded backpressure design, Linux packaging validation, and worker/room lifecycle integration.
+
+Post-dispose goroutine counts and 100-cycle same-process connect/disconnect results are documented in [CYCLES.md](CYCLES.md), including the retained failed plateau check and native-thread evidence.

@@ -9,6 +9,8 @@ static bool (*drop)(uint64_t);
 static void (*dispose)(void);
 static void callback(const uint8_t* p,size_t n) { goEvent((uint8_t*)p,n); }
 const char* probe_load(const char* path) {
+ // The artifact is process-scoped; do not increment dlopen references per room.
+ if (library) return initialize && request && drop && dispose ? NULL : "missing required FFI symbols";
  library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
  if(!library) return dlerror();
  initialize=dlsym(library,"livekit_ffi_initialize");

@@ -30,3 +30,9 @@
 - Final 30-run results: continuous PCM in all scenarios; one shared DTX marker duplication and a continuous-silence onset p95 difference of 50.32ms against a 50ms gate. Both failures retained.
 - Reviewed race build: all three additional scenario checks passed; Go callback-to-consumer p95 0.49–0.54ms, max 1.41ms; explicit retained handle releases succeeded.
 - Resource limitation: immediate Go goroutine count after native dispose was 6–8 vs baseline 3. No leak diagnosis is made from count alone, and the no-outstanding-goroutines acceptance condition is not established. All subprocesses exited; no race report.
+
+- Same-process follow-up: 100 room cycles with one FFI initialization, and 100 with per-cycle initialize/dispose, completed under the Go race detector with PCM every cycle, successful release/disconnect, empty settled queues and unchanged Go-owned goroutine identities.
+- Retained initial lifecycle failure: the fixed-20-warmup foreign-context plateau criterion failed at cycle 58 (6 -> 7). That attempt lacked native thread IDs and was not relabeled as a pass.
+- Opt-in macOS thread snapshots directly observed a new Go callback context on a native thread already present after the first cycle. Seven foreign contexts remained after final disposal, matching Go pthread callback retention and the pinned FFI's process-global runtimes. No per-cycle Go-owned goroutine growth observed; native heap leak freedom remains unproven.
+- Prototype lifecycle separates room cleanup from process FFI disposal and avoids repeated dlopen reference increments. Production code and original content/latency failures remain unchanged.
+- Test-integrity hook rejected t.Skip for the opt-in integration test. Moved it behind the nativecycles build tag, retained the default classifier unit test, and reran focused race tests, tagged vet and five live room cycles successfully. No hook bypass.
