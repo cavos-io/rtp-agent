@@ -21,6 +21,7 @@ type nativeSink interface {
 }
 
 type helperSink struct {
+	duplex                *duplexOutput
 	participant, trackSID string
 	encoder               *json.Encoder
 	err                   error

@@ -147,6 +147,19 @@ func nativeReceive(ctx context.Context, url, token string, sink nativeSink) erro
 // after all cycles; the original receive command still disposes at room exit.
 func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose bool, baselineGoroutines int) (err error) {
 	var room, stream, track uint64
+	var duplex *duplexOutput
+	var commands <-chan duplexCommand
+	if helper, ok := sink.(*helperSink); ok && helper.duplex != nil {
+		duplex = helper.duplex
+		commands = duplex.commands
+	}
+	keepHandles := func() []uint64 {
+		h := []uint64{room, track}
+		if duplex != nil {
+			h = append(h, duplex.handles()...)
+		}
+		return h
+	}
 	defer func() {
 		start := nowNS()
 		releasesOK := true
@@ -173,7 +186,7 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 					if d := ev.GetDisconnect(); d != nil && d.GetAsyncId() == 2 {
 						disconnected = true
 					}
-					if e := release(ev, room, track); e != nil {
+					if e := release(ev, keepHandles()...); e != nil {
 						err = errors.Join(err, e)
 					}
 				case <-deadline.C:
@@ -185,6 +198,11 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 				releasesOK = bool(C.probe_drop(C.uint64_t(track))) && releasesOK
 			}
 			releasesOK = bool(C.probe_drop(C.uint64_t(room))) && releasesOK
+		}
+		if duplex != nil {
+			if e := duplex.close(); e != nil {
+				err = errors.Join(err, e)
+			}
 		}
 		// Global disposal is separate from closing a room.
 		if dispose {
@@ -250,10 +268,23 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 					return e
 				}
 			}
+		case command := <-commands:
+			stop, e := duplex.command(command)
+			if e != nil {
+				return e
+			}
+			if stop {
+				return nil
+			}
 		case raw := <-callbacks.events:
 			ev := new(pb.FfiEvent)
 			if err = proto.Unmarshal(raw.data, ev); err != nil {
 				return err
+			}
+			if duplex != nil {
+				if e := duplex.event(ev); e != nil {
+					return e
+				}
 			}
 			if stats := ev.GetGetStats(); stats != nil {
 				if stats.GetError() != "" {
@@ -273,6 +304,11 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 					return errors.New(c.GetError())
 				}
 				room = c.GetResult().GetRoom().GetHandle().GetId()
+				if duplex != nil {
+					if e := duplex.connect(c.GetResult().GetLocalParticipant().GetHandle().GetId()); e != nil {
+						return e
+					}
+				}
 				if _, e := request(&pb.FfiRequest{Message: &pb.FfiRequest_ReadyForRoomEvent{ReadyForRoomEvent: &pb.ReadyForRoomEventRequest{RoomHandle: proto.Uint64(room)}}}); e != nil {
 					return e
 				}
@@ -323,7 +359,7 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 			if p := ev.GetPanic(); p != nil {
 				return fmt.Errorf("native panic: %v", p)
 			}
-			if err = release(ev, room, track); err != nil {
+			if err = release(ev, keepHandles()...); err != nil {
 				return err
 			}
 		}
