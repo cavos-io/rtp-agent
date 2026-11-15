@@ -156,8 +156,8 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 		disconnected := room == 0
 		if room != 0 {
 			_, e := request(&pb.FfiRequest{Message: &pb.FfiRequest_Disconnect{Disconnect: &pb.DisconnectRequest{RoomHandle: proto.Uint64(room), RequestAsyncId: proto.Uint64(2)}}})
-			if e != nil && err == nil {
-				err = e
+			if e != nil {
+				err = errors.Join(err, e)
 			}
 			deadline := time.NewTimer(1500 * time.Millisecond)
 		wait:
@@ -166,17 +166,15 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 				case raw := <-callbacks.events:
 					ev := new(pb.FfiEvent)
 					if e := proto.Unmarshal(raw.data, ev); e != nil {
-						if err == nil {
-							err = e
-						}
+						err = errors.Join(err, e)
 						continue
 					}
 					sink.event(map[string]any{"event": "shutdown_callback", "type": fmt.Sprintf("%T", ev.Message), "async_id": ev.GetDisconnect().GetAsyncId()})
 					if d := ev.GetDisconnect(); d != nil && d.GetAsyncId() == 2 {
 						disconnected = true
 					}
-					if e := release(ev, room, track); e != nil && err == nil {
-						err = e
+					if e := release(ev, room, track); e != nil {
+						err = errors.Join(err, e)
 					}
 				case <-deadline.C:
 					break wait
@@ -192,14 +190,14 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 		if dispose {
 			disposeNative()
 		}
-		if !releasesOK && err == nil {
-			err = errors.New("retained handle release failed")
+		if !releasesOK {
+			err = errors.Join(err, errors.New("retained handle release failed"))
 		}
-		if !disconnected && err == nil {
-			err = errors.New("disconnect callback timed out")
+		if !disconnected {
+			err = errors.Join(err, errors.New("disconnect callback timed out"))
 		}
-		if callbacks.overflow.Load() && err == nil {
-			err = errors.New("native callback queue overflow")
+		if callbacks.overflow.Load() {
+			err = errors.Join(err, errors.New("native callback queue overflow"))
 		}
 		sink.event(map[string]any{"event": "shutdown", "at": nowNS(), "duration_ns": nowNS() - start, "disconnect_callback": disconnected, "overflow": callbacks.overflow.Load(), "retained_handles_released": releasesOK, "runtime_disposed": dispose, "queued_callbacks": len(callbacks.events), "go_goroutines_before": baselineGoroutines, "go_goroutines_after": runtime.NumGoroutine()})
 	}()
@@ -301,10 +299,10 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 				}
 				if selected, ok := sink.(*helperSink); ok {
 					if p := r.GetParticipantDisconnected(); p != nil && p.GetParticipantIdentity() == selected.participant {
-						return errors.New("selected participant disconnected")
+						return errPublisherDisconnected
 					}
 					if t := r.GetTrackUnsubscribed(); t != nil && t.GetTrackSid() == selected.trackSID {
-						return errors.New("selected track unsubscribed")
+						return errTrackUnsubscribed
 					}
 				}
 				if r.GetDisconnected() != nil {

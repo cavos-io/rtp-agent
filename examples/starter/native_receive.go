@@ -147,6 +147,11 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 	go func() {
 		<-done
 		if receiveCtx.Err() == nil {
+			if errors.Is(receiveErr, nativereceive.ErrSourceEnded) {
+				logger.Logger.Infow("experimental native receive source ended", "reason", receiveErr.Error(), "ipc", stats.Snapshot())
+				job.Shutdown("native receive source ended")
+				return
+			}
 			logger.Logger.Errorw("experimental native receive failed", receiveErr, "ipc", stats.Snapshot())
 			job.Shutdown("experimental native receive failed")
 		}

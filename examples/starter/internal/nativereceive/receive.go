@@ -17,6 +17,9 @@ import (
 
 var ErrConsumerStalled = errors.New("native PCM consumer did not complete within two seconds")
 
+// ErrSourceEnded identifies an explicit, normal selected-source departure.
+var ErrSourceEnded = errors.New("native receive source ended")
+
 const consumerTimeout = 2 * time.Second
 
 type Options struct {
@@ -29,16 +32,26 @@ func readFrames(ctx context.Context, input io.Reader, frames chan<- *model.Audio
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 16384)
 	protocol, subscribed := false, false
+	var ended error
 	for scanner.Scan() {
 		var message struct {
 			Event   string `json:"event"`
+			Reason  string `json:"reason"`
 			Version int    `json:"version"`
 			Data    []byte `json:"data"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
 			return errors.New("invalid native helper message")
 		}
+		if ended != nil {
+			return errors.New("native helper message after end")
+		}
 		switch message.Event {
+		case "ended":
+			if !subscribed || (message.Reason != "participant_disconnected" && message.Reason != "track_unsubscribed") {
+				return errors.New("invalid native helper end")
+			}
+			ended = fmt.Errorf("%w: %s", ErrSourceEnded, message.Reason)
 		case "helper_protocol":
 			if protocol || message.Version != 1 {
 				return errors.New("unsupported native helper protocol")
@@ -93,6 +106,9 @@ func readFrames(ctx context.Context, input io.Reader, frames chan<- *model.Audio
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("native helper pipe: %w", err)
 	}
+	if ended != nil {
+		return ended
+	}
 	return errors.New("native helper stream ended")
 }
 
@@ -129,27 +145,30 @@ func Run(ctx context.Context, opts Options, ready chan<- struct{}, consume func(
 		return fmt.Errorf("start native helper: %w", err)
 	}
 	wait := make(chan error, 1)
-	go func() { wait <- command.Wait() }()
+	readDone := make(chan struct{})
+	go func() { <-readDone; wait <- command.Wait() }()
+	var processErr error
 	// Cancellation and malformed/blocked IPC both trigger bounded child cleanup.
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		select {
 		case <-childCtx.Done():
-		case <-wait:
+		case processErr = <-wait:
 			return
 		}
 		_ = command.Process.Signal(os.Interrupt)
 		select {
-		case <-wait:
+		case processErr = <-wait:
 		case <-time.After(3 * time.Second):
 			_ = command.Process.Kill()
-			<-wait
+			processErr = <-wait
 		}
 		_ = stdout.Close()
 		_ = stdin.Close()
 	}()
 	if _, err = stdin.Write(config); err != nil {
+		close(readDone)
 		cancel(nil)
 		<-stopped
 		return errors.New("write native helper configuration")
@@ -178,6 +197,15 @@ func Run(ctx context.Context, opts Options, ready chan<- struct{}, consume func(
 		}
 	}()
 	err = readFrames(childCtx, stdout, frames, ready, opts.Stats)
+	close(readDone)
+	if errors.Is(err, ErrSourceEnded) {
+		select {
+		case <-stopped:
+		case <-childCtx.Done():
+		case <-time.After(3 * time.Second):
+			err = errors.New("native helper did not exit after source ended")
+		}
+	}
 	if cause := context.Cause(childCtx); cause != nil {
 		err = cause
 	}
@@ -186,6 +214,9 @@ func Run(ctx context.Context, opts Options, ready chan<- struct{}, consume func(
 	<-consumed
 	if ctx.Err() != nil {
 		return nil
+	}
+	if errors.Is(err, ErrSourceEnded) && processErr != nil {
+		return fmt.Errorf("native helper exit: %w", processErr)
 	}
 	return err
 }

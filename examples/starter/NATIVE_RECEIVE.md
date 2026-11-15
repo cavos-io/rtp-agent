@@ -189,3 +189,24 @@ NATIVE_TEST_URL=ws://127.0.0.1:18991 NATIVE_TEST_DURATION=2m \
 ```
 
 See [queue-fix evidence](../starter/QUEUE_FIX.md) for results and readiness limits.
+
+## Publisher departure classification
+
+Selected publisher disconnect and selected-track unsubscribe now produce an
+explicit `ended` IPC event after native cleanup. The agent logs
+`experimental native receive source ended` at INFO and ends the job normally.
+Unexpected EOF, invalid terminal events, nonzero helper exit, native errors,
+and consumer stalls remain failures. The default transport is unchanged.
+
+Rebuild **both helper and agent** for this change (an older helper still reports
+track loss as failure). For the existing local example and environment:
+
+```sh
+go -C examples/native-receive-probe build -o .cache/probe-helper .
+go build -o examples/native-receive-probe/.cache/agent-local ./examples/local
+examples/native-receive-probe/.cache/agent-local start
+```
+
+Regression tests cover both departure reasons, unexpected EOF, a nonzero exit
+following a valid terminal event, invalid terminal sequences, and existing
+burst/stalled-consumer behavior. These tests do not replace the next cloud run.

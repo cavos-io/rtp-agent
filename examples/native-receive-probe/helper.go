@@ -12,6 +12,9 @@ import (
 	pb "native-receive-probe/internal/ffipb"
 )
 
+var errPublisherDisconnected = errors.New("publisher disconnected")
+var errTrackUnsubscribed = errors.New("track unsubscribed")
+
 type nativeSink interface {
 	event(any)
 	frame(int64, *model.AudioFrame) error
@@ -65,5 +68,23 @@ func runHelper(ctx context.Context) error {
 	sink.event(map[string]any{"event": "helper_protocol", "version": 1})
 	sink.subscribed = func() { timer.Stop() }
 	err := nativeReceive(startup, config.URL, config.Token, sink)
+	return sink.finish(err)
+}
+
+// finish runs after nativeReceive has released its native resources.
+func (sink *helperSink) finish(err error) error {
+	if sink.err == nil {
+		var reason string
+		switch err {
+		case errPublisherDisconnected:
+			reason = "participant_disconnected"
+		case errTrackUnsubscribed:
+			reason = "track_unsubscribed"
+		}
+		if reason != "" {
+			sink.event(map[string]any{"event": "ended", "reason": reason})
+			return sink.err
+		}
+	}
 	return errors.Join(err, sink.err)
 }

@@ -57,6 +57,20 @@ func TestMain(m *testing.M) {
 		e := json.NewEncoder(os.Stdout)
 		e.Encode(map[string]any{"event": "helper_protocol", "version": 1})
 		e.Encode(map[string]any{"event": "subscribed"})
+		if config.URL == "participant_disconnected" || config.URL == "track_unsubscribed" || config.URL == "crash_after_end" {
+			reason := config.URL
+			if reason == "crash_after_end" {
+				reason = "track_unsubscribed"
+			}
+			e.Encode(map[string]any{"event": "ended", "reason": reason})
+			if config.URL == "crash_after_end" {
+				os.Exit(7)
+			}
+			os.Exit(0)
+		}
+		if config.URL == "unexpected_eof" {
+			os.Exit(0)
+		}
 		count := 1
 		if config.URL == "burst" {
 			count = 40
@@ -250,5 +264,39 @@ func TestRunTemporaryConsumerStallRecoversEveryFrame(t *testing.T) {
 	}
 	if stats.maxConsume.Load() < int64(500*time.Millisecond) {
 		t.Fatalf("stall not measured: %v", stats.Snapshot())
+	}
+}
+
+func TestRunSourceDepartureAndFailures(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"participant_disconnected", "track_unsubscribed", "crash_after_end", "unexpected_eof", "invalid"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+			defer cancel()
+			err := Run(ctx, Options{Binary: executable, URL: scenario}, make(chan struct{}, 1), func(context.Context, *model.AudioFrame) {})
+			if ctx.Err() != nil {
+				t.Fatal("cleanup timed out")
+			}
+			normal := scenario == "participant_disconnected" || scenario == "track_unsubscribed"
+			if err == nil || errors.Is(err, ErrSourceEnded) != normal {
+				t.Fatalf("classification: %v", err)
+			}
+		})
+	}
+}
+
+func TestInvalidEndEventsRemainFailures(t *testing.T) {
+	for _, input := range []string{
+		`{"event":"ended","reason":"track_unsubscribed"}`,
+		"{\"event\":\"helper_protocol\",\"version\":1}\n{\"event\":\"subscribed\"}\n{\"event\":\"ended\",\"reason\":\"unknown\"}",
+		"{\"event\":\"helper_protocol\",\"version\":1}\n{\"event\":\"subscribed\"}\n{\"event\":\"ended\",\"reason\":\"track_unsubscribed\"}\n{\"event\":\"subscribed\"}",
+	} {
+		err := readFrames(context.Background(), bytes.NewBufferString(input), make(chan *model.AudioFrame, 8), make(chan struct{}, 1), nil)
+		if err == nil || errors.Is(err, ErrSourceEnded) {
+			t.Fatalf("invalid end accepted: %v", err)
+		}
 	}
 }
