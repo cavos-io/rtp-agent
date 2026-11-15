@@ -19,7 +19,24 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// A run owns exactly one provider session, including concurrent close callers.
+type multimodalRun struct {
+	session   llm.RealtimeSession
+	cancel    context.CancelFunc
+	done      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (r *multimodalRun) close() error {
+	r.closeOnce.Do(func() { r.closeErr = r.session.Close() })
+	return r.closeErr
+}
+
 type MultimodalAgent struct {
+	lifecycle sync.Mutex // serialize start, replacement and completed shutdown
+	runState  *multimodalRun
+
 	model   llm.RealtimeModel
 	session *AgentSession
 	chatCtx *llm.ChatContext
@@ -59,6 +76,12 @@ func NewMultimodalAgent(
 }
 
 func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
+	ma.lifecycle.Lock()
+	defer ma.lifecycle.Unlock()
+	if err := ma.closeRun(); err != nil {
+		return err
+	}
+
 	ma.mu.Lock()
 	ma.session = s
 	ma.traceClosed = false
@@ -84,23 +107,53 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 		return err
 	}
 
-	go ma.run(ctx, rtSession)
+	ma.startRun(ctx, rtSession)
 	return nil
 }
 
 func (ma *MultimodalAgent) Close() error {
+	ma.lifecycle.Lock()
+	defer ma.lifecycle.Unlock()
+	return ma.closeRun()
+}
+
+// Caller holds lifecycle, never mu while waiting on provider or receive loop.
+func (ma *MultimodalAgent) closeRun() error {
 	ma.mu.Lock()
+	run := ma.runState
 	rtSession := ma.rtSession
+	ma.runState = nil
 	ma.rtSession = nil
 	ma.realtimeSpans = nil
 	ma.traceClosed = true
 	ma.realtimeSpanIDs = nil
 	ma.mu.Unlock()
-
+	if run != nil {
+		run.cancel()
+		err := run.close()
+		<-run.done
+		return err
+	}
 	if rtSession != nil {
 		return rtSession.Close()
 	}
 	return nil
+}
+
+func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeSession) {
+	runCtx, cancel := context.WithCancel(ctx)
+	run := &multimodalRun{session: rtSession, cancel: cancel, done: make(chan struct{})}
+	ma.mu.Lock()
+	ma.runState = run
+	ma.traceClosed = false
+	ma.mu.Unlock()
+	go func() {
+		defer close(run.done)
+		ma.run(runCtx, rtSession)
+		if runCtx.Err() != nil {
+			_ = run.close()
+		}
+	}()
 }
 
 func (ma *MultimodalAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
@@ -208,6 +261,9 @@ func (ma *MultimodalAgent) Interrupt() error {
 }
 
 func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.RealtimeModel) error {
+	ma.lifecycle.Lock()
+	defer ma.lifecycle.Unlock()
+
 	if model == nil {
 		return nil
 	}
@@ -261,16 +317,16 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 		return err
 	}
 
+	if err := ma.closeRun(); err != nil {
+		_ = rtSession.Close()
+		return err
+	}
 	ma.mu.Lock()
-	oldSession = ma.rtSession
 	ma.model = model
 	ma.rtSession = rtSession
 	ma.mu.Unlock()
 
-	if oldSession != nil {
-		_ = oldSession.Close()
-	}
-	go ma.run(runCtx, rtSession)
+	ma.startRun(runCtx, rtSession)
 	return nil
 }
 
@@ -556,11 +612,9 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 	for {
 		select {
 		case <-ctx.Done():
-			_ = ma.Close()
 			return
 		case frame := <-ma.audioInCh:
 			ma.mu.Lock()
-			rtSession := ma.rtSession
 			session := ma.session
 			ma.mu.Unlock()
 			if rtSession != nil {
@@ -589,39 +643,58 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 			if !ok {
 				return
 			}
+			if ev.Type == llm.RealtimeEventTypeError && ev.Error != nil && !errors.Is(ev.Error, io.EOF) {
+				// Fatal error delivery can synchronously stop the AgentSession. Let it
+				// join this receive loop from a separate goroutine, never join itself.
+				ma.mu.Lock()
+				session, realtimeModel := ma.session, ma.model
+				ma.mu.Unlock()
+				go emitMultimodalError(session, realtimeModel, ev.Error)
+				return
+			}
 			ma.handleRealtimeEvent(ev)
 		}
 	}
 }
 
 func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
+	ma.mu.Lock()
+	session, realtimeModel, publish := ma.session, ma.model, ma.PublishAudio
+	ma.mu.Unlock()
+	var activity *AgentActivity
+	if session != nil {
+		session.mu.Lock()
+		activity = session.activity
+		session.mu.Unlock()
+	}
+
 	switch ev.Type {
 	case llm.RealtimeEventTypeSpeechStarted:
 		ma.mu.Lock()
 		ma.lastUserSpeechStoppedAt = time.Time{}
 		ma.mu.Unlock()
-		ma.session.Logger().Infow("User started speaking (multimodal)")
-		if ma.session != nil && ma.session.activity != nil {
-			ma.session.activity.onInputSpeechStartedAt(ev.SpeechStartTime)
-		} else if ma.session != nil {
-			ma.session.UpdateUserState(UserStateSpeaking)
+		session.Logger().Infow("User started speaking (multimodal)")
+		if session != nil && activity != nil {
+			activity.onInputSpeechStartedAt(ev.SpeechStartTime)
+		} else if session != nil {
+			session.UpdateUserState(UserStateSpeaking)
 		}
 
 	case llm.RealtimeEventTypeSpeechStopped:
 		stoppedAt := ma.recordRealtimeSpeechStopped(ev.SpeechStopped)
-		ma.session.Logger().Infow("User stopped speaking (multimodal)")
-		if ma.session != nil && ma.session.activity != nil {
+		session.Logger().Infow("User stopped speaking (multimodal)")
+		if session != nil && activity != nil {
 			speechStopped := llm.InputSpeechStoppedEvent{}
 			if ev.SpeechStopped != nil {
 				speechStopped = *ev.SpeechStopped
 			}
-			ma.session.activity.onInputSpeechStoppedAt(speechStopped, stoppedAt)
-		} else if ma.session != nil {
-			ma.session.UpdateUserState(UserStateListening)
+			activity.onInputSpeechStoppedAt(speechStopped, stoppedAt)
+		} else if session != nil {
+			session.UpdateUserState(UserStateListening)
 		}
 
 	case llm.RealtimeEventTypeAudio:
-		if ma.PublishAudio != nil {
+		if publish != nil {
 			// Decode and publish
 			frame := &model.AudioFrame{
 				Data:              ev.Data,
@@ -629,19 +702,19 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			if err := ma.PublishAudio(context.Background(), frame); err != nil {
+			if err := publish(context.Background(), frame); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return
 				}
-				if ma.session != nil {
-					ma.session.EmitError(ErrorEvent{
+				if session != nil {
+					session.EmitError(ErrorEvent{
 						Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
 						Source: ma,
 					})
 				}
-			} else if ma.session != nil {
-				ma.session.UpdateAgentState(AgentStateSpeaking)
-				ma.session.notifyAgentSpeakingProgress()
+			} else if session != nil {
+				session.UpdateAgentState(AgentStateSpeaking)
+				session.notifyAgentSpeakingProgress()
 			}
 		}
 
@@ -659,39 +732,39 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			ma.mu.Unlock()
 			ev.Generation.UserSpeechStoppedAt = &value
 		}
-		if ev.Generation == nil || ev.Generation.UserInitiated || ma.session == nil {
+		if ev.Generation == nil || ev.Generation.UserInitiated || session == nil {
 			return
 		}
-		if ma.session.activity != nil {
-			if _, err := ma.session.activity.OnGenerationCreated(*ev.Generation, ma.attachPendingRealtimeAutoToolReply); err != nil {
-				ma.session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+		if activity != nil {
+			if _, err := activity.OnGenerationCreated(*ev.Generation, ma.attachPendingRealtimeAutoToolReply); err != nil {
+				session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
 			}
 			return
 		}
 
-		handle := newSpeechHandleWithLogger(ma.session.Options.AllowInterruptions, DefaultInputDetails(), ma.session.Logger())
+		handle := newSpeechHandleWithLogger(session.Options.AllowInterruptions, DefaultInputDetails(), session.Logger())
 		handle.Generation.RealtimeGeneration = ev.Generation
-		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
+		session.EmitSpeechCreated(SpeechCreatedEvent{
 			UserInitiated: false,
 			Source:        "generate_reply",
 			SpeechHandle:  handle,
 		})
 		ma.attachPendingRealtimeAutoToolReply(handle)
-		if ma.session.activity != nil {
-			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
-				ma.session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+		if activity != nil {
+			if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+				session.Logger().Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
 			}
 		}
 
 	case llm.RealtimeEventTypeInputAudioTranscriptionCompleted:
-		if ev.InputTranscription == nil || ma.session == nil {
+		if ev.InputTranscription == nil || session == nil {
 			return
 		}
-		if ma.session.activity != nil {
-			ma.session.activity.OnInputAudioTranscriptionCompleted(*ev.InputTranscription)
+		if activity != nil {
+			activity.OnInputAudioTranscriptionCompleted(*ev.InputTranscription)
 			return
 		}
-		ma.session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Transcript: ev.InputTranscription.Transcript,
 			IsFinal:    ev.InputTranscription.IsFinal,
 		})
@@ -707,15 +780,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			if ma.chatCtx != nil {
 				_ = ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
 			}
-			ma.session.EmitConversationItemAdded(msg)
+			session.EmitConversationItemAdded(msg)
 		}
 
 	case llm.RealtimeEventTypeRemoteItemAdded:
 		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil {
 			return
 		}
-		if ma.session != nil && ma.session.activity != nil {
-			ma.session.activity.OnRemoteItemAdded(*ev.RemoteItem)
+		if session != nil && activity != nil {
+			activity.OnRemoteItemAdded(*ev.RemoteItem)
 			return
 		}
 		if ma.chatCtx == nil {
@@ -734,14 +807,14 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeMetricsCollected:
-		if ma.session == nil || ev.Metrics == nil {
+		if session == nil || ev.Metrics == nil {
 			return
 		}
 		ma.recordRealtimeMetrics(ev.Metrics)
-		if ma.session.activity != nil {
-			ma.session.activity.OnMetricsCollected(ev.Metrics)
+		if activity != nil {
+			activity.OnMetricsCollected(ev.Metrics)
 		} else {
-			ma.session.EmitMetricsCollected(ev.Metrics)
+			session.EmitMetricsCollected(ev.Metrics)
 		}
 
 	case llm.RealtimeEventTypeFunctionCall:
@@ -757,20 +830,25 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		})
 
 	case llm.RealtimeEventTypeError:
-		if !errors.Is(ev.Error, io.EOF) && ma.session != nil && ev.Error != nil {
-			err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
-			if ma.session.activity != nil {
-				ma.session.activity.OnError(err, ma.model)
-			} else {
-				message, provider, stage := providerErrorLogDetails(ma.model)
-				logAgentProviderError(ma.session, message, err, ma.model, provider, stage)
-				ma.session.EmitError(ErrorEvent{
-					Error:  err,
-					Source: ma.model,
-				})
-			}
-		}
+		emitMultimodalError(session, realtimeModel, ev.Error)
 	}
+}
+
+func emitMultimodalError(session *AgentSession, realtimeModel llm.RealtimeModel, cause error) {
+	if session == nil || cause == nil || errors.Is(cause, io.EOF) {
+		return
+	}
+	err := llm.NewRealtimeModelError(llm.RealtimeLabel(realtimeModel), cause, false)
+	session.mu.Lock()
+	activity := session.activity
+	session.mu.Unlock()
+	if activity != nil {
+		activity.OnError(err, realtimeModel)
+		return
+	}
+	message, provider, stage := providerErrorLogDetails(realtimeModel)
+	logAgentProviderError(session, message, err, realtimeModel, provider, stage)
+	session.EmitError(ErrorEvent{Error: err, Source: realtimeModel})
 }
 
 func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech *SpeechHandle, generation *llm.GenerationCreatedEvent) {
