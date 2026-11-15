@@ -225,3 +225,64 @@ func TestStopUnblocksListeningStateNotificationDuringStart(t *testing.T) {
 		t.Fatal("Start remained blocked after Stop signaled teardown")
 	}
 }
+
+// A canceled reporter may still be completing its last append. Stop must join
+// that writer before flushing history or letting callers reuse the session.
+func TestStopWaitsForUsageReporter(t *testing.T) {
+	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reporterDone := make(chan struct{})
+	release := make(chan struct{})
+	s.started = true
+	s.runCtx = ctx
+	s.runCancel = cancel
+	s.usageLoopDone = reporterDone
+	go func() { <-ctx.Done(); <-release; close(reporterDone) }()
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.Stop(context.Background()) }()
+	<-ctx.Done()
+	select {
+	case err := <-stopped:
+		close(release)
+		t.Fatalf("Stop returned before usage reporter finished: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not join reporter")
+	}
+}
+
+func TestUsageReporterJoinedAcrossSessionRestarts(t *testing.T) {
+	s := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	release := make(chan struct{})
+	close(release)
+	var previous chan struct{}
+	for i := 0; i < 3; i++ {
+		s.Assistant = &blockingStartAssistant{started: make(chan struct{}), release: release}
+		if err := s.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		s.mu.Lock()
+		done := s.usageLoopDone
+		s.mu.Unlock()
+		if err := s.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if done == nil || done == previous {
+			t.Fatal("missing per-run reporter completion")
+		}
+		select {
+		case <-done:
+		default:
+			t.Fatal("reporter still active after Stop")
+		}
+		previous = done
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -324,6 +325,7 @@ type AgentSession struct {
 	closing                 bool
 	runCtx                  context.Context
 	runCancel               context.CancelFunc
+	usageLoopDone           chan struct{}
 	sessionSpan             trace.Span
 	startupTraceCtx         context.Context
 	closingTraceCtx         context.Context
@@ -418,7 +420,7 @@ type AgentSession struct {
 type agentEventListener struct {
 	id              uint64
 	callback        func(Event)
-	callbackPointer uintptr
+	callbackPointer unsafe.Pointer
 	once            bool
 }
 
@@ -736,7 +738,7 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
 		id:              id,
 		callback:        callback,
-		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		callbackPointer: agentEventCallbackIdentity(callback),
 	})
 	s.mu.Unlock()
 	return func() {
@@ -753,11 +755,21 @@ func (s *AgentSession) AddPreCloseCallback(callback func()) {
 	s.mu.Unlock()
 }
 
+// agentEventCallbackIdentity distinguishes function values sharing code but
+// carrying different closure environments. reflect.Value.Pointer only exposes
+// their code address. This compatibility path for Off relies on gc's function
+// value representation; keep callbacks alive in the listener and retain the
+// identity as a GC-visible pointer. On/Once's returned unsubscribe function
+// uses a registration ID and does not depend on runtime representation.
+func agentEventCallbackIdentity(callback func(Event)) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&callback))
+}
+
 func (s *AgentSession) Off(eventType string, callback func(Event)) {
 	if s == nil || eventType == "" || callback == nil {
 		return
 	}
-	s.removeEventListenerByCallback(eventType, reflect.ValueOf(callback).Pointer())
+	s.removeEventListenerByCallback(eventType, agentEventCallbackIdentity(callback))
 }
 
 func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
@@ -773,7 +785,7 @@ func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
 	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
 		id:              id,
 		callback:        callback,
-		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		callbackPointer: agentEventCallbackIdentity(callback),
 		once:            true,
 	})
 	s.mu.Unlock()
@@ -803,8 +815,8 @@ func (s *AgentSession) removeEventListener(eventType string, id uint64) {
 	}
 }
 
-func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer uintptr) {
-	if s == nil || eventType == "" || callbackPointer == 0 {
+func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer unsafe.Pointer) {
+	if s == nil || eventType == "" || callbackPointer == nil {
 		return
 	}
 	s.mu.Lock()
@@ -2700,7 +2712,14 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 
 	if hasMetricsCollector {
-		go s.reportUsageLoop(runCtx)
+		done := make(chan struct{})
+		s.mu.Lock()
+		s.usageLoopDone = done
+		s.mu.Unlock()
+		go func() {
+			defer close(done)
+			s.reportUsageLoop(runCtx)
+		}()
 	}
 
 	s.releaseLifecycle()
@@ -3569,6 +3588,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	}
 	s.signalTeardown()
 
+	usageLoopDone := s.usageLoopDone
+	s.usageLoopDone = nil
 	activity := s.activity
 	ivrActivity := s.ivrActivity
 	assistant := s.Assistant
@@ -3685,6 +3706,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		}
 	}
 	_ = closeSessionToolsets(sessionTools)
+	// Cancellation does not join the writer: it can still finish a selected
+	// ticker case. Wait outside s.mu before reading history during final flush.
+	if usageLoopDone != nil {
+		<-usageLoopDone
+	}
 	s.flushOTelTurnMetrics(telemetryCtx)
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
