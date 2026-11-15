@@ -31,6 +31,13 @@ func TestStarterReceiveLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	duration := 3 * time.Second
+	if value := os.Getenv("NATIVE_TEST_DURATION"); value != "" {
+		duration, err = time.ParseDuration(value)
+		if err != nil || duration < 3*time.Second || duration > 2*time.Minute {
+			t.Fatal("NATIVE_TEST_DURATION must be 3s..2m")
+		}
+	}
 	for _, mode := range []string{"default", "native", "native-unpublish"} {
 		enabled := mode != "default"
 		t.Run(mode, func(t *testing.T) {
@@ -60,7 +67,7 @@ func TestStarterReceiveLocal(t *testing.T) {
 				}
 				return nil // Observe real session input without invoking any provider.
 			}})
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), duration+20*time.Second)
 			defer cancel()
 			config.enabled = enabled
 			if err := startStarterSession(ctx, job, session, server, config); err != nil {
@@ -83,7 +90,13 @@ func TestStarterReceiveLocal(t *testing.T) {
 			pcm := make([]int16, 960)
 			buf := make([]byte, 4000)
 			began := time.Now()
-			for i := 0; i < 150; i++ {
+			initialSamples := samples.Load()
+			for i := 0; i < int(duration/(20*time.Millisecond)); i++ {
+				select {
+				case <-job.ShutdownDone():
+					t.Fatal("job ended during stream")
+				default:
+				}
 				for j := range pcm {
 					pcm[j] = int16(10000 * math.Sin(2*math.Pi*1000*float64(i*960+j)/48000))
 				}
@@ -96,6 +109,12 @@ func TestStarterReceiveLocal(t *testing.T) {
 				}
 				time.Sleep(time.Until(began.Add(time.Duration(i+1) * 20 * time.Millisecond)))
 			}
+			windowSamples := samples.Load() - initialSamples
+			elapsed := time.Since(began)
+			if enabled && math.Abs(float64(windowSamples)/24000-elapsed.Seconds()) > .5 {
+				t.Fatalf("PCM/wall duration differs by >500ms: pcm=%.3f wall=%.3f", float64(windowSamples)/24000, elapsed.Seconds())
+			}
+			t.Logf("measured window: pcm=%.3fs wall=%.3fs", float64(windowSamples)/24000, elapsed.Seconds())
 			if samples.Load() < 24000 || energy.Load() < 1000000 {
 				t.Fatalf("no usable PCM at agent input: samples=%d energy=%d", samples.Load(), energy.Load())
 			}

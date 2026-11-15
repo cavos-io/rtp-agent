@@ -95,9 +95,10 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 	done := make(chan struct{})
 	var receiveErr error
 	var samples atomic.Uint64
+	stats := new(nativereceive.Stats)
 	go func() {
 		defer close(done)
-		receiveErr = nativereceive.Run(receiveCtx, nativereceive.Options{Binary: config.binary, Library: config.library, URL: job.AvatarStartInfo().LiveKitURL, Token: token, Participant: participant.Identity(), TrackSID: publication.SID()}, ready, func(c context.Context, frame *model.AudioFrame) {
+		receiveErr = nativereceive.Run(receiveCtx, nativereceive.Options{Stats: stats, Binary: config.binary, Library: config.library, URL: job.AvatarStartInfo().LiveKitURL, Token: token, Participant: participant.Identity(), TrackSID: publication.SID()}, ready, func(c context.Context, frame *model.AudioFrame) {
 			if c.Err() != nil {
 				return
 			}
@@ -122,7 +123,7 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 			case <-time.After(4 * time.Second):
 				logger.Logger.Errorw("native receive shutdown did not settle", nil)
 			}
-			logger.Logger.Infow("experimental native receive stopped", "pcm_seconds", float64(samples.Load())/24000)
+			logger.Logger.Infow("experimental native receive stopped", "pcm_seconds", float64(samples.Load())/24000, "ipc", stats.Snapshot())
 		})
 	}
 	session.AddPreCloseCallback(stop)
@@ -146,7 +147,7 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 	go func() {
 		<-done
 		if receiveCtx.Err() == nil {
-			logger.Logger.Errorw("experimental native receive failed", receiveErr)
+			logger.Logger.Errorw("experimental native receive failed", receiveErr, "ipc", stats.Snapshot())
 			job.Shutdown("experimental native receive failed")
 		}
 	}()

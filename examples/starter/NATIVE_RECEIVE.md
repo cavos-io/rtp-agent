@@ -78,8 +78,11 @@ automatically.
   processor. Do not treat RoomIO input-track telemetry as native-receive timing.
   STT adapters, interruption logic and downstream queue behavior are unchanged.
 - Startup has bounded waits. The PCM pipe uses versioned JSON/base64 framing,
-  validates frame size and maintains an eight-frame consumer queue. Overflow
-  ends the job instead of dropping frames to conceal a backlog. There is no
+  validates frame size and maintains an eight-frame consumer queue. A full queue
+  now waits for the consumer or cancellation instead of treating a burst as an
+  overflow error. Frames are neither dropped nor reordered. A consumer callback
+  that takes more than two seconds cancels the experimental path with an explicit
+  stalled-consumer error; this is an application liveness bound. There is no
   custom jitter, silence, clock, packet-admission or time-stretch policy.
 - Tokens are short-lived, scoped to the room, hidden and receive-only. They are
   passed through stdin, not command-line arguments or result files. The helper
@@ -149,3 +152,40 @@ after its configured delay. Its startup order is compatible with this bridge.
 The paid two-minute load test itself was not run. Existing controlled recordings,
 failed results and acceptance gates remain untouched; this is not a claim that
 the original latency incident is fixed.
+
+
+## Queue-overflow follow-up
+
+The cloud run on November15 exposed an IPC defect: the nonblocking enqueue
+rejected a buffered burst whenever the eight-frame channel was momentarily full.
+That implementation is replaced with cancellation-aware backpressure, without
+increasing channel capacity or changing native playout.
+
+Shutdown/failure logs now include `ipc.received_frames`, `completed_callbacks`,
+`queue_waits`, `max_queue_wait_ms`, and `max_consume_ms`. Completed callbacks do
+not prove downstream STT retained every frame. Consumer functions must honor
+cancellation; the watchdog cannot forcibly unwind arbitrary Go code. Backpressure
+does not prove bounded latency or native memory under sustained downstream
+under-capacity. No PCM is padded, stretched, reordered or selectively discarded.
+
+Rebuild and restart the agent to pick up this fix. The native helper protocol and
+binary are unchanged. For the tracked starter:
+
+```sh
+go build -o examples/native-receive-probe/.cache/agent-starter-go ./examples/starter
+```
+
+The same IPC fix was applied to the existing ignored `examples/local` copy in
+this workspace, preserving its `DeleteRoomOnClose` setting. If that is your
+entrypoint, rebuild it or use `go run ./examples/local start` with your existing
+native-receive environment. An already-running agent still uses the old code.
+
+A longer provider-free validation can be selected using:
+
+```sh
+NATIVE_TEST_URL=ws://127.0.0.1:18991 NATIVE_TEST_DURATION=2m \
+  go test -race -tags nativereceiveintegration \
+  -run 'TestStarterReceiveLocal/native$' -count=1 -v ./examples/starter
+```
+
+See [queue-fix evidence](../starter/QUEUE_FIX.md) for results and readiness limits.

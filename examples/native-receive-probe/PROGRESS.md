@@ -62,3 +62,8 @@
 - Approved starter integration: opt-in Go helper process and hidden receive-only participant; Pion continues worker/output ownership. Exact caller/audio-track selection, versioned PCM pipe, bounded backlog/error handling and process cleanup. Default StartSession path unchanged.
 - Provider-free local starter tests passed under race instrumentation for default input, native input and selected-track unpublish shutdown. Native mode left Pion subscriptions disabled. PCM tone energy reached the actual session input hook.
 - lk2.19.4 CLI/source verified: echo track publishes before dispatch; no startup/greeting dependency cycle. Paid provider load test not run. Commands: ../starter/NATIVE_RECEIVE.md.
+
+- Queue-overflow follow-up reproduced an immediate eight-frame rejection using a 40-frame buffered burst. Replaced rejection with cancellable backpressure, retaining capacity/order/content. Added callback liveness failure and IPC diagnostics, without receive policy changes.
+- Burst, 600ms consumer-pause, full-queue cancellation and stalled-consumer regressions pass. Mirrored the fix to the user's ignored local example without replacing its room-close customization.
+- Default/native/track-loss local smoke passed; a race-instrumented two-minute real native session delivered120.000s PCM over120.000s wall time. Providers were disabled; this supports a cloud load-test retry, not a completed cloud validation.
+- Preserved supplied incident ZIP/report/log and verified2899 earlier artifact hashes unchanged. Details: ../starter/QUEUE_FIX.md.
