@@ -3669,7 +3669,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
 				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
 				SkipRealtimeAudio: true,
-			}); err != nil && !(cancel != nil && errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil) {
+			}); err != nil && !expectedStoppedSessionCommit(err) && !(cancel != nil && errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil) {
 				stopErr = err
 			}
 			if cancel != nil {
@@ -3738,6 +3738,32 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.mu.Unlock()
 	}
 	return stopErr
+}
+
+// The final-turn hook still runs during shutdown, but generating a reply after
+// activity detachment is no longer possible. Only classify that lifecycle error;
+// joined errors must contain no genuine failure. Other shutdown stages retain
+// their original errors, including ErrAgentSessionNotRunning from a closer.
+func expectedStoppedSessionCommit(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !expectedStoppedSessionCommit(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return expectedStoppedSessionCommit(wrapped.Unwrap())
+	}
+	return errors.Is(err, ErrAgentSessionNotRunning)
 }
 
 func (s *AgentSession) preCloseCallbacksForCycleLocked() []func() {
