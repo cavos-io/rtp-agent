@@ -76,11 +76,11 @@ Setting both flags to 1 is rejected.
   no bit-identical or cross-runtime output parity is claimed.
 - Normal caller departure and track unsubscribe end the session. Unexpected EOF,
   malformed IPC, capture failures, consumer stalls and nonzero helper exits stay
-  errors. Shutdown signals the helper, waits, kills after a three-second bound
+  errors. Shutdown sends the protocol stop, drains cleanup, waits, and kills after a three-second bound
   when necessary, and reaps it. Recording uses the existing Go RecorderIO.
 - Audio-only experimental scope: LiveKit transcription/text/data streams, RPC,
-  participant state attributes, avatars/background audio, pause/resume soft
-  interruption, input processors, seamless track replacement and reconnection
+  participant state attributes, avatars/background audio,
+  input processors, seamless track replacement and reconnection
   are not provided by this adapter. Core STT/LLM/TTS and hard interruption remain
   in Go. Cloud dispatch and paid-provider conversation still need the user's load
   test; provider-free local tests cannot prove those paths.
@@ -201,3 +201,24 @@ explicit native-cleanup flags. Resource limits are warm cycle1+5 goroutines and
 covered by the Go race detector. No cloud or paid-provider calls are needed.
 
 Measured five-session results: [PRIMARY_SEQUENTIAL_SESSIONS.md](PRIMARY_SEQUENTIAL_SESSIONS.md).
+
+## Pause, resume and false-interruption recovery
+
+The opt-in primary adapter now installs both the playback and audio-output
+controllers. Pause stops further capture, waits for the current capture ACK,
+and clears queued native output. Resume releases pending unsubmitted PCM in
+order, retaining the same speech generation. Hard interruption invalidates the
+old generation; canceled producers and shutdown can escape a pause. Real clear
+or capture failures remain errors. Source-queue playback position excludes
+cleared samples and time spent paused; cleared audio is not replayed.
+
+This follows the reference output contract with one explicit timing difference:
+Python `_output.py` clears the source when forwarding observes a pause; this
+adapter clears eagerly after the in-flight ACK. Already encoded/networked audio
+can still arrive after clear. Source queue estimates are not acoustic completion
+or word-aligned recovery. No receive-engine policy or default Pion code changes.
+
+Regression evidence and repeat commands: [NATIVE_PLAYBACK_RECOVERY.md](NATIVE_PLAYBACK_RECOVERY.md).
+
+Shutdown ordering fix and controlled speaking recovery evidence:
+[NATIVE_SHUTDOWN_RECOVERY.md](NATIVE_SHUTDOWN_RECOVERY.md).

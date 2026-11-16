@@ -137,6 +137,7 @@ func (r *Room) Start(ctx context.Context) error {
 	r.playback = newPlayback(child.ctx, child.command, r.recorder.RecordOutput, child.cancel)
 	r.Session.EnsureAssistant().SetPublishAudio(r.playback.Publish)
 	r.Session.SetAudioPlaybackController(r.playback)
+	r.Session.SetAudioOutputController(r.playback)
 	r.Session.AddPreCloseCallback(func() { r.Close() })
 	if err := r.Job.AddShutdownCallback(func() { r.Close() }); err != nil {
 		r.Close()

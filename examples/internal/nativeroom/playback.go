@@ -22,6 +22,12 @@ type playbackCompletion struct {
 }
 
 type playback struct {
+	// Serialize producers while allowing pause, resume and clear to wake a blocked
+	// capture. No unbounded application output queue is introduced.
+	producer   chan struct{}
+	paused     atomic.Bool
+	writing    bool
+	discarded  time.Duration
 	completion *playbackCompletion
 	samples    uint64
 	startedAt  time.Time
@@ -44,7 +50,7 @@ type playback struct {
 }
 
 func newPlayback(ctx context.Context, send func(context.Context, string, []byte) error, record func(*model.AudioFrame), fail func(error)) *playback {
-	return &playback{ctx: ctx, send: send, record: record, fail: fail, changed: make(chan struct{}), listeners: make(map[uint64]func(time.Time))}
+	return &playback{producer: make(chan struct{}, 1), ctx: ctx, send: send, record: record, fail: fail, changed: make(chan struct{}), listeners: make(map[uint64]func(time.Time))}
 }
 func (p *playback) notifyLocked() { close(p.changed); p.changed = make(chan struct{}) }
 func (p *playback) errorLocked(err error) error {
@@ -60,8 +66,8 @@ func (p *playback) captureLocked(ctx context.Context, f *model.AudioFrame, epoch
 		return nil
 	}
 	for offset := 0; offset < len(f.Data); {
-		if p.epoch.Load() != epoch {
-			return context.Canceled
+		if err := p.waitForResumeLocked(ctx, epoch); err != nil {
+			return err
 		}
 		end := min(offset+2400, len(f.Data))
 		data := f.Data[offset:end]
@@ -96,6 +102,10 @@ func (p *playback) Publish(ctx context.Context, f *model.AudioFrame) error {
 		return errors.New("invalid native output PCM format")
 	}
 	epoch := p.epoch.Load()
+	if err := p.acquireProducer(ctx); err != nil {
+		return err
+	}
+	defer func() { <-p.producer }()
 	p.mu.Lock()
 	if epoch != p.epoch.Load() {
 		p.mu.Unlock()
@@ -110,10 +120,13 @@ func (p *playback) Publish(ctx context.Context, f *model.AudioFrame) error {
 		p.mu.Unlock()
 		return err
 	}
+	p.writing = true
+	defer func() { p.mu.Lock(); p.writing = false; p.notifyLocked(); p.mu.Unlock() }()
 	first := !p.active
 	if first {
 		p.completion = &playbackCompletion{}
 		p.total = 0
+		p.discarded = 0
 		p.samples = 0
 		p.startedAt = time.Time{}
 		p.announced = false
@@ -154,10 +167,20 @@ func (p *playback) Publish(ctx context.Context, f *model.AudioFrame) error {
 	return err
 }
 func (p *playback) Flush() {
+	epoch := p.epoch.Load()
+	if p.acquireProducer(p.ctx) != nil {
+		return
+	}
+	defer func() { <-p.producer }()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if epoch != p.epoch.Load() {
+		return
+	}
+	p.writing = true
+	defer func() { p.writing = false; p.notifyLocked() }()
 	if p.resampler != nil {
-		p.captureLocked(p.ctx, p.resampler.Flush(), p.epoch.Load())
+		p.captureLocked(p.ctx, p.resampler.Flush(), epoch)
 		p.resampler = nil
 	}
 }
@@ -166,10 +189,11 @@ func (p *playback) ClearBuffer() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	remaining := max(time.Until(p.deadline), 0)
-	position := max(p.total-remaining, 0)
+	position := max(p.total-p.discarded-remaining, 0)
 	if err := p.send(p.ctx, "clear", nil); err != nil {
 		p.errorLocked(err)
 	}
+	p.paused.Store(false)
 	p.resampler = nil
 	p.deadline = time.Time{}
 	p.active = false
@@ -203,9 +227,21 @@ func (p *playback) waitForSegment(ctx context.Context, target *playbackCompletio
 			p.mu.Unlock()
 			return result, nil
 		}
+		if p.paused.Load() || p.writing {
+			changed := p.changed
+			p.mu.Unlock()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return agent.AudioPlaybackResult{}, ctx.Err()
+			case <-p.ctx.Done():
+				return agent.AudioPlaybackResult{}, p.ctx.Err()
+			}
+			continue
+		}
 		wait := time.Until(p.deadline)
 		if wait <= 0 {
-			p.result = agent.AudioPlaybackResult{PlaybackPosition: p.total}
+			p.result = agent.AudioPlaybackResult{PlaybackPosition: max(p.total-p.discarded, 0)}
 			target.result = p.result
 			target.done = true
 			p.active = false
@@ -239,4 +275,76 @@ func (p *playback) OnPlaybackStarted(cb func(time.Time)) func() {
 	p.listeners[id] = cb
 	p.mu.Unlock()
 	return func() { p.mu.Lock(); delete(p.listeners, id); p.mu.Unlock() }
+}
+
+// Pause clears the already queued native source after the current capture ACK.
+// Unsubmitted PCM remains in the blocked producer and resumes in order. Unlike
+// a receive playout policy, this is an explicit application output control.
+func (p *playback) CanPauseAudioOutput() bool { return p.ctx.Err() == nil }
+func (p *playback) PauseAudioOutput() {
+	if p.paused.Swap(true) {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// A hard clear or resume may have superseded the pause while capture settled.
+	if !p.paused.Load() || p.ctx.Err() != nil {
+		return
+	}
+	remaining := max(time.Until(p.deadline), 0)
+	if err := p.send(p.ctx, "clear", nil); err != nil {
+		p.errorLocked(err)
+		return
+	}
+	p.discarded += min(remaining, max(p.total-p.discarded, 0))
+	p.deadline = time.Time{}
+	p.notifyLocked()
+}
+func (p *playback) ResumeAudioOutput() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paused.Store(false)
+	p.notifyLocked()
+}
+
+// acquireProducer serializes Publish/Flush without trapping canceled producers
+// behind a paused turn.
+func (p *playback) acquireProducer(ctx context.Context) error {
+	select {
+	case p.producer <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	}
+}
+
+// Caller holds mu; release it only while waiting. The producer token keeps frame order.
+func (p *playback) waitForResumeLocked(ctx context.Context, epoch uint64) error {
+	for {
+		if epoch != p.epoch.Load() {
+			return context.Canceled
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := p.ctx.Err(); err != nil {
+			return err
+		}
+		if p.err != nil {
+			return p.err
+		}
+		if !p.paused.Load() {
+			return nil
+		}
+		changed := p.changed
+		p.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+		case <-p.ctx.Done():
+		}
+		p.mu.Lock()
+	}
 }

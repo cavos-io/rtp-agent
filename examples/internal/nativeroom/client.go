@@ -106,8 +106,10 @@ func launch(ctx context.Context, cfg Config, consume func(context.Context, *mode
 	go func() {
 		defer close(c.done)
 		var readErr error
+		configured := false
 		select {
 		case err := <-written:
+			configured = true
 			if err != nil {
 				cancel(errors.New("native room configuration write failed"))
 			}
@@ -122,11 +124,22 @@ func launch(ctx context.Context, cfg Config, consume func(context.Context, *mode
 		// process alive. Closing pipes below also releases the configuration writer.
 		killTimer := time.AfterFunc(3*time.Second, func() { c.killed.Store(true); _ = cmd.Process.Kill(); _ = stdout.Close(); _ = stdin.Close() })
 		defer killTimer.Stop()
-		if run.Err() != nil || !errors.Is(readErr, ErrSourceEnded) {
-			_ = cmd.Process.Signal(os.Interrupt)
+		// A terminal reader result needs no further control command. Never
+		// signal it during native teardown or Go's final exit delay. Otherwise
+		// serialize the protocol stop behind configuration and any active write.
+		// The kill timer bounds a stuck writer/helper; nonzero exits remain errors.
+		if readErr == nil {
+			if !configured {
+				<-written
+			}
+			c.commandMu.Lock()
+			c.nextID++
+			_ = json.NewEncoder(stdin).Encode(message{Event: "stop", ID: c.nextID})
+			c.commandMu.Unlock()
 		}
 		waited := make(chan error, 1)
-		// StdoutPipe requires the read to finish before Wait; cancellation releases it.
+		// StdoutPipe requires the read to finish before Wait. Drain final
+		// diagnostics; the kill timer closes a stuck pipe.
 		cancel(readErr)
 		if readErr == nil {
 			readErr = <-readDone
@@ -194,13 +207,15 @@ func (c *client) read(r io.Reader) error {
 			select {
 			case c.frames <- &model.AudioFrame{Data: m.Data, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1200}:
 			case <-c.ctx.Done():
-				return context.Cause(c.ctx)
+				// Keep draining the pipe to retain the final native cleanup
+				// report. Canceled PCM/ACK delivery must not stop shutdown reads.
 			}
 		case "captured", "cleared":
 			select {
 			case c.ack <- m:
 			case <-c.ctx.Done():
-				return context.Cause(c.ctx)
+				// Keep draining the pipe to retain the final native cleanup
+				// report. Canceled PCM/ACK delivery must not stop shutdown reads.
 			}
 		case "shutdown":
 			shutdown = true

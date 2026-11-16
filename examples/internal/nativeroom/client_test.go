@@ -161,3 +161,76 @@ func TestCleanupDiagnosticsReportsForcedKill(t *testing.T) {
 		t.Fatalf("forced kill hidden: %+v", d)
 	}
 }
+
+func TestClientGracefulStopDrainsCleanup(t *testing.T) {
+	for _, exit := range []string{"0", "7"} {
+		t.Run("exit-"+exit, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "helper")
+			pcm, _ := json.Marshal(message{Event: "pcm", Data: make([]byte, 2400)})
+			// Fail if the parent signals rather than sending the existing stop command.
+			script := "#!/bin/sh\ntrap 'exit 9' INT\nread config\ncat <<'WIRE'\n" + readyMessages + "WIRE\nread command\ncase \"$command\" in *'\"event\":\"stop\"'*) ;; *) exit 8;; esac\ncat <<'WIRE'\n" + strings.Repeat(string(pcm)+"\n", 20) + "{\"event\":\"shutdown\",\"disconnect_callback\":true,\"retained_handles_released\":true,\"runtime_disposed\":true}\nWIRE\nexit " + exit + "\n"
+			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			c, err := launch(context.Background(), Config{Binary: binary}, func(context.Context, *model.AudioFrame) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-c.ready:
+			case <-time.After(time.Second):
+				t.Fatal("not ready")
+			}
+			err = c.close()
+			if exit == "0" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("graceful close: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+				t.Fatalf("real exit hidden: %v", err)
+			}
+			if !c.cleanup.Reaped || c.cleanup.KillAttempted || !c.cleanup.ShutdownSeen || !c.cleanup.RuntimeDisposed {
+				t.Fatalf("cleanup lost: %+v", c.cleanup)
+			}
+		})
+	}
+}
+
+func TestClientStopOrdersAfterInFlightCapture(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "helper")
+	pcm, _ := json.Marshal(message{Event: "pcm", Data: make([]byte, 2400)})
+	script := "#!/bin/sh\nread config\ncat <<'WIRE'\n" + readyMessages + "WIRE\nread command\ncase \"$command\" in *'\"event\":\"capture\",\"id\":1000'*) ;; *) exit 8;; esac\ncat <<'WIRE'\n" + string(pcm) + "\nWIRE\nread command\ncase \"$command\" in *'\"event\":\"stop\",\"id\":1001'*) ;; *) exit 9;; esac\nprintf '%s\\n' '{\"event\":\"shutdown\",\"runtime_disposed\":true}'\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	captured := make(chan struct{}, 1)
+	c, err := launch(context.Background(), Config{Binary: binary}, func(context.Context, *model.AudioFrame) { captured <- struct{}{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	select {
+	case <-c.ready:
+	case <-time.After(time.Second):
+		t.Fatal("not ready")
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.command(context.Background(), "capture", make([]byte, 2400)) }()
+	select {
+	case <-captured:
+	case <-time.After(time.Second):
+		t.Fatal("capture not received")
+	}
+	if err := c.close(); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight command: %v", err)
+	}
+	if c.cleanup.ExitCode != 0 || !c.cleanup.RuntimeDisposed || c.cleanup.KillAttempted {
+		t.Fatalf("stop order: %+v", c.cleanup)
+	}
+	if err := c.command(context.Background(), "clear", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-shutdown clear: %v", err)
+	}
+}

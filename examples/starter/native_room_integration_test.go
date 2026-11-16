@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
@@ -48,6 +50,22 @@ func primaryAmplitude(pcm []int16, hz float64) float64 {
 	}
 	return 2 * math.Hypot(a, b) / float64(len(pcm))
 }
+
+// Inject VAD boundaries without a transcript, using the real core recovery
+// state machine and actual native output. This is not an acoustic VAD test.
+func TestStarterNativePrimaryFalseRecovery(t *testing.T) {
+	t.Setenv("NATIVE_ROOM_DURATION", "10s")
+	runNativePrimary(t, []string{"false-recovery"})
+}
+
+func TestStarterNativePrimaryJobTermination(t *testing.T) {
+	runNativePrimary(t, []string{"job-termination"})
+}
+
+func TestStarterNativePrimaryPause(t *testing.T) {
+	runNativePrimary(t, []string{"pause-resume"})
+}
+
 func TestStarterNativePrimaryLocal(t *testing.T) {
 	runNativePrimary(t, []string{"session-close", "publisher-disconnect", "track-unpublish"})
 }
@@ -264,6 +282,98 @@ func runNativePrimary(t *testing.T, endings []string) {
 			if err != nil || !result.Interrupted || result.PlaybackPosition >= 200*time.Millisecond {
 				t.Fatalf("clear %+v %v", result, err)
 			}
+			var recoveryMS float64
+			if ending == "pause-resume" || ending == "false-recovery" {
+				control := run.session.AudioOutputController()
+				if control == nil || !control.CanPauseAudioOutput() {
+					t.Fatal("native output controller not wired")
+				}
+				// Queue real native output before pausing, without weakening the
+				// preceding hard-clear gate or the resumed content gate.
+				for i := 0; i < 4; i++ {
+					if err := pipeline.PublishAudio(ctx, primaryTone(1200, 990)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var activity *agent.AgentActivity
+				var speech *agent.SpeechHandle
+				var events <-chan agent.AgentFalseInterruptionEvent
+				if ending == "false-recovery" {
+					// Provider-free controller session: the PCM still travels
+					// through the running starter's native output and caller.
+					a := agent.NewAgent("controlled false interruption")
+					recovery := agent.NewAgentSession(a, nil, agent.AgentSessionOptions{
+						ResumeFalseInterruption: true, ResumeFalseInterruptionSet: true,
+						FalseInterruptionTimeout: 2, FalseInterruptionTimeoutSet: true,
+					})
+					recovery.SetAudioOutputController(control)
+					recovery.SetAudioPlaybackController(playback)
+					activity = agent.NewAgentActivity(a, recovery)
+					activity.Start()
+					defer activity.Stop()
+					speech = agent.NewSpeechHandle(true, agent.DefaultInputDetails())
+					defer speech.MarkDone()
+					if err := activity.ScheduleSpeech(speech, 0, false); err != nil {
+						t.Fatal(err)
+					}
+					for activity.CurrentSpeech() != speech {
+						select {
+						case <-ctx.Done():
+							t.Fatal("speech not scheduled")
+						default:
+							time.Sleep(time.Millisecond)
+						}
+					}
+					recovery.UpdateAgentState(agent.AgentStateSpeaking)
+					events = recovery.AgentFalseInterruptionEvents()
+					activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+				} else {
+					control.PauseAudioOutput()
+				}
+				pending := make(chan error, 1)
+				go func() { pending <- pipeline.PublishAudio(ctx, primaryTone(1200, 1320)) }()
+				// Allow 300ms for already encoded/in-flight packets, then require
+				// no old or resumed marker during a 200ms paused interval.
+				time.Sleep(300 * time.Millisecond)
+				old, next := tone990.Load(), tone1320.Load()
+				select {
+				case err := <-pending:
+					t.Fatalf("publication escaped pause: %v", err)
+				case <-time.After(200 * time.Millisecond):
+				}
+				if tone990.Load() != old || tone1320.Load() != next {
+					t.Fatal("marker audio continued while paused")
+				}
+				if activity != nil {
+					endedAt := time.Now()
+					activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+					select {
+					case ev := <-events:
+						if !ev.Resumed {
+							t.Fatal("false interruption did not resume")
+						}
+					case <-ctx.Done():
+						t.Fatal("no recovery event")
+					}
+					recoveryMS = float64(time.Since(endedAt)) / float64(time.Millisecond)
+					if recoveryMS < 1900 || recoveryMS > 3000 {
+						t.Fatalf("two-second recovery timer outside 1.9..3s: %.1fms", recoveryMS)
+					}
+					if speech.IsInterrupted() || activity.CurrentSpeech() != speech {
+						t.Fatal("recovery replaced speech")
+					}
+				} else {
+					control.ResumeAudioOutput()
+				}
+				select {
+				case err := <-pending:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal("resume blocked")
+				}
+			}
 			for i := 0; i < 20; i++ {
 				if err := pipeline.PublishAudio(ctx, primaryTone(1200, 1320)); err != nil {
 					t.Fatal(err)
@@ -289,6 +399,24 @@ func runNativePrimary(t *testing.T, endings []string) {
 			}
 			stop := time.Now()
 			switch ending {
+			case "job-termination":
+				run.session.AudioOutputController().PauseAudioOutput()
+				pending := make(chan error, 1)
+				go func() { pending <- pipeline.PublishAudio(ctx, primaryTone(1200, 1320)) }()
+				select {
+				case err := <-pending:
+					t.Fatalf("pause escaped before job shutdown: %v", err)
+				case <-time.After(20 * time.Millisecond):
+				}
+				run.job.Shutdown("controlled job termination during pause")
+				select {
+				case err := <-pending:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("shutdown publish: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("paused producer not released by shutdown")
+				}
 			case "publisher-disconnect":
 				caller.Disconnect()
 			case "track-unpublish":
@@ -327,7 +455,7 @@ func runNativePrimary(t *testing.T, endings []string) {
 			if !settled || !cleanup.Reaped || cleanup.ExitCode != 0 || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || !cleanup.RuntimeDisposed || cleanup.CallbackOverflow {
 				t.Errorf("helper cleanup failed: settled=%v %+v", settled, cleanup)
 			}
-			metrics := map[string]any{"helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
+			metrics := map[string]any{"false_recovery_ms": recoveryMS, "helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
 			data, _ := json.MarshalIndent(metrics, "", "  ")
 			if err := os.WriteFile(filepath.Join(dir, "summary.json"), data, 0600); err != nil {
 				t.Fatal(err)
