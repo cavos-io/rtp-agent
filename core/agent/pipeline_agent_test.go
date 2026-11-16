@@ -3035,7 +3035,13 @@ func TestPipelineAgentClearInputTranscriptionWrapsNonStreamingSTTWithVAD(t *test
 	sttObj := &nonStreamingPipelineSTT{
 		streamErr: errors.New("direct STT stream should not be used"),
 	}
-	vadObj := &fakePipelineVAD{stream: &fakePipelineVADStream{}}
+	releaseVAD := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseVAD) }) }
+	t.Cleanup(release)
+	// Keep the replacement live until assertions finish; an immediate EOF
+	// legitimately retires it concurrently with ClearInputTranscription.
+	vadObj := &fakePipelineVAD{stream: &fakePipelineVADStream{nextBlock: releaseVAD}}
 	pipeline := NewPipelineAgent(vadObj, sttObj, nil, nil, nil)
 	pipeline.ctx = context.Background()
 
@@ -3045,8 +3051,32 @@ func TestPipelineAgentClearInputTranscriptionWrapsNonStreamingSTTWithVAD(t *test
 	if sttObj.streamCalls != 0 {
 		t.Fatalf("non-streaming STT Stream calls = %d, want 0 because VAD StreamAdapter should wrap it", sttObj.streamCalls)
 	}
-	if pipeline.sttStream == nil {
+	pipeline.mu.Lock()
+	stream := pipeline.sttStream
+	pipeline.mu.Unlock()
+	if stream == nil {
 		t.Fatal("pipeline sttStream = nil, want replacement stream")
+	}
+	// Exercise actual delivery through the replacement, then its EOF lifecycle.
+	frame := &model.AudioFrame{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	if err := pipeline.pushSTTFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		pipeline.mu.Lock()
+		retired := pipeline.sttStream == nil
+		pipeline.mu.Unlock()
+		if retired {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("replacement STT stream did not retire after VAD EOF")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

@@ -77,7 +77,8 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	c := &client{ctx: run, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{}), cleanup: Cleanup{Mode: "inprocess", PID: os.Getpid()}}
-	c.send = func(ctx context.Context, kind string, data []byte) error {
+	c.send = func(ctx context.Context, kind string, data []byte) (err error) {
+		defer func() { err = nativeOutputError(err, s.Err(), context.Cause(run)) }()
 		switch kind {
 		case "capture":
 			if len(data) == 0 || len(data)%2 != 0 || len(data) > 2400 {
@@ -162,4 +163,34 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		c.cleanup.CleanupMS = float64(time.Since(start)) / float64(time.Millisecond)
 	}()
 	return c, nil
+}
+
+// Only a closed operation with a verified normal lifecycle cause is expected.
+// Check every joined cause so cancellation cannot hide an actual failure.
+func nativeOutputError(err, cause, run error) error {
+	if err == nil {
+		return nil
+	}
+	normal := errors.Is(cause, native.ErrSourceEnded) || errors.Is(cause, context.Canceled) || errors.Is(run, context.Canceled)
+	if errors.Is(err, native.ErrClosed) && normal && normalNativeCauses(err) && normalNativeCauses(cause) && normalNativeCauses(run) {
+		return agent.ErrAudioOutputEnded
+	}
+	return err
+}
+func normalNativeCauses(err error) bool {
+	if err == nil {
+		return true
+	}
+	if e, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, c := range e.Unwrap() {
+			if !normalNativeCauses(c) {
+				return false
+			}
+		}
+		return true
+	}
+	if e, ok := err.(interface{ Unwrap() error }); ok {
+		return normalNativeCauses(e.Unwrap())
+	}
+	return err == native.ErrClosed || err == native.ErrSourceEnded || err == context.Canceled
 }

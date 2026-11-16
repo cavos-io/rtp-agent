@@ -2247,8 +2247,13 @@ func (va *PipelineAgent) emitLLMError(session *AgentSession, err error) {
 	})
 }
 
+// ErrAudioOutputEnded marks verified normal transport departure while output is
+// pending. It is not a provider failure. Unexpected transport failures must not
+// use this sentinel.
+var ErrAudioOutputEnded = errors.New("audio output ended normally")
+
 func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
-	if session == nil || err == nil {
+	if session == nil || err == nil || errors.Is(err, ErrAudioOutputEnded) {
 		return
 	}
 	label := "tts"
@@ -2260,6 +2265,9 @@ func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
 }
 
 func (va *PipelineAgent) logTTSError(message string, err error) {
+	if errors.Is(err, ErrAudioOutputEnded) {
+		return
+	}
 	va.logProviderErrorAsWarning(message, err, va.tts, tts.Provider(va.tts), "tts_inference")
 }
 
