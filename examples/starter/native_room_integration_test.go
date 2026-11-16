@@ -102,6 +102,11 @@ func runNativePrimaryWithSignalFault(t *testing.T, endings []string, agentURL st
 			t.Fatal("NATIVE_ROOM_DURATION must be 5s..2m")
 		}
 	}
+	runNativePrimaryConfigured(t, endings, agentURL, fault, recovery, url, out, config, duration)
+}
+
+// Explicit settings let concurrent soak rooms avoid process-global environment mutation.
+func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string, fault func(context.Context) error, recovery bool, url, out string, config nativeReceiveConfig, duration time.Duration) {
 	for _, ending := range endings {
 		t.Run(ending, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), duration+35*time.Second)
