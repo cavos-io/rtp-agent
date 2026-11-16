@@ -70,6 +70,12 @@ func TestStarterNativePrimaryLocal(t *testing.T) {
 	runNativePrimary(t, []string{"session-close", "publisher-disconnect", "track-unpublish"})
 }
 func runNativePrimary(t *testing.T, endings []string) {
+	runNativePrimaryWithSignalFault(t, endings, "", nil, false)
+}
+
+// Fault injection is test-only. The native media engine and playback policies
+// are unchanged, and existing PCM/content/cleanup gates still apply.
+func runNativePrimaryWithSignalFault(t *testing.T, endings []string, agentURL string, fault func(context.Context) error, recovery bool) {
 	url, out := os.Getenv("NATIVE_TEST_URL"), os.Getenv("NATIVE_ROOM_RESULT_DIR")
 	if url == "" || out == "" {
 		t.Fatal("NATIVE_TEST_URL and new NATIVE_ROOM_RESULT_DIR required")
@@ -101,7 +107,14 @@ func runNativePrimary(t *testing.T, endings []string) {
 			roomName := fmt.Sprintf("starter-primary-%d", time.Now().UnixNano())
 			var tone990, tone1320 atomic.Int64
 			subscribed := make(chan struct{}, 1)
+			reconnected := make(chan struct{}, 1)
 			cb := lk.NewRoomCallback()
+			cb.OnReconnected = func() {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
 			cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, _ *lk.RemoteTrackPublication, p *lk.RemoteParticipant) {
 				if p.Identity() != "primary-agent" {
 					return
@@ -144,7 +157,11 @@ func runNativePrimary(t *testing.T, endings []string) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			server := worker.NewAgentServer(worker.WorkerOptions{WSURL: url, APIKey: "devkey", APISecret: "local-native-receive-experiment-secret", JobExecutorType: worker.JobExecutorTypeThread})
+			connectionURL := url
+			if agentURL != "" {
+				connectionURL = agentURL
+			}
+			server := worker.NewAgentServer(worker.WorkerOptions{WSURL: connectionURL, APIKey: "devkey", APISecret: "local-native-receive-experiment-secret", JobExecutorType: worker.JobExecutorTypeThread})
 			var samples atomic.Uint64
 			var last, gap atomic.Int64
 			var inputEnergy atomic.Uint64
@@ -232,7 +249,13 @@ func runNativePrimary(t *testing.T, endings []string) {
 				buf := make([]byte, 4000)
 				pcm := make([]int16, 960)
 				checkpointSamples, checkpointTime := samples.Load(), started
+				checkpointEnergy := inputEnergy.Load()
 				for i := 0; i < int(duration/(20*time.Millisecond)); i++ {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
 					for j := range pcm {
 						pcm[j] = int16(10000 * math.Sin(2*math.Pi*660*float64(i*960+j)/48000))
 						if i >= 100 && i < 150 {
@@ -252,14 +275,18 @@ func runNativePrimary(t *testing.T, endings []string) {
 					if (i+1)%50 == 0 {
 						current, currentTime := samples.Load(), time.Now()
 						pcmWindow, wallWindow := float64(current-checkpointSamples)/24000, currentTime.Sub(checkpointTime).Seconds()
-						windows = append(windows, map[string]float64{"second": float64((i + 1) / 50), "pcm_seconds": pcmWindow, "wall_seconds": wallWindow})
-						if math.Abs(pcmWindow-wallWindow) > .25 {
+						windows = append(windows, map[string]float64{"second": float64((i + 1) / 50), "pcm_seconds": pcmWindow, "wall_seconds": wallWindow, "energy": float64(inputEnergy.Load() - checkpointEnergy)})
+						if !recovery && math.Abs(pcmWindow-wallWindow) > .25 {
 							t.Errorf("one-second PCM window differs by >250ms: pcm=%.3f wall=%.3f", pcmWindow, wallWindow)
 						}
 						checkpointSamples, checkpointTime = current, currentTime
+						checkpointEnergy = inputEnergy.Load()
 					}
 				}
 			}()
+			// Failure injection can end a test before publishing finishes.
+			// Join before returning so callbacks cannot report into a closed test.
+			defer func() { cancel(); pubWG.Wait() }()
 			pipeline := run.session.EnsureAssistant().(*agent.PipelineAgent)
 			playback := run.session.AudioPlaybackController()
 			for i := 0; i < 20; i++ {
@@ -271,6 +298,27 @@ func runNativePrimary(t *testing.T, endings []string) {
 			result, err := playback.WaitForPlayout(ctx)
 			if err != nil || result.Interrupted || result.PlaybackPosition != time.Second {
 				t.Fatalf("drain %+v %v", result, err)
+			}
+			var reconnectMS float64
+			if fault != nil || ending == "publisher-signal-reconnect" {
+				faultCtx, stopFault := context.WithTimeout(ctx, 5*time.Second)
+				faultStart := time.Now()
+				if fault != nil {
+					err = fault(faultCtx)
+				} else {
+					caller.Simulate(lk.SimulateSignalReconnect)
+					select {
+					case <-reconnected:
+						err = nil
+					case <-faultCtx.Done():
+						err = faultCtx.Err()
+					}
+				}
+				stopFault()
+				reconnectMS = float64(time.Since(faultStart)) / float64(time.Millisecond)
+				if err != nil {
+					t.Fatalf("signaling recovery: %v", err)
+				}
 			}
 			for i := 0; i < 4; i++ {
 				if err := pipeline.PublishAudio(ctx, primaryTone(1200, 990)); err != nil {
@@ -391,8 +439,22 @@ func runNativePrimary(t *testing.T, endings []string) {
 			}
 			wall := time.Since(started)
 			pcm := float64(samples.Load()-initial) / 24000
-			if math.Abs(pcm-wall.Seconds()) > .25 || gap.Load() > int64(250*time.Millisecond) {
-				t.Fatalf("continuity pcm=%.3f wall=%.3f gap=%.3fms", pcm, wall.Seconds(), float64(gap.Load())/1e6)
+			if recovery {
+				// Separate full-restart recovery contract. The original no-gap
+				// test remains unchanged and must not be reported as passing.
+				if math.Abs(pcm-wall.Seconds()) > 3 || gap.Load() > int64(3*time.Second) {
+					t.Errorf("restart gap exceeds3s: pcm=%.3f wall=%.3f gap=%.3fms", pcm, wall.Seconds(), float64(gap.Load())/1e6)
+				}
+				if len(windows) < 3 {
+					t.Fatal("missing post-recovery windows")
+				}
+				for _, w := range windows[len(windows)-3:] {
+					if math.Abs(w["pcm_seconds"]-w["wall_seconds"]) > .25 || w["energy"] < 1000000 {
+						t.Errorf("post-recovery PCM/content failed: %+v", w)
+					}
+				}
+			} else if math.Abs(pcm-wall.Seconds()) > .25 || gap.Load() > int64(250*time.Millisecond) {
+				t.Errorf("continuity pcm=%.3f wall=%.3f gap=%.3fms", pcm, wall.Seconds(), float64(gap.Load())/1e6)
 			}
 			if inputEnergy.Load() < 1000000 || tone990.Load() < 20 || tone1320.Load() < 20 {
 				t.Fatalf("missing content input=%d output=%d/%d", inputEnergy.Load(), tone990.Load(), tone1320.Load())
@@ -419,9 +481,22 @@ func runNativePrimary(t *testing.T, endings []string) {
 				}
 			case "publisher-disconnect":
 				caller.Disconnect()
-			case "track-unpublish":
+			case "track-unpublish", "track-republish":
 				if err := caller.LocalParticipant.UnpublishTrack(pub.SID()); err != nil {
 					t.Fatal(err)
+				}
+				if ending == "track-republish" {
+					replacement, e := lk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
+					if e != nil {
+						t.Fatal(e)
+					}
+					replacementPub, e := caller.LocalParticipant.PublishTrack(replacement, &lk.TrackPublicationOptions{Name: "replacement", Source: lkproto.TrackSource_MICROPHONE})
+					if e != nil {
+						t.Fatal(e)
+					}
+					if replacementPub.SID() == pub.SID() {
+						t.Fatal("replacement reused track SID")
+					}
 				}
 			default:
 				run.session.Shutdown(false)
@@ -455,7 +530,7 @@ func runNativePrimary(t *testing.T, endings []string) {
 			if !settled || !cleanup.Reaped || cleanup.ExitCode != 0 || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || !cleanup.RuntimeDisposed || cleanup.CallbackOverflow {
 				t.Errorf("helper cleanup failed: settled=%v %+v", settled, cleanup)
 			}
-			metrics := map[string]any{"false_recovery_ms": recoveryMS, "helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
+			metrics := map[string]any{"full_restart_recovery_contract": recovery, "signaling_recovery_ms": reconnectMS, "false_recovery_ms": recoveryMS, "helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
 			data, _ := json.MarshalIndent(metrics, "", "  ")
 			if err := os.WriteFile(filepath.Join(dir, "summary.json"), data, 0600); err != nil {
 				t.Fatal(err)

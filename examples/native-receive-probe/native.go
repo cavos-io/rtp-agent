@@ -147,6 +147,15 @@ func nativeReceive(ctx context.Context, url, token string, sink nativeSink) erro
 // after all cycles; the original receive command still disposes at room exit.
 func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose bool, baselineGoroutines int) (err error) {
 	var room, stream, track uint64
+	var lifecycle receiveLifecycle
+	var rebindTimer *time.Timer
+	var rebindDeadline <-chan time.Time
+	defer func() {
+		if rebindTimer != nil {
+			rebindTimer.Stop()
+		}
+	}()
+	var subscribedOnce bool
 	var duplex *duplexOutput
 	var commands <-chan duplexCommand
 	if helper, ok := sink.(*helperSink); ok && helper.duplex != nil {
@@ -268,6 +277,8 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 					return e
 				}
 			}
+		case <-rebindDeadline:
+			return errors.New("native selected track resubscription timed out")
 		case command := <-commands:
 			stop, e := duplex.command(command)
 			if e != nil {
@@ -315,6 +326,8 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 				sink.event(map[string]any{"event": "ready", "at": raw.at})
 			}
 			if r := ev.GetRoomEvent(); r != nil {
+				// Event types/handles only: never log tokens or event payloads.
+				fmt.Fprintf(os.Stderr, "native lifecycle at=%d type=%T room=%d track=%d stream=%d\n", raw.at, r.Message, room, track, stream)
 				if fail := r.GetTrackSubscriptionFailed(); fail != nil {
 					return errors.New(fail.GetError())
 				}
@@ -328,24 +341,54 @@ func nativeRoom(ctx context.Context, url, token string, sink nativeSink, dispose
 					if stream == 0 {
 						return errors.New("missing audio stream handle")
 					}
-					sink.event(map[string]any{"event": "subscribed", "at": raw.at})
+					if rebindTimer != nil {
+						rebindTimer.Stop()
+						rebindTimer = nil
+						rebindDeadline = nil
+					}
+					eventName := "subscribed"
+					if subscribedOnce {
+						eventName = "resubscribed"
+					}
+					subscribedOnce = true
+					sink.event(map[string]any{"event": eventName, "at": raw.at})
 					if helper, ok := sink.(*helperSink); ok && helper.subscribed != nil {
 						helper.subscribed()
 					}
 				}
 				if selected, ok := sink.(*helperSink); ok {
-					if p := r.GetParticipantDisconnected(); p != nil && p.GetParticipantIdentity() == selected.participant {
-						return errPublisherDisconnected
+					reset, e := lifecycle.observe(r, selected.participant, selected.trackSID)
+					if e != nil {
+						return e
 					}
-					if t := r.GetTrackUnsubscribed(); t != nil && t.GetTrackSid() == selected.trackSID {
-						return errTrackUnsubscribed
+					if reset {
+						if stream != 0 {
+							if !bool(C.probe_drop(C.uint64_t(stream))) {
+								return errors.New("reconnect stream release failed")
+							}
+							stream = 0
+						}
+						if track != 0 {
+							if !bool(C.probe_drop(C.uint64_t(track))) {
+								return errors.New("reconnect track release failed")
+							}
+							track = 0
+						}
+						// Lifecycle liveness bound, not an audio/packet deadline.
+						if rebindTimer == nil {
+							rebindTimer = time.NewTimer(30 * time.Second)
+							rebindDeadline = rebindTimer.C
+						}
 					}
 				}
 				if r.GetDisconnected() != nil {
 					return errors.New("unexpected room disconnect")
 				}
 			}
-			if a := ev.GetAudioStreamEvent(); a != nil && a.GetFrameReceived() != nil {
+			if a := ev.GetAudioStreamEvent(); a != nil && a.GetEos() != nil {
+				fmt.Fprintf(os.Stderr, "native audio eos at=%d stream=%d\n", raw.at, a.GetStreamHandle())
+			}
+			if a := ev.GetAudioStreamEvent(); a != nil && a.GetStreamHandle() == stream && a.GetFrameReceived() != nil {
 				info := a.GetFrameReceived().GetFrame().GetInfo()
 				size := uint64(info.GetSamplesPerChannel()) * uint64(info.GetNumChannels()) * 2
 				if size > 1024*1024 || info.GetDataPtr() == 0 {
