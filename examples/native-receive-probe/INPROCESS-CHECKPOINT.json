@@ -1,0 +1,305 @@
+{
+  "implementation_commit": "cad0f2f4a",
+  "platform": "macOS arm64",
+  "checks": {
+    "default_race_tests": "passed: ./examples/internal/nativeroom ./examples/starter",
+    "tagged_race_tests": "passed: -tags nativeinprocess, same packages",
+    "wrapper_race_tests": "passed: ./nativeinprocess in nested module",
+    "starter_live_race": "passed: three sequential sessions; 39.360s",
+    "vet": "passed: tagged starter and nativeroom",
+    "builds": "passed: default and nativeinprocess starter",
+    "default_dependency_graph": "native FFI package absent",
+    "hooks": "test integrity, architecture, targeted tests passed"
+  },
+  "scenarios": {
+    "false-recovery": {
+      "cleanup_ms": 2045.399625,
+      "continuity_windows": [
+        {
+          "energy": 1182457991222,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000169875
+        },
+        {
+          "energy": 1204302680532,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000119875
+        },
+        {
+          "energy": 64818567189,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.99999675
+        },
+        {
+          "energy": 1139132293817,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999809625
+        },
+        {
+          "energy": 1204302680532,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 0.999937
+        },
+        {
+          "energy": 1204292822820,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 1.000273459
+        },
+        {
+          "energy": 1204298259235,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 0.999973833
+        },
+        {
+          "energy": 1204304685522,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 0.999946792
+        },
+        {
+          "energy": 1204291757644,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 0.999895083
+        },
+        {
+          "energy": 1204297392236,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 0.999918875
+        }
+      ],
+      "false_recovery_ms": 2001.47325,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 98029,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 2.401166,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 41.268,
+      "output_1320_frames": 54,
+      "output_990_frames": 50,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000066625
+    },
+    "publisher-disconnect": {
+      "cleanup_ms": 2029.899208,
+      "continuity_windows": [
+        {
+          "energy": 1194640794036,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000143875
+        },
+        {
+          "energy": 1204350049047,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 0.999947167
+        },
+        {
+          "energy": 41858254240,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 1.000414
+        },
+        {
+          "energy": 1162045640235,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999606708
+        },
+        {
+          "energy": 1204350049047,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 0.999899667
+        },
+        {
+          "energy": 1204297517477,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 1.000172958
+        },
+        {
+          "energy": 1204244222717,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 0.999910917
+        },
+        {
+          "energy": 1204353142860,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 1.000096666
+        },
+        {
+          "energy": 1204297406248,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 0.999858417
+        },
+        {
+          "energy": 1204242188198,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 1.000105958
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 98029,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 0.043042,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 23.622,
+      "output_1320_frames": 51,
+      "output_990_frames": 51,
+      "participants_after": 0,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000175083
+    },
+    "session-close": {
+      "cleanup_ms": 2005.572625,
+      "continuity_windows": [
+        {
+          "energy": 1182705431651,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000313792
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000130333
+        },
+        {
+          "energy": 53846494248,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.999956917
+        },
+        {
+          "energy": 1150110277850,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 1.00001875
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 0.999926541
+        },
+        {
+          "energy": 1204296744650,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 1.000001334
+        },
+        {
+          "energy": 1204298117687,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 1.0000015
+        },
+        {
+          "energy": 1204298923521,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 0.999994291
+        },
+        {
+          "energy": 1204297820883,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 1.000132417
+        },
+        {
+          "energy": 1204296079314,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 1.000232375
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 98029,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 2.391625,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 24.412,
+      "output_1320_frames": 51,
+      "output_990_frames": 51,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000758
+    }
+  },
+  "preservation": "Previous cloud and recovery artifact hashes verified unchanged",
+  "limits": [
+    "Go race detector does not instrument native Rust/C++",
+    "No full repository test pass claimed",
+    "Local example remains Git-ignored",
+    "Generated FFI schema and native binary require pinned setup; not committed",
+    "Raw results preserved locally"
+  ],
+  "artifacts": {
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/default-deps.txt": "f1f78b5e6ef75998e6c7279e34f241a1875ff858ba8a664126e4a4222cee8ce3",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/server.log": "2c2d25dcbb8a26705b1728f2413e4abd79ef62f4fe0fadaf90df11d594c78866",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/false-recovery/audio.ogg": "4f78f453dc36aa30a59ba2bc2f52dd66e41337d130733cb3a9fdb0a6ea933f70",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/false-recovery/session_report.json": "0fca3680bafa5ea9abbf355c0ccad6ae18e3033754c28bd38f1f1f73bd2d7adb",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/false-recovery/summary.json": "cfc6d3917a99f7b0f9e280ddf57d0d4d72aee9adb62303e1b7f47ae30939671d",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/publisher-disconnect/audio.ogg": "4c1dd44f6a1c3bd4c805e2239012b514c92ee245ea6f476aa8b685d0c359f78f",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/publisher-disconnect/session_report.json": "cd8370529ace7783a137c00bbf7f2958da48f89c824f65958b2489003fd56647",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/publisher-disconnect/summary.json": "4e908757b5c327be89e8f40e9c06b09535e107f9b76d38b164bd242c13de1473",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/session-close/audio.ogg": "b45ccc35fdada5e13920299e88f4918e0db0708b6523aaa898f05ee92e5eef24",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/session-close/session_report.json": "e75a954055a7ffe85154c7068379a667db0c93dfde06d8d1f546e2578e8718da",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter/session-close/summary.json": "cc26099ea348929579a1e7ed09c39287525c2494ab94777c883a45fa4a9bd7ca",
+    "examples/native-receive-probe/results/inprocess-checkpoint-20261116/starter.log": "fe37fc4c0383c8b2815ed1654625f027d005d337f61c3bb13a7a05ab6f53a369"
+  }
+}
