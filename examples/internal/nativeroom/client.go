@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
@@ -19,14 +20,21 @@ import (
 var ErrSourceEnded = errors.New("native room source ended")
 
 type message struct {
-	Event   string `json:"event"`
-	ID      uint64 `json:"id"`
-	Version int    `json:"version"`
-	Reason  string `json:"reason"`
-	Data    []byte `json:"data,omitempty"`
+	NativeDurationNS   int64  `json:"duration_ns,omitempty"`
+	DisconnectCallback bool   `json:"disconnect_callback"`
+	HandlesReleased    bool   `json:"retained_handles_released"`
+	RuntimeDisposed    bool   `json:"runtime_disposed"`
+	CallbackOverflow   bool   `json:"overflow"`
+	Event              string `json:"event"`
+	ID                 uint64 `json:"id"`
+	Version            int    `json:"version"`
+	Reason             string `json:"reason"`
+	Data               []byte `json:"data,omitempty"`
 }
 
 type client struct {
+	cleanup   Cleanup
+	killed    atomic.Bool
 	ctx       context.Context
 	cancel    context.CancelCauseFunc
 	done      chan struct{}
@@ -73,6 +81,7 @@ func launch(ctx context.Context, cfg Config, consume func(context.Context, *mode
 		cancel(err)
 		return nil, err
 	}
+	c.cleanup.PID = cmd.Process.Pid
 	// Credentials are sent only over stdin. Never include them in diagnostics.
 	written := make(chan error, 1)
 	go func() {
@@ -108,9 +117,10 @@ func launch(ctx context.Context, cfg Config, consume func(context.Context, *mode
 		case readErr = <-readDone:
 		case <-run.Done():
 		}
+		cleanupStarted := time.Now()
 		// Reap independently of the reader: a blocked PCM consumer must not keep the
 		// process alive. Closing pipes below also releases the configuration writer.
-		killTimer := time.AfterFunc(3*time.Second, func() { _ = cmd.Process.Kill(); _ = stdout.Close(); _ = stdin.Close() })
+		killTimer := time.AfterFunc(3*time.Second, func() { c.killed.Store(true); _ = cmd.Process.Kill(); _ = stdout.Close(); _ = stdin.Close() })
 		defer killTimer.Stop()
 		if run.Err() != nil || !errors.Is(readErr, ErrSourceEnded) {
 			_ = cmd.Process.Signal(os.Interrupt)
@@ -126,12 +136,17 @@ func launch(ctx context.Context, cfg Config, consume func(context.Context, *mode
 		select {
 		case exitErr = <-waited:
 		case <-time.After(3 * time.Second):
+			c.killed.Store(true)
 			_ = cmd.Process.Kill()
 			exitErr = <-waited
 		}
 		stdin.Close()
 		stdout.Close()
 		<-consumed
+		c.cleanup.Reaped = true
+		c.cleanup.ExitCode = cmd.ProcessState.ExitCode()
+		c.cleanup.KillAttempted = c.killed.Load()
+		c.cleanup.CleanupMS = float64(time.Since(cleanupStarted)) / float64(time.Millisecond)
 		c.err = readErr
 		if exitErr != nil {
 			c.err = fmt.Errorf("native room helper exit: %w", exitErr)
@@ -189,6 +204,12 @@ func (c *client) read(r io.Reader) error {
 			}
 		case "shutdown":
 			shutdown = true
+			c.cleanup.ShutdownSeen = true
+			c.cleanup.NativeCleanupMS = float64(m.NativeDurationNS) / float64(time.Millisecond)
+			c.cleanup.DisconnectCallback = m.DisconnectCallback
+			c.cleanup.HandlesReleased = m.HandlesReleased
+			c.cleanup.RuntimeDisposed = m.RuntimeDisposed
+			c.cleanup.CallbackOverflow = m.CallbackOverflow
 		case "ended":
 			if !subscribed || (m.Reason != "participant_disconnected" && m.Reason != "track_unsubscribed") {
 				return errors.New("invalid native room end")

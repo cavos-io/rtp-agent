@@ -20,6 +20,7 @@ import (
 // Room owns one helper and uses the worker-assigned primary token. It never
 // connects the prepared Pion room or creates a second agent identity.
 type Room struct {
+	continuity        continuity
 	mu                sync.Mutex
 	closed            bool
 	cancel            context.CancelFunc
@@ -105,7 +106,9 @@ func (r *Room) Start(ctx context.Context) error {
 			}
 		}
 	}
+	r.continuity.started = time.Now()
 	child, err := launch(ctx, cfg, func(c context.Context, f *model.AudioFrame) {
+		r.continuity.frame(time.Now(), f.SamplesPerChannel)
 		r.samples.Add(uint64(f.SamplesPerChannel))
 		if !r.Session.InputAudioMuted() {
 			r.recorder.RecordInput(f)
@@ -141,7 +144,19 @@ func (r *Room) Start(ctx context.Context) error {
 	}
 	logger.Logger.Infow("experimental native primary room enabled", "participant", cfg.Participant, "track", cfg.TrackSID, "identity", info.AgentIdentity, "sample_rate", 24000)
 	go func() {
-		<-child.done
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		observing := true
+		for observing {
+			select {
+			case <-ticker.C:
+				logger.Logger.Infow("experimental native primary PCM continuity", "pid", child.cleanup.PID, "continuity", r.continuity.snapshot(time.Now()))
+			case <-child.done:
+				observing = false
+			}
+		}
+		logger.Logger.Infow("experimental native primary PCM final", "continuity", r.continuity.snapshot(time.Now()))
+		logger.Logger.Infow("experimental native primary helper cleanup", "cleanup", child.cleanup)
 		// An explicit source departure is normal; unexpected EOF and nonzero exits
 		// remain failures, including errors reported during native resource cleanup.
 		if errors.Is(child.err, ErrSourceEnded) {
@@ -186,4 +201,20 @@ func (r *Room) Close() error {
 		}
 	})
 	return nil
+}
+
+// CleanupDiagnostics returns a stable snapshot only once the child is reaped.
+func (r *Room) CleanupDiagnostics() (Cleanup, bool) {
+	r.mu.Lock()
+	child := r.child
+	r.mu.Unlock()
+	if child == nil {
+		return Cleanup{}, false
+	}
+	select {
+	case <-child.done:
+		return child.cleanup, true
+	default:
+		return Cleanup{}, false
+	}
 }

@@ -9,7 +9,11 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,9 +21,12 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
 	lkproto "github.com/livekit/protocol/livekit"
+	protologger "github.com/livekit/protocol/logger"
 	lk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -42,6 +49,9 @@ func primaryAmplitude(pcm []int16, hz float64) float64 {
 	return 2 * math.Hypot(a, b) / float64(len(pcm))
 }
 func TestStarterNativePrimaryLocal(t *testing.T) {
+	runNativePrimary(t, []string{"session-close", "publisher-disconnect", "track-unpublish"})
+}
+func runNativePrimary(t *testing.T, endings []string) {
 	url, out := os.Getenv("NATIVE_TEST_URL"), os.Getenv("NATIVE_ROOM_RESULT_DIR")
 	if url == "" || out == "" {
 		t.Fatal("NATIVE_TEST_URL and new NATIVE_ROOM_RESULT_DIR required")
@@ -62,7 +72,7 @@ func TestStarterNativePrimaryLocal(t *testing.T) {
 			t.Fatal("NATIVE_ROOM_DURATION must be 5s..2m")
 		}
 	}
-	for _, ending := range []string{"session-close", "publisher-disconnect", "track-unpublish"} {
+	for _, ending := range endings {
 		t.Run(ending, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), duration+35*time.Second)
 			defer cancel()
@@ -313,12 +323,71 @@ func TestStarterNativePrimaryLocal(t *testing.T) {
 			if len(after.Participants) != want {
 				t.Fatalf("remaining participants=%d want=%d", len(after.Participants), want)
 			}
-			metrics := map[string]any{"continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
+			cleanup, settled := run.job.PrimaryRoomIO().(*nativeroom.Room).CleanupDiagnostics()
+			if !settled || !cleanup.Reaped || cleanup.ExitCode != 0 || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || !cleanup.RuntimeDisposed || cleanup.CallbackOverflow {
+				t.Errorf("helper cleanup failed: settled=%v %+v", settled, cleanup)
+			}
+			metrics := map[string]any{"helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}
 			data, _ := json.MarshalIndent(metrics, "", "  ")
 			if err := os.WriteFile(filepath.Join(dir, "summary.json"), data, 0600); err != nil {
 				t.Fatal(err)
 			}
 			t.Log(string(data))
 		})
+	}
+}
+
+// All five sessions execute sequentially inside this single Go test process.
+func TestNativePrimarySequentialSessions(t *testing.T) {
+	protologger.InitFromConfig(&protologger.Config{Level: "info", JSON: true}, "native-sequential")
+	logutil.SetLogger(protologger.GetLogger())
+	root := os.Getenv("NATIVE_ROOM_RESULT_DIR")
+	if root == "" {
+		t.Fatal("NATIVE_ROOM_RESULT_DIR required")
+	}
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NATIVE_ROOM_DURATION", "2m")
+	var warmHeap uint64
+	var warmGoroutines int
+	var resources []map[string]any
+	for cycle := 1; cycle <= 5; cycle++ {
+		t.Setenv("NATIVE_ROOM_RESULT_DIR", filepath.Join(root, fmt.Sprintf("cycle-%d", cycle)))
+		ending := []string{"session-close", "publisher-disconnect", "track-unpublish", "session-close", "track-unpublish"}[cycle-1]
+		ok := t.Run(fmt.Sprintf("cycle-%d", cycle), func(t *testing.T) { runNativePrimary(t, []string{ending}) })
+		time.Sleep(3 * time.Second)
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		goroutines := runtime.NumGoroutine()
+		rss, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		children, err := exec.Command("pgrep", "-P", strconv.Itoa(os.Getpid()), "-f", filepath.Base(os.Getenv("RTP_AGENT_NATIVE_HELPER"))).CombinedOutput()
+		if len(children) > 0 {
+			t.Errorf("helper remains: %s", children)
+		}
+		if e, yes := err.(*exec.ExitError); err != nil && (!yes || e.ExitCode() != 1) {
+			t.Fatal(err)
+		}
+		if cycle == 1 {
+			warmHeap = m.HeapAlloc
+			warmGoroutines = goroutines
+		}
+		if m.HeapAlloc > warmHeap+16*1024*1024 || goroutines > warmGoroutines+5 {
+			t.Error("settled resources exceed warm baseline tolerance: +16MiB heap or +5 goroutines")
+		}
+		r := map[string]any{"cycle": cycle, "pid": os.Getpid(), "goroutines": goroutines, "heap_alloc": m.HeapAlloc, "heap_sys": m.HeapSys, "rss_kib": strings.TrimSpace(string(rss)), "helper_children": strings.TrimSpace(string(children))}
+		resources = append(resources, r)
+		t.Logf("resources %+v", r)
+		data, _ := json.MarshalIndent(resources, "", "  ")
+		if err := os.WriteFile(filepath.Join(root, "resources.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("session failed; results preserved")
+		}
 	}
 }

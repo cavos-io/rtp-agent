@@ -159,3 +159,45 @@ unchanged.
 The subsequent dispatched cloud run and dashboard confirmation of exactly two
 participants are checkpointed in [CLOUD_NATIVE_PRIMARY.md](CLOUD_NATIVE_PRIMARY.md),
 including the original screenshot and input artifact hashes.
+
+## Periodic diagnostics
+
+The primary-native adapter logs `experimental native primary PCM continuity`
+every10s, plus a final partial window. Fields include wall duration, callback PCM
+duration, cumulative PCM, maximum inter-frame callback gap, time since the last
+frame, and first-frame delay from helper launch. Timing uses the parent monotonic
+clock. The first window includes startup; the final window includes shutdown.
+These are observations at the helper-to-agent callback, before mute filtering;
+they are not RTP loss/DTX measurements or downstream retention guarantees.
+
+`experimental native primary helper cleanup` reports PID, actual wait/reap status,
+exit code, kill attempts, native disconnect callback, retained handle release,
+global runtime disposal and callback overflow. `cleanup_ms` measures the parent's
+teardown/wait phase; `native_cleanup_ms` is the helper's own native teardown
+interval. They are durations from separate clocks, not timestamps to subtract.
+The source-departure path can finish native teardown before parent cleanup starts.
+No receive admission, scheduling, resampling or playback policy changes are made
+by these diagnostics.
+
+Five sequential primary sessions (one race-instrumented Go process; newly built
+race helper) can be run against the local server using:
+
+```sh
+go -C examples/native-receive-probe build -race -o .cache/probe-primary-sequential .
+NATIVE_TEST_URL=ws://127.0.0.1:18991 \
+NATIVE_ROOM_RESULT_DIR="$PWD/examples/native-receive-probe/results/primary-sequential-manual-01" \
+RTP_AGENT_NATIVE_HELPER="$PWD/examples/native-receive-probe/.cache/probe-primary-sequential" \
+LIVEKIT_LIB_PATH="$PWD/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib" \
+go test -race -tags nativeroomintegration ./examples/starter \
+  -run '^TestNativePrimarySequentialSessions$' -count=1 -timeout 14m -v
+```
+
+The new output directory contains per-session recording/report/measurement files
+and a resource census after each3s settle and GC. Sessions exercise close,
+publisher disconnect, unsubscribe, close, unsubscribe in order. Each uses the
+existing2min PCM, two-participant, output-marker, drain and clear gates, and
+explicit native-cleanup flags. Resource limits are warm cycle1+5 goroutines and
++16MiB live Go heap; RSS is reported without a fixed gate. Native memory is not
+covered by the Go race detector. No cloud or paid-provider calls are needed.
+
+Measured five-session results: [PRIMARY_SEQUENTIAL_SESSIONS.md](PRIMARY_SEQUENTIAL_SESSIONS.md).

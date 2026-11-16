@@ -113,7 +113,51 @@ func TestClientNonzeroExitOverridesNormalDeparture(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("child not reaped")
 	}
+	if !c.cleanup.Reaped || c.cleanup.ExitCode != 7 || c.cleanup.PID <= 0 {
+		t.Fatalf("missing failure diagnostics: %+v", c.cleanup)
+	}
 	if c.err == nil || errors.Is(c.err, ErrSourceEnded) || !strings.Contains(c.err.Error(), "exit") {
 		t.Fatal(c.err)
+	}
+}
+
+func TestShutdownDiagnostics(t *testing.T) {
+	c := &client{ctx: context.Background(), ready: make(chan struct{}), frames: make(chan *model.AudioFrame, 8), ack: make(chan message, 1)}
+	wire := readyMessages + `{"event":"shutdown","duration_ns":1000000000,"disconnect_callback":true,"retained_handles_released":true,"runtime_disposed":true,"overflow":false}` + "\n" + `{"event":"ended","reason":"track_unsubscribed"}` + "\n"
+	if err := c.read(strings.NewReader(wire)); !errors.Is(err, ErrSourceEnded) {
+		t.Fatal(err)
+	}
+	d := c.cleanup
+	if !d.ShutdownSeen || !d.DisconnectCallback || !d.HandlesReleased || !d.RuntimeDisposed || d.CallbackOverflow || d.NativeCleanupMS != 1000 || d.Reaped {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestCleanupDiagnosticsReportsForcedKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "helper")
+	script := "#!/bin/sh\ntrap '' INT\nread config\ncat <<'WIRE'\n" + readyMessages + "WIRE\nwhile :; do read command; done\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, err := launch(ctx, Config{Binary: binary}, func(context.Context, *model.AudioFrame) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.ready:
+	case <-time.After(time.Second):
+		t.Fatal("helper not ready")
+	}
+	cancel()
+	select {
+	case <-c.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("helper was not reaped")
+	}
+	d := c.cleanup
+	if !d.Reaped || !d.KillAttempted || d.ExitCode == 0 || d.ShutdownSeen || d.CleanupMS < 2900 {
+		t.Fatalf("forced kill hidden: %+v", d)
 	}
 }
