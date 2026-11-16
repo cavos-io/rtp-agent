@@ -34,6 +34,7 @@ type message struct {
 
 type client struct {
 	cleanup   Cleanup
+	send      func(context.Context, string, []byte) error
 	killed    atomic.Bool
 	ctx       context.Context
 	cancel    context.CancelCauseFunc
@@ -255,6 +256,9 @@ func (c *client) read(r io.Reader) error {
 // cancellation before submission prevents capture; after submission we settle
 // the ACK before clearing. Missing ACKs abort the helper after the liveness bound.
 func (c *client) command(ctx context.Context, event string, data []byte) error {
+	if c.send != nil {
+		return c.send(ctx, event, data)
+	}
 	c.commandMu.Lock()
 	defer c.commandMu.Unlock()
 	if err := ctx.Err(); err != nil {

@@ -248,3 +248,8 @@ tool (
 	golang.org/x/tools/cmd/deadcode
 	honnef.co/go/tools/cmd/staticcheck
 )
+
+// Isolated opt-in native starter binding; unused by default transport.
+require native-receive-probe v0.0.0
+
+replace native-receive-probe => ./examples/native-receive-probe

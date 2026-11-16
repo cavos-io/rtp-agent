@@ -24,11 +24,19 @@ import (
 type nativeReceiveConfig struct {
 	enabled         bool
 	primary         bool
+	inProcess       bool
 	binary, library string
 }
 
 func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 	var c nativeReceiveConfig
+	switch os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS") {
+	case "", "0":
+	case "1":
+		c.inProcess = true
+	default:
+		return c, errors.New("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS must be 0 or 1")
+	}
 	switch os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM") {
 	case "", "0":
 	case "1":
@@ -38,7 +46,7 @@ func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 	}
 	switch os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE") {
 	case "", "0":
-		if !c.primary {
+		if !c.primary && !c.inProcess {
 			return c, nil
 		}
 	case "1":
@@ -46,10 +54,17 @@ func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 	default:
 		return c, errors.New("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE must be 0 or 1")
 	}
-	if c.primary && c.enabled {
-		return c, errors.New("native room and receive-only modes are mutually exclusive")
+	if (c.primary && c.enabled) || (c.inProcess && (c.primary || c.enabled)) {
+		return c, errors.New("native in-process, room-helper and receive-only modes are mutually exclusive")
 	}
-	for key, dest := range map[string]*string{"RTP_AGENT_NATIVE_HELPER": &c.binary, "LIVEKIT_LIB_PATH": &c.library} {
+	if c.inProcess && !inProcessAvailable {
+		return c, errors.New("in-process native requires building with -tags nativeinprocess")
+	}
+	paths := map[string]*string{"LIVEKIT_LIB_PATH": &c.library}
+	if !c.inProcess {
+		paths["RTP_AGENT_NATIVE_HELPER"] = &c.binary
+	}
+	for key, dest := range paths {
 		value := os.Getenv(key)
 		if value == "" {
 			return c, fmt.Errorf("%s is required for native receive", key)
@@ -74,6 +89,9 @@ func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 }
 
 func startStarterSession(ctx context.Context, job *worker.JobContext, session *agent.AgentSession, server *worker.AgentServer, config nativeReceiveConfig) error {
+	if config.inProcess {
+		return startInProcessSession(ctx, job, session, server, config)
+	}
 	if config.primary {
 		transport := nativeroom.New(job, session, nativeroom.Config{Binary: config.binary, Library: config.library, Participant: os.Getenv("RTP_AGENT_NATIVE_PARTICIPANT")}, server.Options.APIKey, server.Options.APISecret)
 		return job.StartSession(ctx, session, worker.StartSessionOptions{Transport: transport})

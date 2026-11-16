@@ -7,6 +7,7 @@ import (
 )
 
 func TestNativeReceiveOptIn(t *testing.T) {
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS", "0")
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "0")
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "")
 	t.Setenv("RTP_AGENT_NATIVE_HELPER", "does-not-exist")
@@ -40,6 +41,7 @@ func TestNativeReceiveOptIn(t *testing.T) {
 }
 
 func TestNativeRoomOptInExclusive(t *testing.T) {
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS", "0")
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "0")
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "bad")
 	if _, err := nativeReceiveFromEnv(); err == nil {

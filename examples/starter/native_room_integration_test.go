@@ -84,7 +84,13 @@ func runNativePrimaryWithSignalFault(t *testing.T, endings []string, agentURL st
 		t.Fatal(err)
 	}
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "0")
-	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "1")
+	if os.Getenv("NATIVE_TEST_INPROCESS") == "1" {
+		t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "0")
+		t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS", "1")
+	} else {
+		t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "1")
+		t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS", "0")
+	}
 	config, err := nativeReceiveFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +533,11 @@ func runNativePrimaryWithSignalFault(t *testing.T, endings []string, agentURL st
 				t.Fatalf("remaining participants=%d want=%d", len(after.Participants), want)
 			}
 			cleanup, settled := run.job.PrimaryRoomIO().(*nativeroom.Room).CleanupDiagnostics()
-			if !settled || !cleanup.Reaped || cleanup.ExitCode != 0 || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || !cleanup.RuntimeDisposed || cleanup.CallbackOverflow {
+			if config.inProcess {
+				if !settled || cleanup.Mode != "inprocess" || cleanup.Reaped || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || cleanup.RuntimeDisposed {
+					t.Errorf("in-process cleanup failed: settled=%v %+v", settled, cleanup)
+				}
+			} else if !settled || !cleanup.Reaped || cleanup.ExitCode != 0 || cleanup.KillAttempted || !cleanup.ShutdownSeen || !cleanup.DisconnectCallback || !cleanup.HandlesReleased || !cleanup.RuntimeDisposed || cleanup.CallbackOverflow {
 				t.Errorf("helper cleanup failed: settled=%v %+v", settled, cleanup)
 			}
 			metrics := map[string]any{"full_restart_recovery_contract": recovery, "signaling_recovery_ms": reconnectMS, "false_recovery_ms": recoveryMS, "helper_cleanup": cleanup, "continuity_windows": windows, "input_pcm_seconds": pcm, "wall_seconds": wall.Seconds(), "max_input_gap_ms": float64(gap.Load()) / 1e6, "output_990_frames": tone990.Load(), "output_1320_frames": tone1320.Load(), "participants_during": 2, "participants_after": len(after.Participants), "cleanup_ms": float64(time.Since(stop)) / 1e6}

@@ -17,10 +17,11 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
-// Room owns one helper and uses the worker-assigned primary token. It never
+// Room owns one native connection and uses the worker-assigned primary token. It never
 // connects the prepared Pion room or creates a second agent identity.
 type Room struct {
 	continuity        continuity
+	connect           func(context.Context, Config, func(context.Context, *model.AudioFrame)) (*client, error)
 	mu                sync.Mutex
 	closed            bool
 	cancel            context.CancelFunc
@@ -107,7 +108,11 @@ func (r *Room) Start(ctx context.Context) error {
 		}
 	}
 	r.continuity.started = time.Now()
-	child, err := launch(ctx, cfg, func(c context.Context, f *model.AudioFrame) {
+	connect := r.connect
+	if connect == nil {
+		connect = launch
+	}
+	child, err := connect(ctx, cfg, func(c context.Context, f *model.AudioFrame) {
 		r.continuity.frame(time.Now(), f.SamplesPerChannel)
 		r.samples.Add(uint64(f.SamplesPerChannel))
 		if !r.Session.InputAudioMuted() {
@@ -143,7 +148,7 @@ func (r *Room) Start(ctx context.Context) error {
 		r.Close()
 		return err
 	}
-	logger.Logger.Infow("experimental native primary room enabled", "participant", cfg.Participant, "track", cfg.TrackSID, "identity", info.AgentIdentity, "sample_rate", 24000)
+	logger.Logger.Infow("experimental native primary room enabled", "in_process", child.cleanup.Mode == "inprocess", "participant", cfg.Participant, "track", cfg.TrackSID, "identity", info.AgentIdentity, "sample_rate", 24000)
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -157,7 +162,11 @@ func (r *Room) Start(ctx context.Context) error {
 			}
 		}
 		logger.Logger.Infow("experimental native primary PCM final", "continuity", r.continuity.snapshot(time.Now()))
-		logger.Logger.Infow("experimental native primary helper cleanup", "cleanup", child.cleanup)
+		if child.cleanup.Mode == "inprocess" {
+			logger.Logger.Infow("experimental native in-process cleanup", "cleanup", child.cleanup)
+		} else {
+			logger.Logger.Infow("experimental native primary helper cleanup", "cleanup", child.cleanup)
+		}
 		// An explicit source departure is normal; unexpected EOF and nonzero exits
 		// remain failures, including errors reported during native resource cleanup.
 		if errors.Is(child.err, ErrSourceEnded) {

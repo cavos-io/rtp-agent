@@ -1,0 +1,28 @@
+#include "bridge.h"
+#include <dlfcn.h>
+#include <time.h>
+extern void nipEvent(uint8_t*, size_t);
+static void* library;
+static void (*initialize)(void (*)(const uint8_t*,size_t),bool,const char*,const char*);
+static uint64_t (*request)(const uint8_t*,size_t,const uint8_t**,size_t*);
+static bool (*drop)(uint64_t);
+static void (*dispose)(void);
+static void callback(const uint8_t* p,size_t n) { nipEvent((uint8_t*)p,n); }
+const char* nip_load(const char* path) {
+ // The artifact is process-scoped; do not increment dlopen references per room.
+ if (library) return initialize && request && drop && dispose ? NULL : "missing required FFI symbols";
+ library=dlopen(path,RTLD_NOW|RTLD_LOCAL);
+ if(!library) return dlerror();
+ initialize=dlsym(library,"livekit_ffi_initialize");
+ request=dlsym(library,"livekit_ffi_request");
+ drop=dlsym(library,"livekit_ffi_drop_handle");
+ dispose=dlsym(library,"livekit_ffi_dispose");
+ if(!initialize||!request||!drop||!dispose) return "missing required FFI symbols";
+ return NULL;
+}
+void nip_init(void) { initialize(callback,false,"go-inprocess-prototype","0.1.0"); }
+uint64_t nip_request(const uint8_t* p,size_t n,const uint8_t** r,size_t* rn) {return request(p,n,r,rn);}
+bool nip_drop(uint64_t h){return drop(h);}
+void nip_dispose(void){dispose();} // Keep library loaded until process exit: no callback into unloaded code.
+int64_t nip_now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (int64_t)t.tv_sec*1000000000+t.tv_nsec;}
+void* nip_pointer(uint64_t p){return (void*)(uintptr_t)p;}

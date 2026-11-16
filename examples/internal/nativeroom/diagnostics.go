@@ -53,9 +53,11 @@ func (d *continuity) snapshot(now time.Time) Continuity {
 	return s
 }
 
-// Cleanup is published only after the child has been waited and the PCM
-// consumer has stopped. Native shutdown flags are reported by the helper.
+// Cleanup is published after connection teardown and PCM-consumer shutdown.
+// Helper mode reports child/native shutdown flags. In-process mode never sets
+// Reaped or RuntimeDisposed: global disposal belongs to worker shutdown.
 type Cleanup struct {
+	Mode               string  `json:"mode,omitempty"`
 	NativeCleanupMS    float64 `json:"native_cleanup_ms"`
 	PID                int     `json:"pid"`
 	Reaped             bool    `json:"reaped"`

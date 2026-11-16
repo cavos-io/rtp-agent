@@ -127,5 +127,6 @@ func main() {
 		os.Exit(1)
 	}
 
+	defer closeInProcessRuntime()
 	cli.RunAppWithOptions(server, cli.WithLogger(zapLogger))
 }
