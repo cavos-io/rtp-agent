@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
 	"github.com/cavos-io/rtp-agent/examples/starter/internal/nativereceive"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
@@ -22,18 +23,31 @@ import (
 
 type nativeReceiveConfig struct {
 	enabled         bool
+	primary         bool
 	binary, library string
 }
 
 func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 	var c nativeReceiveConfig
+	switch os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM") {
+	case "", "0":
+	case "1":
+		c.primary = true
+	default:
+		return c, errors.New("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM must be 0 or 1")
+	}
 	switch os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE") {
 	case "", "0":
-		return c, nil
+		if !c.primary {
+			return c, nil
+		}
 	case "1":
 		c.enabled = true
 	default:
 		return c, errors.New("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE must be 0 or 1")
+	}
+	if c.primary && c.enabled {
+		return c, errors.New("native room and receive-only modes are mutually exclusive")
 	}
 	for key, dest := range map[string]*string{"RTP_AGENT_NATIVE_HELPER": &c.binary, "LIVEKIT_LIB_PATH": &c.library} {
 		value := os.Getenv(key)
@@ -60,6 +74,10 @@ func nativeReceiveFromEnv() (nativeReceiveConfig, error) {
 }
 
 func startStarterSession(ctx context.Context, job *worker.JobContext, session *agent.AgentSession, server *worker.AgentServer, config nativeReceiveConfig) error {
+	if config.primary {
+		transport := nativeroom.New(job, session, nativeroom.Config{Binary: config.binary, Library: config.library, Participant: os.Getenv("RTP_AGENT_NATIVE_PARTICIPANT")}, server.Options.APIKey, server.Options.APISecret)
+		return job.StartSession(ctx, session, worker.StartSessionOptions{Transport: transport})
+	}
 	if !config.enabled {
 		return job.StartSession(ctx, session)
 	}

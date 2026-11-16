@@ -1,5 +1,7 @@
 # Experimental native audio receive for agent-starter-go
 
+For the separate opt-in **two-participant** input/output path, see [NATIVE_ROOM.md](NATIVE_ROOM.md).
+
 Opt-in only. The starter keeps its Pion worker/room connection and audio output,
 but receives caller PCM from the pinned LiveKit native engine in a Go helper
 process. The helper joins as a hidden, receive-only agent participant. This adds

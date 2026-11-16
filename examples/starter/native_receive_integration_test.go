@@ -35,6 +35,7 @@ func runStarterReceiveLocal(t *testing.T, modes []string) {
 		t.Fatal("NATIVE_TEST_URL required; local test server only")
 	}
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "1")
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "0")
 	config, err := nativeReceiveFromEnv()
 	if err != nil {
 		t.Fatal(err)

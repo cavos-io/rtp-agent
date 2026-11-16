@@ -1,5 +1,10 @@
 # Single native room: isolated bidirectional prototype
 
+This document preserves the original prototype evidence. The subsequent opt-in
+primary starter integration is documented in [NATIVE_ROOM.md](../starter/NATIVE_ROOM.md).
+The current duplex protocol is v2 (1..1200 output samples); historical trials
+below used v1 (exactly1200 samples). Ordinary receive-only helper mode is unchanged.
+
 **Feasible and locally demonstrated: caller plus one native agent participant.**
 The Go parent consumes received PCM and supplies outgoing PCM over pipes. The
 helper owns one LiveKit native room, its receive stream, local audio source and

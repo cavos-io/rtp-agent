@@ -7,6 +7,7 @@ import (
 )
 
 func TestNativeReceiveOptIn(t *testing.T) {
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "0")
 	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "")
 	t.Setenv("RTP_AGENT_NATIVE_HELPER", "does-not-exist")
 	t.Setenv("LIVEKIT_LIB_PATH", "does-not-exist")
@@ -35,5 +36,32 @@ func TestNativeReceiveOptIn(t *testing.T) {
 	t.Setenv("LIVEKIT_LIB_PATH", library)
 	if c, err := nativeReceiveFromEnv(); err != nil || !c.enabled {
 		t.Fatalf("opt-in rejected: %+v %v", c, err)
+	}
+}
+
+func TestNativeRoomOptInExclusive(t *testing.T) {
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "0")
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "bad")
+	if _, err := nativeReceiveFromEnv(); err == nil {
+		t.Fatal("invalid primary flag accepted")
+	}
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM", "1")
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "helper")
+	library := filepath.Join(dir, "library")
+	if err := os.WriteFile(binary, nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(library, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RTP_AGENT_NATIVE_HELPER", binary)
+	t.Setenv("LIVEKIT_LIB_PATH", library)
+	if cfg, err := nativeReceiveFromEnv(); err != nil || !cfg.primary || cfg.enabled {
+		t.Fatal(cfg, err)
+	}
+	t.Setenv("RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE", "1")
+	if _, err := nativeReceiveFromEnv(); err == nil {
+		t.Fatal("conflicting modes accepted")
 	}
 }

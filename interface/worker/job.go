@@ -262,6 +262,7 @@ type JobContext struct {
 	roomOnce               sync.Once
 	preparedRoom           *SDKRoom
 	roomConnected          atomic.Bool
+	customRoomTransport    atomic.Bool
 
 	api       *JobAPI
 	apiKey    string
@@ -583,6 +584,9 @@ var jobContextNewRoom = livekitNewJobContextRoom
 var jobContextRoomConnector RoomConnector
 
 type StartSessionOptions struct {
+	// Transport replaces room/media ownership when explicitly supplied. Nil keeps
+	// the standard LiveKit/Pion path. The transport owns its connection and I/O.
+	Transport      SessionRoomIO
 	RoomOptions    RoomOptions
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
@@ -704,6 +708,9 @@ func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...C
 }
 
 func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, options ...ConnectOptions) error {
+	if c != nil && c.customRoomTransport.Load() {
+		return fmt.Errorf("room connection is owned by the custom session transport")
+	}
 	if !c.roomNeedsConnect() {
 		return nil
 	}
@@ -786,6 +793,30 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			operationCtx = c.observability.Context(operationCtx)
 		}
 		ctx := trace.ContextWithSpan(operationCtx, trace.SpanFromContext(startupCtx))
+		if transport := opts.Transport; transport != nil {
+			if c.roomConnected.Load() {
+				return fmt.Errorf("custom session transport requires an unconnected job room")
+			}
+			session.Room = nil
+			c.customRoomTransport.Store(true)
+			c.SetPrimaryRoomIO(transport)
+			if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+				if err := transport.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+					_ = transport.Close()
+					return err
+				}
+			}
+			session.AddPreCloseCallback(func() {
+				if err := transport.StopRecorder(); err != nil {
+					logger.Logger.Errorw("failed to finalize session recording", err)
+				}
+			})
+			if err := transport.Start(ctx); err != nil {
+				_ = transport.Close()
+				return err
+			}
+			return nil
+		}
 		roomOptions := opts.RoomOptions
 		if roomOptions.DeleteRoom == nil {
 			roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {

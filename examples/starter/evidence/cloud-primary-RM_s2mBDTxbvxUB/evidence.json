@@ -1,0 +1,18 @@
+{
+  "observability.zip": {
+    "sha256": "4b0bfda64672e6574ad9fa440226e987ef47a7e67f3b4e607cded715df2ee775",
+    "bytes": 1373187
+  },
+  "session_report.json": {
+    "sha256": "aeff674e585b66a2fabdb9b127715f89e4af34744b7b857f2e84009e8d4a8225",
+    "bytes": 189482
+  },
+  "session.log": {
+    "sha256": "a443d79c2b4564c42fe2edadeb6d0b397877ec1e5528f5f6774fcce5af552924",
+    "bytes": 33858
+  },
+  "participants.png": {
+    "sha256": "bd4fcb8a6381fd5017593fefc2828cf5dbc546712c513475829240a09f8fd016",
+    "bytes": 145965
+  }
+}

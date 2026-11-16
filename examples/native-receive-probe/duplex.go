@@ -69,8 +69,8 @@ func (d *duplexOutput) connect(local uint64) error {
 func validateDuplexCommand(c duplexCommand) error {
 	switch c.Event {
 	case "capture":
-		if len(c.Data) != 2400 {
-			return errors.New("capture requires 50ms 24kHz mono PCM16")
+		if len(c.Data) == 0 || len(c.Data) > 2400 || len(c.Data)%2 != 0 {
+			return errors.New("capture requires 1..1200 samples of 24kHz mono PCM16")
 		}
 	case "clear", "stop":
 		if len(c.Data) != 0 {
@@ -120,7 +120,7 @@ func (d *duplexOutput) command(c duplexCommand) (bool, error) {
 		p := C.CBytes(c.Data)
 		// Pinned FFI capture_frame copies with to_vec() before returning the request.
 		defer C.free(p)
-		_, err := request(&pb.FfiRequest{Message: &pb.FfiRequest_CaptureAudioFrame{CaptureAudioFrame: &pb.CaptureAudioFrameRequest{SourceHandle: proto.Uint64(d.source), RequestAsyncId: proto.Uint64(c.ID), Buffer: &pb.AudioFrameBufferInfo{DataPtr: proto.Uint64(uint64(uintptr(unsafe.Pointer(p)))), SampleRate: proto.Uint32(24000), NumChannels: proto.Uint32(1), SamplesPerChannel: proto.Uint32(1200)}}}})
+		_, err := request(&pb.FfiRequest{Message: &pb.FfiRequest_CaptureAudioFrame{CaptureAudioFrame: &pb.CaptureAudioFrameRequest{SourceHandle: proto.Uint64(d.source), RequestAsyncId: proto.Uint64(c.ID), Buffer: &pb.AudioFrameBufferInfo{DataPtr: proto.Uint64(uint64(uintptr(unsafe.Pointer(p)))), SampleRate: proto.Uint32(24000), NumChannels: proto.Uint32(1), SamplesPerChannel: proto.Uint32(uint32(len(c.Data) / 2))}}}})
 		if err != nil {
 			return false, err
 		}
@@ -183,6 +183,6 @@ func runDuplexHelper(ctx context.Context) error {
 	}()
 	sink := &helperSink{participant: config.Participant, trackSID: config.TrackSID, encoder: json.NewEncoder(os.Stdout)}
 	sink.duplex = &duplexOutput{commands: commands, sink: sink, pending: make(map[uint64]bool)}
-	sink.event(map[string]any{"event": "duplex_protocol", "version": 1})
+	sink.event(map[string]any{"event": "duplex_protocol", "version": 2})
 	return sink.finish(nativeReceive(runCtx, config.URL, config.Token, sink))
 }

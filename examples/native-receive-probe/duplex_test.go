@@ -5,6 +5,7 @@ import "testing"
 func TestDuplexProtocolValidation(t *testing.T) {
 	for _, c := range []duplexCommand{
 		{Event: "capture", ID: 1000, Data: make([]byte, 2400)},
+		{Event: "capture", ID: 1000, Data: make([]byte, 2)},
 		{Event: "clear", ID: 1001}, {Event: "stop", ID: 1002},
 	} {
 		if err := validateDuplexCommand(c); err != nil {
@@ -13,6 +14,8 @@ func TestDuplexProtocolValidation(t *testing.T) {
 	}
 	for _, c := range []duplexCommand{
 		{Event: "capture", ID: 1000, Data: make([]byte, 2399)},
+		{Event: "capture", ID: 1000},
+		{Event: "capture", ID: 1000, Data: make([]byte, 2402)},
 		{Event: "clear", ID: 1001, Data: []byte{1}},
 		{Event: "unknown", ID: 1000}, {Event: "stop", ID: 3},
 	} {
