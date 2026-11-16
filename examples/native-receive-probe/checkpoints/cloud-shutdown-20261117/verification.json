@@ -1,0 +1,39 @@
+{
+  "verified_prior_files": 3441,
+  "previous_cloud_archives_verified": [
+    "RM_Bey97Q99oiWs",
+    "RM_9gJhyMGhpXrc"
+  ],
+  "shutdown_spans": [
+    {
+      "name": "session_close",
+      "status": {},
+      "start_ns": "1794872890027350000",
+      "end_ns": "1794872893464807000"
+    },
+    {
+      "name": "drain_agent_activity",
+      "status": {},
+      "start_ns": "1794872892028639000",
+      "end_ns": "1794872892028702000"
+    }
+  ],
+  "zero_audio_tts_followup": [
+    {
+      "name": "tts_request",
+      "span_id": "ZlNg2bw9FrQ=",
+      "parent_span_id": "NQEGoOgplwk=",
+      "start_ns": "1794872863241590000",
+      "end_ns": "1794872863669098000",
+      "error": "no audio frames were pushed; transcript omitted"
+    },
+    {
+      "name": "tts_request_run",
+      "span_id": "8vYlVsGv1cE=",
+      "parent_span_id": "ZlNg2bw9FrQ=",
+      "start_ns": "1794872863241603000",
+      "end_ns": "1794872863669082000",
+      "error": "no audio frames were pushed; transcript omitted"
+    }
+  ]
+}
