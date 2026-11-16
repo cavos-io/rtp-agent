@@ -5,7 +5,7 @@ import (
 	"errors"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 	"sync"
 	"sync/atomic"
 	"testing"

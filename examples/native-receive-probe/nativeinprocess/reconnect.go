@@ -2,7 +2,7 @@ package nativeinprocess
 
 import (
 	"fmt"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 	"time"
 )
 

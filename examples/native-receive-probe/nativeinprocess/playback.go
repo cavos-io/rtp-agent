@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 )
 
 // Pause waits for an in-flight capture acknowledgement, then clears the native

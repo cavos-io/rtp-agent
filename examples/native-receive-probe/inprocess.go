@@ -15,7 +15,7 @@ import (
 	"unsafe"
 
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 )
 
 // Experimental single-owner dispatcher. Native rooms run concurrently; only

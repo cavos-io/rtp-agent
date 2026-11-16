@@ -1,6 +1,6 @@
 package main
 
-import pb "native-receive-probe/internal/ffipb"
+import pb "native-receive-probe/ffipb"
 
 // Native full restart removes remote participants and subscriptions before
 // reconnecting. Only that bounded lifecycle transition may retire the old sink

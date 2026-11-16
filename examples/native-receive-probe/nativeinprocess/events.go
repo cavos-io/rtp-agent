@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 )
 
 func (r *Runtime) dispatch(raw callbackEvent) (err error) {

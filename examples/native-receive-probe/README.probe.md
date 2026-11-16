@@ -17,7 +17,7 @@ GOCACHE="$PWD/.cache/go-build" go test -race ./...
 
 Use a new result directory for each run. `run.py` starts a loopback-only server on 18991, TCP media on 18992, and UDP media ports 19000–19100. It creates disposable local credentials and unique rooms. No provider adapters or paid APIs run. It signals and waits for its own subprocesses on exit. Sandbox execution needs permission to bind local sockets.
 
-`setup.sh` checks archive digests, generates upstream protobuf definitions into ignored `internal/ffipb`, installs a local Python environment, builds `probe`, and prepares speech PCM. Dependencies live in this nested module; the parent module is used only for `core/audio/model.AudioFrame`.
+`setup.sh` checks archive digests, regenerates the checked-in upstream protobuf definitions in `ffipb`, installs a local Python environment, builds `probe`, and prepares speech PCM. Dependencies live in this nested module; the parent module is used only for `core/audio/model.AudioFrame`.
 
 The speech fixture comes from `github.com/hraban/opus` at `c76ea7e21bf3`, `testdata/speech_8.wav` (10.8 seconds), looped and converted to 20 seconds of mono 48kHz PCM16 with FFmpeg. No fixture audio is redistributed in this experiment. Preserve upstream licensing when redistributing fixtures. Each content second starts with a distinct 250ms tone marker; remaining content is speech. Loss is injected at 24.5–25s, outside markers.
 
@@ -89,3 +89,5 @@ The runner now waits for both native track subscriptions before sending fixture 
 Post-stall native-buffer and PCM-marker recovery measurements from the preserved barrier captures are documented in [RECOVERY.md](RECOVERY.md), including unconfirmed recovery bounds.
 
 The optional `-mode helper` serves live PCM to the starter over a local pipe, reusing the same native receive engine. See [starter integration commands and limitations](../starter/NATIVE_RECEIVE.md). Normal probe modes and existing evidence remain separate.
+
+The agent and helper now build directly with Go using checked-in `ffipb` sources. `setup.sh` is optional for full probe experiments, not an application build prerequisite.

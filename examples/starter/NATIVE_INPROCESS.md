@@ -7,20 +7,18 @@ Neither the default Pion path nor the helper fallback is replaced.
 
 ## Build and cloud test
 
-From the repository root, using the already installed dependencies and the
-pinned probe cache/generated schema:
+From the repository root, using normal Go/CGO and the existing agent system dependencies. The pinned FFI Go bindings are included in source; no probe setup, Python, protoc or downloaded SDK source is needed to build.
 
 ```sh
-export GOCACHE="$PWD/examples/native-receive-probe/.cache/go-build"
 go build -tags nativeinprocess \
-  -o examples/native-receive-probe/.cache/agent-starter-go-inprocess ./examples/starter
+  -o agent-starter-go ./examples/starter
 
 export LIVEKIT_AGENT_NAME=agent-starter-go
 export RTP_AGENT_EXPERIMENTAL_NATIVE_RECEIVE=0
 export RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM=0
 export RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS=1
-export LIVEKIT_LIB_PATH="$PWD/examples/native-receive-probe/.cache/native/liblivekit_ffi.dylib"
-examples/native-receive-probe/.cache/agent-starter-go-inprocess start
+export LIVEKIT_LIB_PATH="/absolute/path/to/liblivekit_ffi.dylib"
+./agent-starter-go start
 ```
 
 In another terminal configured for the same LiveKit deployment:
@@ -40,13 +38,13 @@ still apply. No paid provider test was run here. This checkpoint includes `examp
 workspace also has equivalent opt-in wiring. Run the whole example package,
 not its main.go file alone.
 
-Fresh-checkout builds still require the pinned schema/native artifacts prepared
-by `examples/native-receive-probe/setup.sh`; review its prerequisites/downloads
-first. No system dependencies were installed during this change. The root
-`go.mod` has a local replacement for the isolated probe module; that directory
-must accompany this experimental build. The default starter dependency graph
-was checked to exclude the in-process FFI package. Existing helper packaging
-scripts still build the helper-based variant, not this tagged binary.
+The root `go.mod` resolves the experimental wrapper from the included nested Go
+module. Keep that source directory in the checkout; its `.cache`, generated
+`internal` directory and Python environment are not build prerequisites.
+The library is loaded at runtime; it is not needed for compilation or linking.
+See [normal build and library installation](packaging/INPROCESS.md) for the
+pinned macOS arm64 download and helper rollback commands. The default starter
+dependency graph excludes the in-process FFI package.
 
 ## Playback and lifecycle integration
 

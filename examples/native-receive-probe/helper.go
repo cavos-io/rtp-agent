@@ -9,7 +9,7 @@ import (
 	"time"
 
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 )
 
 var errPublisherDisconnected = errors.New("publisher disconnected")

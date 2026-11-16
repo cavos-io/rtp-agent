@@ -16,7 +16,7 @@ import (
 	"unsafe"
 
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 )
 
 // Explicit prototype protocol. The ordinary receive-only helper never enables it.

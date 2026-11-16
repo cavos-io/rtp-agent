@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 	"testing"
 )
 

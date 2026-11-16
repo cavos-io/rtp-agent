@@ -1,0 +1,53 @@
+{
+  "date": "2026-11-16",
+  "platform": "macOS arm64",
+  "clean_source_copy": "/private/tmp/rtp-normal-go-source-20261116",
+  "copy_excluded": [
+    "probe .cache",
+    "probe internal",
+    "native library",
+    "Python virtualenv",
+    ".env",
+    ".git"
+  ],
+  "go_cache_note": "Existing Go module/build caches and installed CGO system dependencies reused; GOPROXY=off and GOWORK=off. No probe setup or code generation executed in the clean copy.",
+  "builds": {
+    "default_starter": "passed",
+    "nativeinprocess_starter": "passed",
+    "helper": "passed"
+  },
+  "checks": {
+    "native_wrapper_race": "passed",
+    "helper_protocol_tests": "passed",
+    "default_starter_and_helper_race": "passed on sequential retry",
+    "tagged_starter_and_helper_race": "passed",
+    "forced_kill_regression": "5 sequential repetitions passed",
+    "architecture": "passed",
+    "tagged_vet": "passed",
+    "default_graph": "excludes native wrapper"
+  },
+  "preserved_failure": "initial-default-tests.log: existing TestCleanupDiagnosticsReportsForcedKill hit one-second helper readiness timeout during concurrent builds; no test or transport change made, precise cause not proven",
+  "prior_artifacts_unchanged": 3441,
+  "generated_bindings_identical_to_previous_cache": true,
+  "bindings": {
+    "examples/native-receive-probe/ffipb/rpc.pb.go": "3282d99ac785c0a7e38e80e9726d39fa02ed0d35dde7355ebd365e24f6f14311",
+    "examples/native-receive-probe/ffipb/data_track.pb.go": "cc6e05197ee732de0d2611bcc558c9c22e063106094753715d83b5465e6d1775",
+    "examples/native-receive-probe/ffipb/e2ee.pb.go": "9dfe99002469a4a25f09b72c733c5198cd9c848d9e4d4dde9747910b371f8a8a",
+    "examples/native-receive-probe/ffipb/participant.pb.go": "3ff15f22ba8d15499aa75d6aa8f69ee46edbe709dc242f01c55e94549bd577c9",
+    "examples/native-receive-probe/ffipb/stats.pb.go": "a8925808d5c8c550d714e838e5ac59c171805e84df54f8112d5cf2107204128a",
+    "examples/native-receive-probe/ffipb/handle.pb.go": "ad4f3a1f47d94fdbc24d5646049814ee6f667928e51e3c8eff0eada98a55e5f1",
+    "examples/native-receive-probe/ffipb/video_frame.pb.go": "239ed1116d39836a30a45145f9202007cf3c14e717c2c50ac59b6f0343a9fdb5",
+    "examples/native-receive-probe/ffipb/track_publication.pb.go": "f31b0ccd1adb6ab8072808127c287954cd499ac56851061aae491d1c39eb6240",
+    "examples/native-receive-probe/ffipb/capture.pb.go": "fc81c242dec32936ffbfa92116900ac4124f15a4d4f5321c3eaa86c14116858a",
+    "examples/native-receive-probe/ffipb/track.pb.go": "b62ad78ccd0630baf267cb110559acbbd00c4f85cd56979cf347261f5b4af379",
+    "examples/native-receive-probe/ffipb/audio_frame.pb.go": "871771cc2b9bcb4156b8fc0c80893d8c5558d2b63d3024047fdbcfd0ff7d9bd3",
+    "examples/native-receive-probe/ffipb/room.pb.go": "af390cf530b78b5d6402d551c3d307b54037fc2684173a908d269904361d85e5",
+    "examples/native-receive-probe/ffipb/data_stream.pb.go": "58d3c703f905a5170fcccda76cf96a52e0c8d0e598ecafca335efdd0647d34d4",
+    "examples/native-receive-probe/ffipb/ffi.pb.go": "0b96a5c2f4d76efe29444daf388f239ad5bac16b6f196b40105bbd7dc9b7c59a"
+  },
+  "binaries": {
+    "/private/tmp/rtp-normal-go-default": "1f89ab42267e8011ee86bdd71a5aa593fbda957f7c69e8e3f0b3cc7b72284f5e",
+    "/private/tmp/rtp-normal-go-native": "31c62f27d57ac79ab07c2d6df1b0e8157b5ca61a8edd1b64c976e7ea71a2914a",
+    "/private/tmp/rtp-normal-go-helper": "a38eb635c59f676e874093e80dc947bd46c6a7c920d7266ad0f78af2f2106455"
+  }
+}

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	pb "native-receive-probe/internal/ffipb"
+	pb "native-receive-probe/ffipb"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"

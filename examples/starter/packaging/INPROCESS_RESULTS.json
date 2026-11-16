@@ -1,0 +1,406 @@
+{
+  "platform": "macOS arm64",
+  "relocated_bundle": "/private/tmp/rtp-inprocess-deploy-20261116",
+  "archive": "examples/native-receive-probe/.cache/bundles/inprocess-macos-arm64-20261116.tar.gz",
+  "archive_sha256": "0b6516fd75d35bcebaa7f3ac63e63fc42c66dc72210f38b05061ea07e7b9254d",
+  "preserved_prior_files": 3417,
+  "native": {
+    "session-close": {
+      "cleanup_ms": 2009.747666,
+      "continuity_windows": [
+        {
+          "energy": 1182705431651,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000174583
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.00022425
+        },
+        {
+          "energy": 53846494248,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.999952875
+        },
+        {
+          "energy": 1150110277850,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999822834
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 1.000106375
+        },
+        {
+          "energy": 1204296744650,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 0.999939125
+        },
+        {
+          "energy": 1204298117687,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 1.000168666
+        },
+        {
+          "energy": 1204298923521,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 0.999938084
+        },
+        {
+          "energy": 1204297820883,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 0.999861666
+        },
+        {
+          "energy": 1204296079314,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 1.000091667
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 5608,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 3.700792,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 22.06,
+      "output_1320_frames": 51,
+      "output_990_frames": 51,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000298708
+    },
+    "false-recovery": {
+      "cleanup_ms": 2042.205917,
+      "continuity_windows": [
+        {
+          "energy": 1182705431651,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000182291
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000025334
+        },
+        {
+          "energy": 53846494248,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.999980708
+        },
+        {
+          "energy": 1150110277850,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999911583
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 1.00009475
+        },
+        {
+          "energy": 1204296744650,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 1.000024375
+        },
+        {
+          "energy": 1204298117687,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 0.999836042
+        },
+        {
+          "energy": 1204298923521,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 1.000065208
+        },
+        {
+          "energy": 1204297820883,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 1.000108375
+        },
+        {
+          "energy": 1204296079314,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 0.999824584
+        }
+      ],
+      "false_recovery_ms": 2000.42825,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 5608,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 2.219958,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 25.185,
+      "output_1320_frames": 54,
+      "output_990_frames": 51,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000077958
+    },
+    "publisher-disconnect": {
+      "cleanup_ms": 2037.046625,
+      "continuity_windows": [
+        {
+          "energy": 1194640794036,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000016125
+        },
+        {
+          "energy": 1204333099200,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000253667
+        },
+        {
+          "energy": 45523788202,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.99994125
+        },
+        {
+          "energy": 1158399092388,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999816958
+        },
+        {
+          "energy": 1204330660948,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 1.000192167
+        },
+        {
+          "energy": 1204299056468,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 0.999912917
+        },
+        {
+          "energy": 1204263689405,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 0.999937125
+        },
+        {
+          "energy": 1204334450042,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 1.000000125
+        },
+        {
+          "energy": 1204296668092,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 1.000135083
+        },
+        {
+          "energy": 1204262723888,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 0.999914083
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 5608,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 0.048291,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 26.383,
+      "output_1320_frames": 51,
+      "output_990_frames": 51,
+      "participants_after": 0,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000164459
+    }
+  },
+  "helper": {
+    "session-close": {
+      "cleanup_ms": 2035.213791,
+      "continuity_windows": [
+        {
+          "energy": 1158732344523,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000184375
+        },
+        {
+          "energy": 1204341692726,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000087125
+        },
+        {
+          "energy": 77775060074,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 1.000412542
+        },
+        {
+          "energy": 1126122090472,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 0.999653042
+        },
+        {
+          "energy": 1204371527423,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 1.000126375
+        },
+        {
+          "energy": 1204224784569,
+          "pcm_seconds": 1,
+          "second": 6,
+          "wall_seconds": 0.999748166
+        },
+        {
+          "energy": 1204297845963,
+          "pcm_seconds": 1,
+          "second": 7,
+          "wall_seconds": 1.000018042
+        },
+        {
+          "energy": 1204374943052,
+          "pcm_seconds": 1,
+          "second": 8,
+          "wall_seconds": 0.999849333
+        },
+        {
+          "energy": 1204221956870,
+          "pcm_seconds": 1,
+          "second": 9,
+          "wall_seconds": 1.000383209
+        },
+        {
+          "energy": 1204296964484,
+          "pcm_seconds": 1,
+          "second": 10,
+          "wall_seconds": 0.99955025
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "native_cleanup_ms": 3.82,
+        "pid": 5773,
+        "reaped": true,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 10.345708,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": true,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 10,
+      "max_input_gap_ms": 58.99,
+      "output_1320_frames": 51,
+      "output_990_frames": 51,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 10.000096084
+    }
+  },
+  "checks": {
+    "offline": "passed hashes, signatures, arm64 slices, dependency closure, FFI symbols",
+    "native_transport": "passed standalone race-instrumented starter executable outside checkout, sanitized environment",
+    "helper_transport": "passed same packaged test executable with bundled helper",
+    "cli": "release executable printed usage, exit 1; no provider-backed startup claim",
+    "regressions": "two packaging parser tests passed"
+  },
+  "limitations": [
+    "same host relocation, not clean host certification",
+    "ONNX/models/credentials not bundled",
+    "ad-hoc signing, not notarized",
+    "native test binary is separate from release starter",
+    "full provider-backed cloud worker not tested"
+  ],
+  "artifacts": {
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/verify.log": "809cfe1e0253ded9c0f003351a4adc7d3882b37bcc72b67c2c0cbc0fa400265d",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/transport.log": "74108c7a926701f71864dbe41d56bf4e25bf7f1dbc68087e9884caf33b388e33",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/prior-results-sha256.json": "ed1b8b4b2aaf007d5c3d0665010822952a34593efbf9e543d022fc04df352043",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/build-v2.log": "fea915374a770ce20f9124fc8409b5e30f775aff8432fd52a84246d2d12a0d21",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/helper.log": "58badd67dfb9efafaa59bb4ac9d86ebdaa0e0c7ba5102b262bc68945f620b59b",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/cli-model.log": "c64e0d32935227028e2483473403651a6f5b32fe03bbd04e5c5c5ce22e6312d7",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/verify-arm64.log": "9058860ae4b7eccfcbb2e24803958ce70f2b55401336b00b0f85c35797ef6b5b",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/cli.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/bundle-manifest.json": "ee7a9ddfe29c720b66198490d33b5cac87cc4a54c5a4a1562dcc923e16778018",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/server.log": "29e42174a2b0b5ee05c83203e0710ec26e359382af9e19cfb59d21e39ee9565e",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/cli-local-config.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/build.log": "8917d95f75893a667cc606ffa78b6712efc286be4e4bc240575a0dbd68945cd5",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/session-close/summary.json": "1360e3b3e3cb03d0faee4fefc1da697b7df550be49e3248965ff3471488f9a9d",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/session-close/session_report.json": "82edcce0c9e55c8ace1510fff515d6fa5f87c2386262f108995662d9eb3569f6",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/session-close/audio.ogg": "3142eb83002a531e3f286b7e17b823121e036457f47fecdcdbba0a0ecf307853",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/false-recovery/summary.json": "313b587c48a131f4f28a315afebc6cfd5cdd9b32e30638a8f986cb92e5e8e944",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/false-recovery/session_report.json": "f8c35f28889c52d6abdc3e78a2aa9a4fd9dadba15f9ae4ef06c7615157d05f66",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/false-recovery/audio.ogg": "3b522b9469b26dcf959ed920d8264bb0560c5861cabc85ee79d1fa2e9b3c00b2",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/publisher-disconnect/summary.json": "da7a137bad8d330aee70151f61803423eb2c723f3dcae967ee3752f4efb41a89",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/publisher-disconnect/session_report.json": "b8afad4b916b50540f4b1f4c9bc03514220d9d85c2cb83d40c4747de155a3b09",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/native-results/publisher-disconnect/audio.ogg": "85b78b7a56ae5c986d549ea9cbfab81b5b8617dd30adebcd71089465e577c892",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/helper-results/session-close/summary.json": "de52a77a7f672b60ac669a945bbb076f911a789a9f226bc482ade87711268854",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/helper-results/session-close/session_report.json": "6517600ce71cce93e93bd99d5a9dc6ee31e87ca4a3489e1d5cb6f94f8f7e0c45",
+    "examples/native-receive-probe/results/inprocess-packaging-20261116/helper-results/session-close/audio.ogg": "be4d26e2aad3e69ef98b415fe9eece062d827e71df2427ba5d68abda2a667fd4"
+  }
+}
