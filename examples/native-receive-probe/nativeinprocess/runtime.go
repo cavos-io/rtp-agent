@@ -35,6 +35,7 @@ type Session struct {
 	cancel            context.CancelFunc
 	frames            chan Frame
 	stateErrors       chan error
+	dtmf              chan DTMF
 	ready, done       chan struct{}
 	mu                sync.Mutex
 	err               error
@@ -46,6 +47,7 @@ type Session struct {
 	// Everything below is accessed only by the runtime owner goroutine.
 	room, local, track, stream, source, output  uint64
 	captionPending                              int
+	dtmfPending                                 bool
 	stateDesired, stateActive                   *ClientState
 	stateDirty, statePending                    bool
 	stateStopped                                bool
@@ -63,7 +65,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{ctx: ctx, cancel: cancel, stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -102,6 +104,7 @@ func (s *Session) finish(e error) {
 	}
 	s.parked = nil
 	s.control = nil
+	close(s.dtmf)
 	close(s.frames)
 	close(s.done)
 }
@@ -166,6 +169,7 @@ type nativeBackend struct {
 }
 type command struct {
 	caption     *pb.FfiRequest
+	dtmf        *DTMF
 	clientState *ClientState
 	stopState   bool
 	s           *Session
@@ -327,7 +331,7 @@ func (r *Runtime) finish(s *Session, e error) {
 		if p.s == s && p.kind == "client-state" {
 			delete(r.pending, id)
 		}
-		if p.s == s && p.kind == "caption" {
+		if p.s == s && (p.kind == "caption" || p.kind == "dtmf") {
 			delete(r.pending, id)
 			p.reply <- errors.Join(ErrClosed, e)
 		}
@@ -356,6 +360,9 @@ func (r *Runtime) failSession(s *Session, e error) error {
 }
 func (r *Runtime) handle(c command) error {
 	s := c.s
+	if c.dtmf != nil {
+		return r.handleDTMF(c)
+	}
 	if c.stopState {
 		s.stateStopped = true
 		s.stateActive = nil
@@ -436,7 +443,7 @@ func (r *Runtime) run() {
 		for {
 			select {
 			case c := <-r.commands:
-				if c.pcm != nil || c.kind != "" || c.caption != nil || c.clientState != nil || c.stopState {
+				if c.pcm != nil || c.kind != "" || c.caption != nil || c.dtmf != nil || c.clientState != nil || c.stopState {
 					c.reply <- ErrClosed
 				} else {
 					c.s.finish(ErrClosed)

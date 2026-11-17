@@ -1,0 +1,55 @@
+{
+  "base_revision": "048889717677b54731d0febdab1386ae08bc8fa6",
+  "platform": "Darwin arm64",
+  "go": "go version go1.27.4 darwin/arm64",
+  "native_ffi": "0.12.80",
+  "rust_sdks": "5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb",
+  "live_run": "live-03/end-call",
+  "passed": [
+    "bidirectional DTMF with repeats and sender identity",
+    "end-call room deletion",
+    "existing PCM/output/cleanup gates",
+    "focused race regressions",
+    "native wrapper full race suite",
+    "default adapter/starter/beta tools race suites",
+    "tagged adapter/starter/beta tools race suites",
+    "architecture",
+    "vet"
+  ],
+  "limits": [
+    "No SIP trunk or PSTN call",
+    "No dialing/transfer/hold",
+    "Full core-agent race suite failed; preserved in regression.log",
+    "Explicit per-session LLM tool registration required"
+  ],
+  "preservation": {
+    "verified": 3485,
+    "mismatches": [],
+    "manifests": [
+      "examples/native-receive-probe/results/simple-go-build-20261116/prior-results-sha256.json",
+      "examples/starter/NATIVE_CAPTIONS_RESULTS.json",
+      "examples/starter/NATIVE_CLIENT_STATE_RESULTS.json"
+    ]
+  },
+  "sha256": {
+    "examples/native-receive-probe/results/native-dtmf-20261117/architecture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/native-dtmf-20261117/default-regression.log": "77ea8a00a95de134b56696f09631a0b57966b15f1be2c45efafc476fe18f83ae",
+    "examples/native-receive-probe/results/native-dtmf-20261117/focused.log": "3f6624db7e6ba536438e015f82e39b7ae76a5f5739716b2004a74586399cf1a5",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-01/end-call/audio.ogg": "3ecc0fc64a8ea7bc451ffb9136eba695fe7803e09ee4907cfbfee2ea8d41f077",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-01/end-call/dtmf.json": "cb4f85680da1901981997390fbc1b6823ec4e5cdab6e9669fccb3fbb27d0a5fe",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-01/end-call/session_report.json": "3a44abc1174252d33070db10fcf74d8b829495b60d3486eecd28f0d04628f424",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-01.log": "8185d4ad4b5d381027b734d26cdfca0efe64cd89984b5e389004020ade57ecfd",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-02.log": "945868fd57492ebc58fcf7b4be8d6dd1cb7e86b7b8fdee95b6aab927df5e7814",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-03/end-call/audio.ogg": "129fda0bc17a46c4104439d333705f8dbe83ecfe5aa8bd59d3f236b4c67dbc2c",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-03/end-call/dtmf.json": "cb4f85680da1901981997390fbc1b6823ec4e5cdab6e9669fccb3fbb27d0a5fe",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-03/end-call/session_report.json": "c9f928c4f8df58f853022d0de2cc06cf27c1fe4ac1d13b762cfb0691c1ee70e2",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-03/end-call/summary.json": "7d9b96eb2a37a23e3b65f909d71651da688f0babbaca873971b43bb3db46beda",
+    "examples/native-receive-probe/results/native-dtmf-20261117/live-03.log": "9493aec13dbcbaf4f1c63940cccbf4df23e41e07011a7236fb5692424ea70419",
+    "examples/native-receive-probe/results/native-dtmf-20261117/native-regression-02.log": "3fae94602f80eaf684a728653c8629e851285173d24f423fde8cd931a547f1d3",
+    "examples/native-receive-probe/results/native-dtmf-20261117/native-regression.log": "2f4d868c8c3b3494074b082319b4ed4b3dfe934e1eda53a9fb1a8ecbb38b0695",
+    "examples/native-receive-probe/results/native-dtmf-20261117/preservation.json": "bbc8fd3e3f7e200a0ef5129348c2ea731c49f9d5fd3aa819053bcd36e08b356a",
+    "examples/native-receive-probe/results/native-dtmf-20261117/regression.log": "8b739829a0fb86391ed1ecdb8acee22f8f80db20e5eeae8d3977c0bbf65782f7",
+    "examples/native-receive-probe/results/native-dtmf-20261117/server.log": "1725a4eb2e03db6fa492a53f70c2565f108db096073ab9915b55b65cd6c0df66",
+    "examples/native-receive-probe/results/native-dtmf-20261117/vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

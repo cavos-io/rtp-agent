@@ -17,6 +17,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 	if ev.GetPanic() != nil {
 		return errors.New("native panic callback")
 	}
+	if handled, e := r.dtmfCallback(ev); handled {
+		return e
+	}
 	if handled, e := r.clientStateCallback(ev); handled {
 		return e
 	}
@@ -130,6 +133,12 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 		if s.closing {
 			return nil
+		}
+		if packet := event.GetDataPacketReceived(); packet != nil && packet.GetSipDtmf() != nil {
+			d := packet.GetSipDtmf()
+			if e := s.deliverDTMF(DTMF{Code: d.GetCode(), Digit: d.GetDigit(), Sender: packet.GetParticipantIdentity()}); e != nil {
+				return r.failSession(s, e)
+			}
 		}
 		if tr := event.GetTrackSubscribed(); tr != nil {
 			sid, identity := tr.GetTrack().GetInfo().GetSid(), tr.GetParticipantIdentity()

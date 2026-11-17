@@ -123,6 +123,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			cb := lk.NewRoomCallback()
 			captionCheck := newNativeCaptionCheck(t, cb)
 			stateCheck := newNativeStateCheck(t, cb)
+			dtmfCheck := newNativeDTMFCheck(t, cb)
 			cb.OnReconnected = func() {
 				select {
 				case reconnected <- struct{}{}:
@@ -219,11 +220,13 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}
 			execution := make(chan error, 1)
 			go func() {
-				execution <- server.ExecuteLocalJobWithOptions(ctx, roomName, "primary-agent", worker.LocalJobOptions{Token: stateToken, FakeJob: true, SessionDirectory: dir, SessionReportPath: filepath.Join(dir, "session_report.json"), RecordingOptions: agent.RecordingOptions{Audio: true}})
+				execution <- server.ExecuteLocalJobWithOptions(ctx, roomName, "primary-agent", worker.LocalJobOptions{Token: stateToken, RoomInfo: &lkproto.Room{Name: roomName}, FakeJob: ending != "end-call", SessionDirectory: dir, SessionReportPath: filepath.Join(dir, "session_report.json"), RecordingOptions: agent.RecordingOptions{Audio: true}})
 			}()
 			var run running
 			select {
 			case run = <-ready:
+			case err := <-execution:
+				t.Fatalf("job exited before ready: %v", err)
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
@@ -258,6 +261,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}
 			captionCheck.verify(ctx, run.session, pub.SID(), dir)
 			stateCheck.verify(ctx, run.session, dir)
+			dtmfCheck.verify(ctx, run.session, run.job.PrimaryRoomIO(), caller, dir)
 			started := time.Now()
 			initial := samples.Load()
 			var windows []map[string]float64
@@ -486,6 +490,8 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}
 			stop := time.Now()
 			switch ending {
+			case "end-call":
+				dtmfCheck.endCall(ctx, run.job.PrimaryRoomIO())
 			case "job-termination":
 				run.session.AudioOutputController().PauseAudioOutput()
 				pending := make(chan error, 1)
@@ -541,11 +547,18 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 				t.Fatal("execution did not settle")
 			}
 			after, err := api.ListParticipants(ctx, &lkproto.ListParticipantsRequest{Room: roomName})
-			if err != nil {
+			if err != nil && ending != "end-call" {
 				t.Fatal(err)
 			}
+			if ending == "end-call" {
+				rooms, e := api.ListRooms(ctx, &lkproto.ListRoomsRequest{Names: []string{roomName}})
+				if e != nil || len(rooms.Rooms) != 0 {
+					t.Fatal("room not deleted", e)
+				}
+				after = &lkproto.ListParticipantsResponse{}
+			}
 			want := 1
-			if ending == "publisher-disconnect" {
+			if ending == "publisher-disconnect" || ending == "end-call" {
 				want = 0
 			}
 			if len(after.Participants) != want {

@@ -35,6 +35,7 @@ type message struct {
 }
 
 type client struct {
+	publishDTMF   func(context.Context, uint32, string) error
 	startCaptions func(*agent.AgentSession, string) (func(context.Context) error, error)
 	cleanup       Cleanup
 	send          func(context.Context, string, []byte) error

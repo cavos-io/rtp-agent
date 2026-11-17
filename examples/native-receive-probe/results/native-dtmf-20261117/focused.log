@@ -1,0 +1,4 @@
+ok  	github.com/cavos-io/rtp-agent/examples/internal/nativeroom	4.469s
+ok  	github.com/cavos-io/rtp-agent/examples/starter	1.593s [no tests to run]
+ok  	github.com/cavos-io/rtp-agent/core/beta/tools	2.184s
+ok  	github.com/cavos-io/rtp-agent/core/agent	1.648s

@@ -1,0 +1,5 @@
+--- FAIL: TestDTMFNativeEventRoutingAndOverflowIsolation (0.00s)
+    dtmf_test.go:100: proto: required field livekit.proto.DataPacketReceived.kind not set
+FAIL
+FAIL	native-receive-probe/nativeinprocess	2.658s
+FAIL
