@@ -34,6 +34,7 @@ type Session struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	frames            chan Frame
+	stateErrors       chan error
 	ready, done       chan struct{}
 	mu                sync.Mutex
 	err               error
@@ -45,6 +46,11 @@ type Session struct {
 	// Everything below is accessed only by the runtime owner goroutine.
 	room, local, track, stream, source, output  uint64
 	captionPending                              int
+	stateDesired, stateActive                   *ClientState
+	stateDirty, statePending                    bool
+	stateStopped                                bool
+	stateStep                                   int
+	stateTimer                                  *time.Timer
 	outputSID                                   string // published before ready closes; immutable thereafter
 	connecting, closing, published, captureBusy bool
 	paused                                      bool
@@ -57,7 +63,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{ctx: ctx, cancel: cancel, frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{ctx: ctx, cancel: cancel, stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -149,22 +155,25 @@ func (s *Session) Capture(ctx context.Context, pcm []int16) error {
 }
 
 type nativeBackend struct {
-	events   <-chan callbackEvent
-	request  func(*pb.FfiRequest) (*pb.FfiResponse, error)
-	drop     func(uint64) error
-	pcm      func(*pb.AudioFrameBufferInfo) ([]int16, error)
-	capture  func(uint64, uint64, []int16) error
-	dispose  func()
-	overflow func() bool
+	events       <-chan callbackEvent
+	request      func(*pb.FfiRequest) (*pb.FfiResponse, error)
+	drop         func(uint64) error
+	pcm          func(*pb.AudioFrameBufferInfo) ([]int16, error)
+	capture      func(uint64, uint64, []int16) error
+	publishState func(uint64, uint64, []byte) error
+	dispose      func()
+	overflow     func() bool
 }
 type command struct {
-	caption    *pb.FfiRequest
-	s          *Session
-	url, token string
-	kind       string
-	pcm        []int16
-	reply      chan error
-	ctx        context.Context
+	caption     *pb.FfiRequest
+	clientState *ClientState
+	stopState   bool
+	s           *Session
+	url, token  string
+	kind        string
+	pcm         []int16
+	reply       chan error
+	ctx         context.Context
 }
 type pendingRequest struct {
 	s     *Session
@@ -198,7 +207,7 @@ func Open(path string) (*Runtime, error) {
 	if e := startNative(path); e != nil {
 		return nil, e
 	}
-	return startRuntime(nativeBackend{callbacks.events, request, dropHandle, copyPCM, capture, disposeNative, callbacks.overflow.Load}), nil
+	return startRuntime(nativeBackend{events: callbacks.events, request: request, drop: dropHandle, pcm: copyPCM, capture: capture, publishState: publishStateData, dispose: disposeNative, overflow: callbacks.overflow.Load}), nil
 }
 func startRuntime(b nativeBackend) *Runtime {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -310,7 +319,14 @@ func (r *Runtime) release(ev proto.Message) error {
 	return nil
 }
 func (r *Runtime) finish(s *Session, e error) {
+	if s.stateTimer != nil {
+		s.stateTimer.Stop()
+		s.stateTimer = nil
+	}
 	for id, p := range r.pending {
+		if p.s == s && p.kind == "client-state" {
+			delete(r.pending, id)
+		}
 		if p.s == s && p.kind == "caption" {
 			delete(r.pending, id)
 			p.reply <- errors.Join(ErrClosed, e)
@@ -340,6 +356,21 @@ func (r *Runtime) failSession(s *Session, e error) error {
 }
 func (r *Runtime) handle(c command) error {
 	s := c.s
+	if c.stopState {
+		s.stateStopped = true
+		s.stateActive = nil
+		s.stateDesired = nil
+		s.stateDirty = false
+		if s.stateTimer != nil {
+			s.stateTimer.Stop()
+			s.stateTimer = nil
+		}
+		c.reply <- nil
+		return nil
+	}
+	if c.clientState != nil {
+		return r.handleClientState(c)
+	}
 	if c.caption != nil {
 		return r.handleCaption(c)
 	}
@@ -405,7 +436,7 @@ func (r *Runtime) run() {
 		for {
 			select {
 			case c := <-r.commands:
-				if c.pcm != nil || c.kind != "" || c.caption != nil {
+				if c.pcm != nil || c.kind != "" || c.caption != nil || c.clientState != nil || c.stopState {
 					c.reply <- ErrClosed
 				} else {
 					c.s.finish(ErrClosed)

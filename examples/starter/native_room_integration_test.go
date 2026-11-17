@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/livekit/protocol/auth"
 	"math"
 	"os"
 	"os/exec"
@@ -121,6 +122,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			reconnected := make(chan struct{}, 1)
 			cb := lk.NewRoomCallback()
 			captionCheck := newNativeCaptionCheck(t, cb)
+			stateCheck := newNativeStateCheck(t, cb)
 			cb.OnReconnected = func() {
 				select {
 				case reconnected <- struct{}{}:
@@ -207,9 +209,17 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}, nil, nil); err != nil {
 				t.Fatal(err)
 			}
+			stateToken := ""
+			if stateCheck.enabled {
+				allowMetadata := true
+				stateToken, err = auth.NewAccessToken("devkey", "local-native-receive-experiment-secret").SetIdentity("primary-agent").SetKind(lkproto.ParticipantInfo_AGENT).SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: roomName, Agent: true, CanUpdateOwnMetadata: &allowMetadata}).SetValidFor(time.Hour).ToJWT()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			execution := make(chan error, 1)
 			go func() {
-				execution <- server.ExecuteLocalJobWithOptions(ctx, roomName, "primary-agent", worker.LocalJobOptions{FakeJob: true, SessionDirectory: dir, SessionReportPath: filepath.Join(dir, "session_report.json"), RecordingOptions: agent.RecordingOptions{Audio: true}})
+				execution <- server.ExecuteLocalJobWithOptions(ctx, roomName, "primary-agent", worker.LocalJobOptions{Token: stateToken, FakeJob: true, SessionDirectory: dir, SessionReportPath: filepath.Join(dir, "session_report.json"), RecordingOptions: agent.RecordingOptions{Audio: true}})
 			}()
 			var run running
 			select {
@@ -247,6 +257,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 				t.Fatal("assigned agent identity absent")
 			}
 			captionCheck.verify(ctx, run.session, pub.SID(), dir)
+			stateCheck.verify(ctx, run.session, dir)
 			started := time.Now()
 			initial := samples.Load()
 			var windows []map[string]float64

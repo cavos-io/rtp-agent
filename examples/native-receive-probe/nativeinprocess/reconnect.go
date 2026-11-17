@@ -38,10 +38,14 @@ func (r *Runtime) retireInput(s *Session) error {
 func (r *Runtime) observeLifecycle(s *Session, event *pb.RoomEvent) error {
 	if event.GetReconnecting() != nil {
 		s.reconnecting = true
+		s.stateDirty = s.stateDesired != nil
+		s.stateActive = nil
 		r.beginRebind(s)
 	}
 	if event.GetReconnected() != nil {
 		s.reconnecting = false
+		s.stateDirty = s.stateDesired != nil
+		r.pumpClientState(s)
 		if s.stream != 0 {
 			s.endRebind()
 		}

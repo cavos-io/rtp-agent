@@ -17,6 +17,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 	if ev.GetPanic() != nil {
 		return errors.New("native panic callback")
 	}
+	if handled, e := r.clientStateCallback(ev); handled {
+		return e
+	}
 	if handled, e := r.captionCallback(ev); handled {
 		return e
 	}
