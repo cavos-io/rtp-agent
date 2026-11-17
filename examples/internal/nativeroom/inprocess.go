@@ -73,7 +73,7 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	run, cancel := context.WithCancelCause(ctx)
-	s, e := rt.ConnectMicrophoneChat(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput)
+	s, e := rt.ConnectMicrophoneRecording(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput, cfg.recordAux != nil)
 	if e != nil {
 		cancel(e)
 		return nil, e
@@ -138,17 +138,25 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 			select {
 			case <-run.Done():
 				return
+			case aux, ok := <-s.RecordingFrames():
+				if !ok {
+					return
+				}
+				if run.Err() != nil {
+					return
+				}
+				if cfg.recordAux != nil {
+					watchdog := time.AfterFunc(2*time.Second, func() { cancel(errors.New("in-process native recording consumer stalled")) })
+					cfg.recordAux(aux.TrackSID, nativePCMFrame(aux.Frame.PCM))
+					watchdog.Stop()
+				}
 			case f, ok := <-s.Frames():
 				if !ok {
 					return
 				}
 
-				data := make([]byte, len(f.PCM)*2)
-				for i, v := range f.PCM {
-					binary.LittleEndian.PutUint16(data[2*i:], uint16(v))
-				}
 				watchdog := time.AfterFunc(2*time.Second, func() { cancel(errors.New("in-process native PCM consumer stalled")) })
-				consume(run, &model.AudioFrame{Data: data, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: uint32(len(f.PCM))})
+				consume(run, nativePCMFrame(f.PCM))
 				watchdog.Stop()
 			}
 		}
@@ -228,4 +236,12 @@ func normalNativeCauses(err error) bool {
 		return normalNativeCauses(e.Unwrap())
 	}
 	return err == native.ErrClosed || err == native.ErrSourceEnded || err == context.Canceled
+}
+
+func nativePCMFrame(pcm []int16) *model.AudioFrame {
+	data := make([]byte, len(pcm)*2)
+	for i, v := range pcm {
+		binary.LittleEndian.PutUint16(data[2*i:], uint16(v))
+	}
+	return &model.AudioFrame{Data: data, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: uint32(len(pcm))}
 }

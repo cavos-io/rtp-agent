@@ -62,6 +62,13 @@ func (r *Room) Start(ctx context.Context) error {
 	r.mu.Unlock()
 	ctx = run
 	cfg := r.Config
+	if r.microphoneLifecycle && cfg.captionOptions.RecordRemoteParticipants && !cfg.captionOptions.DisableAudioInput {
+		cfg.recordAux = func(sid string, frame *model.AudioFrame) {
+			if !r.Session.InputAudioMuted() {
+				r.recorder.RecordAux(sid, frame)
+			}
+		}
+	}
 	info := r.Job.AvatarStartInfo()
 	if cfg.URL == "" {
 		cfg.URL = info.LiveKitURL

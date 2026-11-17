@@ -51,8 +51,10 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 			return r.failSession(s, context.Canceled)
 		}
 		for _, p := range c.GetResult().GetParticipants() {
+			s.observeRecordingParticipant(p.GetParticipant().GetInfo())
 			for _, pub := range p.GetPublications() {
 				s.observePublication(p.GetParticipant().GetInfo().GetIdentity(), pub.GetInfo())
+				s.observeRecordingPublication(p.GetParticipant().GetInfo().GetIdentity(), pub.GetInfo())
 			}
 		}
 		res, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_NewAudioSource{NewAudioSource: &pb.NewAudioSourceRequest{Type: pb.AudioSourceType_AUDIO_SOURCE_NATIVE.Enum(), SampleRate: proto.Uint32(24000), NumChannels: proto.Uint32(1), QueueSizeMs: proto.Uint32(200)}}})
@@ -117,6 +119,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 			return e
 		}
 		s := p.s
+		if e = r.closeRecordingTracks(s); e != nil {
+			return e
+		}
 		for _, h := range []uint64{s.stream, s.track, s.output, s.source, s.local, s.room} {
 			if e = r.b.drop(h); e != nil {
 				return e
@@ -136,6 +141,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		s := r.rooms[event.GetRoomHandle()]
 		if s == nil || s.closing {
 			return nil
+		}
+		if err := r.observeRecordingLifecycle(s, event); err != nil {
+			return err
 		}
 		if chat := event.GetTextStreamOpened(); chat != nil {
 			return r.openChat(s, chat)
@@ -161,6 +169,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 		if tr := event.GetTrackSubscribed(); tr != nil {
 			sid, identity := tr.GetTrack().GetInfo().GetSid(), tr.GetParticipantIdentity()
+			if s.recordRemote && identity != s.participant {
+				return r.openRecordingTrack(s, tr)
+			}
 			if s.microphone {
 				if identity != s.participant || (!s.microphones[sid] && sid != s.trackSID) {
 					return nil
@@ -213,6 +224,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 	}
 	if audio := ev.GetAudioStreamEvent(); audio != nil {
+		if s := r.auxStreams[audio.GetStreamHandle()]; s != nil {
+			return r.recordingAudio(s, audio, raw.at)
+		}
 		s := r.streams[audio.GetStreamHandle()]
 		if s == nil || s.closing {
 			return nil

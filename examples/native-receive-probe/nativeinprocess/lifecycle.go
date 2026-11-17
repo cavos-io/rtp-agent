@@ -9,7 +9,7 @@ import (
 // ConnectMicrophone keeps the selected caller across microphone republishing.
 // ConnectSelected retains its exact-publication contract for existing probes.
 func (r *Runtime) ConnectMicrophone(ctx context.Context, url, token, participant, sid string) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, true, false)
+	return r.connectSelected(ctx, url, token, participant, sid, true, false, false)
 }
 func (s *Session) InputTrackSID() string {
 	v := s.inputSID.Load()

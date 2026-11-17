@@ -55,6 +55,7 @@ type client struct {
 
 type Config struct {
 	captionOptions                    wl.RoomOptions
+	recordAux                         func(string, *model.AudioFrame)
 	Binary, Library                   string
 	URL, Token, Participant, TrackSID string
 }

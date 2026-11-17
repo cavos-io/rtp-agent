@@ -1,0 +1,21 @@
+{
+  "aux_frames": 0,
+  "cleanup": {
+    "mode": "inprocess",
+    "native_cleanup_ms": 0,
+    "pid": 47773,
+    "reaped": false,
+    "exit_code": 0,
+    "kill_attempted": false,
+    "cleanup_ms": 2.721541,
+    "shutdown_seen": true,
+    "disconnect_callback": true,
+    "handles_released": true,
+    "runtime_disposed": false,
+    "callback_overflow": false
+  },
+  "input_marker_leaks": 0,
+  "primary_frames": 200,
+  "record_remote": false,
+  "recording_aux_peak": 72.88112364816791
+}

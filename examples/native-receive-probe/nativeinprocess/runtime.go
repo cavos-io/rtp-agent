@@ -31,6 +31,11 @@ type Frame struct {
 	PCM []int16
 }
 type Session struct {
+	recordRemote          bool
+	recordings            chan RecordingFrame
+	recordingTracks       map[string]recordingTrack
+	recordingParticipants map[string]*pb.ParticipantInfo
+	recordingPublications map[string]recordingPublication
 	chatEnabled           bool // configured before session submission
 	chats                 chan Chat
 	chatReaders           map[uint64]*chatReader
@@ -74,7 +79,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{recordings: make(chan RecordingFrame, 100), recordingTracks: make(map[string]recordingTrack), recordingParticipants: make(map[string]*pb.ParticipantInfo), recordingPublications: make(map[string]recordingPublication), chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -113,6 +118,7 @@ func (s *Session) finish(e error) {
 	}
 	s.parked = nil
 	s.control = nil
+	close(s.recordings)
 	close(s.chats)
 	close(s.dtmf)
 	close(s.frames)
@@ -195,6 +201,7 @@ type pendingRequest struct {
 	reply chan error
 }
 type Runtime struct {
+	auxStreams     map[uint64]*Session
 	b              nativeBackend
 	commands       chan command
 	wake           chan struct{}
@@ -225,7 +232,7 @@ func Open(path string) (*Runtime, error) {
 }
 func startRuntime(b nativeBackend) *Runtime {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{b: b, commands: make(chan command), wake: make(chan struct{}, 1), done: make(chan struct{}), ctx: ctx, cancel: cancel, pending: make(map[uint64]pendingRequest), sessions: make(map[*Session]bool), rooms: make(map[uint64]*Session), streams: make(map[uint64]*Session)}
+	r := &Runtime{auxStreams: make(map[uint64]*Session), b: b, commands: make(chan command), wake: make(chan struct{}, 1), done: make(chan struct{}), ctx: ctx, cancel: cancel, pending: make(map[uint64]pendingRequest), sessions: make(map[*Session]bool), rooms: make(map[uint64]*Session), streams: make(map[uint64]*Session)}
 	go r.run()
 	return r
 }
@@ -263,9 +270,9 @@ func (r *Runtime) Connect(ctx context.Context, url, token string) (*Session, err
 
 // ConnectSelected pins the caller and publication discovered by the agent.
 func (r *Runtime) ConnectSelected(ctx context.Context, url, token, participant, sid string) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, false, false)
+	return r.connectSelected(ctx, url, token, participant, sid, false, false, false)
 }
-func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat bool) (*Session, error) {
+func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat, record bool) (*Session, error) {
 	if url == "" || token == "" {
 		return nil, errors.New("URL and token required")
 	}
@@ -273,6 +280,7 @@ func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, 
 	s.rt = r
 	s.microphone = microphone
 	s.chatEnabled = chat
+	s.recordRemote = record
 	s.inputSID.Store(sid)
 	if microphone {
 		s.microphones[sid] = true
@@ -319,6 +327,9 @@ func (r *Runtime) resolve(id uint64, kind string) (pendingRequest, error) {
 func (r *Runtime) keep() []uint64 {
 	var out []uint64
 	for s := range r.sessions {
+		for _, tr := range s.recordingTracks {
+			out = append(out, tr.track, tr.stream)
+		}
 		out = append(out, s.room, s.local, s.track, s.stream, s.source, s.output)
 	}
 	return out
@@ -343,6 +354,7 @@ func (r *Runtime) release(ev proto.Message) error {
 }
 func (r *Runtime) finish(s *Session, e error) {
 	r.closeChatReaders(s)
+	s.setError(r.closeRecordingTracks(s))
 	if s.stateTimer != nil {
 		s.stateTimer.Stop()
 		s.stateTimer = nil
@@ -457,6 +469,9 @@ func (r *Runtime) run() {
 		r.cancel()
 		// Native dispose is intentionally on the owner, never on a callback thread.
 		// A hung native call cannot be force-killed in-process; Close's context bounds waiting.
+		for s := range r.sessions {
+			s.setError(r.closeRecordingTracks(s))
+		}
 		r.b.dispose()
 		for s := range r.sessions {
 			r.finish(s, errors.Join(ErrClosed, r.err))
