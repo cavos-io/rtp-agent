@@ -6,6 +6,10 @@ The latest downstream audit is [agent-worker-golang compatibility and migration]
 
 **Recommendation: keep native opt-in.** The current local voice application has evidence for its audio loop, but the native adapter is not a drop-in replacement for the room features exposed by the default adapter. Decide the supported client contract before implementing optional features.
 
+## Public API update
+
+The examples/internal restriction is now resolved: [public native transport usage](../../docs/features/native-public-api.md). Room facade and FFI runtime now live under `interface/worker/livekit` in the root module. Earlier audit statements about importability describe the pre-migration checkout; downstream lifecycle/evidence/transfer integration remains outstanding.
+
 ## What the current app actually uses
 
 The inspected, Git-ignored `examples/local/main.go` manually constructs a Silero VAD, Deepgram STT, Azure LLM and LiveKit TTS agent, a static weather tool, an initial greeting, and session reporting. It enables TTS-aligned transcripts in the agent session. Its in-process startup sets `DeleteRoomOnClose=true`. Commented-out providers/detectors are not active requirements. Reading `app.DefaultConfigFromEnv()` does not activate every feature in `app.App` when the example constructs its own session.
@@ -51,7 +55,7 @@ No historical artifacts or acceptance gates were changed for this review. No new
 ## Smallest path toward a default
 
 1. Follow the concrete [downstream audit](../../docs/features/native-downstream-compatibility.md): the six named RoomOptions are not the entire application contract, and disabled pre-connect audio applies only to telephony today.
-2. Export an architecture-compliant native API from `interface/worker`. The current examples/internal transport cannot be imported downstream; build tags and example environment flags do not select it in agent-worker-golang.
+2. Use the public `interface/worker/livekit/nativeroom` API to wire an explicit downstream opt-in factory. Build tags and example environment flags alone do not select native downstream.
 3. Record-only mute retention is fixed with primary and auxiliary recording regressions; validate the complete downstream transfer/recording-segment workflow after migrating its room APIs. Preserve existing ordinary-recording results and gates.
 4. Wire downstream reliable `agent.events`, room lifecycle callbacks, hangup participant enumeration and room identity without connecting Pion. Migrate hold/transfer/supervisor consumers or explicitly exclude those workflows in a restricted native test profile. Reject unsupported non-default RoomOptions.
 5. Run combined downstream cloud/client validation, distinct-marker concurrent chat/recording/reconnect, actual worker dispatch and drain/startup-failure tests. Keep native responsible for playout/reconnect and retain restart-based rollback. The separate zero-audio TTS issue remains independent follow-up.
@@ -60,10 +64,10 @@ The helper-primary fallback shares this room/playback adapter, so it preserves p
 
 ## Source anchors
 
-- [`nativeroom.Room`](../internal/nativeroom/room.go): discovery, selected input, lifecycle, recording and deletion.
-- [`launchInProcess`](../internal/nativeroom/inprocess.go): shared runtime and input/output readiness.
-- [`playback`](../internal/nativeroom/playback.go): playback/controllers; related `playback_pause_test.go` tests.
-- Native [`events.go`](../native-receive-probe/nativeinprocess/events.go), [`reconnect.go`](../native-receive-probe/nativeinprocess/reconnect.go), [`runtime.go`](../native-receive-probe/nativeinprocess/runtime.go): event coverage, exact-SID policy and auto-subscribe.
+- [`nativeroom.Room`](../../interface/worker/livekit/nativeroom/room.go): discovery, selected input, lifecycle, recording and deletion.
+- [`launchInProcess`](../../interface/worker/livekit/nativeroom/inprocess.go): shared runtime and input/output readiness.
+- [`playback`](../../interface/worker/livekit/nativeroom/playback.go): playback/controllers; related `playback_pause_test.go` tests.
+- Native [`events.go`](../../interface/worker/livekit/nativeinprocess/events.go), [`reconnect.go`](../../interface/worker/livekit/nativeinprocess/reconnect.go), [`runtime.go`](../../interface/worker/livekit/nativeinprocess/runtime.go): event coverage, exact-SID policy and auto-subscribe.
 - Default [`room_io.go`](../../interface/worker/livekit/room_io.go): RoomOptions, state/transcription listeners, text/pre-connect registration, DTMF, microphone-source selection and output subscription wait; [`client_events.go`](../../interface/worker/livekit/client_events.go): client data events.
 - [`job.go`](../../interface/worker/job.go): StartSession custom branch and Pion-based participant wait APIs.
 - [`native_receive.go`](native_receive.go), [`native_inprocess_enabled.go`](native_inprocess_enabled.go), [`main.go`](main.go): tracked starter selection and application composition. `examples/local` was inspected separately and is not a reproducible tracked fixture.

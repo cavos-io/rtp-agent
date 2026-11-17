@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"testing"
 	"time"
 )

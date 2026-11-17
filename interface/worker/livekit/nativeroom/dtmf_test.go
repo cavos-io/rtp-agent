@@ -9,7 +9,7 @@ import (
 	tools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/livekit/protocol/livekit"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 	"net/http"
 	"net/http/httptest"
 	"testing"

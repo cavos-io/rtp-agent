@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	lk "github.com/livekit/server-sdk-go/v2"

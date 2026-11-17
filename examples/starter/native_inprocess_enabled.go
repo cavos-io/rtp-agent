@@ -5,7 +5,7 @@ package main
 import (
 	"context"
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"os"

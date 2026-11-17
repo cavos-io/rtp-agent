@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/cavos-io/rtp-agent/core/agent"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 	"testing"
 	"time"
 )

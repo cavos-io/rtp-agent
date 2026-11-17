@@ -6,7 +6,7 @@ Build using the existing Go/CGO toolchain and agent system dependencies:
 go build -tags nativeinprocess -o agent-starter-go ./examples/starter
 ```
 
-No Python packaging, probe setup, protoc, native SDK checkout, or native binary is needed to compile. Pinned generated Go FFI bindings are included under `interface/worker/livekit/ffipb`. The experimental wrapper remains in the included nested Go module; the root go.mod resolves it locally. Do not copy only the starter folder when building.
+No Python packaging, probe setup, protoc, native SDK checkout, or native binary is needed to compile. Pinned generated Go FFI bindings are included under `interface/worker/livekit/ffipb`. The runtime and public transport are in the root module under `interface/worker/livekit/nativeinprocess` and `interface/worker/livekit/nativeroom`. No probe-module replacement is required. See [downstream API usage](../../../docs/features/native-public-api.md). Do not copy only the starter folder when building.
 
 Existing Opus/PortAudio development/runtime dependencies still apply to the starter. ONNX, Silero model and provider configuration are unchanged. CGO is required. This does not introduce a new receive playout policy or select native by default.
 

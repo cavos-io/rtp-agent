@@ -15,7 +15,7 @@ import (
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 )
 
 var processOwner struct {

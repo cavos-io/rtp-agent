@@ -24,7 +24,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"

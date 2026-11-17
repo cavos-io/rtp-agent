@@ -9,7 +9,7 @@ import (
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 	"testing"
 	"time"
 )

@@ -10,7 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 	"time"
 )
 

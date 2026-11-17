@@ -2,7 +2,11 @@
 
 Reviewed 2026-11-17. RTP Agent checkpoint: `7d531c011` (remote participant recording). Downstream: `/Users/el7cosmos/src/cavos/agent-worker-golang`, commit `f87d99c2c17fec4af3d0dd4220d2e410dbc90482`, clean working tree. Downstream currently requires RTP Agent `v0.9.3-0.20261112021132-67c11611d71b`.
 
-## Readiness verdict
+## Public API update
+
+The subsequent [public API migration](native-public-api.md) resolves the examples/internal import restriction: use `interface/worker/livekit/nativeroom`. The runtime is now in the root module, so omit the `native-receive-probe` replacement in the historical audit commands below. The audit's rejected-import evidence remains preserved. The other downstream integration blockers still apply; no native downstream dispatch is claimed.
+
+## Readiness verdict (at audit time)
 
 **Ready for downstream dependency/build tests using the existing Pion transport. Not ready for an end-to-end native downstream run or default promotion.**
 

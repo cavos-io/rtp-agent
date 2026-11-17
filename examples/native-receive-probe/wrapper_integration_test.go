@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 )
 
 func TestNativeWrapperLocal(t *testing.T) {

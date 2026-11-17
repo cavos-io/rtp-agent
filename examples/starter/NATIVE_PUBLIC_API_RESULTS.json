@@ -1,0 +1,41 @@
+{
+  "base": "db08648b701d2351cc14b9133741bbbcb92fa0de",
+  "public_api": "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom",
+  "checks": {
+    "before.log": "passed baseline race suites",
+    "after-final.log": "passed relocated native/helper/starter race suites",
+    "all-tests-final.log": "passed root suite",
+    "architecture-final.log": "passed",
+    "vet.log": "passed",
+    "probe-final.log": "passed helper/probe suite",
+    "external-consumer.log": "passed separate module configuration and shutdown without probe dependency or native library",
+    "build-native.log": "passed",
+    "build-default.log": "passed"
+  },
+  "failed_attempts": [
+    "import-red.log: public package did not yet exist",
+    "all-tests.log: initial placement violated existing LiveKit boundary; moved beneath livekit without changing rule"
+  ],
+  "sha256": {
+    "examples/native-receive-probe/results/public-native-api-20261117/after-final.log": "0bb80a1c54e7ea0a345f21dce9364f97197ae958f3733e814513bc70581ef4ed",
+    "examples/native-receive-probe/results/public-native-api-20261117/after.log": "4285fc34079f3a01f4c1e454916ddc26d4abaaeeb091acdb8ed911f5ed9c4dcd",
+    "examples/native-receive-probe/results/public-native-api-20261117/all-tests-final.log": "a2589923ea59301aebf0ffaf808161bf4ebdb1415155602efc7bb74d671c6bfc",
+    "examples/native-receive-probe/results/public-native-api-20261117/all-tests.log": "7a5a4f195d95f0f3c7653e12fd4fc094345fcf812b940955a00f9c45f9405d74",
+    "examples/native-receive-probe/results/public-native-api-20261117/architecture-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/public-native-api-20261117/architecture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/public-native-api-20261117/before.log": "d2aa097eca465209181ed687aab39ac7fa6946d5c19145e3ae7d64b682193be7",
+    "examples/native-receive-probe/results/public-native-api-20261117/build-default.log": "7f13b5fc015239af20f64263cf4a8b907501d74ef7012f500aa1f154653754d0",
+    "examples/native-receive-probe/results/public-native-api-20261117/build-native.log": "ce27db49e37731a604b5eb0fcab982dd4d59f0a62d8e9758e3d71aa6dc60f4f3",
+    "examples/native-receive-probe/results/public-native-api-20261117/external-consumer.log": "66ba46bab49b6b543914066def7fd90bb981643e987e3166a85d20a69a0908d5",
+    "examples/native-receive-probe/results/public-native-api-20261117/import-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/public-native-api-20261117/import-green.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/public-native-api-20261117/import-no-probe.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/public-native-api-20261117/import-red.log": "3328f2d61ee926b8d228b3cc396243968cb3ccb1ffef6a962aff1b5d101bd3e5",
+    "examples/native-receive-probe/results/public-native-api-20261117/local-native_inprocess_enabled.go.txt": "acb57b1e245b2eb024378f656522e09adeab643a3240e143db6d709a4176456e",
+    "examples/native-receive-probe/results/public-native-api-20261117/local-native_receive.go.txt": "698971c4dc5b456e9e55a64d9dd0df26dfe9e30d80908af6f15e621c4be988fa",
+    "examples/native-receive-probe/results/public-native-api-20261117/preservation.json": "073b3f21fe5b0af50d1ec743ef7470038ade8e38a98fb72dc7cab04878847893",
+    "examples/native-receive-probe/results/public-native-api-20261117/probe-final.log": "d06cedc3f81f9e3e7fc65cc1c3fb231aea06a99beec62f5ac3bee35af898e3b2",
+    "examples/native-receive-probe/results/public-native-api-20261117/probe.log": "d06cedc3f81f9e3e7fc65cc1c3fb231aea06a99beec62f5ac3bee35af898e3b2",
+    "examples/native-receive-probe/results/public-native-api-20261117/vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -18,7 +18,7 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"google.golang.org/protobuf/proto"
 	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 )
 
 type captionPublisher struct {

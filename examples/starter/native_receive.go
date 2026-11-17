@@ -12,7 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"github.com/cavos-io/rtp-agent/examples/starter/internal/nativereceive"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"

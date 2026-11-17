@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"

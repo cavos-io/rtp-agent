@@ -7,7 +7,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	native "native-receive-probe/nativeinprocess"
+	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
 )
 
 // One consumer per session preserves completion order without blocking the FFI
