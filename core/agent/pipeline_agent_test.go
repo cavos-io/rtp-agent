@@ -1447,6 +1447,66 @@ func TestPipelineAgentEmitsFinalSynchronizedAgentOutputTranscription(t *testing.
 	}
 }
 
+func TestPipelineAgentNonAlignedChunkedTTSFallsBackToTextTranscription(t *testing.T) {
+	recorder := traceParityRecorder(t)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
+	provider := &fakeGenerationChunkedTTS{stream: &fakeGenerationChunkedStream{
+		frames: []*model.AudioFrame{
+			{Data: make([]byte, 960), SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 480},
+			{Data: make([]byte, 960), SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 480},
+		},
+	}}
+	va := NewPipelineAgent(nil, nil, nil, provider, llm.NewChatContext())
+	va.session, va.ctx = session, context.Background()
+	playback := &latencyPlaybackController{}
+	session.SetAudioPlaybackController(playback)
+	var publications int
+	va.PublishAudio = func(_ context.Context, frame *model.AudioFrame) error {
+		publications++
+		playback.notify(time.Now())
+		return nil
+	}
+	events := session.AgentOutputTranscribedEvents()
+	ctx, turn := telemetry.StartSpan(context.Background(), "agent_turn")
+	data, err := va.synthesizeSpeech(ctx, session, singleTextChannel("Hello there."), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markTTSGenerationStoppedSpeaking(data)
+	addAssistantSpeechMetrics(ctx, session, nil, data, &llm.ChatMessage{
+		Metrics: map[string]any{"stopped_speaking_at": timeToUnixSeconds(time.Now().Add(-time.Second))},
+	}, false)
+	session.UpdateAgentState(AgentStateListening)
+	turn.End()
+	if publications < 2 {
+		t.Errorf("publications = %d, want incremental audio rather than a collected utterance", publications)
+	}
+	var final string
+	for {
+		select {
+		case event := <-events:
+			if event.IsFinal {
+				final = event.Transcript
+			}
+		default:
+			if final != "Hello there." {
+				t.Errorf("final transcript = %q, want Hello there.", final)
+			}
+			spans := make(map[string]sdktrace.ReadOnlySpan)
+			for _, span := range recorder.Ended() {
+				spans[span.Name()] = span
+			}
+			if spans["agent_speaking"] == nil {
+				t.Error("missing agent_speaking span")
+			}
+			if _, ok := spanAttributeValues(spans["agent_turn"].Attributes())[telemetry.AttrE2ELatency]; !ok {
+				t.Error("agent_turn missing e2e latency")
+			}
+			return
+		}
+	}
+}
+
 func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

@@ -2522,8 +2522,9 @@ func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
 	if !enabled {
 		return false
 	}
-	capabilities := va.tts.Capabilities()
-	return capabilities.AlignedTranscript || !capabilities.Streaming
+	// Batch synthesis alone does not imply provider-aligned text. Keep providers
+	// without alignment on the streaming adapter and text transcription path.
+	return va.tts.Capabilities().AlignedTranscript
 }
 
 func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
