@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
 )
 
 func (r *Runtime) dispatch(raw callbackEvent) (err error) {
@@ -14,6 +14,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, r.release(ev)) }()
+	if ev.GetTextStreamReaderEvent() != nil {
+		return r.chatEvent(ev.GetTextStreamReaderEvent())
+	}
 	if ev.GetPanic() != nil {
 		return errors.New("native panic callback")
 	}
@@ -133,6 +136,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		s := r.rooms[event.GetRoomHandle()]
 		if s == nil || s.closing {
 			return nil
+		}
+		if chat := event.GetTextStreamOpened(); chat != nil {
+			return r.openChat(s, chat)
 		}
 		if p := event.GetTrackPublished(); p != nil {
 			s.observePublication(p.GetParticipantIdentity(), p.GetPublication().GetInfo())

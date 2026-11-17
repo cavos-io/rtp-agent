@@ -7,7 +7,7 @@ import (
 	"errors"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"strings"
 	"testing"
 	"time"

@@ -26,6 +26,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/examples/internal/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
 	lkproto "github.com/livekit/protocol/livekit"
@@ -190,6 +191,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 				err     error
 			}
 			ready := make(chan running, 1)
+			chatReceived := make(chan wl.TextInputEvent, 8)
 			if err := server.RTCSession(func(job *worker.JobContext) error {
 				session := agent.NewAgentSession(agent.NewAgent("offline primary native room"), job.Room, agent.AgentSessionOptions{AudioInputHook: func(_ context.Context, f *model.AudioFrame) *model.AudioFrame {
 					now := time.Now().UnixNano()
@@ -216,7 +218,12 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 					}
 					return nil
 				}})
-				err := startStarterSession(ctx, job, session, server, config)
+				var err error
+				if os.Getenv("NATIVE_TEST_CHAT") == "1" {
+					err = startChatTestSession(ctx, job, session, server, config, chatReceived)
+				} else {
+					err = startStarterSession(ctx, job, session, server, config)
+				}
 				ready <- running{job, session, err}
 				return err
 			}, nil, nil); err != nil {
@@ -271,6 +278,11 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}
 			if !foundAgent {
 				t.Fatal("assigned agent identity absent")
+			}
+			if os.Getenv("NATIVE_TEST_CHAT") == "1" {
+				chatCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+				verifyNativeChat(t, chatCtx, caller, chatReceived, dir)
+				stop()
 			}
 			captionCheck.verify(ctx, run.session, pub.SID(), dir)
 			stateCheck.verify(ctx, run.session, dir)

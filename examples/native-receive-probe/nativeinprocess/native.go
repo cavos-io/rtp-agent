@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"

@@ -27,6 +27,6 @@ func (r *Room) ConfigureRoomOptions(opts wl.RoomOptions) error {
 	if opts.ParticipantIdentity != "" {
 		r.Config.Participant = opts.ParticipantIdentity
 	}
-	r.Config.captionOptions = wl.RoomOptions{DisableTranscriptionOutput: opts.DisableTranscriptionOutput, TranscriptionNextOutput: opts.TranscriptionNextOutput}
+	r.Config.captionOptions = wl.RoomOptions{DisableTextInput: opts.DisableTextInput, TextInputCallback: opts.TextInputCallback, DisableTranscriptionOutput: opts.DisableTranscriptionOutput, TranscriptionNextOutput: opts.TranscriptionNextOutput}
 	return nil
 }

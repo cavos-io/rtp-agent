@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
 )
 
 var (
@@ -31,6 +31,9 @@ type Frame struct {
 	PCM []int16
 }
 type Session struct {
+	chatEnabled           bool // configured before session submission
+	chats                 chan Chat
+	chatReaders           map[uint64]*chatReader
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	frames                chan Frame
@@ -71,7 +74,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -110,6 +113,7 @@ func (s *Session) finish(e error) {
 	}
 	s.parked = nil
 	s.control = nil
+	close(s.chats)
 	close(s.dtmf)
 	close(s.frames)
 	close(s.done)
@@ -259,15 +263,16 @@ func (r *Runtime) Connect(ctx context.Context, url, token string) (*Session, err
 
 // ConnectSelected pins the caller and publication discovered by the agent.
 func (r *Runtime) ConnectSelected(ctx context.Context, url, token, participant, sid string) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, false)
+	return r.connectSelected(ctx, url, token, participant, sid, false, false)
 }
-func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone bool) (*Session, error) {
+func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat bool) (*Session, error) {
 	if url == "" || token == "" {
 		return nil, errors.New("URL and token required")
 	}
 	s := newSession(ctx, 25)
 	s.rt = r
 	s.microphone = microphone
+	s.chatEnabled = chat
 	s.inputSID.Store(sid)
 	if microphone {
 		s.microphones[sid] = true
@@ -337,6 +342,7 @@ func (r *Runtime) release(ev proto.Message) error {
 	return nil
 }
 func (r *Runtime) finish(s *Session, e error) {
+	r.closeChatReaders(s)
 	if s.stateTimer != nil {
 		s.stateTimer.Stop()
 		s.stateTimer = nil
@@ -357,6 +363,7 @@ func (r *Runtime) finish(s *Session, e error) {
 func (r *Runtime) failSession(s *Session, e error) error {
 	s.setError(e)
 	s.cancel()
+	r.closeChatReaders(s)
 	if s.connecting || s.closing {
 		return nil
 	}
@@ -436,7 +443,7 @@ func (r *Runtime) handle(c command) error {
 	}
 	s.connecting = true
 	id := r.id(s, "connect", nil)
-	_, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(c.url), Token: proto.String(c.token), Options: &pb.RoomOptions{AutoSubscribe: proto.Bool(true)}, RequestAsyncId: proto.Uint64(id)}}})
+	_, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(c.url), Token: proto.String(c.token), Options: nativeRoomOptions(s.chatEnabled), RequestAsyncId: proto.Uint64(id)}}})
 	if e != nil {
 		delete(r.pending, id)
 		s.connecting = false
@@ -470,6 +477,17 @@ func (r *Runtime) run() {
 	for {
 		var err error
 		for s := range r.sessions {
+			for _, reader := range s.chatReaders {
+				if !time.Now().Before(reader.deadline) {
+					if e := r.failSession(s, errors.New("native chat stream timed out")); e != nil {
+						err = e
+					}
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
 			if s.parked != nil && s.parked.ctx.Err() != nil {
 				s.parked.reply <- s.parked.ctx.Err()
 				s.parked = nil

@@ -3,8 +3,8 @@ package nativeinprocess
 import (
 	"context"
 	"errors"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
 )
 
 // Pause waits for an in-flight capture acknowledgement, then clears the native

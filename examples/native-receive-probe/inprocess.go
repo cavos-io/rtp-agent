@@ -15,7 +15,7 @@ import (
 	"unsafe"
 
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 )
 
 // Experimental single-owner dispatcher. Native rooms run concurrently; only

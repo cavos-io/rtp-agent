@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"io"
 	"maps"
 	"strconv"
@@ -169,7 +170,7 @@ func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 
 type TextInputEvent struct {
 	Text                string
-	Info                lksdk.TextStreamInfo
+	Info                *pb.TextStreamInfo
 	ParticipantIdentity string
 }
 
@@ -1570,11 +1571,11 @@ func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantI
 		return
 	}
 	go func() {
-		rio.handleChatTextInput(context.Background(), reader.ReadAll(), reader.Info, participantIdentity)
+		rio.handleChatTextInput(context.Background(), reader.ReadAll(), textStreamInfoProto(reader.Info), participantIdentity)
 	}()
 }
 
-func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
+func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info *pb.TextStreamInfo, participantIdentity string) {
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}

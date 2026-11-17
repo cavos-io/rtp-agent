@@ -1,0 +1,20 @@
+[38;2;56;56;56m╭──────────────────────────────────────╮[m
+[38;2;56;56;56m│[m lefthook  v2.2.2   hook:  [1mpre-commit[m [38;2;56;56;56m│[m
+[38;2;56;56;56m╰──────────────────────────────────────╯[m
+┃  test integrity ❯ 
+Rejected: test files contain or add t.Skip/t.Skipf/SkipNow
+
+exit status 1
+┃  architecture ❯ 
+
+┃  targeted tests ❯ 
+ok  	github.com/cavos-io/rtp-agent/examples/starter	0.948s
+?   	github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb	[no test files]
+ok  	github.com/cavos-io/rtp-agent/examples/internal/nativeroom	12.686s
+ok  	github.com/cavos-io/rtp-agent/interface/worker/livekit	6.110s
+
+[38;2;56;56;56m  ────────────────────────────────────[m
+summary: (done in 19.28 seconds)
+✓ architecture (4.35 seconds)
+✓ targeted tests (19.28 seconds)
+✗ test integrity (0.52 seconds)

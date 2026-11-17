@@ -18,7 +18,7 @@ import (
 	"time"
 	"unsafe"
 
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 	"google.golang.org/protobuf/encoding/protojson"

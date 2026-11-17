@@ -17,7 +17,7 @@ import (
 	lk "github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	native "native-receive-probe/nativeinprocess"
 )
 

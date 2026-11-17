@@ -73,7 +73,7 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	run, cancel := context.WithCancelCause(ctx)
-	s, e := rt.ConnectMicrophone(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID)
+	s, e := rt.ConnectMicrophoneChat(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput)
 	if e != nil {
 		cancel(e)
 		return nil, e
@@ -85,16 +85,18 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		if err != nil {
 			return nil, err
 		}
+		closeChat := startTextInput(run, s.Chats(), session, cfg.captionOptions.TextInputCallback)
 		closeDTMF := startDTMF(run, s.DTMF(), session, cancel)
 		closeState := startClientState(run, session, s.UpdateClientState, s.ClientStateErrors())
 		return func(ctx context.Context) error {
+			chatErr := closeChat(ctx)
 			dtmfErr := closeDTMF(ctx)
 			stateErr := closeState(ctx)
 			stopErr := s.StopClientState(ctx)
 			if errors.Is(stopErr, native.ErrClosed) {
 				stopErr = nil
 			}
-			return errors.Join(dtmfErr, stateErr, stopErr, closeCaptions(ctx))
+			return errors.Join(chatErr, dtmfErr, stateErr, stopErr, closeCaptions(ctx))
 		}, nil
 	}
 	var outputReady atomic.Bool

@@ -2,7 +2,7 @@ package nativeinprocess
 
 import (
 	"fmt"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"time"
 )
 

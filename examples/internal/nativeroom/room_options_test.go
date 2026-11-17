@@ -4,6 +4,7 @@ package nativeroom
 
 import (
 	"context"
+	"github.com/cavos-io/rtp-agent/core/agent"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"testing"
 )
@@ -47,3 +48,16 @@ type optionsTextOutput struct{}
 
 func (*optionsTextOutput) CaptureText(context.Context, string) error { return nil }
 func (*optionsTextOutput) Flush()                                    {}
+
+func TestNativeChatRoomOptions(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		r := NewInProcess(nil, nil, Config{}, "", "")
+		cb := func(context.Context, *agent.AgentSession, wl.TextInputEvent) error { return nil }
+		if err := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: disabled, TextInputCallback: cb}); err != nil {
+			t.Fatal(err)
+		}
+		if r.Config.captionOptions.DisableTextInput != disabled || r.Config.captionOptions.TextInputCallback == nil {
+			t.Fatal("chat options lost")
+		}
+	}
+}

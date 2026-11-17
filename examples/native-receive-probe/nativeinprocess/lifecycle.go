@@ -3,13 +3,13 @@ package nativeinprocess
 import (
 	"context"
 	"errors"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 )
 
 // ConnectMicrophone keeps the selected caller across microphone republishing.
 // ConnectSelected retains its exact-publication contract for existing probes.
 func (r *Runtime) ConnectMicrophone(ctx context.Context, url, token, participant, sid string) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, true)
+	return r.connectSelected(ctx, url, token, participant, sid, true, false)
 }
 func (s *Session) InputTrackSID() string {
 	v := s.inputSID.Load()

@@ -2,7 +2,7 @@ package main
 
 import (
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"testing"
 )
 

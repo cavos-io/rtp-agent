@@ -1,0 +1,3 @@
+ok  	native-receive-probe	1.749s
+?   	native-receive-probe/internal/ffipb	[no test files]
+ok  	native-receive-probe/nativeinprocess	3.428s

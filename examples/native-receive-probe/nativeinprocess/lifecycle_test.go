@@ -3,8 +3,8 @@ package nativeinprocess
 import (
 	"context"
 	"errors"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
-	pb "native-receive-probe/ffipb"
 	"testing"
 	"time"
 )

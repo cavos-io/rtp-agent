@@ -3,9 +3,9 @@ package nativeinprocess
 import (
 	"context"
 	"errors"
+	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	pb "native-receive-probe/ffipb"
 	"sync"
 	"sync/atomic"
 	"testing"
