@@ -1,0 +1,15 @@
+{
+  "checks": {
+    "red.log": "expected failure: primary and auxiliary zero recording energy; helper passed",
+    "green.log": "passed: primary, auxiliary and helper under race detector",
+    "native-suite.log": "passed: native room and starter race suites",
+    "default-suite.log": "passed: default room, helper and starter suites"
+  },
+  "sha256": {
+    "examples/native-receive-probe/results/native-record-only-20261117/default-suite.log": "a6e9d6914a294968cb56f5a9fd4daf627e5c7158b68030d04e5ae219b4add742",
+    "examples/native-receive-probe/results/native-record-only-20261117/green.log": "447292181c690f5a0c42e6c3887189354b8775622802a7956ec231ee9d2bf4b0",
+    "examples/native-receive-probe/results/native-record-only-20261117/native-suite.log": "420d9c1cc7d53e63923bdb0d4e8289d82de3eba6be8fc6c81c22451d3f489c10",
+    "examples/native-receive-probe/results/native-record-only-20261117/preservation.json": "eedeeb434a7cc70b65d89cf7fd077942d9f93c3c9083f92b52296f5a39e3bcb4",
+    "examples/native-receive-probe/results/native-record-only-20261117/red.log": "0a9e809abe4e6ec889008bffa6b8bee49584eeb2ee1a040621bc717da982a790"
+  }
+}

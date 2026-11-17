@@ -63,11 +63,8 @@ func (r *Room) Start(ctx context.Context) error {
 	ctx = run
 	cfg := r.Config
 	if r.microphoneLifecycle && cfg.captionOptions.RecordRemoteParticipants && !cfg.captionOptions.DisableAudioInput {
-		cfg.recordAux = func(sid string, frame *model.AudioFrame) {
-			if !r.Session.InputAudioMuted() {
-				r.recorder.RecordAux(sid, frame)
-			}
-		}
+		// Session mute stops agent processing, not record-only evidence capture.
+		cfg.recordAux = r.recorder.RecordAux
 	}
 	info := r.Job.AvatarStartInfo()
 	if cfg.URL == "" {
@@ -124,8 +121,15 @@ func (r *Room) Start(ctx context.Context) error {
 	child, err := connect(ctx, cfg, func(c context.Context, f *model.AudioFrame) {
 		r.continuity.frame(time.Now(), f.SamplesPerChannel)
 		r.samples.Add(uint64(f.SamplesPerChannel))
-		if !r.Session.InputAudioMuted() {
+		// In-process recording taps input before session mute, like default RoomIO.
+		// Keep the existing helper mute/recording contract unchanged.
+		if r.microphoneLifecycle {
 			r.recorder.RecordInput(f)
+		}
+		if !r.Session.InputAudioMuted() {
+			if !r.microphoneLifecycle {
+				r.recorder.RecordInput(f)
+			}
 			r.Session.OnAudioFrame(c, f)
 		}
 	})

@@ -1,0 +1,20 @@
+{
+  "repo": "agent-worker-golang",
+  "revision": "f87d99c2c17fec4af3d0dd4220d2e410dbc90482",
+  "working_tree_status": "",
+  "source_sha256": {
+    "app/room_options.go": "1d999444137c534967d4a95ba046f7dd6103583c2737905839377ce082918c1e",
+    "app/runner.go": "a0c4ea645517c2469c1af56e3493224a5581c429869123f1db9d14ff6022722e",
+    "app/run.go": "41574e09683a512cce1b05a462eda5d2476f45ba9513e8e8b4c7c53fb81b3f81",
+    "interface/worker/agent_test_text_input.go": "2a5e2978be31d731f41f6cd6099527a8c7aee3a5827841468b4f3378d779160e",
+    "interface/worker/test_evidence.go": "8581f8e36cd5d2a3a9644fb81213a387c24a5a2df5efce594a97ff21e2c1af90",
+    "adapter/livekit/sessionmgr/participant_repository.go": "563c9d4883f8f5cccbc93a58a405d25b2161baf9bdad399ecceb9f1a92dcfc74",
+    "adapter/livekit/sessionmgr/callbacks.go": "66d09df633cc972eadaf385399396734e43cc5668bfb707f9dc7e98730ea6490",
+    "adapter/livekit/sessionmgr/hold_audio_runtime.go": "15579d67c39ee117dfb9b3404facfcd882034ae86a0bc171db9f6f614567bc03",
+    "adapter/livekit/sessionmgr/session_manager.go": "523c0ff8dadbd74d46e7b9cfd5268b68ed081f71422b613e79cfad7305bcb903",
+    "adapter/livekit/supervisor/session.go": "7268bb05cb0c54cbd5c5417b03792bed8c7afbe11eab7f2fcb6fa52396010d9d",
+    "adapter/test/dispatch/livekit/media.go": "d8c69fc2ca1955d72467b44545a3d8dd28b93705d67a1cef687b2e752558b4d1",
+    "go.mod": "e0b835b8b2ed8eaf55b241cbd577806b27b6ce3af5efffb97392073732158323",
+    "go.sum": "af5153fdff418ccaf36215d564a6bd0abe9a66000d300e1546baebddf03696b3"
+  }
+}

@@ -2,9 +2,13 @@
 
 `RoomOptions.RecordRemoteParticipants` now enables auxiliary microphone recording for the in-process native transport. It remains false by default. Enable it in the `RoomOptions` passed to `job.StartSession` alongside `DisablePreConnectAudio: true` and your `ParticipantIdentity` selector. Multiple initial caller candidates still require explicit caller selection.
 
-The selected caller continues through the existing agent input/recording path. Other standard, SIP and connector participants' microphone audio feeds the existing `RecorderIO.RecordAux` mixer only. Agent/ingress/egress/bridge participants, publish-on-behalf participants, screen-share, video and unknown publications are excluded. `DisableAudioInput` prevents auxiliary capture, and session input mute suppresses recording delivery. Other RoomOptions not previously implemented remain unsupported.
+The selected caller continues through the existing agent input/recording path. Other standard, SIP and connector participants' microphone audio feeds the existing `RecorderIO.RecordAux` mixer only. Agent/ingress/egress/bridge participants, publish-on-behalf participants, screen-share, video and unknown publications are excluded. `DisableAudioInput` prevents auxiliary capture, and session input mute suppresses agent processing while retaining recording delivery. Other RoomOptions not previously implemented remain unsupported.
 
 This matches the default transport's auxiliary recording selection and shared recorder behavior. It adds no agent connection, helper subscriber, new recording format, custom audio playout, or changes to default Pion transport behavior. Helper mode retains its existing behavior. Remote tracks are not injected into STT, VAD, caller captions, or the primary audio hook.
+
+## Downstream audit qualification
+
+A subsequent source audit found that agent-worker-golang uses `SetInputAudioMuted(true)` for transfer **record-only** mode. This was fixed after the audit: native now retains primary and auxiliary recordings under session mute while keeping muted input away from the agent. Decoded-recording regressions reproduce the original failure and pass under the race detector; helper behavior is preserved. The successful live tests below did not exercise transfer itself. See [record-only regression evidence](NATIVE_RECORD_ONLY.md) and the [downstream audit](../../docs/features/native-downstream-compatibility.md#newly-identified-record-only-incompatibility). Earlier results and acceptance gates are unchanged.
 
 ## Ownership and bounds
 
