@@ -54,3 +54,48 @@ func TestStartSessionExplicitTransportNeverJoinsPion(t *testing.T) {
 		job.Shutdown("test done")
 	}
 }
+
+type configurableSessionTransport struct {
+	testSessionTransport
+	options    RoomOptions
+	configured bool
+	configErr  error
+}
+
+func (t *configurableSessionTransport) ConfigureRoomOptions(o RoomOptions) error {
+	if t.starts != 0 {
+		return errors.New("configured after startup")
+	}
+	t.configured = true
+	t.options = o
+	return t.configErr
+}
+func TestStartSessionConfiguresCustomTransport(t *testing.T) {
+	for _, configErr := range []error{nil, errors.New("unsupported option")} {
+		job := NewJobContext(&livekit.Job{Id: "configured-transport", Room: &livekit.Room{Name: "room"}}, "ws://unused", "key", "secret")
+		defer os.RemoveAll(job.SessionDirectory())
+		session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+		transport := &configurableSessionTransport{configErr: configErr}
+		next := &transportTestTextOutput{}
+		opts := RoomOptions{DisablePreConnectAudio: true, DisableTranscriptionOutput: true, ParticipantIdentity: "caller", TranscriptionNextOutput: next}
+		err := job.StartSession(context.Background(), session, StartSessionOptions{Transport: transport, RoomOptions: opts})
+		if !errors.Is(err, configErr) {
+			t.Fatal(err)
+		}
+		if !transport.configured || transport.options.TranscriptionNextOutput != next || transport.options.ParticipantIdentity != "caller" || !transport.options.DisableTranscriptionOutput || !transport.options.DisablePreConnectAudio {
+			t.Fatal("RoomOptions not forwarded")
+		}
+		if configErr != nil && (transport.starts != 0 || transport.closes != 0) {
+			t.Fatal("started with invalid options")
+		}
+		if configErr == nil && transport.starts != 1 {
+			t.Fatal("valid transport not started")
+		}
+		job.Shutdown("test done")
+	}
+}
+
+type transportTestTextOutput struct{}
+
+func (*transportTestTextOutput) CaptureText(context.Context, string) error { return nil }
+func (*transportTestTextOutput) Flush()                                    {}

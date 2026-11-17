@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -53,6 +54,7 @@ type client struct {
 }
 
 type Config struct {
+	captionOptions                    wl.RoomOptions
 	Binary, Library                   string
 	URL, Token, Participant, TrackSID string
 }

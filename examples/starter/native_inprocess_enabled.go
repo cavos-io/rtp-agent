@@ -16,7 +16,7 @@ const inProcessAvailable = true
 
 func startInProcessSession(ctx context.Context, job *worker.JobContext, session *agent.AgentSession, server *worker.AgentServer, cfg nativeReceiveConfig) error {
 	transport := nativeroom.NewInProcess(job, session, nativeroom.Config{Library: cfg.library, Participant: os.Getenv("RTP_AGENT_NATIVE_PARTICIPANT")}, server.Options.APIKey, server.Options.APISecret)
-	return job.StartSession(ctx, session, worker.StartSessionOptions{Transport: transport})
+	return job.StartSession(ctx, session, worker.StartSessionOptions{Transport: transport, RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true}})
 }
 func closeInProcessRuntime() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

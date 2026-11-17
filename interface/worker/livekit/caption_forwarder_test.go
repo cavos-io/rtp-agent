@@ -85,3 +85,41 @@ func TestCaptionForwarderInterleavesWithoutRepeatingSpokenPrefix(t *testing.T) {
 		t.Fatal("prefix repeated", final)
 	}
 }
+
+func TestCaptionForwarderOptionsMatchDefault(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+		next := &recordingTranscriptionTextOutput{}
+		packets := make(chan *lk.Transcription, 8)
+		f := NewCaptionForwarder(session, CaptionTransport{AgentIdentity: "agent", AgentTrack: "out", CallerIdentity: "caller", CallerTrack: "in", DisableTranscriptionOutput: disabled, TranscriptionNextOutput: next, PublishPacket: func(p *lk.Transcription) error { packets <- p; return nil }})
+		session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "caller", IsFinal: true})
+		session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "ans", IsFinal: false})
+		session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "answer", IsFinal: true})
+		if !disabled {
+			for i := 0; i < 3; i++ {
+				select {
+				case <-packets:
+				case <-time.After(time.Second):
+					t.Fatal("missing captions")
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if e := f.Close(ctx); e != nil {
+			t.Fatal(e)
+		}
+		cancel()
+		next.mu.Lock()
+		calls := append([]string(nil), next.calls...)
+		next.mu.Unlock()
+		if disabled {
+			if len(packets) != 0 || len(calls) != 0 {
+				t.Fatal("disabled output forwarded", calls)
+			}
+		} else {
+			if len(calls) != 3 || calls[0] != "capture:ans" || calls[1] != "capture:answer" || calls[2] != "flush" {
+				t.Fatal("next output", calls)
+			}
+		}
+	}
+}

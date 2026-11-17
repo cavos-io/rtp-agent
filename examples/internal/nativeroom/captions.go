@@ -109,7 +109,7 @@ func (w *captionWriter) Close() {
 	}
 	_ = w.p.request(&pb.FfiRequest{Message: &pb.FfiRequest_SendStreamTrailer{SendStreamTrailer: &pb.SendStreamTrailerRequest{SenderIdentity: proto.String(w.p.identity), Trailer: &pb.DataStream_Trailer{StreamId: proto.String(w.id), Reason: proto.String(reason)}}}})
 }
-func startNativeCaptions(ctx context.Context, s *native.Session, session *agent.AgentSession, identity, caller, track string) (func(context.Context) error, error) {
+func startNativeCaptions(ctx context.Context, s *native.Session, session *agent.AgentSession, identity, caller, track string, opts wl.RoomOptions) (func(context.Context) error, error) {
 	sid, err := s.OutputTrackSID(ctx)
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func startNativeCaptions(ctx context.Context, s *native.Session, session *agent.
 	}
 	captionCtx, cancel := context.WithCancel(ctx)
 	p := &captionPublisher{ctx: captionCtx, send: s.PublishCaption, identity: identity}
-	f := wl.NewCaptionForwarder(session, wl.CaptionTransport{AgentIdentity: identity, AgentTrack: sid, CallerIdentity: caller, CallerTrack: track, PublishPacket: func(t *lk.Transcription) error {
+	f := wl.NewCaptionForwarder(session, wl.CaptionTransport{DisableTranscriptionOutput: opts.DisableTranscriptionOutput, TranscriptionNextOutput: opts.TranscriptionNextOutput, AgentIdentity: identity, AgentTrack: sid, CallerIdentity: caller, CallerTrack: track, PublishPacket: func(t *lk.Transcription) error {
 		if t.TranscribedParticipantIdentity == caller {
 			t = proto.Clone(t).(*lk.Transcription)
 			t.TrackId = s.InputTrackSID()

@@ -586,6 +586,8 @@ var jobContextRoomConnector RoomConnector
 type StartSessionOptions struct {
 	// Transport replaces room/media ownership when explicitly supplied. Nil keeps
 	// the standard LiveKit/Pion path. The transport owns its connection and I/O.
+	// Optional ConfigureRoomOptions(RoomOptions) error runs before ownership; it
+	// must validate/configure only, without acquiring resources.
 	Transport      SessionRoomIO
 	RoomOptions    RoomOptions
 	ConnectOptions []ConnectOptions
@@ -796,6 +798,13 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		if transport := opts.Transport; transport != nil {
 			if c.roomConnected.Load() {
 				return fmt.Errorf("custom session transport requires an unconnected job room")
+			}
+			// Opt-in transports can validate/apply room options before owning media or
+			// starting recording. Existing transports without this hook are unchanged.
+			if configurable, ok := transport.(interface{ ConfigureRoomOptions(RoomOptions) error }); ok {
+				if err := configurable.ConfigureRoomOptions(opts.RoomOptions); err != nil {
+					return fmt.Errorf("configure custom room transport: %w", err)
+				}
 			}
 			session.Room = nil
 			c.customRoomTransport.Store(true)

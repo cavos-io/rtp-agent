@@ -19,6 +19,8 @@ type CaptionWriter interface {
 // CaptionTransport supplies publication only; RoomIO retains caption semantics.
 // Functions must be safe for concurrent caller and agent events.
 type CaptionTransport struct {
+	DisableTranscriptionOutput                             bool
+	TranscriptionNextOutput                                TranscriptionTextOutput
 	AgentIdentity, AgentTrack, CallerIdentity, CallerTrack string
 	PublishPacket                                          func(*lk.Transcription) error
 	PublishText                                            func(string, lksdk.StreamTextOptions)
@@ -35,7 +37,7 @@ type CaptionForwarder struct {
 }
 
 func NewCaptionForwarder(session *agent.AgentSession, transport CaptionTransport) *CaptionForwarder {
-	r := &RoomIO{AgentSession: session, audioTrackID: transport.AgentTrack,
+	r := &RoomIO{Options: RoomOptions{DisableTranscriptionOutput: transport.DisableTranscriptionOutput, TranscriptionNextOutput: transport.TranscriptionNextOutput}, AgentSession: session, audioTrackID: transport.AgentTrack,
 		userTranscriptionTrackID: transport.CallerTrack, userTranscriptionParticipantID: transport.CallerIdentity,
 		transcriptionPacketPublisher: transport.PublishPacket, transcriptionTextPublisher: transport.PublishText,
 		transcriptionParticipantIdentity: func() string { return transport.AgentIdentity },
