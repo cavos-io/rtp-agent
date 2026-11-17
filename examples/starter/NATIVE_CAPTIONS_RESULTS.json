@@ -1,0 +1,151 @@
+{
+  "base_revision": "fdc689de9",
+  "native_ffi": "0.12.80",
+  "platform": "darwin/arm64",
+  "live_runs": {
+    "live-01": {
+      "cleanup_ms": 2023.304791,
+      "continuity_windows": [
+        {
+          "energy": 1182705431651,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000213417
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.000345041
+        },
+        {
+          "energy": 53846494248,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 1.000160042
+        },
+        {
+          "energy": 1150110277850,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 1.000048875
+        },
+        {
+          "energy": 1204297171424,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 1.00004475
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 23213,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 3.2995,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 5,
+      "max_input_gap_ms": 21.623,
+      "output_1320_frames": 51,
+      "output_990_frames": 50,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 5.000831917
+    },
+    "live-02": {
+      "cleanup_ms": 2016.2005,
+      "continuity_windows": [
+        {
+          "energy": 1178136149244,
+          "pcm_seconds": 1,
+          "second": 1,
+          "wall_seconds": 1.000967416
+        },
+        {
+          "energy": 1204302644955,
+          "pcm_seconds": 1,
+          "second": 2,
+          "wall_seconds": 1.001059792
+        },
+        {
+          "energy": 64814678405,
+          "pcm_seconds": 1,
+          "second": 3,
+          "wall_seconds": 0.9985635
+        },
+        {
+          "energy": 1139124492820,
+          "pcm_seconds": 1,
+          "second": 4,
+          "wall_seconds": 1.00142425
+        },
+        {
+          "energy": 1204356143812,
+          "pcm_seconds": 1,
+          "second": 5,
+          "wall_seconds": 0.99839325
+        }
+      ],
+      "false_recovery_ms": 0,
+      "full_restart_recovery_contract": false,
+      "helper_cleanup": {
+        "mode": "inprocess",
+        "native_cleanup_ms": 0,
+        "pid": 23818,
+        "reaped": false,
+        "exit_code": 0,
+        "kill_attempted": false,
+        "cleanup_ms": 3.999167,
+        "shutdown_seen": true,
+        "disconnect_callback": true,
+        "handles_released": true,
+        "runtime_disposed": false,
+        "callback_overflow": false
+      },
+      "input_pcm_seconds": 5,
+      "max_input_gap_ms": 55.499,
+      "output_1320_frames": 51,
+      "output_990_frames": 50,
+      "participants_after": 1,
+      "participants_during": 2,
+      "signaling_recovery_ms": 0,
+      "wall_seconds": 5.000505166
+    }
+  },
+  "prior_result_hashes_verified": 3441,
+  "known_failure": "TestRoomIOOffPlaybackStartedUsesCallbackIdentity, also fails in isolation",
+  "artifacts": {
+    "examples/native-receive-probe/results/native-captions-20261117/architecture.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/native-captions-20261117/callback-identity-followup.log": "b2514e60c77f4b5e4db19b8e6514918f1c8cfb51f90150bbc18d2c0a4853e271",
+    "examples/native-receive-probe/results/native-captions-20261117/default-helper.log": "605a5e37fa477ad7c058512bfbb2b74e10a681ac9fe8de4d5058cb70573f82fa",
+    "examples/native-receive-probe/results/native-captions-20261117/focused-final.log": "7b7fd9a99215e8b9ce847ae2bed6035b597326a1d49d18f59bf4341951c85c72",
+    "examples/native-receive-probe/results/native-captions-20261117/live-01/session-close/audio.ogg": "9ddc4a76ae203772749ba99b069bc8d1d47f360a154b99a1cf57230e8664713e",
+    "examples/native-receive-probe/results/native-captions-20261117/live-01/session-close/captions.json": "957f6d341413434ee1a347a046ed02d761d2567c3ee0a3e4412751237308139b",
+    "examples/native-receive-probe/results/native-captions-20261117/live-01/session-close/session_report.json": "c1afa27668512c4e716e91e04ba7d61711ab2985f17f923e7fe1b9e32b78cccc",
+    "examples/native-receive-probe/results/native-captions-20261117/live-01/session-close/summary.json": "91cd06daf5b6622c057e6550c1dff2b048394770e263cc3dccf1ee06c676f06e",
+    "examples/native-receive-probe/results/native-captions-20261117/live-01.log": "561396d230e140145898e8aaf78708677e145397041a43b114caf8e9c2f623d8",
+    "examples/native-receive-probe/results/native-captions-20261117/live-02/session-close/audio.ogg": "a3aa2c43c27368a959e752559a623d299012e8ef77621eb0ec822ff6c6265d4a",
+    "examples/native-receive-probe/results/native-captions-20261117/live-02/session-close/captions.json": "d23a46edc6152761ff68215d708eb44e9b650a80baf48771afbc9b344a60e120",
+    "examples/native-receive-probe/results/native-captions-20261117/live-02/session-close/session_report.json": "5251f152fc7f86b69c224842c5ffbb8c6d9d0da4966c2ff1beeaba28891f1063",
+    "examples/native-receive-probe/results/native-captions-20261117/live-02/session-close/summary.json": "3aafed23b7d9a92db63780f2f096eacac81516e1f1a23987879edbcac612ea57",
+    "examples/native-receive-probe/results/native-captions-20261117/live-02.log": "4086e7d7e6922a5fdb04f3732db866f7bd58c398954807661216d5b9c791d734",
+    "examples/native-receive-probe/results/native-captions-20261117/regression-network.log": "0a2fc0e9cfba72e1b3fe4be500f002a146ed1affdfc6a14b8cf462c1ead0038c",
+    "examples/native-receive-probe/results/native-captions-20261117/regression.log": "0dc32b38d070937c6a14ce7e441a9e652cdd4f11ba351113b076c4564316d6c3",
+    "examples/native-receive-probe/results/native-captions-20261117/server-live.log": "29137bf568ce1d831e77f3baabb5446e6436e3a3e641aa760d43c881c0ad068e",
+    "examples/native-receive-probe/results/native-captions-20261117/server.log": "3b9961267aa6624d1eb04f97071777c413edad2d1ca3e64bdd59a5330eff96d5",
+    "examples/native-receive-probe/results/native-captions-20261117/vet.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "examples/native-receive-probe/results/native-captions-20261117/wrapper-final.log": "5a997c500e9a6b7791cade563c7a9e46ad5086338853d487d5116741e3c8fc12",
+    "examples/native-receive-probe/results/native-captions-20261117/wrapper-validation.log": "f074e4f7e98b19d09dd8d2c05b7ce39d309a17a40b277d9233da2be02b0c3cea",
+    "examples/native-receive-probe/results/native-captions-20261117/wrapper.log": "4e30da5fcd1f03d03ed2cefca966e994e2d4e869d05a45806f041f286f12f5bd"
+  }
+}

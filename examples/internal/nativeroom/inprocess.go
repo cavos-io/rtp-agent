@@ -77,6 +77,9 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	c := &client{ctx: run, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{}), cleanup: Cleanup{Mode: "inprocess", PID: os.Getpid()}}
+	c.startCaptions = func(session *agent.AgentSession, identity string) (func(context.Context) error, error) {
+		return startNativeCaptions(run, s, session, identity, cfg.Participant, cfg.TrackSID)
+	}
 	c.send = func(ctx context.Context, kind string, data []byte) (err error) {
 		defer func() { err = nativeOutputError(err, s.Err(), context.Cause(run)) }()
 		switch kind {

@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -2449,15 +2449,24 @@ func (rio *RoomIO) OnPlaybackStarted(callback func(PlaybackStartedEvent)) {
 	rio.mu.Unlock()
 }
 
+// playbackCallbackIdentity preserves the legacy callback-based Off API for
+// closures sharing code but capturing different state. As with AgentSession.Off,
+// this relies on gc's function-value representation; retain a GC-visible pointer
+// and keep the callback itself alive in the handler slice. Code addresses alone
+// do not identify closures. The session playback controller uses registration IDs.
+func playbackCallbackIdentity[T any](callback func(T)) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&callback))
+}
+
 func (rio *RoomIO) OffPlaybackStarted(callback func(PlaybackStartedEvent)) {
 	if rio == nil || callback == nil {
 		return
 	}
-	callbackPointer := reflect.ValueOf(callback).Pointer()
+	callbackPointer := playbackCallbackIdentity(callback)
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	for i, handler := range rio.playbackStartedHandlers {
-		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+		if playbackCallbackIdentity(handler) != callbackPointer {
 			continue
 		}
 		rio.playbackStartedHandlers = append(rio.playbackStartedHandlers[:i], rio.playbackStartedHandlers[i+1:]...)
@@ -2478,11 +2487,11 @@ func (rio *RoomIO) OffPlaybackFinished(callback func(PlaybackFinishedEvent)) {
 	if rio == nil || callback == nil {
 		return
 	}
-	callbackPointer := reflect.ValueOf(callback).Pointer()
+	callbackPointer := playbackCallbackIdentity(callback)
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	for i, handler := range rio.playbackFinishedHandlers {
-		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+		if playbackCallbackIdentity(handler) != callbackPointer {
 			continue
 		}
 		rio.playbackFinishedHandlers = append(rio.playbackFinishedHandlers[:i], rio.playbackFinishedHandlers[i+1:]...)

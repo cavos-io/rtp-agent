@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
+
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
@@ -33,19 +35,20 @@ type message struct {
 }
 
 type client struct {
-	cleanup   Cleanup
-	send      func(context.Context, string, []byte) error
-	killed    atomic.Bool
-	ctx       context.Context
-	cancel    context.CancelCauseFunc
-	done      chan struct{}
-	ready     chan struct{}
-	ack       chan message
-	frames    chan *model.AudioFrame
-	stdin     io.WriteCloser
-	commandMu sync.Mutex
-	nextID    uint64
-	err       error // published by closing done
+	startCaptions func(*agent.AgentSession, string) (func(context.Context) error, error)
+	cleanup       Cleanup
+	send          func(context.Context, string, []byte) error
+	killed        atomic.Bool
+	ctx           context.Context
+	cancel        context.CancelCauseFunc
+	done          chan struct{}
+	ready         chan struct{}
+	ack           chan message
+	frames        chan *model.AudioFrame
+	stdin         io.WriteCloser
+	commandMu     sync.Mutex
+	nextID        uint64
+	err           error // published by closing done
 }
 
 type Config struct {

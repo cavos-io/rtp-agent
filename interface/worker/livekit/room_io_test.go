@@ -2362,6 +2362,42 @@ func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	}
 }
 
+//go:noinline
+func playbackFinishedClosure(ch chan<- PlaybackFinishedEvent) func(PlaybackFinishedEvent) {
+	return func(ev PlaybackFinishedEvent) { ch <- ev }
+}
+
+func TestRoomIOOffPlaybackFinishedUsesCallbackIdentity(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	first, second := make(chan PlaybackFinishedEvent, 1), make(chan PlaybackFinishedEvent, 1)
+	firstCallback, secondCallback := playbackFinishedClosure(first), playbackFinishedClosure(second)
+	rio.OnPlaybackFinished(firstCallback)
+	rio.OnPlaybackFinished(secondCallback)
+	// An unregistered closure sharing code must not remove either listener.
+	rio.OffPlaybackFinished(playbackFinishedClosure(make(chan PlaybackFinishedEvent, 1)))
+	rio.OffPlaybackFinished(secondCallback)
+	rio.OffPlaybackFinished(secondCallback) // Removing twice must leave the first intact.
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
+		Data: make([]byte, 960*2), SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rio.Flush()
+	select {
+	case ev := <-first:
+		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("unexpected playback event: %#v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first playback_finished handler did not receive event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed handler received event: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOPlaybackFinishedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	kept := make(chan PlaybackFinishedEvent, 1)

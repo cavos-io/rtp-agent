@@ -44,6 +44,8 @@ type Session struct {
 	subscribedOnce    bool
 	// Everything below is accessed only by the runtime owner goroutine.
 	room, local, track, stream, source, output  uint64
+	captionPending                              int
+	outputSID                                   string // published before ready closes; immutable thereafter
 	connecting, closing, published, captureBusy bool
 	paused                                      bool
 	parked, control                             *command
@@ -156,6 +158,7 @@ type nativeBackend struct {
 	overflow func() bool
 }
 type command struct {
+	caption    *pb.FfiRequest
 	s          *Session
 	url, token string
 	kind       string
@@ -306,7 +309,17 @@ func (r *Runtime) release(ev proto.Message) error {
 	}
 	return nil
 }
-func (r *Runtime) finish(s *Session, e error) { delete(r.sessions, s); s.finish(e) }
+func (r *Runtime) finish(s *Session, e error) {
+	for id, p := range r.pending {
+		if p.s == s && p.kind == "caption" {
+			delete(r.pending, id)
+			p.reply <- errors.Join(ErrClosed, e)
+		}
+	}
+	s.captionPending = 0
+	delete(r.sessions, s)
+	s.finish(e)
+}
 func (r *Runtime) failSession(s *Session, e error) error {
 	s.setError(e)
 	s.cancel()
@@ -327,6 +340,9 @@ func (r *Runtime) failSession(s *Session, e error) error {
 }
 func (r *Runtime) handle(c command) error {
 	s := c.s
+	if c.caption != nil {
+		return r.handleCaption(c)
+	}
 	if c.kind != "" {
 		return r.playbackControl(c)
 	}
@@ -389,7 +405,7 @@ func (r *Runtime) run() {
 		for {
 			select {
 			case c := <-r.commands:
-				if c.pcm != nil || c.kind != "" {
+				if c.pcm != nil || c.kind != "" || c.caption != nil {
 					c.reply <- ErrClosed
 				} else {
 					c.s.finish(ErrClosed)

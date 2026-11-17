@@ -120,6 +120,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			subscribed := make(chan struct{}, 1)
 			reconnected := make(chan struct{}, 1)
 			cb := lk.NewRoomCallback()
+			captionCheck := newNativeCaptionCheck(t, cb)
 			cb.OnReconnected = func() {
 				select {
 				case reconnected <- struct{}{}:
@@ -160,6 +161,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 				t.Fatal(err)
 			}
 			defer caller.Disconnect()
+			captionCheck.attach(caller)
 			track, err := lk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
 			if err != nil {
 				t.Fatal(err)
@@ -244,6 +246,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			if !foundAgent {
 				t.Fatal("assigned agent identity absent")
 			}
+			captionCheck.verify(ctx, run.session, pub.SID(), dir)
 			started := time.Now()
 			initial := samples.Load()
 			var windows []map[string]float64

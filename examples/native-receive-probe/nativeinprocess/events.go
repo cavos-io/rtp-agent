@@ -17,6 +17,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 	if ev.GetPanic() != nil {
 		return errors.New("native panic callback")
 	}
+	if handled, e := r.captionCallback(ev); handled {
+		return e
+	}
 	if c := ev.GetConnect(); c != nil {
 		pending, e := r.resolve(c.GetAsyncId(), "connect")
 		if e != nil {
@@ -70,6 +73,7 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		if c.GetError() != "" {
 			return r.failSession(p.s, errors.New(c.GetError()))
 		}
+		p.s.outputSID = c.GetPublication().GetInfo().GetSid()
 		p.s.published = true
 		close(p.s.ready)
 	}

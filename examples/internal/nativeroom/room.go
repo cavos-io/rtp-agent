@@ -34,6 +34,7 @@ type Room struct {
 	child             *client
 	playback          *playback
 	closeOnce         sync.Once
+	closeCaptions     func(context.Context) error
 	samples           atomic.Uint64
 }
 
@@ -139,6 +140,23 @@ func (r *Room) Start(ctx context.Context) error {
 		child.close()
 		return startup.Err()
 	}
+	if child.startCaptions != nil {
+		closeCaptions, err := child.startCaptions(r.Session, info.AgentIdentity)
+		if err != nil {
+			child.close()
+			return err
+		}
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = closeCaptions(closeCtx)
+			return context.Canceled
+		}
+		r.closeCaptions = closeCaptions
+		r.mu.Unlock()
+	}
 	r.playback = newPlayback(child.ctx, child.command, r.recorder.RecordOutput, child.cancel)
 	r.Session.EnsureAssistant().SetPublishAudio(r.playback.Publish)
 	r.Session.SetAudioPlaybackController(r.playback)
@@ -189,6 +207,17 @@ func (r *Room) BeginShutdown() {
 }
 func (r *Room) Close() error {
 	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		closeCaptions := r.closeCaptions
+		r.mu.Unlock()
+		if closeCaptions != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := closeCaptions(ctx); err != nil {
+				logger.Logger.Warnw("native captions shutdown failed", err)
+			}
+			cancel()
+		}
 		r.BeginShutdown()
 		r.mu.Lock()
 		child := r.child
