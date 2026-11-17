@@ -1,0 +1,59 @@
+{
+  "cleanup_ms": 2010.842958,
+  "continuity_windows": [
+    {
+      "energy": 1194640794036,
+      "pcm_seconds": 1,
+      "second": 1,
+      "wall_seconds": 1.000205834
+    },
+    {
+      "energy": 1180438213139,
+      "pcm_seconds": 0.98,
+      "second": 2,
+      "wall_seconds": 0.999830875
+    },
+    {
+      "energy": 65770090148,
+      "pcm_seconds": 1,
+      "second": 3,
+      "wall_seconds": 1.000361208
+    },
+    {
+      "energy": 1138178375405,
+      "pcm_seconds": 1,
+      "second": 4,
+      "wall_seconds": 0.999643833
+    },
+    {
+      "energy": 1204305477969,
+      "pcm_seconds": 1.02,
+      "second": 5,
+      "wall_seconds": 1.00001175
+    }
+  ],
+  "false_recovery_ms": 0,
+  "full_restart_recovery_contract": false,
+  "helper_cleanup": {
+    "mode": "inprocess",
+    "native_cleanup_ms": 0,
+    "pid": 33469,
+    "reaped": false,
+    "exit_code": 0,
+    "kill_attempted": false,
+    "cleanup_ms": 3.967792,
+    "shutdown_seen": true,
+    "disconnect_callback": true,
+    "handles_released": true,
+    "runtime_disposed": false,
+    "callback_overflow": false
+  },
+  "input_pcm_seconds": 5,
+  "max_input_gap_ms": 26.295,
+  "output_1320_frames": 51,
+  "output_990_frames": 51,
+  "participants_after": 1,
+  "participants_during": 2,
+  "signaling_recovery_ms": 0,
+  "wall_seconds": 5.000078542
+}

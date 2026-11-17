@@ -1,0 +1,72 @@
+{
+  "audio_recording_path": "/Users/el7cosmos/src/cavos/rtp-agent/examples/native-receive-probe/results/native-lifecycle-20261117/live-04/lifecycle-muted/audio.ogg",
+  "audio_recording_started_at": 1794888483.349206,
+  "chat_history": {
+    "items": [
+      {
+        "created_at": 1794888483.329112,
+        "id": "handoff_b2d99c6b-b76",
+        "new_agent_id": "default_agent",
+        "type": "agent_handoff"
+      },
+      {
+        "created_at": 1794888483.329139,
+        "id": "item_18b58a67bc2a",
+        "instructions": "offline primary native room",
+        "type": "agent_config_update"
+      }
+    ]
+  },
+  "events": [
+    {
+      "created_at": 1794888483.329113,
+      "item": {
+        "created_at": 1794888483.329112,
+        "id": "handoff_b2d99c6b-b76",
+        "new_agent_id": "default_agent",
+        "type": "agent_handoff"
+      },
+      "type": "conversation_item_added"
+    },
+    {
+      "created_at": 1794888483.329191,
+      "new_state": "listening",
+      "old_state": "initializing",
+      "type": "agent_state_changed"
+    },
+    {
+      "created_at": 1794888490.596798,
+      "error": null,
+      "reason": "user_initiated",
+      "type": "close"
+    }
+  ],
+  "job_id": "mock-job-d6263201b90a",
+  "options": {
+    "aec_warmup_duration": 3,
+    "allow_interruptions": true,
+    "discard_audio_if_uninterruptible": true,
+    "ivr_detection": false,
+    "max_endpointing_delay": 3,
+    "max_tool_steps": 3,
+    "min_consecutive_speech_delay": 0,
+    "min_endpointing_delay": 0.5,
+    "min_interruption_duration": 0.5,
+    "min_interruption_words": 0,
+    "preemptive_generation": {
+      "enabled": true,
+      "max_retries": 3,
+      "max_speech_duration": 10,
+      "preemptive_tts": false
+    },
+    "session_close_transcript_timeout": 2,
+    "turn_detection": "",
+    "use_tts_aligned_transcript": false,
+    "user_away_timeout": 15
+  },
+  "room": "starter-primary-1794888483097618000",
+  "room_id": "",
+  "sdk_version": "1.0.0",
+  "timestamp": 1794888490.597046,
+  "usage": null
+}

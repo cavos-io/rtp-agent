@@ -20,22 +20,23 @@ import (
 // Room owns one native connection and uses the worker-assigned primary token. It never
 // connects the prepared Pion room or creates a second agent identity.
 type Room struct {
-	continuity        continuity
-	connect           func(context.Context, Config, func(context.Context, *model.AudioFrame)) (*client, error)
-	mu                sync.Mutex
-	closed            bool
-	cancel            context.CancelFunc
-	Config            Config
-	APIKey, APISecret string
-	Job               *worker.JobContext
-	Session           *agent.AgentSession
-	DeleteRoomOnClose bool
-	recorder          *workerlivekit.RecorderIO
-	child             *client
-	playback          *playback
-	closeOnce         sync.Once
-	closeCaptions     func(context.Context) error
-	samples           atomic.Uint64
+	continuity          continuity
+	microphoneLifecycle bool
+	connect             func(context.Context, Config, func(context.Context, *model.AudioFrame)) (*client, error)
+	mu                  sync.Mutex
+	closed              bool
+	cancel              context.CancelFunc
+	Config              Config
+	APIKey, APISecret   string
+	Job                 *worker.JobContext
+	Session             *agent.AgentSession
+	DeleteRoomOnClose   bool
+	recorder            *workerlivekit.RecorderIO
+	child               *client
+	playback            *playback
+	closeOnce           sync.Once
+	closeCaptions       func(context.Context) error
+	samples             atomic.Uint64
 }
 
 func New(job *worker.JobContext, session *agent.AgentSession, cfg Config, key, secret string) *Room {
@@ -88,7 +89,7 @@ func (r *Room) Start(ctx context.Context) error {
 					continue
 				}
 				for _, t := range p.Tracks {
-					if t.Type == lkproto.TrackType_AUDIO && !t.Muted {
+					if eligibleInput(t, r.microphoneLifecycle) {
 						candidates = append(candidates, struct{ identity, sid string }{p.Identity, t.Sid})
 					}
 				}
@@ -256,4 +257,11 @@ func (r *Room) CleanupDiagnostics() (Cleanup, bool) {
 	default:
 		return Cleanup{}, false
 	}
+}
+
+func eligibleInput(t *lkproto.TrackInfo, microphone bool) bool {
+	if microphone {
+		return t.Type == lkproto.TrackType_AUDIO && t.Source == lkproto.TrackSource_MICROPHONE
+	}
+	return t.Type == lkproto.TrackType_AUDIO && !t.Muted
 }

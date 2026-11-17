@@ -53,8 +53,11 @@ func (r *Runtime) observeLifecycle(s *Session, event *pb.RoomEvent) error {
 	if p := event.GetParticipantDisconnected(); p != nil && p.GetParticipantIdentity() == s.participant && !s.reconnecting {
 		return r.failSession(s, fmt.Errorf("%w: publisher disconnected", ErrSourceEnded))
 	}
+	if p := event.GetTrackUnpublished(); p != nil && s.microphone && p.GetParticipantIdentity() == s.participant {
+		delete(s.microphones, p.GetPublicationSid())
+	}
 	if tr := event.GetTrackUnsubscribed(); tr != nil && tr.GetTrackSid() == s.trackSID {
-		if s.reconnecting {
+		if s.microphone || s.reconnecting {
 			return r.retireInput(s)
 		}
 		return r.failSession(s, fmt.Errorf("%w: track unsubscribed", ErrSourceEnded))

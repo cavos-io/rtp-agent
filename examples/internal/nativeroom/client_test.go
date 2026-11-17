@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,11 +146,7 @@ func TestCleanupDiagnosticsReportsForcedKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-c.ready:
-	case <-time.After(time.Second):
-		t.Fatal("helper not ready")
-	}
+	requireFixtureReady(t, c)
 	cancel()
 	select {
 	case <-c.done:
@@ -176,11 +173,7 @@ func TestClientGracefulStopDrainsCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case <-c.ready:
-			case <-time.After(time.Second):
-				t.Fatal("not ready")
-			}
+			requireFixtureReady(t, c)
 			err = c.close()
 			if exit == "0" {
 				if !errors.Is(err, context.Canceled) {
@@ -209,11 +202,7 @@ func TestClientStopOrdersAfterInFlightCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.close()
-	select {
-	case <-c.ready:
-	case <-time.After(time.Second):
-		t.Fatal("not ready")
-	}
+	requireFixtureReady(t, c)
 	done := make(chan error, 1)
 	go func() { done <- c.command(context.Background(), "capture", make([]byte, 2400)) }()
 	select {
@@ -232,5 +221,60 @@ func TestClientStopOrdersAfterInFlightCapture(t *testing.T) {
 	}
 	if err := c.command(context.Background(), "clear", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("post-shutdown clear: %v", err)
+	}
+}
+
+// Startup is fixture setup, not the shutdown timing contract under test. Newly
+// created executable scripts can be delayed before /bin/sh executes any code.
+// Register cleanup after TempDir so the child is reaped before its script goes away.
+func requireFixtureReady(t *testing.T, c *client) {
+	t.Helper()
+	t.Cleanup(func() { _ = c.close() })
+	if err := fixtureReady(c, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+func fixtureReady(c *client, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-c.ready:
+		return nil
+	case <-c.done:
+		return fmt.Errorf("helper exited before ready: %w", c.err)
+	case <-timer.C:
+		return errors.New("helper fixture startup timed out")
+	}
+}
+
+func TestFixtureReadyReportsExitAndTimeout(t *testing.T) {
+	failure := errors.New("fixture exit")
+	c := &client{ready: make(chan struct{}), done: make(chan struct{}), err: failure}
+	close(c.done)
+	if e := fixtureReady(c, time.Second); !errors.Is(e, failure) {
+		t.Fatal(e)
+	}
+	c.done = make(chan struct{})
+	if e := fixtureReady(c, time.Millisecond); e == nil {
+		t.Fatal("missing readiness accepted")
+	}
+}
+
+func TestFixtureDelayedStartupStillChecksGracefulCleanup(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "helper")
+	script := "#!/bin/sh\nsleep 1.1\nread config\ncat <<'WIRE'\n" + readyMessages + "WIRE\nread command\nprintf '%s\\n' '{\"event\":\"shutdown\",\"runtime_disposed\":true}'\n"
+	if e := os.WriteFile(binary, []byte(script), 0700); e != nil {
+		t.Fatal(e)
+	}
+	c, e := launch(context.Background(), Config{Binary: binary}, func(context.Context, *model.AudioFrame) {})
+	if e != nil {
+		t.Fatal(e)
+	}
+	requireFixtureReady(t, c)
+	if e = c.close(); !errors.Is(e, context.Canceled) {
+		t.Fatal(e)
+	}
+	if !c.cleanup.Reaped || c.cleanup.KillAttempted || !c.cleanup.RuntimeDisposed || c.cleanup.ExitCode != 0 {
+		t.Fatalf("cleanup lost: %+v", c.cleanup)
 	}
 }

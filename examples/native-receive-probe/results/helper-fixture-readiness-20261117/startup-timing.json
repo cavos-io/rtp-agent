@@ -1,0 +1,86 @@
+[
+  {
+    "iteration": 0,
+    "shell_entered_s": 0.6036102089856286,
+    "config_read_s": 0.6036657499789726,
+    "ready": "ready",
+    "ready_s": 0.609350041981088
+  },
+  {
+    "iteration": 1,
+    "shell_entered_s": 0.3087153340165969,
+    "config_read_s": 0.3087242920009885,
+    "ready": "ready",
+    "ready_s": 0.31126679200679064
+  },
+  {
+    "iteration": 2,
+    "shell_entered_s": 0.3557759159884881,
+    "config_read_s": 0.35579349999898113,
+    "ready": "ready",
+    "ready_s": 0.36055591597687453
+  },
+  {
+    "iteration": 3,
+    "shell_entered_s": 0.24109412499819882,
+    "config_read_s": 0.2411044999898877,
+    "ready": "ready",
+    "ready_s": 0.2436504170182161
+  },
+  {
+    "iteration": 4,
+    "shell_entered_s": 0.06566787502379157,
+    "config_read_s": 0.06567475001793355,
+    "ready": "ready",
+    "ready_s": 0.06813487500767224
+  },
+  {
+    "iteration": 5,
+    "shell_entered_s": 0.1418209159746766,
+    "config_read_s": 0.14182849999633618,
+    "ready": "ready",
+    "ready_s": 0.14432341599604115
+  },
+  {
+    "iteration": 6,
+    "shell_entered_s": 0.2736440830049105,
+    "config_read_s": 0.2736552920250688,
+    "ready": "ready",
+    "ready_s": 0.27727329201297835
+  },
+  {
+    "iteration": 7,
+    "shell_entered_s": 0.3800668330222834,
+    "config_read_s": 0.3800760410085786,
+    "ready": "ready",
+    "ready_s": 0.3842295409995131
+  },
+  {
+    "iteration": 8,
+    "shell_entered_s": 0.30129595901235007,
+    "config_read_s": 0.3013007090194151,
+    "ready": "ready",
+    "ready_s": 0.3051343340193853
+  },
+  {
+    "iteration": 9,
+    "shell_entered_s": 0.24203733398462646,
+    "config_read_s": 0.242047374980757,
+    "ready": "ready",
+    "ready_s": 0.2457424589956645
+  },
+  {
+    "iteration": 10,
+    "shell_entered_s": 0.3603928749798797,
+    "config_read_s": 0.3604087919811718,
+    "ready": "ready",
+    "ready_s": 0.3634402919851709
+  },
+  {
+    "iteration": 11,
+    "shell_entered_s": 0.07306408399017528,
+    "config_read_s": 0.073074291984085,
+    "ready": "ready",
+    "ready_s": 0.07608229198376648
+  }
+]

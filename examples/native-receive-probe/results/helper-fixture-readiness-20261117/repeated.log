@@ -1,0 +1,44 @@
+=== RUN   TestCleanupDiagnosticsReportsForcedKill
+--- PASS: TestCleanupDiagnosticsReportsForcedKill (3.11s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.20s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.13s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.07s)
+=== RUN   TestClientStopOrdersAfterInFlightCapture
+--- PASS: TestClientStopOrdersAfterInFlightCapture (0.12s)
+=== RUN   TestFixtureReadyReportsExitAndTimeout
+--- PASS: TestFixtureReadyReportsExitAndTimeout (0.00s)
+=== RUN   TestFixtureDelayedStartupStillChecksGracefulCleanup
+--- PASS: TestFixtureDelayedStartupStillChecksGracefulCleanup (1.22s)
+=== RUN   TestCleanupDiagnosticsReportsForcedKill
+--- PASS: TestCleanupDiagnosticsReportsForcedKill (3.28s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.42s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.23s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.19s)
+=== RUN   TestClientStopOrdersAfterInFlightCapture
+--- PASS: TestClientStopOrdersAfterInFlightCapture (0.13s)
+=== RUN   TestFixtureReadyReportsExitAndTimeout
+--- PASS: TestFixtureReadyReportsExitAndTimeout (0.00s)
+=== RUN   TestFixtureDelayedStartupStillChecksGracefulCleanup
+--- PASS: TestFixtureDelayedStartupStillChecksGracefulCleanup (1.31s)
+=== RUN   TestCleanupDiagnosticsReportsForcedKill
+--- PASS: TestCleanupDiagnosticsReportsForcedKill (3.17s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.33s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.16s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.17s)
+=== RUN   TestClientStopOrdersAfterInFlightCapture
+--- PASS: TestClientStopOrdersAfterInFlightCapture (0.09s)
+=== RUN   TestFixtureReadyReportsExitAndTimeout
+--- PASS: TestFixtureReadyReportsExitAndTimeout (0.00s)
+=== RUN   TestFixtureDelayedStartupStillChecksGracefulCleanup
+--- PASS: TestFixtureDelayedStartupStillChecksGracefulCleanup (1.21s)
+PASS
+ok  	github.com/cavos-io/rtp-agent/examples/internal/nativeroom	15.255s

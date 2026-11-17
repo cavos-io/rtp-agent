@@ -159,7 +159,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 					}
 				}()
 			}
-			caller, err := lk.ConnectToRoom(url, lk.ConnectInfo{APIKey: "devkey", APISecret: "local-native-receive-experiment-secret", RoomName: roomName, ParticipantIdentity: "caller-test"}, cb)
+			caller, err := lk.ConnectToRoom(url, lk.ConnectInfo{APIKey: "devkey", APISecret: "local-native-receive-experiment-secret", RoomName: roomName, ParticipantIdentity: "caller-test"}, cb, lk.WithAutoSubscribe(ending != "lifecycle-delayed"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,6 +173,8 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			if err != nil {
 				t.Fatal(err)
 			}
+			stopScreen := prepareLifecycleInput(t, ending, caller, pub, dir)
+			defer stopScreen()
 			connectionURL := url
 			if agentURL != "" {
 				connectionURL = agentURL
@@ -181,6 +183,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			var samples atomic.Uint64
 			var last, gap atomic.Int64
 			var inputEnergy atomic.Uint64
+			var screenLeak atomic.Uint64
 			type running struct {
 				job     *worker.JobContext
 				session *agent.AgentSession
@@ -198,6 +201,15 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 						}
 					}
 					samples.Add(uint64(f.SamplesPerChannel))
+					if strings.HasPrefix(ending, "lifecycle-") {
+						pcm := make([]int16, len(f.Data)/2)
+						for i := range pcm {
+							pcm[i] = int16(binary.LittleEndian.Uint16(f.Data[i*2:]))
+						}
+						if primaryAmplitude(pcm, 3520) > 1000 {
+							screenLeak.Add(1)
+						}
+					}
 					for i := 0; i < len(f.Data); i += 2 {
 						v := int64(int16(binary.LittleEndian.Uint16(f.Data[i:])))
 						inputEnergy.Add(uint64(v * v))
@@ -234,6 +246,7 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 				t.Fatal(run.err)
 			}
 			defer run.job.Shutdown("test cleanup")
+			track, pub = exerciseLifecycle(t, ctx, ending, caller, run.session, track, pub, dir)
 			if run.job.RoomConnected() || run.session.Room != nil {
 				t.Fatal("Pion room connected")
 			}
@@ -262,6 +275,27 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			captionCheck.verify(ctx, run.session, pub.SID(), dir)
 			stateCheck.verify(ctx, run.session, dir)
 			dtmfCheck.verify(ctx, run.session, run.job.PrimaryRoomIO(), caller, dir)
+			if strings.HasPrefix(ending, "lifecycle-") {
+				// Separate intentional mute/replacement gaps from the steady PCM contract.
+				before := samples.Load()
+				deadline := time.After(2 * time.Second)
+				tick := time.NewTicker(20 * time.Millisecond)
+				for samples.Load() == before {
+					select {
+					case <-deadline:
+						tick.Stop()
+						t.Fatal("no PCM after lifecycle change")
+					case <-tick.C:
+					}
+				}
+				tick.Stop()
+				b, _ := json.Marshal(map[string]float64{"lifecycle_max_gap_ms": float64(gap.Load()) / 1e6})
+				if e := os.WriteFile(filepath.Join(dir, "lifecycle-gap.json"), b, 0600); e != nil {
+					t.Fatal(e)
+				}
+				gap.Store(0)
+				last.Store(0)
+			}
 			started := time.Now()
 			initial := samples.Load()
 			var windows []map[string]float64
@@ -284,6 +318,14 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 					case <-ctx.Done():
 						return
 					default:
+					}
+					if ending == "lifecycle-muted" {
+						if i == 100 {
+							pub.SetMuted(true)
+						}
+						if i == 150 {
+							pub.SetMuted(false)
+						}
 					}
 					for j := range pcm {
 						pcm[j] = int16(10000 * math.Sin(2*math.Pi*660*float64(i*960+j)/48000))
@@ -487,6 +529,9 @@ func runNativePrimaryConfigured(t *testing.T, endings []string, agentURL string,
 			}
 			if inputEnergy.Load() < 1000000 || tone990.Load() < 20 || tone1320.Load() < 20 {
 				t.Fatalf("missing content input=%d output=%d/%d", inputEnergy.Load(), tone990.Load(), tone1320.Load())
+			}
+			if screenLeak.Load() != 0 {
+				t.Errorf("screen-share marker reached input: %d frames", screenLeak.Load())
 			}
 			stop := time.Now()
 			switch ending {

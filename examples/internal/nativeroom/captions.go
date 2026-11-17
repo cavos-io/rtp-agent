@@ -119,7 +119,19 @@ func startNativeCaptions(ctx context.Context, s *native.Session, session *agent.
 	}
 	captionCtx, cancel := context.WithCancel(ctx)
 	p := &captionPublisher{ctx: captionCtx, send: s.PublishCaption, identity: identity}
-	f := wl.NewCaptionForwarder(session, wl.CaptionTransport{AgentIdentity: identity, AgentTrack: sid, CallerIdentity: caller, CallerTrack: track, PublishPacket: p.packet, PublishText: p.text, OpenText: p.open, Usable: func() bool { return ctx.Err() == nil }})
+	f := wl.NewCaptionForwarder(session, wl.CaptionTransport{AgentIdentity: identity, AgentTrack: sid, CallerIdentity: caller, CallerTrack: track, PublishPacket: func(t *lk.Transcription) error {
+		if t.TranscribedParticipantIdentity == caller {
+			t = proto.Clone(t).(*lk.Transcription)
+			t.TrackId = s.InputTrackSID()
+		}
+		return p.packet(t)
+	}, PublishText: func(text string, o lksdk.StreamTextOptions) {
+		if o.Attributes[wl.RoomIOTranscriptionTrackIDAttribute] == track {
+			o.Attributes = maps.Clone(o.Attributes)
+			o.Attributes[wl.RoomIOTranscriptionTrackIDAttribute] = s.InputTrackSID()
+		}
+		p.text(text, o)
+	}, OpenText: p.open, Usable: func() bool { return ctx.Err() == nil }})
 	return func(closeCtx context.Context) error {
 		stop := context.AfterFunc(closeCtx, cancel)
 		defer stop()

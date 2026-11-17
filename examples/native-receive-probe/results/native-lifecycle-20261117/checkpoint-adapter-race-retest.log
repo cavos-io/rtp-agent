@@ -1,0 +1,6 @@
+--- FAIL: TestClientGracefulStopDrainsCleanup (1.61s)
+    --- FAIL: TestClientGracefulStopDrainsCleanup/exit-7 (1.01s)
+        client_test.go:182: not ready
+FAIL
+FAIL	github.com/cavos-io/rtp-agent/examples/internal/nativeroom	15.128s
+FAIL

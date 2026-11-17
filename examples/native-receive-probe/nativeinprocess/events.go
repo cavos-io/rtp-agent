@@ -47,6 +47,11 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		if s.ctx.Err() != nil || r.ctx.Err() != nil {
 			return r.failSession(s, context.Canceled)
 		}
+		for _, p := range c.GetResult().GetParticipants() {
+			for _, pub := range p.GetPublications() {
+				s.observePublication(p.GetParticipant().GetInfo().GetIdentity(), pub.GetInfo())
+			}
+		}
 		res, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_NewAudioSource{NewAudioSource: &pb.NewAudioSourceRequest{Type: pb.AudioSourceType_AUDIO_SOURCE_NATIVE.Enum(), SampleRate: proto.Uint32(24000), NumChannels: proto.Uint32(1), QueueSizeMs: proto.Uint32(200)}}})
 		if e != nil {
 			return r.failSession(s, e)
@@ -81,6 +86,7 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 		p.s.outputSID = c.GetPublication().GetInfo().GetSid()
 		p.s.published = true
+		p.s.markOutputSubscribed()
 		close(p.s.ready)
 	}
 	if c := ev.GetCaptureAudioFrame(); c != nil {
@@ -128,6 +134,13 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		if s == nil || s.closing {
 			return nil
 		}
+		if p := event.GetTrackPublished(); p != nil {
+			s.observePublication(p.GetParticipantIdentity(), p.GetPublication().GetInfo())
+		}
+		if sub := event.GetLocalTrackSubscribed(); sub != nil {
+			s.outputSubscriptionSID = sub.GetTrackSid()
+			s.markOutputSubscribed()
+		}
 		if e := r.observeLifecycle(s, event); e != nil {
 			return e
 		}
@@ -142,13 +155,27 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 		if tr := event.GetTrackSubscribed(); tr != nil {
 			sid, identity := tr.GetTrack().GetInfo().GetSid(), tr.GetParticipantIdentity()
-			if s.explicitSelection && (identity != s.participant || (sid != s.trackSID && !s.awaitingTrack)) {
+			if s.microphone {
+				if identity != s.participant || (!s.microphones[sid] && sid != s.trackSID) {
+					return nil
+				}
+				if s.stream != 0 {
+					if sid == s.trackSID {
+						return nil
+					}
+					if e := r.retireInput(s); e != nil {
+						return e
+					}
+					delete(s.microphones, s.trackSID)
+				}
+			} else if s.explicitSelection && (identity != s.participant || (sid != s.trackSID && !s.awaitingTrack)) {
 				return nil
 			}
-			if s.trackSID != "" && (sid != s.trackSID || identity != s.participant) {
+			if !s.microphone && s.trackSID != "" && (sid != s.trackSID || identity != s.participant) {
 				return r.failSession(s, errors.New("native selected track replaced"))
 			}
 			s.trackSID = sid
+			s.inputSID.Store(sid)
 			s.participant = identity
 			if s.stream != 0 {
 				return r.failSession(s, errors.New("multiple input tracks not supported by prototype"))
@@ -170,6 +197,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 			s.endRebind()
 		}
 		if failure := event.GetTrackSubscriptionFailed(); failure != nil {
+			if s.microphone && (failure.GetParticipantIdentity() != s.participant || !s.microphones[failure.GetTrackSid()]) {
+				return nil
+			}
 			return r.failSession(s, errors.New(failure.GetError()))
 		}
 		if event.GetDisconnected() != nil {
@@ -182,7 +212,7 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 			return nil
 		}
 		if audio.GetEos() != nil {
-			if s.reconnecting || s.awaitingTrack {
+			if s.microphone || s.reconnecting || s.awaitingTrack {
 				return r.retireInput(s)
 			}
 			return r.failSession(s, fmt.Errorf("%w: stream ended", ErrSourceEnded))

@@ -1,0 +1,32 @@
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.72s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.30s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.42s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.28s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.19s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.09s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.19s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.07s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.12s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.36s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.12s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.24s)
+=== RUN   TestClientGracefulStopDrainsCleanup
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-0
+=== RUN   TestClientGracefulStopDrainsCleanup/exit-7
+--- PASS: TestClientGracefulStopDrainsCleanup (0.37s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-0 (0.08s)
+    --- PASS: TestClientGracefulStopDrainsCleanup/exit-7 (0.29s)
+PASS
+ok  	github.com/cavos-io/rtp-agent/examples/internal/nativeroom	2.320s

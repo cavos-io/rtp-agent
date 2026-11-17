@@ -1,0 +1,401 @@
+=== RUN   TestStarterInProcessNativeAudioLifecycle
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-delayed
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56698->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:54628->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:65348->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56698->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:54628->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:65348->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:61887->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56698->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:54628->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:65348->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:61887->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:59041->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56698->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:54628->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:65348->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:61887->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:59041->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:61817->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:65001->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:53912->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:63531->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:62916->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:49613->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:52327->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:58451->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:63911->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56698->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no buffer space available"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:54628->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:61817->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:65348->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:53912->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:63531->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:62916->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:49613->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:61887->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:52327->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:58451->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:63911->[fe80::2546:942c:2e32:fbd1%en0]:19059: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:59041->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:65001->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:61676->[fe80::2546:942c:2e32:fbd1%en0]:19009: sendto: no route to host"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:30 "level"=0 "msg"="published track" "name"="caller" "source"="MICROPHONE" "trackID"="TR_AM3bhY2enhCz6p"
+2026/11/17 11:02:30 "level"=0 "msg"="published track" "name"="screen" "source"="SCREEN_SHARE_AUDIO" "trackID"="TR_AsVg6QscZiFJi9"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:30 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:30 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:31 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:31 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:31 "level"=0 "msg"="track subscribed" "participant"="primary-agent" "trackID"="TR_AMzrEqfMLnNoX4" "kind"="audio"
+    native_room_integration_test.go:331: drain {PlaybackPosition:1.02s Interrupted:false SynchronizedTranscript: HasSynchronizedTranscript:false} <nil>
+2026/11/17 11:02:32 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:32 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-muted
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to read from candidate udp4 srflx 103.121.17.14:36822 related 0.0.0.0:62787 (resolved: 103.121.17.14:36822): read udp4 0.0.0.0:62787: i/o timeout"
+2026/11/17 11:02:34 "level"=0 "msg"="server initiated leave" "reason"="CLIENT_INITIATED"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Closed"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: closed"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: closed"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Closed"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: closed"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: closed"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53455->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53455->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:58406->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53455->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:58406->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:51165->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53455->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:57670->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:53638->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:54931->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:49913->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:58406->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:57661->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:54150->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57696->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:51165->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:50639->[fe80::2546:942c:2e32:fbd1%en0]:19093: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:57670->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no buffer space available"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:53638->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:54931->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:49913->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:57661->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:54150->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57696->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:57007->[fe80::2546:942c:2e32:fbd1%en0]:19002: sendto: no route to host"
+2026/11/17 11:02:34 "level"=0 "msg"="published track" "name"="caller" "source"="MICROPHONE" "trackID"="TR_AMUSBZLaRfKTZC"
+2026/11/17 11:02:34 "level"=0 "msg"="published track" "name"="screen" "source"="SCREEN_SHARE_AUDIO" "trackID"="TR_Asqp2NCrj8kQa5"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:34 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:34 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:34 "level"=0 "msg"="track subscribed" "participant"="primary-agent" "trackID"="TR_AMegxVXdMVRZWP" "kind"="audio"
+    native_room_integration_test.go:582: {
+          "cleanup_ms": 2034.750167,
+          "continuity_windows": [
+            {
+              "energy": 1182705431651,
+              "pcm_seconds": 1,
+              "second": 1,
+              "wall_seconds": 1.000264583
+            },
+            {
+              "energy": 1204297171424,
+              "pcm_seconds": 1,
+              "second": 2,
+              "wall_seconds": 0.999972667
+            },
+            {
+              "energy": 53846494248,
+              "pcm_seconds": 1,
+              "second": 3,
+              "wall_seconds": 1.000050791
+            },
+            {
+              "energy": 1150110277850,
+              "pcm_seconds": 1,
+              "second": 4,
+              "wall_seconds": 1.000159792
+            },
+            {
+              "energy": 1204297171424,
+              "pcm_seconds": 1,
+              "second": 5,
+              "wall_seconds": 0.999861833
+            }
+          ],
+          "false_recovery_ms": 0,
+          "full_restart_recovery_contract": false,
+          "helper_cleanup": {
+            "mode": "inprocess",
+            "native_cleanup_ms": 0,
+            "pid": 33080,
+            "reaped": false,
+            "exit_code": 0,
+            "kill_attempted": false,
+            "cleanup_ms": 1.615,
+            "shutdown_seen": true,
+            "disconnect_callback": true,
+            "handles_released": true,
+            "runtime_disposed": false,
+            "callback_overflow": false
+          },
+          "input_pcm_seconds": 5,
+          "max_input_gap_ms": 27.44,
+          "output_1320_frames": 51,
+          "output_990_frames": 51,
+          "participants_after": 1,
+          "participants_during": 2,
+          "signaling_recovery_ms": 0,
+          "wall_seconds": 5.000331541
+        }
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-device
+2026/11/17 11:02:41 "level"=0 "msg"="server initiated leave" "reason"="CLIENT_INITIATED"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to read from candidate udp6 host [2402:8780:1065:7afb:f0:b8c:d24:47f6]:54337 (resolved: [2402:8780:1065:7afb:f0:b8c:d24:47f6]:54337): read udp [2402:8780:1065:7afb:f0:b8c:d24:47f6]:54337: i/o timeout"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Closed"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: closed"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: closed"
+2026/11/17 11:02:41 pion.sctp: "level"=0 "msg"="[0xc000ffc008] failed to write packets on netConn: dtls fatal: conn is closed"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Closed"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: closed"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: closed"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Checking"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: checking"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: connecting"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to ping without candidate pairs. Connection is not possible yet."
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53196->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:61631->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:57479->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:50099->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:54772->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:53196->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:61631->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:57479->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:50099->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:54772->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:65229->[fe80::2546:942c:2e32:fbd1%en0]:19057: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:51198->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:51198->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no buffer space available"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:51198->[fe80::2546:942c:2e32:fbd1%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:51198->[fe80::544d:4aff:fedf:ae0b%en0]:19036: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::2546:942c:2e32:fbd1%utun0]:56875->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%awdl0]:55159->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::544d:4aff:fedf:ae0b%llw0]:64548->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ad1b:a6af:3cf6:2623%utun1]:63764->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8ef1:e275:b2fd:dc7f%utun2]:52041->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::ce81:b1c:bd2c:69e%utun3]:49215->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::8088:9f0d:8bc2:e941%utun4]:57387->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Failed to send packet: write udp [fe80::9e01:4bdc:8c03:6362%utun5]:51198->[fe80::544d:4aff:fedf:ae0b%en0]:19029: sendto: no route to host"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:41 "level"=0 "msg"="published track" "name"="caller" "source"="MICROPHONE" "trackID"="TR_AMpVg4m6rQRfVB"
+2026/11/17 11:02:41 "level"=0 "msg"="published track" "name"="screen" "source"="SCREEN_SHARE_AUDIO" "trackID"="TR_AsAXLxKXHeC4Hw"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Setting new connection state: Connected"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="ICE connection state changed: connected"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19059), no such remote"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="peer connection state changed: connected"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:c995:568d:765:fb8e]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([2402:8780:1065:7afb:f0:b8c:d24:47f6]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19059), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19083), no such remote"
+2026/11/17 11:02:41 pion.ice: "level"=0 "msg"="Discard success message from ([fe80::62:5eca:7812:80b9%en0]:19059), no such remote"
+2026/11/17 11:02:41 "level"=0 "msg"="unpublished track" "name"="caller" "trackID"="TR_AMpVg4m6rQRfVB"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to have-remote-offer"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:41 "level"=0 "msg"="track subscribed" "participant"="primary-agent" "trackID"="TR_AMQqXVRPUpzhD6" "kind"="audio"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:41 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+2026/11/17 11:02:42 "level"=0 "msg"="published track" "name"="replacement" "source"="MICROPHONE" "trackID"="TR_AMsuh3nmT93sEB"
+2026/11/17 11:02:42 pion.pc: "level"=0 "msg"="signaling state changed to have-local-offer"
+2026/11/17 11:02:42 pion.pc: "level"=0 "msg"="signaling state changed to stable"
+    native_room_integration_test.go:488: continuity pcm=4.800 wall=5.000 gap=390.405ms
+    native_room_integration_test.go:582: {
+          "cleanup_ms": 2033.094708,
+          "continuity_windows": [
+            {
+              "energy": 880567660239,
+              "pcm_seconds": 0.8,
+              "second": 1,
+              "wall_seconds": 1.000384541
+            },
+            {
+              "energy": 1204269647115,
+              "pcm_seconds": 1,
+              "second": 2,
+              "wall_seconds": 0.999980125
+            },
+            {
+              "energy": 57522589954,
+              "pcm_seconds": 1,
+              "second": 3,
+              "wall_seconds": 0.999807125
+            },
+            {
+              "energy": 1146434352006,
+              "pcm_seconds": 1,
+              "second": 4,
+              "wall_seconds": 1.0001335
+            },
+            {
+              "energy": 1204296599578,
+              "pcm_seconds": 1,
+              "second": 5,
+              "wall_seconds": 0.999943459
+            }
+          ],
+          "false_recovery_ms": 0,
+          "full_restart_recovery_contract": false,
+          "helper_cleanup": {
+            "mode": "inprocess",
+            "native_cleanup_ms": 0,
+            "pid": 33080,
+            "reaped": false,
+            "exit_code": 0,
+            "kill_attempted": false,
+            "cleanup_ms": 2.426209,
+            "shutdown_seen": true,
+            "disconnect_callback": true,
+            "handles_released": true,
+            "runtime_disposed": false,
+            "callback_overflow": false
+          },
+          "input_pcm_seconds": 4.8,
+          "max_input_gap_ms": 390.405,
+          "output_1320_frames": 51,
+          "output_990_frames": 51,
+          "participants_after": 1,
+          "participants_during": 2,
+          "signaling_recovery_ms": 0,
+          "wall_seconds": 5.000267791
+        }
+--- FAIL: TestStarterInProcessNativeAudioLifecycle (19.15s)
+    --- FAIL: TestStarterInProcessNativeAudioLifecycle/lifecycle-delayed (4.16s)
+    --- PASS: TestStarterInProcessNativeAudioLifecycle/lifecycle-muted (7.50s)
+    --- FAIL: TestStarterInProcessNativeAudioLifecycle/lifecycle-device (7.49s)
+FAIL
+FAIL	github.com/cavos-io/rtp-agent/examples/starter	20.002s
+FAIL

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -63,6 +64,7 @@ func CloseInProcessRuntime(ctx context.Context) error {
 func NewInProcess(job *worker.JobContext, session *agent.AgentSession, cfg Config, key, secret string) *Room {
 	r := New(job, session, cfg, key, secret)
 	r.connect = launchInProcess
+	r.microphoneLifecycle = true
 	return r
 }
 func launchInProcess(ctx context.Context, cfg Config, consume func(context.Context, *model.AudioFrame)) (*client, error) {
@@ -71,7 +73,7 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	run, cancel := context.WithCancelCause(ctx)
-	s, e := rt.ConnectSelected(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID)
+	s, e := rt.ConnectMicrophone(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID)
 	if e != nil {
 		cancel(e)
 		return nil, e
@@ -95,10 +97,23 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 			return errors.Join(dtmfErr, stateErr, stopErr, closeCaptions(ctx))
 		}, nil
 	}
+	var outputReady atomic.Bool
 	c.send = func(ctx context.Context, kind string, data []byte) (err error) {
 		defer func() { err = nativeOutputError(err, s.Err(), context.Cause(run)) }()
 		switch kind {
 		case "capture":
+			if !outputReady.Load() {
+				wait, stop := context.WithTimeout(ctx, 10*time.Second)
+				e := s.WaitOutputSubscribed(wait)
+				stop()
+				if e != nil && (ctx.Err() != nil || !errors.Is(e, context.DeadlineExceeded)) {
+					return e
+				}
+				if e != nil {
+					logger.Logger.Infow("native output subscription wait timed out", "timeout", 10*time.Second)
+				}
+				outputReady.Store(true)
+			}
 			if len(data) == 0 || len(data)%2 != 0 || len(data) > 2400 {
 				return errors.New("invalid in-process capture PCM")
 			}
