@@ -173,8 +173,9 @@ natural call completion during drain, including decoded recording markers.
 Initial hold and forced-drain runs found teardown ordering and report serialization
 races. After fixes, both cases pass under the race detector: hold clears before
 transport closure; forced drain completes in about five seconds with finalized
-reports and decodable recordings. Full worker race testing still exposes separate
-races reproduced on unchanged HEAD. The fixture bypasses full app.Run
+reports and decodable recordings. The worker logger/assignment race follow-up is
+recorded in [worker race results](../results/worker-races-20261118/README.md);
+recursive Agora/IPC race findings remain separate. The fixture bypasses full app.Run
 dispatch/providers/storage and is not a long soak.
 
 ### Remaining gates

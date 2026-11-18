@@ -1789,6 +1789,8 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 	timeline := s.dispatchTimelines[jobID]
 	timeline.AcceptedAt = time.Now()
 	s.dispatchTimelines[jobID] = timeline
+	// Retain the logger for this acceptance; its timer can outlive the caller.
+	acceptLogger := logger.Logger
 	livekitStoreServerPendingAccept(PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
@@ -1803,7 +1805,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 			}
 			s.mu.Unlock()
 			if expired {
-				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+				acceptLogger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
 			}
 		},
 	})

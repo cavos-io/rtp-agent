@@ -1,0 +1,247 @@
+{
+  "raw_log": "/private/tmp/worker-race-full-after.log",
+  "sha256": "3a4b63f1a9a7aa4114c1612f948bd27e1c64728b95ff60749d752ef6e4c9ea79",
+  "race_reports": 112,
+  "distinct_site_pairs": [
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*recordingDataPublisher).PublishData()",
+        "source": "interface/worker/agora/transcript_test.go:18 +0x140"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.waitForPublishedTranscript()",
+        "source": "interface/worker/agora/transcript_test.go:529 +0xd8"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.publishedJSON()",
+        "source": "interface/worker/agora/transcript_test.go:546 +0x150"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*recordingDataPublisher).PublishData()",
+        "source": "interface/worker/agora/transcript_test.go:18 +0xf0"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.publishedJSON()",
+        "source": "interface/worker/agora/transcript_test.go:546 +0x11c"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*recordingDataPublisher).PublishData()",
+        "source": "interface/worker/agora/transcript_test.go:18 +0x90"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportCloseCancelsInProgressJoin()",
+        "source": "interface/worker/agora/transport_test.go:878 +0x300"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportLeaveCancelsInProgressJoin()",
+        "source": "interface/worker/agora/transport_test.go:913 +0x300"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportDropsClientEventsAfterLeaveCancelsInProgressJoin()",
+        "source": "interface/worker/agora/transport_test.go:951 +0x304"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportLeaveCleansUpLateJoinSuccess()",
+        "source": "interface/worker/agora/transport_test.go:993 +0x314"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportJoinReportsClosedWhenCloseWinsJoinRace()",
+        "source": "interface/worker/agora/transport_test.go:1034 +0x314"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.(*fakeChannelClient).Join()",
+        "source": "interface/worker/agora/transport_test.go:38 +0x70"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/agora.TestTransportJoinReportsCleanupErrorWhenCloseWinsJoinRace()",
+        "source": "interface/worker/agora/transport_test.go:1076 +0x39c"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).LaunchRunningJob.func1()",
+        "source": "interface/worker/ipc/executor.go:311 +0x40"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.waitForProcessExecutorCommand()",
+        "source": "interface/worker/ipc/executor_test.go:965 +0x1b4"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.init.func2()",
+        "source": "interface/worker/ipc/executor.go:48 +0x18"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).LaunchRunningJob.func1()",
+        "source": "interface/worker/ipc/executor.go:311 +0x40"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingMarksFailedWhenProcessMissing()",
+        "source": "interface/worker/ipc/executor_test.go:697 +0x7c"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:335 +0x3c"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.WriteMessage()",
+        "source": "interface/worker/ipc/channel.go:14 +0xc0"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingWritesPingRequest()",
+        "source": "interface/worker/ipc/executor_test.go:773 +0x708"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingWritesPingRequest()",
+        "source": "interface/worker/ipc/executor_test.go:773 +0x708"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.writeFull()",
+        "source": "interface/worker/ipc/channel.go:21 +0x50"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.ReadMessage()",
+        "source": "interface/worker/ipc/channel.go:33 +0x68"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.WriteMessage()",
+        "source": "interface/worker/ipc/channel.go:14 +0xc0"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.WriteMessage()",
+        "source": "interface/worker/ipc/channel.go:14 +0xc0"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.ReadMessage()",
+        "source": "interface/worker/ipc/channel.go:33 +0x68"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.writeFull()",
+        "source": "interface/worker/ipc/channel.go:21 +0x50"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.ReadMessage()",
+        "source": "interface/worker/ipc/channel.go:38 +0xa8"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingWritesPingRequest.func4()",
+        "source": "interface/worker/ipc/executor_test.go:754 +0x58"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:354 +0x2ec"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingWritesPingRequest.func4()",
+        "source": "interface/worker/ipc/executor_test.go:755 +0x94"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:364 +0x350"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingWritesPingRequest.func4()",
+        "source": "interface/worker/ipc/executor_test.go:756 +0xd0"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:378 +0x410"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingTimeoutKillsProcessWhenPongMissing()",
+        "source": "interface/worker/ipc/executor_test.go:810 +0xc8"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:365 +0x3d0"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).LaunchRunningJob.func1()",
+        "source": "interface/worker/ipc/executor.go:311 +0x40"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).Close()",
+        "source": "interface/worker/ipc/executor.go:427 +0x168"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.TestProcessJobExecutorPingFailureIsNotOverwrittenByCleanExit.func4()",
+        "source": "interface/worker/ipc/executor_test.go:936 +0x94"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*ProcessJobExecutor).pingTask()",
+        "source": "interface/worker/ipc/executor.go:359 +0xac8"
+      }
+    ],
+    [
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.waitForFakeExecutorCloseCalls()",
+        "source": "interface/worker/ipc/pool_test.go:1203 +0xd8"
+      },
+      {
+        "function": "github.com/cavos-io/rtp-agent/interface/worker/ipc.(*fakeJobExecutor).Close()",
+        "source": "interface/worker/ipc/pool_test.go:61 +0x8c"
+      }
+    ]
+  ]
+}

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
@@ -14,10 +15,15 @@ type roomIORecordingLogger struct {
 	warnMessages  []string
 	errorMessages []string
 	withValues    [][]any
+	debugMessages chan string
 }
 
-func (l *roomIORecordingLogger) Debugw(string, ...any) {}
-func (l *roomIORecordingLogger) Infow(string, ...any)  {}
+func (l *roomIORecordingLogger) Debugw(msg string, _ ...any) {
+	if l.debugMessages != nil {
+		l.debugMessages <- msg
+	}
+}
+func (l *roomIORecordingLogger) Infow(string, ...any) {}
 func (l *roomIORecordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 	l.warnMessages = append(l.warnMessages, msg)
 }
@@ -179,5 +185,45 @@ func TestJobContextShutdownLifecycleLogsUseJobLogContext(t *testing.T) {
 		if got[key] != want {
 			t.Errorf("shutdown logger %s = %#v, want %#v", key, got[key], want)
 		}
+	}
+}
+
+type assignmentTimeoutLogger struct {
+	roomIORecordingLogger
+	warnings chan string
+}
+
+func (l *assignmentTimeoutLogger) Warnw(message string, _ error, _ ...any) {
+	l.warnings <- message
+}
+
+func TestAssignmentTimeoutRetainsSchedulingLogger(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &assignmentTimeoutLogger{warnings: make(chan string, 1)}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+	server := NewAgentServer(WorkerOptions{})
+	server.storePendingAccept("retained-logger", JobAcceptArguments{})
+	server.mu.Lock()
+	timer := server.pendingTimers["retained-logger"]
+	timer.Stop()
+	// Timer expiry must use the logger that owned this acceptance even if the
+	// process logger is subsequently replaced before the timeout is delivered.
+	logutil.SetLogger(protoLogger.GetDiscardLogger())
+	timer.Reset(0)
+	server.mu.Unlock()
+	select {
+	case message := <-recorder.warnings:
+		if message != "assignment timed out after availability accept" {
+			t.Fatalf("unexpected warning: %s", message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout did not use its scheduling logger")
+	}
+	server.mu.Lock()
+	_, pending := server.pendingAccepts["retained-logger"]
+	server.mu.Unlock()
+	if pending {
+		t.Fatal("expired acceptance remained pending")
 	}
 }

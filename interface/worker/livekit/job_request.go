@@ -525,12 +525,17 @@ func StorePendingAccept(opts PendingAcceptStoreOptions) {
 	StopPendingAssignmentTimer(opts.Timers, opts.JobID)
 	opts.Pending[opts.JobID] = opts.Args
 	var timer *time.Timer
+	// AfterFunc may run before it returns, even for a positive timeout.
+	// Publish both the timer identity and map entry before invoking its owner.
+	ready := make(chan struct{})
 	timer = time.AfterFunc(opts.Timeout, func() {
+		<-ready
 		if opts.OnTimeout != nil {
 			opts.OnTimeout(opts.JobID, timer)
 		}
 	})
 	opts.Timers[opts.JobID] = timer
+	close(ready)
 }
 
 func StoreServerPendingAccept(opts PendingAcceptStoreOptions) {
