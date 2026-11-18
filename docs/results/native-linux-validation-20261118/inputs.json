@@ -1,0 +1,6 @@
+{
+  "/Users/el7cosmos/src/cavos/rtp-agent/examples/starter/packaging/native-runtime.Dockerfile": "c5343046c8a4b54501488579d4def7d0f12876fe871067ad2d909ee593fe1179",
+  "/Users/el7cosmos/src/cavos/rtp-agent/scripts/install-livekit-ffi-linux.sh": "c428f672f4c7311ea6ebca1b0352c4bda23a4719bc5a35ee1279a8c7b90220b6",
+  "/Users/el7cosmos/src/cavos/agent-worker-golang/Dockerfile": "2be38cb0d24b99a7399d61a8f7d9d4d2e975d44438ec2c4c139359c027714ad8",
+  "/Users/el7cosmos/src/cavos/agent-worker-golang/go.mod": "d77d828cfe0e250bf5fa707d8a6fe8ec054782d0ee423ad7ead01fc1a52c0540"
+}

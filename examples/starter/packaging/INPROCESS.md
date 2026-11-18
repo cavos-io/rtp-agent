@@ -63,3 +63,32 @@ To return to default Pion, set all three experimental flags to `0`. A plain `go 
 ## Historical evidence
 
 Python packaging has been removed from the active workflow. Previous scripts, reports and failed attempts are preserved under `examples/native-receive-probe/results/simple-go-build-20261116/superseded-packaging/`; original experiment results and bundles remain unchanged. `INPROCESS_RESULTS.json` describes the earlier portable-bundle experiment, not this normal-build workflow. This remains experimental opt-in, not default promotion or clean-machine deployment certification.
+
+## Linux packaging (opt-in)
+
+The pinned installer supports Linux amd64 and arm64:
+
+```sh
+bash scripts/install-livekit-ffi-linux.sh amd64 /opt/livekit
+export LIVEKIT_LIB_PATH=/opt/livekit/liblivekit_ffi.so
+```
+
+It downloads the exact 0.12.80 release, checks its architecture-specific SHA-256
+before extraction, and installs only `liblivekit_ffi.so`. Requirements: Bash,
+curl, sha256sum, unzip and install. An optional third argument supplies an offline
+archive; it must pass the same checksum. No runtime flag is changed.
+
+To check Linux ABI initialization/disposal and the runtime race suite without STG:
+
+```sh
+docker buildx build --platform linux/amd64 --progress plain \
+  -f examples/starter/packaging/native-runtime.Dockerfile .
+docker buildx build --platform linux/arm64 --progress plain \
+  -f examples/starter/packaging/native-runtime.Dockerfile .
+```
+
+These checks load the real library but do not join a room. They do not replace
+Linux media, concurrent-call, recording, or downstream image acceptance. The
+Docker engine must be running. Linux arm64 and emulated amd64 runtime/image
+checks passed; see [validation evidence](../../../docs/results/native-linux-validation-20261118/README.md).
+Live Linux media acceptance remains separate.

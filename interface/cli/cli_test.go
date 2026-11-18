@@ -422,7 +422,7 @@ func TestStartConsoleAudioUISkipsAudioForTextMode(t *testing.T) {
 
 func TestStartConsoleTranscriptPrinterWritesAgentOutput(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("help"), nil, agent.AgentSessionOptions{})
-	var out bytes.Buffer
+	var out synchronizedTestBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1704,4 +1704,33 @@ func (f *fakeWorkerLifecycle) Run(context.Context) error {
 func (f *fakeWorkerLifecycle) Drain(context.Context) error {
 	f.drainCalls++
 	return f.drainErr
+}
+
+func TestRunAppWithOptionsErrorReturnsForInvalidCommand(t *testing.T) {
+	old := os.Args
+	os.Args = []string{"worker", "invalid-command"}
+	defer func() { os.Args = old }()
+	server := worker.NewAgentServer(worker.WorkerOptions{})
+	if err := RunAppWithOptionsError(server); err == nil {
+		t.Fatal("invalid command succeeded")
+	}
+	if err := server.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type synchronizedTestBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedTestBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+func (b *synchronizedTestBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }

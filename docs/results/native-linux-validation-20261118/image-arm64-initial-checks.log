@@ -1,0 +1,10 @@
+Image sha256:6b141b0d22486e99f05ce0903023444944152747d0f18071f859e91d3e16e68d platform linux/arm64 user appuser; native flag unset
+=== RUN   TestPinnedNativeLibrarySmoke
+--- PASS: TestPinnedNativeLibrarySmoke (0.01s)
+PASS
+
+Traceback (most recent call last):
+  File "/private/tmp/native-linux-validation/check-image.py", line 28, in <module>
+    assert 'worker.transport.selected' in log and expected in log, 'selection marker missing'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: selection marker missing

@@ -31,33 +31,40 @@ type Frame struct {
 	PCM []int16
 }
 type Session struct {
-	recordRemote          bool
-	recordings            chan RecordingFrame
-	recordingTracks       map[string]recordingTrack
-	recordingParticipants map[string]*pb.ParticipantInfo
-	recordingPublications map[string]recordingPublication
-	chatEnabled           bool // configured before session submission
-	chats                 chan Chat
-	chatReaders           map[uint64]*chatReader
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	frames                chan Frame
-	stateErrors           chan error
-	dtmf                  chan DTMF
-	ready, done           chan struct{}
-	mu                    sync.Mutex
-	err                   error
-	rt                    *Runtime
-	stopWake              func() bool
-	explicitSelection     bool
-	microphone            bool
-	microphones           map[string]bool
-	inputSID              atomic.Value
-	outputSubscribed      chan struct{}
-	outputSubscribedOnce  bool
-	outputSubscriptionSID string
-	subscribed            chan struct{}
-	subscribedOnce        bool
+	participants                          map[string]bool // protected by mu
+	departures                            chan string
+	departuresEnabled                     bool
+	holdSource, holdTrack                 uint64
+	holdClear                             *command
+	dataPending                           bool
+	holdPublished, holdBusy, holdStarting bool
+	recordRemote                          bool
+	recordings                            chan RecordingFrame
+	recordingTracks                       map[string]recordingTrack
+	recordingParticipants                 map[string]*pb.ParticipantInfo
+	recordingPublications                 map[string]recordingPublication
+	chatEnabled                           bool // configured before session submission
+	chats                                 chan Chat
+	chatReaders                           map[uint64]*chatReader
+	ctx                                   context.Context
+	cancel                                context.CancelFunc
+	frames                                chan Frame
+	stateErrors                           chan error
+	dtmf                                  chan DTMF
+	ready, done                           chan struct{}
+	mu                                    sync.Mutex
+	err                                   error
+	rt                                    *Runtime
+	stopWake                              func() bool
+	explicitSelection                     bool
+	microphone                            bool
+	microphones                           map[string]bool
+	inputSID                              atomic.Value
+	outputSubscribed                      chan struct{}
+	outputSubscribedOnce                  bool
+	outputSubscriptionSID                 string
+	subscribed                            chan struct{}
+	subscribedOnce                        bool
 	// Everything below is accessed only by the runtime owner goroutine.
 	room, local, track, stream, source, output  uint64
 	captionPending                              int
@@ -79,7 +86,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{recordings: make(chan RecordingFrame, 100), recordingTracks: make(map[string]recordingTrack), recordingParticipants: make(map[string]*pb.ParticipantInfo), recordingPublications: make(map[string]recordingPublication), chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{participants: make(map[string]bool), departures: make(chan string, 32), recordings: make(chan RecordingFrame, 100), recordingTracks: make(map[string]recordingTrack), recordingParticipants: make(map[string]*pb.ParticipantInfo), recordingPublications: make(map[string]recordingPublication), chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -111,13 +118,14 @@ func (s *Session) finish(e error) {
 	if s.rebindTimer != nil {
 		s.rebindTimer.Stop()
 	}
-	for _, c := range []*command{s.parked, s.control} {
+	for _, c := range []*command{s.parked, s.control, s.holdClear} {
 		if c != nil {
 			c.reply <- errors.Join(ErrClosed, e)
 		}
 	}
 	s.parked = nil
 	s.control = nil
+	close(s.departures)
 	close(s.recordings)
 	close(s.chats)
 	close(s.dtmf)
@@ -180,10 +188,12 @@ type nativeBackend struct {
 	pcm          func(*pb.AudioFrameBufferInfo) ([]int16, error)
 	capture      func(uint64, uint64, []int16) error
 	publishState func(uint64, uint64, []byte) error
+	publishData  func(uint64, uint64, string, []byte) error
 	dispose      func()
 	overflow     func() bool
 }
 type command struct {
+	data        *DataPacket
 	caption     *pb.FfiRequest
 	dtmf        *DTMF
 	clientState *ClientState
@@ -228,7 +238,7 @@ func Open(path string) (*Runtime, error) {
 	if e := startNative(path); e != nil {
 		return nil, e
 	}
-	return startRuntime(nativeBackend{events: callbacks.events, request: request, drop: dropHandle, pcm: copyPCM, capture: capture, publishState: publishStateData, dispose: disposeNative, overflow: callbacks.overflow.Load}), nil
+	return startRuntime(nativeBackend{events: callbacks.events, request: request, drop: dropHandle, pcm: copyPCM, capture: capture, publishState: publishStateData, publishData: publishData, dispose: disposeNative, overflow: callbacks.overflow.Load}), nil
 }
 func startRuntime(b nativeBackend) *Runtime {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -270,9 +280,9 @@ func (r *Runtime) Connect(ctx context.Context, url, token string) (*Session, err
 
 // ConnectSelected pins the caller and publication discovered by the agent.
 func (r *Runtime) ConnectSelected(ctx context.Context, url, token, participant, sid string) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, false, false, false)
+	return r.connectSelected(ctx, url, token, participant, sid, false, false, false, false)
 }
-func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat, record bool) (*Session, error) {
+func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat, record, departures bool) (*Session, error) {
 	if url == "" || token == "" {
 		return nil, errors.New("URL and token required")
 	}
@@ -281,6 +291,7 @@ func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, 
 	s.microphone = microphone
 	s.chatEnabled = chat
 	s.recordRemote = record
+	s.departuresEnabled = departures
 	s.inputSID.Store(sid)
 	if microphone {
 		s.microphones[sid] = true
@@ -330,7 +341,7 @@ func (r *Runtime) keep() []uint64 {
 		for _, tr := range s.recordingTracks {
 			out = append(out, tr.track, tr.stream)
 		}
-		out = append(out, s.room, s.local, s.track, s.stream, s.source, s.output)
+		out = append(out, s.room, s.local, s.track, s.stream, s.source, s.output, s.holdSource, s.holdTrack)
 	}
 	return out
 }
@@ -363,7 +374,7 @@ func (r *Runtime) finish(s *Session, e error) {
 		if p.s == s && p.kind == "client-state" {
 			delete(r.pending, id)
 		}
-		if p.s == s && (p.kind == "caption" || p.kind == "dtmf") {
+		if p.s == s && (p.kind == "caption" || p.kind == "dtmf" || p.kind == "hold-publish" || p.kind == "hold-capture" || p.kind == "data") {
 			delete(r.pending, id)
 			p.reply <- errors.Join(ErrClosed, e)
 		}
@@ -393,6 +404,12 @@ func (r *Runtime) failSession(s *Session, e error) error {
 }
 func (r *Runtime) handle(c command) error {
 	s := c.s
+	if isCallControl(c.kind) {
+		return r.handleCallControl(c)
+	}
+	if c.data != nil {
+		return r.handleData(c)
+	}
 	if c.dtmf != nil {
 		return r.handleDTMF(c)
 	}
@@ -479,7 +496,7 @@ func (r *Runtime) run() {
 		for {
 			select {
 			case c := <-r.commands:
-				if c.pcm != nil || c.kind != "" || c.caption != nil || c.dtmf != nil || c.clientState != nil || c.stopState {
+				if c.data != nil || c.pcm != nil || c.kind != "" || c.caption != nil || c.dtmf != nil || c.clientState != nil || c.stopState {
 					c.reply <- ErrClosed
 				} else {
 					c.s.finish(ErrClosed)

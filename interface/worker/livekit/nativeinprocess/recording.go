@@ -25,7 +25,7 @@ func (s *Session) RecordingFrames() <-chan RecordingFrame { return s.recordings 
 
 // ConnectMicrophoneRecording enables recording before native room events begin.
 func (r *Runtime) ConnectMicrophoneRecording(ctx context.Context, url, token, participant, sid string, chat, record bool) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, true, chat, record)
+	return r.connectSelected(ctx, url, token, participant, sid, true, chat, record, false)
 }
 func (s *Session) observeRecordingParticipant(p *pb.ParticipantInfo) {
 	if s.recordRemote && p != nil {

@@ -8,13 +8,19 @@ import (
 )
 
 func TestNativeRecordingRoomOptions(t *testing.T) {
-	for _, disabled := range []bool{false, true} {
+	for _, record := range []bool{false, true} {
 		r := NewInProcess(nil, nil, Config{}, "", "")
-		if err := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: true, RecordRemoteParticipants: true, DisableAudioInput: disabled}); err != nil {
+		if err := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: true, RecordRemoteParticipants: record}); err != nil {
 			t.Fatal(err)
 		}
-		if !r.Config.captionOptions.RecordRemoteParticipants || r.Config.captionOptions.DisableAudioInput != disabled {
-			t.Fatal("recording options not propagated")
+		if r.Config.captionOptions.RecordRemoteParticipants != record {
+			t.Fatal("recording option not propagated")
+		}
+		if err := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: true, DisableAudioInput: true}); err == nil {
+			t.Fatal("unsupported input disable accepted")
+		}
+		if r.Config.captionOptions.RecordRemoteParticipants != record {
+			t.Fatal("rejected options mutated recording configuration")
 		}
 	}
 }

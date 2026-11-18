@@ -14,8 +14,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/interface/worker"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 var processOwner struct {
@@ -73,13 +73,23 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	run, cancel := context.WithCancelCause(ctx)
-	s, e := rt.ConnectMicrophoneRecording(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput, cfg.recordAux != nil)
+	s, e := rt.ConnectMicrophoneCall(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput, cfg.recordAux != nil)
 	if e != nil {
 		cancel(e)
 		return nil, e
 	}
 	c := &client{ctx: run, cancel: cancel, ready: make(chan struct{}), done: make(chan struct{}), cleanup: Cleanup{Mode: "inprocess", PID: os.Getpid()}}
+	c.callControl = s
 	c.publishDTMF = s.SendDTMF
+	departuresDone := make(chan struct{})
+	go func() {
+		defer close(departuresDone)
+		for identity := range s.ParticipantDepartures() {
+			if cfg.ParticipantDisconnected != nil {
+				cfg.ParticipantDisconnected(identity)
+			}
+		}
+	}()
 	c.startCaptions = func(session *agent.AgentSession, identity string) (func(context.Context) error, error) {
 		closeCaptions, err := startNativeCaptions(run, s, session, identity, cfg.Participant, cfg.TrackSID, cfg.captionOptions)
 		if err != nil {
@@ -198,6 +208,12 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		case <-s.Done():
 			settled = true
 		default:
+		}
+		// Process departures before the room observer triggers source-ended job shutdown.
+		select {
+		case <-departuresDone:
+		case <-time.After(35 * time.Second):
+			c.err = errors.Join(c.err, errors.New("native participant callback did not stop"))
 		}
 		c.cleanup.ShutdownSeen = settled
 		c.cleanup.HandlesReleased = settled && (closeErr == nil || errors.Is(closeErr, native.ErrSourceEnded))

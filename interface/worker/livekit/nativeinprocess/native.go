@@ -140,8 +140,11 @@ func capture(source, id uint64, pcm []int16) error {
 // The pinned FFI publish_data copies the C buffer before spawning its async task
 // (livekit-ffi/src/server/room.rs). No Go pointer survives a native request.
 func publishStateData(local, id uint64, data []byte) error {
+	return publishData(local, id, "lk-agent-state", data)
+}
+func publishData(local, id uint64, topic string, data []byte) error {
 	ptr := C.CBytes(data)
 	defer C.free(ptr)
-	_, err := request(&pb.FfiRequest{Message: &pb.FfiRequest_PublishData{PublishData: &pb.PublishDataRequest{LocalParticipantHandle: proto.Uint64(local), RequestAsyncId: proto.Uint64(id), DataPtr: proto.Uint64(uint64(uintptr(ptr))), DataLen: proto.Uint64(uint64(len(data))), Reliable: proto.Bool(true), Topic: proto.String("lk-agent-state")}}})
+	_, err := request(&pb.FfiRequest{Message: &pb.FfiRequest_PublishData{PublishData: &pb.PublishDataRequest{LocalParticipantHandle: proto.Uint64(local), RequestAsyncId: proto.Uint64(id), DataPtr: proto.Uint64(uint64(uintptr(ptr))), DataLen: proto.Uint64(uint64(len(data))), Reliable: proto.Bool(true), Topic: proto.String(topic)}}})
 	return err
 }

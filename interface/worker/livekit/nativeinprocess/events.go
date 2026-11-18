@@ -23,10 +23,16 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 	if handled, e := r.dtmfCallback(ev); handled {
 		return e
 	}
+	if handled, e := r.dataCallback(ev); handled {
+		return e
+	}
 	if handled, e := r.clientStateCallback(ev); handled {
 		return e
 	}
 	if handled, e := r.captionCallback(ev); handled {
+		return e
+	}
+	if handled, e := r.holdCallback(ev); handled {
 		return e
 	}
 	if c := ev.GetConnect(); c != nil {
@@ -51,6 +57,7 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 			return r.failSession(s, context.Canceled)
 		}
 		for _, p := range c.GetResult().GetParticipants() {
+			s.observeParticipant(p.GetParticipant().GetInfo().GetIdentity(), true)
 			s.observeRecordingParticipant(p.GetParticipant().GetInfo())
 			for _, pub := range p.GetPublications() {
 				s.observePublication(p.GetParticipant().GetInfo().GetIdentity(), pub.GetInfo())
@@ -122,7 +129,7 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		if e = r.closeRecordingTracks(s); e != nil {
 			return e
 		}
-		for _, h := range []uint64{s.stream, s.track, s.output, s.source, s.local, s.room} {
+		for _, h := range []uint64{s.stream, s.track, s.holdTrack, s.holdSource, s.output, s.source, s.local, s.room} {
 			if e = r.b.drop(h); e != nil {
 				return e
 			}
@@ -141,6 +148,14 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		s := r.rooms[event.GetRoomHandle()]
 		if s == nil || s.closing {
 			return nil
+		}
+		if p := event.GetParticipantConnected(); p != nil {
+			s.observeParticipant(p.GetInfo().GetInfo().GetIdentity(), true)
+		}
+		if p := event.GetParticipantDisconnected(); p != nil && !s.reconnecting {
+			if e := s.departParticipant(p.GetParticipantIdentity()); e != nil {
+				return r.failSession(s, e)
+			}
 		}
 		if err := r.observeRecordingLifecycle(s, event); err != nil {
 			return err

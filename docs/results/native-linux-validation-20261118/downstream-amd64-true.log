@@ -1,0 +1,110 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.downstream
+#1 transferring dockerfile: 4.19kB done
+#1 DONE 0.0s
+
+#2 [context rtp-source] load .dockerignore
+#2 transferring rtp-source: 2B done
+#2 DONE 0.0s
+
+#3 [auth] library/debian:pull token for registry-1.docker.io
+#3 DONE 0.0s
+
+#4 [auth] library/golang:pull token for registry-1.docker.io
+#4 DONE 0.0s
+
+#5 [internal] load metadata for docker.io/library/golang:1.26-trixie
+#5 ...
+
+#6 [internal] load metadata for docker.io/library/debian:trixie-slim
+#6 DONE 4.8s
+
+#5 [internal] load metadata for docker.io/library/golang:1.26-trixie
+#5 DONE 4.8s
+
+#7 [stage-1 1/9] FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+#7 resolve docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 0.0s done
+#7 DONE 0.0s
+
+#8 [build 1/9] FROM docker.io/library/golang:1.26-trixie@sha256:cff05dd6b81c901f2e8249eb6f91c69a60451d0f12c26bfef08e476a85b32d4d
+#8 resolve docker.io/library/golang:1.26-trixie@sha256:cff05dd6b81c901f2e8249eb6f91c69a60451d0f12c26bfef08e476a85b32d4d 0.0s done
+#8 DONE 0.0s
+
+#9 [stage-1 2/9] RUN apt update &&     apt install -y --no-install-recommends       libavformat61       libopus0       libopusfile0       libportaudio2       libstdc++6       ca-certificates &&     rm -rf /var/lib/apt/lists/*
+#9 CACHED
+
+#10 [stage-1 3/9] RUN useradd     --no-create-home     --home-dir "/app"     --shell "/sbin/nologin"     --uid "10001"     appuser
+#10 CACHED
+
+#11 [internal] load build context
+#11 transferring context: 1.76MB 0.1s
+#11 transferring context: 4.19MB 0.2s done
+#11 DONE 0.2s
+
+#12 [build 2/9] WORKDIR /app
+#12 CACHED
+
+#13 [build 3/9] RUN apt update &&     apt install -y --no-install-recommends       ca-certificates       curl       unzip       git       openssh-client       libavcodec-dev       libavformat-dev       libavutil-dev       libswresample-dev       libopus-dev       libopusfile-dev       portaudio19-dev       pkg-config &&     rm -rf /var/lib/apt/lists/*
+#13 CACHED
+
+#14 [context rtp-source] load from client
+#14 transferring rtp-source: 18.06MB 0.3s
+#14 transferring rtp-source: 26.76MB 0.4s done
+#14 DONE 0.5s
+
+#15 [build 4/9] COPY . .
+#15 DONE 0.3s
+
+#16 [build 5/9] COPY --from=rtp-source / /rtp-agent
+#16 DONE 0.2s
+
+#17 [build 6/9] RUN --mount=type=secret,id=gl_token,required=false     --mount=type=ssh,required=false     --mount=type=cache,target=/go/pkg/mod     --mount=type=cache,target=/root/.cache/go-build     if [ -s /run/secrets/gl_token ]; then       token="$(cat /run/secrets/gl_token)" &&       git config --global url."https://[redacted]@github.com/".insteadOf "https://github.com/";     elif [ -S "${SSH_AUTH_SOCK:-}" ]; then       mkdir -p /root/.ssh && ssh-keyscan -H github.com > /root/.ssh/known_hosts &&       git config --global url."ssh://git@github.com/".insteadOf "https://github.com/";     else       echo "GitHub credentials are required for private modules" >&2; exit 1;     fi &&     go mod tidy &&     rm -f /root/.gitconfig
+#17 DONE 0.7s
+
+#18 [build 7/9] RUN --mount=type=secret,id=gl_token     --mount=type=cache,target=/go/pkg/mod     --mount=type=cache,target=/root/.cache/go-build     mkdir -p "/opt/hecttor/lib" &&     HECTTOR_REGISTRY_TOKEN=$(cat /run/secrets/gl_token)     go run ./cmd download-files &&     test -r "/opt/hecttor/lib/libonnxruntime.so.1"
+#18 7.039 Downloading files for 2 registered plugins...
+#18 7.040 Downloading for rtp-agent.plugins.silero (rtp-agent.plugins.silero)...
+#18 9.024 {"file":"/app/app/init.go:76","func":"github.com/cavos-io/agent-worker-golang/app.initApplicationWithDeps","level":"warning","msg":"config.file_missing path=configuration.json; continuing with defaults and env overrides","time":"2026-11-17T17:19:01Z"}
+#18 15.78 Downloading for agent-worker.plugins.hecttor (agent-worker.plugins.hecttor)...
+#18 15.80 hecttor: pulling ghcr.io/cavos-io/libhecttor_sdk:1.4.0-linux-amd64
+#18 237.9 hecttor: native bundle 1.4.0 installed in /opt/hecttor/lib
+#18 237.9 Finished downloading files.
+#18 DONE 238.3s
+
+#19 [build 8/9] RUN --mount=type=cache,target=/go/pkg/mod     mkdir -p /opt/livekit &&     case "true" in       true) rtp_dir="$(go list -m -f '{{.Dir}}' github.com/cavos-io/rtp-agent)" &&             bash "$rtp_dir/scripts/install-livekit-ffi-linux.sh" "amd64" /opt/livekit ;;       false) ;;       *) echo "ENABLE_NATIVE must be true or false" >&2; exit 1 ;;     esac
+#19 8.594 Installed LiveKit FFI 0.12.80 (amd64)
+#19 DONE 8.7s
+
+#20 [build 9/9] RUN --mount=type=cache,target=/go/pkg/mod     --mount=type=cache,target=/root/.cache/go-build     build_tags=ffmpeg &&     if [ "true" = true ]; then build_tags=ffmpeg,nativeinprocess; fi &&     CGO_ENABLED=1 GOOS=linux go build -a     -o /app/main     -tags "$build_tags"     -ldflags="-s -w -extldflags '-Wl,--strip-all'"     ./cmd/main.go
+#20 DONE 117.3s
+
+#21 [stage-1 4/9] COPY --from=build --chown=appuser:appuser /app/main /app/main
+#21 DONE 0.2s
+
+#22 [stage-1 5/9] COPY --from=build --chown=appuser:appuser /opt/livekit /opt/livekit
+#22 DONE 0.2s
+
+#23 [stage-1 6/9] COPY --from=build --chown=appuser:appuser /opt/hecttor/lib /opt/hecttor/lib
+#23 DONE 0.2s
+
+#24 [stage-1 7/9] COPY --from=build --chown=appuser:appuser /app/resources/models /app/resources/models
+#24 DONE 0.1s
+
+#25 [stage-1 8/9] COPY --from=build --chown=appuser:appuser /app/hold_music.mp3 /app/hold_music.mp3
+#25 DONE 0.0s
+
+#26 [stage-1 9/9] WORKDIR /app
+#26 DONE 0.0s
+
+#27 exporting to image
+#27 exporting layers
+#27 exporting layers 3.9s done
+#27 exporting manifest sha256:4274a778886f5e05d68ac935a8148103bf880843575be4954321a8f8f396004a done
+#27 exporting config sha256:5a30221cdfd623a3bde24289a4dcb3efcbce94d6617a088462223ba771147773 done
+#27 exporting attestation manifest sha256:f48a0c862231b338aa4cc99309081240eccfdb14e03c5de38ba77d2a20d1b7bd done
+#27 exporting manifest list sha256:975a0e4e1476a1bff8533359dfcd5afd9a74381764f4e9922656b63b7ea2dd72 done
+#27 naming to docker.io/library/agent-worker-validation:amd64-native-true done
+#27 DONE 4.0s
+
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/mpoptee2ayy9sodmvmtu3mq99

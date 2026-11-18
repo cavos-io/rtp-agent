@@ -1,0 +1,3 @@
+=== RUN   TestPinnedNativeLibrarySmoke
+--- PASS: TestPinnedNativeLibrarySmoke (0.01s)
+PASS

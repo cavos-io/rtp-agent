@@ -88,3 +88,46 @@ This is an ownership/API migration, not new cloud or native-library runtime vali
 Run `scripts/test-native-public-api.sh` to repeat the separate-module import/configuration/shutdown check without loading a native library.
 
 Evidence, including the initial worker-boundary placement failure, is preserved in `examples/native-receive-probe/results/public-native-api-20261117/` and [the manifest](../../examples/starter/NATIVE_PUBLIC_API_RESULTS.json).
+
+## Supported options and embedded shutdown
+
+Native now rejects explicit unsupported `RoomOptions` before acquiring media.
+The supported fields are `DisablePreConnectAudio` (must be true),
+`ParticipantIdentity`, `RecordRemoteParticipants`, `DisableTextInput`,
+`TextInputCallback`, `DisableTranscriptionOutput`, and `TranscriptionNextOutput`.
+All other fields must remain zero/nil/empty. This includes audio input/output
+disable flags: session mute controls are separate and retain recording.
+Native audio uses its existing fixed profile; specifying a custom rate, frame
+size, processor or track name is rejected, even if the value resembles a default.
+The helper and default Pion option handling are unchanged.
+
+Embedded applications that own FFI should call `cli.RunAppWithOptionsError`.
+It returns command errors after server closure, allowing application defers to
+run. Dispose the native runtime only after successful server drain/closure, using
+a fresh bounded context. `cli.RunAppWithOptions` preserves standalone process-exit
+behavior for existing consumers. SIGKILL and a blocked native call cannot be
+turned into graceful disposal by this API.
+
+The downstream worker integration now supplies participant lifecycle, reliable
+data and hold controls described in its `docs/native-transport.md`. The older
+audit above is historical. Linux runtime/image checks are recorded in
+[validation evidence](../results/native-linux-validation-20261118/README.md);
+remaining live downstream acceptance still gates promotion. Pion remains the default.
+
+
+## Hold diagnostics
+
+With native enabled, `native.hold.published` confirms publication acknowledgement.
+`native.hold.pcm_delivered` reports the first successful capture, then every 500
+frames (about ten seconds for 20 ms frames), with frame count, PCM duration and
+that frame's absolute peak amplitude. These counters measure native SDK
+acknowledgements, not remote playback. `native.hold.stopped` reports final counts
+and whether clearing succeeded. Publication, capture and clearing errors are
+reported separately.
+
+STG browser call `1117981` on 2026-11-18 published hold at 07:58:00 Asia/Jakarta,
+delivered 1,470 frames / 29.4 seconds of PCM, then cleared successfully at
+07:58:30 and played the transfer-unavailable message. The tester confirmed
+hearing hold audio and intentionally did not answer the transferred call.
+This covers audible browser hold and the unanswered-transfer path; it does not
+establish an answered handoff for this run.

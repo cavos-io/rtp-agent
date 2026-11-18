@@ -99,7 +99,7 @@ func (r *Runtime) closeChatReaders(s *Session) {
 // ConnectMicrophoneChat enables bounded lk.chat receive before connecting.
 // Existing connect methods retain their audio-only behavior.
 func (r *Runtime) ConnectMicrophoneChat(ctx context.Context, url, token, participant, sid string, enabled bool) (*Session, error) {
-	return r.connectSelected(ctx, url, token, participant, sid, true, enabled, false)
+	return r.connectSelected(ctx, url, token, participant, sid, true, enabled, false, false)
 }
 func nativeRoomOptions(chat bool) *pb.RoomOptions {
 	opts := &pb.RoomOptions{AutoSubscribe: proto.Bool(true)}

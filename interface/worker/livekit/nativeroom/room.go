@@ -37,6 +37,8 @@ type Room struct {
 	closeOnce           sync.Once
 	closeCaptions       func(context.Context) error
 	samples             atomic.Uint64
+	holdFrames          atomic.Uint64
+	holdSamples         atomic.Uint64
 }
 
 func New(job *worker.JobContext, session *agent.AgentSession, cfg Config, key, secret string) *Room {
