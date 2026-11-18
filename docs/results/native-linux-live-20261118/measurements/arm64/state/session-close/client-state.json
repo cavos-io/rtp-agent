@@ -1,0 +1,62 @@
+[
+  {
+    "Kind": "attribute",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "agent_state_changed",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "user_state_changed",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "attribute",
+    "State": "thinking",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "agent_state_changed",
+    "State": "thinking",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "user_state_changed",
+    "State": "speaking",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "attribute",
+    "State": "speaking",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "agent_state_changed",
+    "State": "speaking",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "user_state_changed",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "attribute",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "agent_state_changed",
+    "State": "listening",
+    "Identity": "primary-agent"
+  },
+  {
+    "Kind": "user_state_changed",
+    "State": "listening",
+    "Identity": "primary-agent"
+  }
+]

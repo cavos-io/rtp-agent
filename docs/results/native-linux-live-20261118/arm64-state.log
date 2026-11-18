@@ -1,0 +1,5 @@
+=== RUN   TestStarterInProcessNativeClientState
+=== RUN   TestStarterInProcessNativeClientState/session-close
+--- PASS: TestStarterInProcessNativeClientState (7.32s)
+    --- PASS: TestStarterInProcessNativeClientState/session-close (7.32s)
+PASS

@@ -1,0 +1,13 @@
+=== RUN   TestLocalNativeActiveDrainAcceptance
+{"level":"warn","ts":1794990336.9781342,"logger":"worker","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
+{"level":"warn","ts":1794990336.9887738,"logger":"worker","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
+{"level":"warn","ts":1794990336.989593,"logger":"worker","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
+{"level":"warn","ts":1794990336.9906266,"logger":"worker","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
+{"level":"info","ts":1794990336.9929907,"logger":"worker","caller":"nativeroom/call_control.go:42","msg":"native.hold.published","participant":"caller","track_name":"hold-audio","sample_rate":24000}
+{"level":"info","ts":1794990337.6922612,"logger":"worker","caller":"nativeroom/call_control.go:81","msg":"native.hold.pcm_delivered","participant":"caller","frames":1,"pcm_seconds":0.02,"frame_peak_abs":7}
+{"level":"info","ts":1794990347.658462,"logger":"worker","caller":"nativeroom/call_control.go:81","msg":"native.hold.pcm_delivered","participant":"caller","frames":500,"pcm_seconds":10,"frame_peak_abs":2622}
+{"level":"info","ts":1794990349.0489326,"logger":"worker","caller":"nativeroom/room.go:199","msg":"experimental native in-process cleanup","cleanup":{"mode":"inprocess","native_cleanup_ms":0,"pid":1,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":2.80775,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}}
+{"level":"info","ts":1794990349.0820386,"logger":"worker","caller":"nativeroom/call_control.go:51","msg":"native.hold.stopped","participant":"caller","frames":571,"pcm_seconds":11.42,"clear_succeeded":true}
+{"level":"info","ts":1794990349.085348,"logger":"worker","caller":"nativeroom/room.go:199","msg":"experimental native in-process cleanup","cleanup":{"mode":"inprocess","native_cleanup_ms":0,"pid":1,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":3.077334,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}}
+--- PASS: TestLocalNativeActiveDrainAcceptance (12.30s)
+PASS

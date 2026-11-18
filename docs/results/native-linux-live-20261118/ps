@@ -1,0 +1,7 @@
+#!/bin/sh
+# Test-only replacement for ps -o rss= -p PID in the slim runtime.
+[ "$#" = 4 ] && [ "$1" = -o ] && [ "$2" = rss= ] && [ "$3" = -p ] || exit 2
+while read -r key value unit; do
+    if [ "$key" = 'VmRSS:' ]; then printf '%s\n' "$value"; exit 0; fi
+done < "/proc/$4/status"
+exit 1

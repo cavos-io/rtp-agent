@@ -1,0 +1,9 @@
+=== RUN   TestStarterInProcessNativeAudioLifecycle
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-delayed
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-muted
+=== RUN   TestStarterInProcessNativeAudioLifecycle/lifecycle-device
+--- PASS: TestStarterInProcessNativeAudioLifecycle (23.80s)
+    --- PASS: TestStarterInProcessNativeAudioLifecycle/lifecycle-delayed (8.57s)
+    --- PASS: TestStarterInProcessNativeAudioLifecycle/lifecycle-muted (7.49s)
+    --- PASS: TestStarterInProcessNativeAudioLifecycle/lifecycle-device (7.72s)
+PASS

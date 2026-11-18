@@ -1,0 +1,23 @@
+[
+  {
+    "name": "native-linux-live:arm64",
+    "id": "sha256:0e54dd4df785d301585aa220d23dfb0fe0061df617347e9ff28a35a3b82a50cc",
+    "architecture": "arm64",
+    "user": "appuser",
+    "native_runtime_flag_in_image": false
+  },
+  {
+    "name": "native-linux-live:amd64",
+    "id": "sha256:1afbdd3ad2e2b98fcbfc62c89ec15313f1b6766e9c401cb83e25f49c0c3bb056",
+    "architecture": "amd64",
+    "user": "appuser",
+    "native_runtime_flag_in_image": false
+  },
+  {
+    "name": "livekit/livekit-server:v1.13.11",
+    "id": "sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20",
+    "architecture": "arm64",
+    "user": "",
+    "native_runtime_flag_in_image": false
+  }
+]

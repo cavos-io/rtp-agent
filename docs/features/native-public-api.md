@@ -147,6 +147,7 @@ compatibility audit's outstanding-work list, not its historical evidence.
 | Status | Scenario | Evidence and limits |
 | --- | --- | --- |
 | Passed | Linux packaging and idle lifecycle | [Linux results](../results/native-linux-validation-20261118/README.md): arm64 and emulated amd64 FFI initialization/disposal, runtime race suite, downstream image build, nonroot library loading, dependencies/assets, selector behavior and idle SIGTERM exit 0. No live Linux media was exercised. |
+| Passed, local component scope | Linux live media on arm64 and emulated amd64 | [Linux live-media results](../results/native-linux-live-20261118/README.md): 18 successful runs in downstream runtime layers using current FFmpeg/native test binaries. Both architectures pass 26-call audio/chat/caption/event isolation, handle cleanup, hold/graceful and forced SIGTERM, MP4 marker checks, playback/microphone lifecycle, DTMF/state and two-second signaling recovery. No full app.Run/provider/SIP workflow, released artifact or native amd64 hardware was exercised. |
 | Passed | Answered outbound SIP with native media | `1117978`: native room initialized; 30.82s input PCM; successful 33s call; agent `end_call` and proper closing persisted. Native handles released without callback overflow. Trace `a41247524918b2add270961fd1935cae`. |
 | Passed | Rejected outbound invitation | `1117977`: expected rejection confirmed by tester; SIP 480, failed/0s outcome before native media started. Trace `c97f2dcb681941f1b522494ef287d180`. This validates rejection handling, not native media. |
 | Passed, observed | Browser microphone and live captions | Native browser calls reached conversation/transfer; tester confirmed visible live captions. Tester also confirmed captions disabled with `DisableTranscriptionOutput=true` on the active in-process startup path; no frontend transcription was visible. |
@@ -221,13 +222,17 @@ evidence below; passing local suites does not close those gates.
   currently unavailable. Use an environment that can receive the inbound route;
   verify answer, conversation, hangup and recording. This remains required for
   an unrestricted default that includes incoming calls.
-- [ ] **Run live media on the deployment Linux architecture.** Use the final
-  downstream image with native explicitly enabled against STG. Exercise web/SIP,
-  hold/transfer and recording there. macOS calls plus Linux library smoke are not
-  Linux media validation. If deployment is amd64, run on native amd64 hardware;
-  the current amd64 image evidence comes from emulation.
+- [ ] **Validate final-image media on the deployment Linux architecture.**
+  [Local Linux component media checks](../results/native-linux-live-20261118/README.md)
+  now pass on arm64 and emulated amd64, including FFmpeg recording and active
+  hold/drain. These use current test binaries in the earlier downstream runtime
+  layer, not the released full application. Run the final downstream image with
+  native explicitly enabled against STG; exercise real web/SIP, hold/transfer,
+  providers and recording. If deployment is amd64, also run on native amd64
+  hardware; emulation does not close that hardware gate.
 - [ ] **Validate full-application shutdown and recovery.** Local component hold,
-  natural drain and five-second forced drain pass. Run the real downstream app
+  natural drain and five-second forced drain pass, including both Linux test
+  architectures with finalized MP4 recordings. Run the real downstream app
   with providers and session-end persistence during speech and an active transfer;
   SIGTERM/drain must complete or terminate according to the configured drain
   policy, finalize recordings, release session handles and dispose FFI only after
@@ -235,7 +240,7 @@ evidence below; passing local suites does not close those gates.
   republishing and remote participant departure: recovery or clean failure must
   preserve isolation, outcomes and bounded shutdown. Idle SIGTERM is already
   covered and need not be repeated as a substitute. Local two-second signaling
-  recovery is also covered; verify downstream outcomes and recording continuity
+  recovery and microphone lifecycle are also covered on Linux; verify downstream outcomes and recording continuity
   for these recovery cases on the final artifact.
 - [ ] **Run deployment soak validation.** The
   [local sustained soak](../results/native-sustained-soak-20261118/README.md) now
@@ -250,7 +255,9 @@ evidence below; passing local suites does not close those gates.
   Repeat the agreed workload on the final deployment artifact with providers and recording
   enabled, checking recording isolation/continuity and longer resource trends.
   The local RSS comparison is process residency on macOS, not an independent
-  native-allocation census or production capacity benchmark.
+  native-allocation census or production capacity benchmark. Linux now also
+  passes 26 short concurrent/repeated sessions per architecture with bounded
+  RSS/heap/goroutines; this is not a sustained deployment soak.
 - [ ] **Confirm the supported default profile.** Inventory effective downstream
   options and accept the native fixed audio profile and explicitly disabled
   pre-connect audio. Unsupported configurations must remain on Pion or gain
