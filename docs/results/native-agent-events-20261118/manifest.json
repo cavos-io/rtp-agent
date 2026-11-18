@@ -1,0 +1,12 @@
+{
+  "upstream_base": "fd60f7d99",
+  "downstream_head": "f87d99c2c17fec4af3d0dd4220d2e410dbc90482",
+  "raw_log": "/private/tmp/native-evidence-20261118/run-1.log",
+  "raw_log_sha256": "a2e445ff0042e80b61995bddf7febd0259b8a3a3989f2435031ca0f7b7d27762",
+  "exit_code": 0,
+  "race_reports": 0,
+  "received_evidence_packets": 7,
+  "generated_replies": 2,
+  "transport": "nativeinprocess",
+  "host": "macOS arm64"
+}

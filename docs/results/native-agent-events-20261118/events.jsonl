@@ -1,0 +1,7 @@
+{"sender":"native-agent","kind":"status","name":"ready_for_tester","data":{"run_id":"local-evidence"}}
+{"sender":"native-agent","kind":"ack","name":"tester_input","data":{"message_id":"local-evidence/turn/1","run_id":"local-evidence","turn":1}}
+{"sender":"native-agent","kind":"transcript","name":"agent","text":"synthetic reply: input 1","data":{"message_id":"local-evidence/turn/1","run_id":"local-evidence","turn":1}}
+{"sender":"native-agent","kind":"ack","name":"tester_input","data":{"message_id":"local-evidence/turn/2","run_id":"local-evidence","turn":2}}
+{"sender":"native-agent","kind":"transcript","name":"agent","text":"synthetic reply: input 2","data":{"message_id":"local-evidence/turn/2","run_id":"local-evidence","turn":2}}
+{"sender":"native-agent","kind":"ack","name":"tester_input","data":{"message_id":"local-evidence/turn/2","run_id":"local-evidence","turn":2}}
+{"sender":"native-agent","kind":"transcript","name":"agent","text":"synthetic reply: input 2","data":{"message_id":"local-evidence/turn/2","run_id":"local-evidence","turn":2}}

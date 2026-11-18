@@ -134,7 +134,9 @@ establish an answered handoff for this run.
 
 ## Default-promotion validation checklist
 
-Updated 2026-11-18 against upstream `f893bd639`, the local uncommitted
+Updated 2026-11-18 through upstream `fd60f7d99`, including teardown/report fixes
+(`ebe3d436a`), assignment/logger fixes (`422761bb1`), and recursive race/environment
+fixes (`fd60f7d99`). Evidence also includes the local uncommitted
 agent-worker-golang integration, reviewed STG calls and tester observations.
 **Native is not yet ready for an unrestricted default switch. Pion stays default
 and remains the rollback transport.** This checklist supersedes the original
@@ -147,11 +149,16 @@ compatibility audit's outstanding-work list, not its historical evidence.
 | Passed | Linux packaging and idle lifecycle | [Linux results](../results/native-linux-validation-20261118/README.md): arm64 and emulated amd64 FFI initialization/disposal, runtime race suite, downstream image build, nonroot library loading, dependencies/assets, selector behavior and idle SIGTERM exit 0. No live Linux media was exercised. |
 | Passed | Answered outbound SIP with native media | `1117978`: native room initialized; 30.82s input PCM; successful 33s call; agent `end_call` and proper closing persisted. Native handles released without callback overflow. Trace `a41247524918b2add270961fd1935cae`. |
 | Passed | Rejected outbound invitation | `1117977`: expected rejection confirmed by tester; SIP 480, failed/0s outcome before native media started. Trace `c97f2dcb681941f1b522494ef287d180`. This validates rejection handling, not native media. |
-| Passed, observed | Browser microphone and live captions | Native browser calls reached conversation/transfer; tester confirmed visible live captions. Captions-disabled and explicit text-chat acceptance are separate open cases. |
+| Passed, observed | Browser microphone and live captions | Native browser calls reached conversation/transfer; tester confirmed visible live captions. Tester also confirmed captions disabled with `DisableTranscriptionOutput=true` on the active in-process startup path; no frontend transcription was visible. |
+| Passed, tester-confirmed | Text chat and interruption without duplicate replies | Tester confirmed both behaviors on 2026-11-18. Call IDs/revisions were not supplied for this confirmation; reliable `agent.events` correlation remains separate. |
 | Passed for observed media; lifecycle follow-ups remain | Answered warm transfer | `1117979`: native caller transport, route to developer, supervisor briefing, record-only mode and transfer row 115 `DONE`; recording reference 84274. Trace `7b9192a97ca0a2961c9c67b60d660a90`. Tester confirmed two-way human audio both live and in the recording. Explicit agent-silence and hangup-propagation checks remain. |
 | Passed | Audible browser hold and unanswered-transfer recovery | `1117981`: tester heard hold and intentionally did not answer the transferred call; publication acknowledged, 1,470 frames / 29.4s PCM delivered, clear succeeded, transfer-unavailable message played. No answered handoff was exercised in this run. |
 | Partial | Recording and transcript persistence | `1117978` has audio reference 84270, summary and six persisted conversation rows; `1117979` has pre/post recording finalization evidence. Tester confirmed both human parties audible in the `1117979` recording. Ordinary-call playback and detailed pre/post continuity/duration checks remain. |
 | Passed | Focused implementation checks | Native runtime/room/CLI race suites, default-build packages, architecture and commit hooks passed. Unsupported RoomOptions fail explicitly; embedded CLI returns after cleanup. These are not active-call drain or soak results. |
+| Passed, local component scope | Active hold and forced drain | [Downstream local results](../results/native-downstream-local-20261118/README.md): two active calls, real SIGTERM, hold cleared before closure; five-second forced drain finalized reports and recordings without a detected report race. Both jobs ended, handles released, runtime disposed. Full app.Run/provider/storage finalizers were bypassed. |
+| Passed | Recursive worker race and repeatability checks | [Final recursive results](../results/worker-recursive-races-20261118/README.md): complete worker subtree plus CLI passed with `-race -count=3`, both default and `nativeinprocess` builds, with repetitions in the same process per package. Agora/IPC races and credential leakage no longer reproduce in these runs. Architecture and commit hooks passed. |
+| Passed, short observation | Two-call synthetic media isolation | [Downstream local results](../results/native-downstream-local-20261118/README.md): two-minute run, distinct caller tones, continued media during graceful drain, decodable recordings and no alien-dominant checked windows. This does not establish sustained RSS stability or caption/data isolation. |
+| Passed, live local component scope | Native automated-test evidence delivery | [agent.events results](../results/native-agent-events-20261118/README.md): real LiveKit/native FFI, independent observer, readiness and two correlated chat turns from agent identity; duplicate replay without another generation; race-enabled run passed. Synthetic replies; dispatch and manager/UI workflow were bypassed. |
 
 Calls `1117947`–`1117952` ran without the native flag and do not count toward
 native acceptance. Transcript cleanup warnings are excluded from this checklist
@@ -176,17 +183,32 @@ transport closure; forced drain completes in about five seconds with finalized
 reports and decodable recordings. The worker logger/assignment race follow-up is
 recorded in [worker race results](../results/worker-races-20261118/README.md);
 the [recursive follow-up](../results/worker-recursive-races-20261118/README.md)
-addresses Agora/IPC races and test environment leakage. The fixture bypasses full app.Run
-dispatch/providers/storage and is not a long soak.
+passes both recursive race suites three times, including Agora/IPC and repeated-run
+environment isolation. The earlier failure logs are historical evidence, not open
+blockers. The downstream fixture bypasses full app.Run dispatch/providers/storage
+and is not a long soak.
+
+The identified local hold teardown, forced-drain report, worker logger/assignment,
+Agora/IPC and test environment defects are resolved. No known failure from those
+checks remains open. Native promotion still requires the end-to-end and deployment
+evidence below; passing local suites does not close those gates.
 
 ### Remaining gates
 
-- [ ] **Finish web behavior coverage.** Run native microphone calls with captions
-  enabled and disabled; verify disabled captions stay absent, text chat reaches
-  the intended turn, and real speech interruption stops output without duplicate
-  replies. Check reliable `agent.events` delivery and turn/message correlation in
-  the downstream automated tester. Existing visible captions do not prove this
-  separate data path.
+- [ ] **Validate the deployed automated-test workflow.** Local native `agent.events`
+  delivery, sender identity, two-turn correlation and duplicate replay now pass
+  with real LiveKit/FFI and synthetic replies. Run the actual manager/tester flow
+  on the final artifact to cover dispatch and provider-backed replies.
+  Ordinary web microphone, captions enabled/disabled, text chat and interruption
+  without duplicate replies
+  are tester-confirmed; attach call/revision identifiers when available. For a
+  default profile including automated tests, verify the workflow consumes readiness,
+  acknowledgements and completed transcripts with matching run_id/message_id/turn.
+  This topic belongs to the downstream AutomatedTest integration, not the plain
+  examples/local session.
+  Run with transcription output enabled: the current integration feeds completed
+  agent text through TranscriptionNextOutput, which caption disabling suppresses.
+  Visible captions alone do not prove this separate data path.
 - [ ] **Finish answered transfer and recording acceptance.** Two-way live and recorded human audio is confirmed for
   `1117979`, with a persisted DONE outcome. Verify agent silence in record-only
   mode and hangup propagation. Play an ordinary-call recording and inspect
@@ -203,17 +225,20 @@ dispatch/providers/storage and is not a long soak.
   hold/transfer and recording there. macOS calls plus Linux library smoke are not
   Linux media validation. If deployment is amd64, run on native amd64 hardware;
   the current amd64 image evidence comes from emulation.
-- [ ] **Exercise active-call shutdown and recovery.** SIGTERM/drain during speech
-  and hold/transfer must complete or terminate according to the configured drain
+- [ ] **Validate full-application shutdown and recovery.** Local component hold,
+  natural drain and five-second forced drain pass. Run the real downstream app
+  with providers and session-end persistence during speech and an active transfer;
+  SIGTERM/drain must complete or terminate according to the configured drain
   policy, finalize recordings, release session handles and dispose FFI only after
   all sessions close. Also test network disconnect/reconnect, microphone
   republishing and remote participant departure: recovery or clean failure must
   preserve isolation, outcomes and bounded shutdown. Idle SIGTERM is already
-  covered and need not be repeated as a substitute. Local downstream-component
-  active hold and five-second forced drain now pass; full application/provider
-  teardown and recovery remain open.
-- [ ] **Run concurrent-call and repeated-call soak.** Use distinct audio/chat
-  markers across simultaneous sessions; check no cross-call audio, captions,
+  covered and need not be repeated as a substitute. Local two-second signaling
+  recovery is also covered; verify downstream outcomes and recording continuity
+  for these recovery cases on the final artifact.
+- [ ] **Run sustained concurrent-call and repeated-call soak.** The two-call,
+  two-minute media run and repeated unit suites pass. Extend to a defined sustained
+  workload with distinct audio/chat markers; check no cross-call audio, captions,
   events or recordings, no callback overflow, stable PCM delivery, and no growing
   handle/goroutine/memory accumulation after repeated teardown. Record workload,
   duration and resource trends against Pion; define acceptable limits before
@@ -225,8 +250,9 @@ dispatch/providers/storage and is not a long soak.
   for a broad default. Agree which web, SIP and transfer modes the switch covers.
 - [ ] **Release and validate the deployable artifact and rollback.** Review and
   commit downstream integration separately when authorized; release/pin the
-  upstream revision containing this progress, then build without the temporary
-  sibling replacement. Repeat relevant acceptance on that exact artifact. Verify
+  upstream revision containing all fixes through `fd60f7d99`, then build without
+  the temporary sibling replacement. Earlier Linux images predate these fixes.
+  Repeat relevant acceptance on that exact artifact. Verify
   drain/restart with explicit Pion selection and document the selector used for
   rollback after the default changes. Rollback is not an in-call transport swap.
 
