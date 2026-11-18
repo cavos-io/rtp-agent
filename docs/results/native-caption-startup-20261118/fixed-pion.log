@@ -1,0 +1,52 @@
+=== RUN   TestLocalNativeSoak
+    local_native_soak_test.go:180: RESOURCE {Phase:active--1 Seconds:6.229935208 RSS:69232 Heap:12555912 Goroutines:212}
+    local_native_soak_test.go:363: CALL room=soak-1794980488--1-0 frames=109 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:363: CALL room=soak-1794980488--1-1 frames=107 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:180: RESOURCE {Phase:clean--1 Seconds:8.245322916 RSS:69648 Heap:8408608 Goroutines:2}
+    local_native_soak_test.go:180: RESOURCE {Phase:active-0 Seconds:17.550267541 RSS:72512 Heap:11503408 Goroutines:212}
+    local_native_soak_test.go:363: CALL room=soak-1794980488-0-0 frames=172 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:363: CALL room=soak-1794980488-0-1 frames=153 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:180: RESOURCE {Phase:clean-0 Seconds:19.603228916 RSS:72576 Heap:8789408 Goroutines:2}
+    local_native_soak_test.go:180: RESOURCE {Phase:active-1 Seconds:27.881835125 RSS:72784 Heap:14316328 Goroutines:212}
+    local_native_soak_test.go:363: CALL room=soak-1794980488-1-0 frames=151 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:363: CALL room=soak-1794980488-1-1 frames=148 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:180: RESOURCE {Phase:clean-1 Seconds:29.900020541 RSS:72672 Heap:8824464 Goroutines:2}
+    local_native_soak_test.go:384: SOAK completed; native cleanup checked when selected; process RSS measured
+--- PASS: TestLocalNativeSoak (29.90s)
+PASS
+PEER_LOG soak-1794980488--1-0.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_82459e95-e97"  text:"synthetic reply: soak-1794980488--1-0 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488--1-0 sent=308 markers=267 wrong=0 turns=1
+--- PASS: TestSoakPeer (6.20s)
+PASS
+PEER_LOG soak-1794980488--1-1.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_c3e6cd83-4a9"  text:"synthetic reply: soak-1794980488--1-1 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488--1-1 sent=301 markers=267 wrong=0 turns=1
+--- PASS: TestSoakPeer (6.05s)
+PASS
+PEER_LOG soak-1794980488-0-0.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_0d2f3e23-c10"  text:"synthetic reply: soak-1794980488-0-0 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488-0-0 sent=462 markers=425 wrong=0 turns=1
+--- PASS: TestSoakPeer (9.28s)
+PASS
+PEER_LOG soak-1794980488-0-1.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_505a9365-eeb"  text:"synthetic reply: soak-1794980488-0-1 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488-0-1 sent=457 markers=380 wrong=0 turns=1
+--- PASS: TestSoakPeer (9.18s)
+PASS
+PEER_LOG soak-1794980488-1-0.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_05d6092c-bf5"  text:"synthetic reply: soak-1794980488-1-0 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488-1-0 sent=410 markers=372 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.25s)
+PASS
+PEER_LOG soak-1794980488-1-1.peer.log
+    local_native_soak_test.go:101: PARTICIPANT_READY
+CAPTION_WIRE identity=native-agent known=true segments=[id:"SG_f987c2a1-0a0"  text:"synthetic reply: soak-1794980488-1-1 input 1"  final:true]
+    local_native_soak_test.go:134: PEER room=soak-1794980488-1-1 sent=402 markers=367 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.11s)
+PASS

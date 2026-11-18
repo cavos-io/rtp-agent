@@ -1,0 +1,58 @@
+=== RUN   TestLocalNativeSoak
+    local_native_soak_test.go:159: RESOURCE {Phase:active--1 Seconds:6.7150947500000004 RSS:109440 Heap:12283256 Goroutines:44}
+    local_native_soak_test.go:249: peer soak-1794980455--1-0 exit status 1
+    local_native_soak_test.go:249: peer soak-1794980455--1-1 exit status 1
+    local_native_soak_test.go:328: CALL room=soak-1794980455--1-0 frames=407 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":1.376959,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:328: CALL room=soak-1794980455--1-1 frames=396 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.034208,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:159: RESOURCE {Phase:clean--1 Seconds:10.802015708999999 RSS:112400 Heap:8477784 Goroutines:12}
+    local_native_soak_test.go:159: RESOURCE {Phase:active-0 Seconds:19.06619375 RSS:108672 Heap:13085072 Goroutines:29}
+    local_native_soak_test.go:249: peer soak-1794980455-0-0 exit status 1
+    local_native_soak_test.go:249: peer soak-1794980455-0-1 exit status 1
+    local_native_soak_test.go:328: CALL room=soak-1794980455-0-0 frames=396 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.009916,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:328: CALL room=soak-1794980455-0-1 frames=396 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.014041,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:159: RESOURCE {Phase:clean-0 Seconds:21.08288525 RSS:108496 Heap:8035056 Goroutines:13}
+    local_native_soak_test.go:159: RESOURCE {Phase:active-1 Seconds:29.394823584 RSS:109440 Heap:13308832 Goroutines:29}
+    local_native_soak_test.go:249: peer soak-1794980455-1-0 exit status 1
+    local_native_soak_test.go:249: peer soak-1794980455-1-1 exit status 1
+    local_native_soak_test.go:328: CALL room=soak-1794980455-1-0 frames=396 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.023875,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:328: CALL room=soak-1794980455-1-1 frames=396 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":5792,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.017833,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:159: RESOURCE {Phase:clean-1 Seconds:31.417549875 RSS:108464 Heap:8052000 Goroutines:13}
+    local_native_soak_test.go:349: SOAK completed; per-room cleanup checked; process RSS includes Go and native allocations
+--- FAIL: TestLocalNativeSoak (31.42s)
+FAIL
+PEER_LOG soak-1794980455--1-0.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_2361d1d8-7c7" text:"synthetic reply: soak-1794980455--1-0 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.76s)
+FAIL
+PEER_LOG soak-1794980455--1-1.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_c1c195c2-64d" text:"synthetic reply: soak-1794980455--1-1 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.13s)
+FAIL
+PEER_LOG soak-1794980455-0-0.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_5248925f-405" text:"synthetic reply: soak-1794980455-0-0 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.11s)
+FAIL
+PEER_LOG soak-1794980455-0-1.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_b8efb646-531" text:"synthetic reply: soak-1794980455-0-1 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.12s)
+FAIL
+PEER_LOG soak-1794980455-1-0.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_acac3c6f-85d" text:"synthetic reply: soak-1794980455-1-0 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.16s)
+FAIL
+PEER_LOG soak-1794980455-1-1.peer.log
+    local_native_soak_test.go:80: READY participant_known=false returned_frames=0
+CAPTION_WIRE identity=native-agent known=false segments=[id:"SG_34cfb25d-6dd" text:"synthetic reply: soak-1794980455-1-1 input 1" final:true]
+    local_native_soak_test.go:95: missing caption
+--- FAIL: TestSoakPeer (8.11s)
+FAIL

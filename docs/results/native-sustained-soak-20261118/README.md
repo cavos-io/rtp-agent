@@ -7,6 +7,12 @@ readiness. The matched Pion run passed with a one-second startup wait. Pion rema
 the default. No product code or downstream files were changed for this test;
 downstream fixtures use Go overlays. The temporary server was stopped afterward.
 
+Follow-up: [startup investigation and fix](../native-caption-startup-20261118/README.md)
+confirmed captions arrived before caller participant discovery and were dropped
+by the Go SDK. The corrected fixture waits for participant discovery, with no
+audio prerequisite or fixed delay. Use that fixture for new validation runs;
+the original sources and failed evidence below remain historical records.
+
 ## Results
 
 | Run | Outcome | Duration / scope |
