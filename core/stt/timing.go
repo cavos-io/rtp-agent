@@ -12,6 +12,10 @@ func AlignSpeechEventTiming(event *SpeechEvent, stream RecognizeStream) *SpeechE
 		return nil
 	}
 	copy := *event
+	if copy.timingAligned {
+		return &copy
+	}
+	copy.timingAligned = true
 	if copy.ReceivedAt.IsZero() {
 		copy.ReceivedAt = time.Now()
 	}
@@ -26,6 +30,37 @@ func AlignSpeechEventTiming(event *SpeechEvent, stream RecognizeStream) *SpeechE
 			if copy.SpeechEndTime == nil {
 				value := timing.StartTime() + data.EndTime
 				copy.SpeechEndTime = &value
+			}
+		}
+	}
+	if timing, ok := stream.(StreamTiming); ok {
+		if clock, ok := stream.(StreamWallTiming); ok {
+			remap := func(anchor *float64, start bool) *float64 {
+				if anchor != nil {
+					lookup := clock.WallTimeAt
+					if start {
+						lookup = clock.WallTimeAtStart
+					}
+					if wall, found := lookup(*anchor - timing.StartTime()); found {
+						value := float64(wall.UnixNano()) / 1e9
+						return &value
+					}
+				}
+				return anchor
+			}
+			copy.SpeechStartTime = remap(copy.SpeechStartTime, true)
+			copy.SpeechEndTime = remap(copy.SpeechEndTime, false)
+			copy.Alternatives = append([]SpeechData(nil), copy.Alternatives...)
+			for i := range copy.Alternatives {
+				data := &copy.Alternatives[i]
+				data.Words = append([]TimedString(nil), data.Words...)
+				for j := range data.Words {
+					word := &data.Words[j]
+					start, end := timing.StartTime()+word.StartTime, timing.StartTime()+word.EndTime
+					word.SpeechStartTime, word.SpeechEndTime = remap(&start, true), remap(&end, false)
+					mid := timing.StartTime() + (word.StartTime+word.EndTime)/2
+					word.SpeechMidTime = remap(&mid, false)
+				}
 			}
 		}
 	}

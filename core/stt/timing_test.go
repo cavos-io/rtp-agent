@@ -50,3 +50,52 @@ type timingTestStream struct {
 }
 
 func (s *timingTestStream) StartTime() float64 { return s.startTime }
+
+// Missing audio must move wall anchors without stretching words across the gap.
+func TestAlignSpeechEventTimingAcrossSilenceGap(t *testing.T) {
+	s := &mappedTimingStream{timingTestStream: timingTestStream{startTime: 100}}
+	event := &SpeechEvent{ReceivedAt: time.Unix(140, 0), Alternatives: []SpeechData{{StartTime: 0, EndTime: 2, Words: []TimedString{{Text: "ok", StartTime: 0, EndTime: 1}, {Text: "stop", StartTime: 1, EndTime: 2}}}}}
+	got := AlignSpeechEventTiming(event, s)
+	if *got.SpeechEndTime != 132 {
+		t.Fatalf("end=%v, want 132 after 30s gap", *got.SpeechEndTime)
+	}
+	if *got.SpeechStartTime != 100 {
+		t.Fatal("start changed")
+	}
+}
+
+type mappedTimingStream struct{ timingTestStream }
+
+func (s *mappedTimingStream) WallTimeAtStart(offset float64) (time.Time, bool) {
+	if offset == 1 {
+		return time.Unix(131, 0), true
+	}
+	return s.WallTimeAt(offset)
+}
+func (*mappedTimingStream) WallTimeAt(offset float64) (time.Time, bool) {
+	if offset > 1 {
+		return time.Unix(130, 0).Add(time.Duration(offset * float64(time.Second))), true
+	}
+	return time.Unix(100, 0).Add(time.Duration(offset * float64(time.Second))), true
+}
+
+func TestAlignedWallTimingPreservesProviderOffsetsAndSurvivesReplay(t *testing.T) {
+	s := &mappedTimingStream{timingTestStream: timingTestStream{startTime: 100}}
+	end := 102.0
+	event := &SpeechEvent{ReceivedAt: time.Unix(140, 0), SpeechEndTime: &end, Alternatives: []SpeechData{{StartTime: 1, EndTime: 2, Words: []TimedString{{Text: "stop", StartTime: 1.2, EndTime: 1.8}}}}}
+	got := AlignSpeechEventTiming(event, s)
+	if *got.SpeechEndTime != 132 || *got.Alternatives[0].Words[0].SpeechMidTime != 131.5 {
+		t.Fatalf("wall anchors not mapped: %+v", got)
+	}
+	if event.Alternatives[0].Words[0].SpeechMidTime != nil || got.Alternatives[0].Words[0].StartTime != 1.2 || *event.SpeechEndTime != 102 {
+		t.Fatal("provider data mutated")
+	}
+	replay := AlignSpeechEventTiming(got, s)
+	if *replay.SpeechEndTime != 132 || *replay.Alternatives[0].Words[0].SpeechMidTime != 131.5 {
+		t.Fatal("replay remapped wall anchors twice")
+	}
+	zero := AlignSpeechEventTiming(&SpeechEvent{ReceivedAt: time.Unix(140, 0), Alternatives: []SpeechData{{StartTime: 0.2, EndTime: 0.8}}}, s)
+	if math.Abs(*zero.SpeechStartTime-100.2) > 1e-8 || math.Abs(*zero.SpeechEndTime-100.8) > 1e-8 {
+		t.Fatal("zero-drift behavior changed")
+	}
+}

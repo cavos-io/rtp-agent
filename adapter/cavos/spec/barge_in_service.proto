@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package barge_in;
+
+option go_package = "github.com/cavos-io/rtp-agent/adapter/cavos/spec";
+
+// BargeInServiceV1 classifies a 2 s window of user audio as barge-in or backchannel.
+// It is stateless: the caller owns timing and which windows to send.
+service BargeInServiceV1 {
+  rpc Predict (BargeInRequest) returns (BargeInResponse);
+}
+
+message BargeInRequest {
+  bytes pcm = 1;               // PCM16LE mono 16 kHz, up to 64000 bytes; shorter is zero-padded at the front
+}
+
+message BargeInResponse {
+  float probability = 1;       // raw model output [0..1]
+  float threshold = 2;         // decision threshold shipped in the model file
+  bool is_barge_in = 3;        // probability >= threshold
+  float preprocess_ms = 4;     // feature extraction time in milliseconds
+  float inference_ms = 5;      // inference time in milliseconds
+}

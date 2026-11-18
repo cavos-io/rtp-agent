@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -129,11 +130,108 @@ func TestAdaptiveInterruptionStartCooldownStillResumesFalsePause(t *testing.T) {
 	timer.Stop()
 }
 
+func TestAdaptiveLateBargeInWithoutTranscriptResumesPlayback(t *testing.T) {
+	activity := newAdaptiveTranscriptActivity(t)
+	session := activity.Session
+	session.Options.ResumeFalseInterruption = true
+	session.Options.FalseInterruptionTimeout = 0.02
+	output := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(output)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	t.Cleanup(func() { activity.cancelFalseInterruptionTimer(); current.MarkDone(); activity.Stop() })
+	activity.armBackchannelBoundary(time.Now().Add(-2 * time.Second))
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	if output.pauseCount != 0 {
+		t.Fatal("playback paused before the verdict")
+	}
+	started := activity.userSpeechStartedAt
+	verdict := OverlappingSpeechEvent{IsInterruption: true, DetectedAt: time.Now(), OverlapStartedAt: &started}
+	if !activity.onOverlapSpeechEnded(verdict) {
+		t.Fatal("verdict rejected")
+	}
+	activity.OnInterruption(verdict)
+	if output.pauseCount != 1 || current.IsInterrupted() {
+		t.Fatal("verdict must pause current playback without cancelling it")
+	}
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		if !ev.Resumed || output.resumeCount != 1 || current.IsInterrupted() {
+			t.Fatal("silent false interruption did not resume the same speech")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("silent adaptive barge-in left playback paused without recovery")
+	}
+}
+
+func TestAdaptiveLateBargeInTranscriptCommitsWithoutFalseResume(t *testing.T) {
+	a := newAdaptiveTranscriptActivity(t)
+	session := a.Session
+	session.Options.ResumeFalseInterruption = true
+	session.Options.FalseInterruptionTimeout = 2
+	output := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(output)
+	previous := a.Agent.ChatCtx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "The story begins in a city."})
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	a.currentSpeech = current
+	t.Cleanup(func() { a.cancelFalseInterruptionTimer(); current.MarkDone(); a.Stop() })
+	a.armBackchannelBoundary(time.Now().Add(-2 * time.Second))
+	a.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	a.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	started := a.userSpeechStartedAt
+	verdict := OverlappingSpeechEvent{IsInterruption: true, DetectedAt: time.Now(), OverlapStartedAt: &started}
+	a.onOverlapSpeechEnded(verdict)
+	a.OnInterruption(verdict)
+	if output.pauseCount != 1 || current.IsInterrupted() {
+		t.Fatal("late verdict must pause the current speech")
+	}
+	// Keep endpointing deterministic; explicitly commit the late STT turn below.
+	session.Options.TurnDetection = TurnDetectionModeManual
+	a.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "Please change the story", Confidence: 1}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+	waitForInterrupted(t, current)
+	current.MarkDone()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late transcript did not commit")
+	}
+	items := a.Agent.ChatCtx.Items
+	if len(items) != 2 || items[0] != previous {
+		t.Fatalf("conversation history lost: %#v", items)
+	}
+	message, ok := items[1].(*llm.ChatMessage)
+	if !ok || message.Role != llm.ChatRoleUser || message.TextContent() != "Please change the story" {
+		t.Fatalf("committed user message = %#v", items[1])
+	}
+	a.falseInterruptionMu.Lock()
+	timer, paused := a.falseInterruptionTimer, a.pausedSpeech
+	a.falseInterruptionMu.Unlock()
+	if timer != nil || paused != nil {
+		t.Fatal("real user turn left false-interruption recovery armed")
+	}
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		t.Fatalf("real interruption emitted false-resume event: %#v", ev)
+	default:
+	}
+}
+
 func TestAdaptiveBackchannelDoesNotAdvanceEndpointing(t *testing.T) {
 	endpointing := &recordingActivityEndpointing{}
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{InterruptionMode: InterruptionModeAdaptive, Endpointing: endpointing})
+	output := &recordingAudioOutputController{canPause: true}
+	session.SetAudioOutputController(output)
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
 	activity.adaptiveInterruptionStream = &testInterruptionStream{events: make(chan OverlappingSpeechEvent)}
@@ -153,19 +251,25 @@ func TestAdaptiveBackchannelDoesNotAdvanceEndpointing(t *testing.T) {
 	if endpointing.endCount != 1 || !endpointing.lastShouldIgnore {
 		t.Fatalf("endpointing end=%d ignore=%v, want ignored backchannel", endpointing.endCount, endpointing.lastShouldIgnore)
 	}
-	// Recent events remain behind the gate until a later boundary resolves them.
-	if len(activity.heldSTTEvents) != 1 || !activity.holdSTTWhileAgentSpeaking {
-		t.Fatal("recent backchannel was not retained behind the transcript gate")
+	// Confirmed BC text is removed; the gate still waits for the next verdict.
+	if len(activity.heldSTTEvents) != 0 || !activity.holdSTTWhileAgentSpeaking {
+		t.Fatal("confirmed backchannel was retained for a later user turn")
 	}
 	activity.OnFinalTranscript(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript, Alternatives: []stt.SpeechData{{Text: "late backchannel transcript", Confidence: 0.9}}})
 	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
 	if current.IsInterrupted() {
 		t.Fatal("late backchannel was treated as a new barge-in")
 	}
+	if output.pauseCount != 0 || len(agent.ChatCtx.Items) != 0 {
+		t.Fatal("backchannel paused playback or committed a conversation turn")
+	}
 	select {
 	case ev := <-userEvents:
-		t.Fatalf("backchannel transcript escaped: %#v", ev)
+		if ev.Transcript != "uh huh" {
+			t.Fatalf("display transcript = %q", ev.Transcript)
+		}
 	default:
+		t.Fatal("backchannel transcript missing from display")
 	}
 }
 
