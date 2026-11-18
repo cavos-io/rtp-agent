@@ -158,6 +158,15 @@ native acceptance. Transcript cleanup warnings are excluded from this checklist
 at the tester's request. Per-session `runtime_disposed=false` is expected for the
 process-owned runtime and is not a leak finding by itself.
 
+### Additional local lifecycle evidence
+
+[Local checks on 2026-11-18](../results/native-local-lifecycle-20261118/README.md)
+passed with the real FFI against a loopback LiveKit server: stalled-room isolation,
+three repeated live-session closes, runtime disposal during live audio,
+pause/interruption, and recovery after a two-second signaling outage. Focused
+hold/lifecycle/CLI race tests passed three repetitions. These narrow passes do not
+close the downstream active-call SIGTERM or sustained concurrency gates below.
+
 ### Remaining gates
 
 - [ ] **Finish web behavior coverage.** Run native microphone calls with captions

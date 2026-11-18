@@ -1,0 +1,4 @@
+{"event":"false_interruption_recovery","paused_marker_growth":0,"resumed_markers":25,"same_producer":true}
+{"event":"hard_interruption","new_marker_frames":25}
+{"elapsed_seconds":5.456994625,"event":"signaling_outage","max_pcm_gap_ms":2479.084,"original_3s_gap_gate_pass":true,"outage_seconds":2,"post_reconnect_output_markers":99,"recovered_pcm_seconds":2,"recovered_wall_seconds":2.000097667}
+{"clean":true,"event":"shutdown"}
