@@ -175,7 +175,8 @@ races. After fixes, both cases pass under the race detector: hold clears before
 transport closure; forced drain completes in about five seconds with finalized
 reports and decodable recordings. The worker logger/assignment race follow-up is
 recorded in [worker race results](../results/worker-races-20261118/README.md);
-recursive Agora/IPC race findings remain separate. The fixture bypasses full app.Run
+the [recursive follow-up](../results/worker-recursive-races-20261118/README.md)
+addresses Agora/IPC races and test environment leakage. The fixture bypasses full app.Run
 dispatch/providers/storage and is not a long soak.
 
 ### Remaining gates

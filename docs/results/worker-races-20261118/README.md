@@ -69,3 +69,10 @@ validation. Existing native promotion gates remain in force.
 
 Earlier logs are retained as intermediate findings, not final passes. No STG calls
 or downstream image rebuild was needed for these worker lifecycle fixes.
+
+
+## Follow-up
+
+The Agora/IPC and repeated-run environment findings above are addressed by the
+[next validation report](../worker-recursive-races-20261118/README.md). The failure
+logs here preserve the earlier baseline; consult that report for final results.

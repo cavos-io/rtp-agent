@@ -3,6 +3,7 @@ package agora
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,16 +11,21 @@ import (
 )
 
 type recordingDataPublisher struct {
+	mu       sync.Mutex
 	payloads [][]byte
 	closes   int
 }
 
 func (r *recordingDataPublisher) PublishData(_ context.Context, payload []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.payloads = append(r.payloads, append([]byte(nil), payload...))
 	return nil
 }
 
 func (r *recordingDataPublisher) Close(context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.closes++
 	return nil
 }
@@ -526,7 +532,7 @@ func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher)
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	for {
-		if len(publisher.payloads) > 0 {
+		if publisher.payloadCount() > 0 {
 			return publishedJSON(t, publisher, 0)
 		}
 		select {
@@ -539,6 +545,8 @@ func waitForPublishedTranscript(t *testing.T, publisher *recordingDataPublisher)
 
 func publishedJSON(t *testing.T, publisher *recordingDataPublisher, index int) map[string]any {
 	t.Helper()
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
 	if index >= len(publisher.payloads) {
 		t.Fatalf("published payload index %d missing, have %d", index, len(publisher.payloads))
 	}
@@ -555,16 +563,22 @@ func assertPublishedPayloadCount(t *testing.T, publisher *recordingDataPublisher
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
 	for {
-		if len(publisher.payloads) > want {
-			t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+		if publisher.payloadCount() > want {
+			t.Fatalf("published payload count = %d, want %d", publisher.payloadCount(), want)
 		}
 		select {
 		case <-tick.C:
 		case <-deadline:
-			if len(publisher.payloads) != want {
-				t.Fatalf("published payload count = %d, want %d", len(publisher.payloads), want)
+			if publisher.payloadCount() != want {
+				t.Fatalf("published payload count = %d, want %d", publisher.payloadCount(), want)
 			}
 			return
 		}
 	}
+}
+
+func (r *recordingDataPublisher) payloadCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.payloads)
 }

@@ -4105,6 +4105,7 @@ func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
 }
 
 func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4133,6 +4134,7 @@ func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4157,6 +4159,7 @@ func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportWithNormalizedContext(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4177,6 +4180,7 @@ func TestRunDelegatesAgoraTransportWithNormalizedContext(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	t.Setenv("LIVEKIT_URL", "wss://existing.livekit.example")
 	t.Setenv("LIVEKIT_API_KEY", "existing-key")
 	t.Setenv("LIVEKIT_API_SECRET", "existing-secret")
@@ -4211,6 +4215,7 @@ func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
 }
 
 func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4371,6 +4376,7 @@ func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	t.Setenv("LIVEKIT_URL", "wss://old.example")
 	t.Setenv("LIVEKIT_API_KEY", "old-key")
@@ -4424,6 +4430,7 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 }
 
 func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerPrometheusListener(t, 43884)
 	oldDial := workerDialContext
 	oldSleep := workerRetrySleep
@@ -4463,6 +4470,7 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 }
 
 func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	oldSleep := workerRetrySleep
 	oldDial := workerDialContext
@@ -4581,6 +4589,7 @@ func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
 }
 
 func TestRunResetsRetryAfterSuccessfulWorkerConnection(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	oldSleep := workerRetrySleep
 	oldDial := workerDialContext
@@ -4742,6 +4751,7 @@ func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {
 }
 
 func TestRunRejectsAlreadyStartedServer(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		WSRL:      "wss://run.example",
 		APIKey:    "run-key",
@@ -6670,5 +6680,14 @@ func waitForWorkerDebugMessage(t *testing.T, messages <-chan string, want string
 		case <-timer.C:
 			t.Fatalf("worker did not finish logging %q", want)
 		}
+	}
+}
+
+// Run exports credentials for subprocesses. Tests must restore even initially
+// absent variables so repeated package runs cannot inherit synthetic credentials.
+func preserveWorkerRunEnvironment(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"} {
+		t.Setenv(key, os.Getenv(key))
 	}
 }
