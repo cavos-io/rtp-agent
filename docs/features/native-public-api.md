@@ -158,6 +158,7 @@ compatibility audit's outstanding-work list, not its historical evidence.
 | Passed, local component scope | Active hold and forced drain | [Downstream local results](../results/native-downstream-local-20261118/README.md): two active calls, real SIGTERM, hold cleared before closure; five-second forced drain finalized reports and recordings without a detected report race. Both jobs ended, handles released, runtime disposed. Full app.Run/provider/storage finalizers were bypassed. |
 | Passed | Recursive worker race and repeatability checks | [Final recursive results](../results/worker-recursive-races-20261118/README.md): complete worker subtree plus CLI passed with `-race -count=3`, both default and `nativeinprocess` builds, with repetitions in the same process per package. Agora/IPC races and credential leakage no longer reproduce in these runs. Architecture and commit hooks passed. |
 | Passed, short observation | Two-call synthetic media isolation | [Downstream local results](../results/native-downstream-local-20261118/README.md): two-minute run, distinct caller tones, continued media during graceful drain, decodable recordings and no alien-dominant checked windows. This does not establish sustained RSS stability or caption/data isolation. |
+| Partial; local resources and sustained media passed | Sustained and repeated-call soak | [Soak results](../results/native-sustained-soak-20261118/README.md): two native calls for ten minutes, then 12 two-call cycles. All 26 sessions released handles; post-cleanup goroutines stayed at 13 and Go heap stayed within bounds. Sustained calls each completed 40 correlated chat/caption turns with no crossed tone markers. Four short-call initial SDK captions were missing; a separate 26-session repeat passed after waiting for caller media readiness. Immediate-start caption handling still needs verification in the actual client. |
 | Passed, live local component scope | Native automated-test evidence delivery | [agent.events results](../results/native-agent-events-20261118/README.md): real LiveKit/native FFI, independent observer, readiness and two correlated chat turns from agent identity; duplicate replay without another generation; race-enabled run passed. Synthetic replies; dispatch and manager/UI workflow were bypassed. |
 
 Calls `1117947`–`1117952` ran without the native flag and do not count toward
@@ -236,13 +237,19 @@ evidence below; passing local suites does not close those gates.
   covered and need not be repeated as a substitute. Local two-second signaling
   recovery is also covered; verify downstream outcomes and recording continuity
   for these recovery cases on the final artifact.
-- [ ] **Run sustained concurrent-call and repeated-call soak.** The two-call,
-  two-minute media run and repeated unit suites pass. Extend to a defined sustained
-  workload with distinct audio/chat markers; check no cross-call audio, captions,
-  events or recordings, no callback overflow, stable PCM delivery, and no growing
-  handle/goroutine/memory accumulation after repeated teardown. Record workload,
-  duration and resource trends against Pion; define acceptable limits before
-  calling the result a pass.
+- [ ] **Finish caption-startup and deployment soak validation.** The
+  [local sustained soak](../results/native-sustained-soak-20261118/README.md) now
+  covers two native calls for ten minutes plus 12 two-call cycles, with bounded
+  worker RSS/Go heap/goroutines, successful native session/global cleanup and
+  sustained audio/chat/event isolation. The original run failed four initial
+  SDK caption checks during short cycles. A separate 26-session repeat passed
+  with an explicit caller media-ready barrier; readiness data can precede caller
+  discovery of the agent participant. Verify immediate-start caption handling
+  in the real frontend/tester before treating that path as closed. Repeat the
+  agreed workload on the final deployment artifact with providers and recording
+  enabled, checking recording isolation/continuity and longer resource trends.
+  The local RSS comparison is process residency on macOS, not an independent
+  native-allocation census or production capacity benchmark.
 - [ ] **Confirm the supported default profile.** Inventory effective downstream
   options and accept the native fixed audio profile and explicitly disabled
   pre-connect audio. Unsupported configurations must remain on Pion or gain

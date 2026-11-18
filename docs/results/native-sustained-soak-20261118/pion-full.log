@@ -1,0 +1,219 @@
+=== RUN   TestLocalNativeSoak
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:10.193519875 RSS:70224 Heap:16153240 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:20.199411 RSS:72752 Heap:11055632 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:30.210515791 RSS:71776 Heap:14443368 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:40.215294416 RSS:71360 Heap:17838864 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:50.226004041 RSS:71344 Heap:11416360 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:60.238303833 RSS:71456 Heap:14391472 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:70.248760291 RSS:70496 Heap:17659992 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:80.26020825 RSS:70880 Heap:10888688 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:90.274180375 RSS:70784 Heap:14119736 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:100.284696833 RSS:71056 Heap:17715440 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:110.295763875 RSS:71248 Heap:10888936 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:120.306465958 RSS:70800 Heap:13969144 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:130.315950291 RSS:57168 Heap:17618416 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:140.322715166 RSS:62048 Heap:10884008 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:150.327578875 RSS:48944 Heap:13937280 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:160.3571715 RSS:43472 Heap:16954832 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:170.368655291 RSS:45280 Heap:19533912 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:180.379393333 RSS:48560 Heap:12036112 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:190.396309 RSS:50240 Heap:15711752 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:200.410422166 RSS:50672 Heap:18843176 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:210.423139166 RSS:50368 Heap:11482848 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:220.43395275 RSS:40336 Heap:14763216 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:230.445776375 RSS:43792 Heap:17400424 Goroutines:213}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:240.459822375 RSS:50032 Heap:10752576 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:250.475479875 RSS:50240 Heap:13991688 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:260.488932625 RSS:50448 Heap:16737128 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:270.505093541 RSS:50432 Heap:20005168 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:280.514110958 RSS:51120 Heap:12701912 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:290.527254875 RSS:50816 Heap:15509072 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:300.536357041 RSS:50864 Heap:18426928 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:310.55342475 RSS:51552 Heap:11884896 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:320.566223875 RSS:51312 Heap:14715384 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:330.576834875 RSS:47904 Heap:17673352 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:340.591521416 RSS:50816 Heap:10608680 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:350.602672458 RSS:51152 Heap:12924656 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:360.615894458 RSS:51088 Heap:16108912 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:370.625993625 RSS:51152 Heap:19276288 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:380.635532 RSS:49520 Heap:11821472 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:390.644981583 RSS:50400 Heap:14906864 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:400.655006583 RSS:50048 Heap:17570200 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:410.668227916 RSS:50880 Heap:20002056 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:420.683273833 RSS:51120 Heap:12972496 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:430.696887833 RSS:36656 Heap:15886080 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:440.710454875 RSS:41280 Heap:18211384 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:450.720144583 RSS:50240 Heap:11150488 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:460.73190725 RSS:41968 Heap:13847984 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:470.740653083 RSS:43296 Heap:16394216 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:480.747097291 RSS:46176 Heap:19398888 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:490.75878475 RSS:50480 Heap:11425528 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:500.763659625 RSS:47888 Heap:14364656 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:510.772499166 RSS:43536 Heap:17172160 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:520.783344375 RSS:50160 Heap:19213168 Goroutines:213}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:530.794394375 RSS:49728 Heap:11808192 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:540.806305541 RSS:50448 Heap:15021360 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:550.817617291 RSS:50768 Heap:17160672 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:560.822568958 RSS:51008 Heap:19754664 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:570.834296583 RSS:51088 Heap:12939616 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:580.852777458 RSS:40720 Heap:15759424 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:590.865766458 RSS:42096 Heap:18642424 Goroutines:212}
+    local_native_soak_test.go:161: RESOURCE {Phase:active--1 Seconds:600.190087041 RSS:43552 Heap:19434528 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188--1-0 frames=11994 wrong=0 replies=40 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188--1-1 frames=11993 wrong=0 replies=40 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean--1 Seconds:602.242708791 RSS:51616 Heap:7509152 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-0 Seconds:610.618591625 RSS:52384 Heap:17368968 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-0-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-0-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-0 Seconds:612.648567416 RSS:50768 Heap:7705456 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-1 Seconds:620.969352416 RSS:56064 Heap:16868192 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-1-0 frames=161 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-1-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-1 Seconds:623.000582416 RSS:56176 Heap:9530944 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-2 Seconds:631.245744958 RSS:58064 Heap:18060648 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-2-0 frames=159 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-2-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-2 Seconds:633.272758125 RSS:57088 Heap:8761352 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-3 Seconds:641.600223041 RSS:57968 Heap:15138112 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-3-0 frames=161 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-3-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-3 Seconds:643.62861025 RSS:57056 Heap:9598712 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-4 Seconds:651.947928125 RSS:52720 Heap:12784632 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-4-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-4-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-4 Seconds:653.969940958 RSS:50528 Heap:8683120 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-5 Seconds:662.279616416 RSS:41840 Heap:16996912 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-5-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-5-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-5 Seconds:664.298746041 RSS:39056 Heap:8739736 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-6 Seconds:672.757914708 RSS:57200 Heap:13070216 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-6-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-6-1 frames=157 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-6 Seconds:674.772983125 RSS:57408 Heap:7746648 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-7 Seconds:683.07321225 RSS:58816 Heap:12051280 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-7-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-7-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-7 Seconds:685.106741375 RSS:58832 Heap:8591856 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-8 Seconds:693.502422541 RSS:58944 Heap:14133376 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-8-0 frames=161 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-8-1 frames=159 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-8 Seconds:695.540781875 RSS:58592 Heap:8738448 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-9 Seconds:703.853184875 RSS:59216 Heap:12289480 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-9-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-9-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-9 Seconds:705.885793041 RSS:57200 Heap:8655056 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-10 Seconds:714.221878625 RSS:54544 Heap:16341304 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-10-0 frames=161 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-10-1 frames=159 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-10 Seconds:716.244896458 RSS:51648 Heap:8751424 Goroutines:2}
+    local_native_soak_test.go:161: RESOURCE {Phase:active-11 Seconds:724.553734416 RSS:54112 Heap:10775512 Goroutines:212}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-11-0 frames=160 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:341: CALL room=soak-1794979188-11-1 frames=158 wrong=0 replies=1 cleanup={"native_cleanup_ms":0,"pid":0,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0,"shutdown_seen":false,"disconnect_callback":false,"handles_released":false,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:161: RESOURCE {Phase:clean-11 Seconds:726.580886208 RSS:50176 Heap:8688984 Goroutines:2}
+    local_native_soak_test.go:362: SOAK completed; native cleanup checked when selected; process RSS measured
+--- PASS: TestLocalNativeSoak (726.58s)
+PASS
+PEER_LOG soak-1794979188--1-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188--1-0 sent=29995 markers=29983 wrong=0 turns=40
+--- PASS: TestSoakPeer (600.18s)
+PASS
+PEER_LOG soak-1794979188--1-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188--1-1 sent=29992 markers=29982 wrong=0 turns=40
+--- PASS: TestSoakPeer (600.06s)
+PASS
+PEER_LOG soak-1794979188-0-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-0-0 sent=408 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.22s)
+PASS
+PEER_LOG soak-1794979188-0-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-0-1 sent=404 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.12s)
+PASS
+PEER_LOG soak-1794979188-1-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-1-0 sent=410 markers=399 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.25s)
+PASS
+PEER_LOG soak-1794979188-1-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-1-1 sent=404 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.12s)
+PASS
+PEER_LOG soak-1794979188-10-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-10-0 sent=410 markers=399 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.25s)
+PASS
+PEER_LOG soak-1794979188-10-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-10-1 sent=405 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.14s)
+PASS
+PEER_LOG soak-1794979188-11-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-11-0 sent=409 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.23s)
+PASS
+PEER_LOG soak-1794979188-11-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-11-1 sent=404 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.12s)
+PASS
+PEER_LOG soak-1794979188-2-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-2-0 sent=407 markers=394 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.17s)
+PASS
+PEER_LOG soak-1794979188-2-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-2-1 sent=403 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.09s)
+PASS
+PEER_LOG soak-1794979188-3-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-3-0 sent=410 markers=399 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.26s)
+PASS
+PEER_LOG soak-1794979188-3-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-3-1 sent=404 markers=392 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.12s)
+PASS
+PEER_LOG soak-1794979188-4-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-4-0 sent=410 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.25s)
+PASS
+PEER_LOG soak-1794979188-4-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-4-1 sent=404 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.13s)
+PASS
+PEER_LOG soak-1794979188-5-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-5-0 sent=408 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.21s)
+PASS
+PEER_LOG soak-1794979188-5-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-5-1 sent=403 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.10s)
+PASS
+PEER_LOG soak-1794979188-6-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-6-0 sent=411 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.25s)
+PASS
+PEER_LOG soak-1794979188-6-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-6-1 sent=401 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.09s)
+PASS
+PEER_LOG soak-1794979188-7-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-7-0 sent=409 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.23s)
+PASS
+PEER_LOG soak-1794979188-7-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-7-1 sent=402 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.11s)
+PASS
+PEER_LOG soak-1794979188-8-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-8-0 sent=411 markers=399 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.28s)
+PASS
+PEER_LOG soak-1794979188-8-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-8-1 sent=405 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.14s)
+PASS
+PEER_LOG soak-1794979188-9-0.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-9-0 sent=408 markers=397 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.21s)
+PASS
+PEER_LOG soak-1794979188-9-1.peer.log
+    local_native_soak_test.go:115: PEER room=soak-1794979188-9-1 sent=403 markers=391 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.10s)
+PASS

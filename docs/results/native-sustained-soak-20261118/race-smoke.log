@@ -1,0 +1,40 @@
+=== RUN   TestLocalNativeSoak
+    local_native_soak_test.go:158: RESOURCE {Phase:active--1 Seconds:7.304601041 RSS:187568 Heap:15263040 Goroutines:43}
+    local_native_soak_test.go:326: CALL room=soak-1794979075--1-0 frames=323 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.138417,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:326: CALL room=soak-1794979075--1-1 frames=352 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.0815,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:158: RESOURCE {Phase:clean--1 Seconds:11.359751708 RSS:185296 Heap:7963208 Goroutines:11}
+    local_native_soak_test.go:158: RESOURCE {Phase:active-0 Seconds:20.104171666 RSS:166896 Heap:13425984 Goroutines:43}
+    local_native_soak_test.go:326: CALL room=soak-1794979075-0-0 frames=423 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.158041,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:326: CALL room=soak-1794979075-0-1 frames=451 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.140125,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:158: RESOURCE {Phase:clean-0 Seconds:24.14928975 RSS:168992 Heap:7973584 Goroutines:11}
+    local_native_soak_test.go:158: RESOURCE {Phase:active-1 Seconds:32.934597833 RSS:170544 Heap:13212240 Goroutines:43}
+    local_native_soak_test.go:326: CALL room=soak-1794979075-1-0 frames=420 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.227584,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:326: CALL room=soak-1794979075-1-1 frames=452 wrong=0 replies=1 cleanup={"mode":"inprocess","native_cleanup_ms":0,"pid":96934,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":0.05225,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}
+    local_native_soak_test.go:158: RESOURCE {Phase:clean-1 Seconds:36.980936291 RSS:170384 Heap:7995456 Goroutines:11}
+    local_native_soak_test.go:347: SOAK completed; per-room cleanup checked; process RSS includes Go and native allocations
+--- PASS: TestLocalNativeSoak (36.98s)
+PASS
+PEER_LOG soak-1794979075--1-0.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075--1-0 sent=350 markers=320 wrong=0 turns=1
+--- PASS: TestSoakPeer (7.22s)
+PASS
+PEER_LOG soak-1794979075--1-1.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075--1-1 sent=359 markers=350 wrong=0 turns=1
+--- PASS: TestSoakPeer (7.39s)
+PASS
+PEER_LOG soak-1794979075-0-0.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075-0-0 sent=425 markers=422 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.66s)
+PASS
+PEER_LOG soak-1794979075-0-1.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075-0-1 sent=458 markers=450 wrong=0 turns=1
+--- PASS: TestSoakPeer (9.40s)
+PASS
+PEER_LOG soak-1794979075-1-0.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075-1-0 sent=423 markers=418 wrong=0 turns=1
+--- PASS: TestSoakPeer (8.69s)
+PASS
+PEER_LOG soak-1794979075-1-1.peer.log
+    local_native_soak_test.go:112: PEER room=soak-1794979075-1-1 sent=454 markers=449 wrong=0 turns=1
+--- PASS: TestSoakPeer (9.33s)
+PASS

@@ -1,0 +1,363 @@
+//go:build nativeinprocess && nativeacceptance
+
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	configmodel "github.com/cavos-io/agent-worker-golang/core/config/model"
+	meta "github.com/cavos-io/agent-worker-golang/core/session/metadata/model"
+	wi "github.com/cavos-io/agent-worker-golang/interface/worker"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
+	lkproto "github.com/livekit/protocol/livekit"
+	lk "github.com/livekit/server-sdk-go/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestSoakPeer(t *testing.T) {
+	name := os.Getenv("SOAK_ROOM")
+	if name == "" {
+		t.Skip("child only")
+	}
+	hz, _ := strconv.ParseFloat(os.Getenv("SOAK_HZ"), 64)
+	other := 1600 - hz
+	events := make(chan observedEvidence, 256)
+	captions := make(chan string, 256)
+	soakCallback = func(cb *lk.RoomCallback) {
+		cb.OnDataReceived = func(b []byte, p lk.DataReceiveParams) {
+			if p.Topic != "agent.events" {
+				return
+			}
+			var e observedEvidence
+			if err := json.Unmarshal(b, &e); err != nil {
+				t.Error(err)
+				return
+			}
+			e.Sender = p.SenderIdentity
+			events <- e
+		}
+		cb.OnTranscriptionReceived = func(ss []*lk.TranscriptionSegment, _ lk.Participant, _ lk.TrackPublication) {
+			for _, s := range ss {
+				if s.Final {
+					captions <- s.Text
+				}
+			}
+		}
+	}
+	p := startProcessPublisher(t, os.Getenv("NATIVE_ACCEPTANCE_URL"), name, hz, other)
+	if err := os.WriteFile(os.Getenv("SOAK_READY"), []byte("ready"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	next := func(kind string, turn int) {
+		t.Helper()
+		select {
+		case e := <-events:
+			if e.Kind != kind || e.Data["run_id"] != name || e.Sender != "native-agent" {
+				t.Fatalf("crossed/unexpected event: %+v", e)
+			}
+			if turn > 0 && (e.Data["message_id"] != fmt.Sprintf("%s/turn/%d", name, turn) || e.Data["turn"] != float64(turn)) {
+				t.Fatalf("crossed correlation %+v", e)
+			}
+			if kind == "transcript" && e.Text != fmt.Sprintf("synthetic reply: %s input %d", name, turn) {
+				t.Fatalf("crossed text %+v", e)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("missing event", kind, turn)
+		}
+	}
+	next("status", 0)
+	if os.Getenv("SOAK_PION") == "1" {
+		time.Sleep(time.Second)
+	}
+	stop := make(chan struct{})
+	go func() { var b [1]byte; os.Stdin.Read(b[:]); close(stop) }()
+	turns := 0
+	for {
+		turns++
+		p.room.LocalParticipant.SendText(fmt.Sprintf("%s input %d", name, turns), lk.StreamTextOptions{Topic: "lk.chat", Attributes: map[string]string{"run_id": name, "message_id": fmt.Sprintf("%s/turn/%d", name, turns), "turn": fmt.Sprint(turns)}})
+		next("ack", turns)
+		next("transcript", turns)
+		select {
+		case s := <-captions:
+			if s != fmt.Sprintf("synthetic reply: %s input %d", name, turns) {
+				t.Fatal("crossed caption", s)
+			}
+		case <-time.After(8 * time.Second):
+			t.Fatal("missing caption")
+		}
+		select {
+		case <-stop:
+			goto finished
+		case <-time.After(15 * time.Second):
+		}
+	}
+finished:
+	p.finish()
+	select {
+	case err := <-p.err:
+		t.Error(err)
+	default:
+	}
+	if p.markers.Load() < 100 || p.wrong.Load() != 0 {
+		t.Error("missing/crossed returned audio", p.markers.Load(), p.wrong.Load())
+	}
+	t.Logf("PEER room=%s sent=%d markers=%d wrong=%d turns=%d", name, p.sent.Load(), p.markers.Load(), p.wrong.Load(), turns)
+}
+
+type soakCall struct {
+	name      string
+	assistant *evidenceAssistant
+	job       *worker.JobContext
+	native    *nativeroom.Room
+	done      chan error
+	ready     chan struct{}
+}
+
+func TestLocalNativeSoak(t *testing.T) {
+	url, lib, out := os.Getenv("NATIVE_ACCEPTANCE_URL"), os.Getenv("LIVEKIT_LIB_PATH"), os.Getenv("NATIVE_ACCEPTANCE_OUT")
+	if url != "ws://127.0.0.1:17880" || lib == "" || out == "" {
+		t.Fatal("isolated local settings required")
+	}
+	if err := os.Mkdir(out, 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(out, "resources.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	type sample struct {
+		Phase      string  `json:"phase"`
+		Seconds    float64 `json:"seconds"`
+		RSS        int64   `json:"rss_kib"`
+		Heap       uint64  `json:"heap_bytes"`
+		Goroutines int     `json:"goroutines"`
+	}
+	started := time.Now()
+	sampleNow := func(phase string) sample {
+		b, e := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
+		if e != nil {
+			t.Fatal(e)
+		}
+		rss, e := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		s := sample{phase, time.Since(started).Seconds(), rss, m.HeapAlloc, runtime.NumGoroutine()}
+		json.NewEncoder(f).Encode(s)
+		t.Logf("RESOURCE %+v", s)
+		return s
+	}
+	wi.AgentNumIdleProcesses = 0
+	srv := wi.NewAgentServerRuntime(wi.AgentServerRuntimeInput{AgentName: "soak-local", LiveKitURL: url, LiveKitAPIKey: localKey, LiveKitAPISecret: localSecret}).Server
+	cfg := &configmodel.ConfigModel{LiveKitURL: url, LiveKitAPIKey: localKey, LiveKitAPISecret: localSecret, NativeInProcess: true, NativeLibrary: lib}
+	var mu sync.Mutex
+	calls := map[string]*soakCall{}
+	err = srv.RTCSession(func(job *worker.JobContext) error {
+		mu.Lock()
+		c := calls[job.Job.Room.Name]
+		mu.Unlock()
+		if c == nil {
+			return fmt.Errorf("unknown room")
+		}
+		session := agent.NewAgentSession(agent.NewAgent("synthetic"), nil, agent.AgentSessionOptions{})
+		session.Assistant = c.assistant
+		var n nativeTransport
+		if os.Getenv("SOAK_PION") != "1" {
+			n = newNativeTransport(job, session, cfg, lib, nil)
+			c.native = n.(*nativeroom.Room)
+		}
+		ev := wi.NewTestEvidencePublisher(&meta.AutomatedTest{ExecutionID: c.name, TesterIdentity: "caller"}, job.Room, func(e error) { t.Error(e) })
+		if n != nil {
+			if e := ev.UseDataPublisher(n); e != nil {
+				return e
+			}
+		}
+		detach := ev.Attach(session)
+		defer detach()
+		job.SetSessionDirectory(filepath.Join(out, c.name))
+		if e := job.StartSession(context.Background(), session, worker.StartSessionOptions{Transport: n, RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, ParticipantIdentity: "caller", TranscriptionNextOutput: ev, TextInputCallback: wi.NewAgentTestTextInputCallback(ev)}}); e != nil {
+			return e
+		}
+		c.job = job
+		close(c.ready)
+		ev.Ready()
+		<-job.ShutdownDone()
+		return nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if e := nativeroom.CloseInProcessRuntime(ctx); e != nil {
+			t.Error(e)
+		}
+	}()
+	duration := 600 * time.Second
+	waves := 12
+	if os.Getenv("SOAK_SMOKE") == "1" {
+		duration = 6 * time.Second
+		waves = 2
+	}
+	var baseline sample
+	for wave := -1; wave < waves; wave++ {
+		var active []*soakCall
+		var stops []func()
+		for slot := 0; slot < 2; slot++ {
+			hz := 600.0
+			if slot == 1 {
+				hz = 1000
+			}
+			name := fmt.Sprintf("soak-%d-%d-%d", started.Unix(), wave, slot)
+			c := &soakCall{name: name, assistant: &evidenceAssistant{acceptanceEcho: acceptanceEcho{hz: hz, other: 1600 - hz}}, done: make(chan error, 1), ready: make(chan struct{})}
+			mu.Lock()
+			calls[name] = c
+			mu.Unlock()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSoakPeer$", "-test.v", "-test.timeout=15m")
+			ready := filepath.Join(out, name+".ready")
+			cmd.Env = append(os.Environ(), "SOAK_ROOM="+name, "SOAK_HZ="+fmt.Sprint(hz), "SOAK_READY="+ready)
+			log, e := os.Create(filepath.Join(out, name+".peer.log"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			cmd.Stdout = log
+			cmd.Stderr = log
+			stdin, e := cmd.StdinPipe()
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = cmd.Start(); e != nil {
+				t.Fatal(e)
+			}
+			exited := make(chan error, 1)
+			go func() { exited <- cmd.Wait(); log.Close() }()
+			stop := sync.OnceFunc(func() {
+				stdin.Write([]byte("q"))
+				stdin.Close()
+				select {
+				case e := <-exited:
+					if e != nil {
+						t.Error("peer", name, e)
+					}
+				case <-time.After(15 * time.Second):
+					cmd.Process.Kill()
+					<-exited
+					t.Error("peer stop timeout", name)
+				}
+			})
+			t.Cleanup(stop)
+			stops = append(stops, stop)
+			until := time.Now().Add(15 * time.Second)
+			for {
+				if _, e = os.Stat(ready); e == nil {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatal("peer startup timeout", name)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			go func() {
+				c.done <- srv.ExecuteLocalJobWithOptions(context.Background(), name, "native-agent", worker.LocalJobOptions{FakeJob: false, RoomInfo: &lkproto.Room{Name: name}})
+			}()
+			select {
+			case <-c.ready:
+			case e := <-c.done:
+				t.Fatal("job startup", e)
+			case <-time.After(25 * time.Second):
+				t.Fatal("job startup timeout")
+			}
+			t.Cleanup(func() {
+				if c.job != nil {
+					c.job.Shutdown("fixture cleanup")
+				}
+			})
+			active = append(active, c)
+		}
+		d := 8 * time.Second
+		if wave == -1 {
+			d = duration
+		}
+		until := time.Now().Add(d)
+		last := [2]int64{}
+		for time.Now().Before(until) {
+			pause := 10 * time.Second
+			if left := time.Until(until); left < pause {
+				pause = left
+			}
+			time.Sleep(pause)
+			sampleNow(fmt.Sprintf("active-%d", wave))
+			for i, c := range active {
+				now := c.assistant.frames.Load()
+				minFPS := 20.0
+				if os.Getenv("SOAK_PION") == "1" {
+					minFPS = 10
+				}
+				if now-last[i] < int64(pause.Seconds()*minFPS) {
+					t.Error("PCM delivery stalled", c.name, now-last[i])
+				}
+				last[i] = now
+			}
+		}
+		for _, stop := range stops {
+			stop()
+		}
+		for _, c := range active {
+			if c.assistant.frames.Load() < 100 || c.assistant.wrong.Load() != 0 || c.assistant.failures.Load() != 0 {
+				t.Error("worker audio", c.name, c.assistant.frames.Load(), c.assistant.wrong.Load(), c.assistant.failures.Load())
+			}
+			c.job.Shutdown("soak cycle complete")
+			select {
+			case e := <-c.done:
+				if e != nil {
+					t.Error(e)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("job teardown timeout")
+			}
+			cleanup, ok := nativeroom.Cleanup{}, true
+			if c.native != nil {
+				cleanup, ok = c.native.CleanupDiagnostics()
+			}
+			if c.native != nil && (!ok || !cleanup.HandlesReleased || cleanup.CallbackOverflow || !cleanup.ShutdownSeen) {
+				t.Error("cleanup", ok, cleanup)
+			}
+			b, _ := json.Marshal(cleanup)
+			t.Logf("CALL room=%s frames=%d wrong=%d replies=%d cleanup=%s", c.name, c.assistant.frames.Load(), c.assistant.wrong.Load(), c.assistant.replies.Load(), b)
+			mu.Lock()
+			delete(calls, c.name)
+			mu.Unlock()
+			c.job = nil
+			c.native = nil
+			c.assistant = nil
+		}
+		runtime.GC()
+		time.Sleep(2 * time.Second)
+		s := sampleNow(fmt.Sprintf("clean-%d", wave))
+		if wave == 0 {
+			baseline = s
+		}
+		if wave > 0 && (s.RSS > baseline.RSS+32*1024 || s.Heap > baseline.Heap+16*1024*1024 || s.Goroutines > baseline.Goroutines+10) {
+			t.Error("post-cleanup resource bound exceeded", baseline, s)
+		}
+	}
+	if len(srv.ActiveJobs()) != 0 {
+		t.Error("active jobs retained")
+	}
+	t.Log("SOAK completed; native cleanup checked when selected; process RSS measured")
+}
