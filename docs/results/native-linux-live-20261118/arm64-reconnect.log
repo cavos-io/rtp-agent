@@ -1,9 +1,0 @@
-=== RUN   TestNativePrimarySignalOutageRecovery
-=== RUN   TestNativePrimarySignalOutageRecovery/native-signal-reconnect
-{"level":"warn","ts":1794990527.3675563,"logger":"reconnect-comparison","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
-{"level":"warn","ts":1794990527.3707242,"logger":"reconnect-comparison","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
-{"level":"warn","ts":1794990531.254893,"logger":"reconnect-comparison","caller":"nativeroom/client_state.go:70","msg":"native client state publication failed","error":"native client state: request error: NotAllowed - does not have permission to update own metadata"}
-{"level":"info","ts":1794990539.421715,"logger":"reconnect-comparison","caller":"nativeroom/room.go:199","msg":"experimental native in-process cleanup","cleanup":{"mode":"inprocess","native_cleanup_ms":0,"pid":1,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":5.862292,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}}
---- PASS: TestNativePrimarySignalOutageRecovery (12.33s)
-    --- PASS: TestNativePrimarySignalOutageRecovery/native-signal-reconnect (12.32s)
-PASS

@@ -1,5 +1,0 @@
-=== RUN   TestStarterInProcessNativeCaptions
-=== RUN   TestStarterInProcessNativeCaptions/session-close
---- PASS: TestStarterInProcessNativeCaptions (7.34s)
-    --- PASS: TestStarterInProcessNativeCaptions/session-close (7.34s)
-PASS

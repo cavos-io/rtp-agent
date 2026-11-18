@@ -1,9 +1,0 @@
-=== RUN   TestStarterInProcessNative
-=== RUN   TestStarterInProcessNative/session-close
-=== RUN   TestStarterInProcessNative/false-recovery
-=== RUN   TestStarterInProcessNative/publisher-disconnect
---- PASS: TestStarterInProcessNative (36.72s)
-    --- PASS: TestStarterInProcessNative/session-close (12.30s)
-    --- PASS: TestStarterInProcessNative/false-recovery (12.21s)
-    --- PASS: TestStarterInProcessNative/publisher-disconnect (12.21s)
-PASS

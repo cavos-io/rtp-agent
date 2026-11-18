@@ -1,5 +1,0 @@
---- FAIL: TestJobShutdownKeepsNativeRoomOpenForSessionCleanup (2.24s)
-    room_test.go:79: native room closed before application session cleanup
-FAIL
-FAIL	github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom	3.098s
-FAIL

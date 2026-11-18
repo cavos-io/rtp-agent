@@ -1,9 +1,0 @@
---- FAIL: TestAssignmentReportsFailureWhenEntrypointPanics (0.00s)
-    server_test.go:3841: assigned job remained in activeJobs after panicked entrypoint
-FAIL
-FAIL	github.com/cavos-io/rtp-agent/interface/worker	10.109s
-ok  	github.com/cavos-io/rtp-agent/interface/worker/livekit	7.197s
-ok  	github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom	16.952s
-ok  	github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess	3.224s
-ok  	github.com/cavos-io/rtp-agent/interface/cli	3.023s
-FAIL

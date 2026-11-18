@@ -1,4 +1,0 @@
-Image sha256:975a0e4e1476a1bff8533359dfcd5afd9a74381764f4e9922656b63b7ea2dd72 platform linux/amd64 user appuser; native flag unset
-=== RUN   TestPinnedNativeLibrarySmoke
---- PASS: TestPinnedNativeLibrarySmoke (0.04s)
-PASS

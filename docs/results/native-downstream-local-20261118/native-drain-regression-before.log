@@ -1,8 +1,0 @@
---- FAIL: TestCustomTransportStopsAfterSessionCleanup (0.00s)
-    --- FAIL: TestCustomTransportStopsAfterSessionCleanup/custom (0.00s)
-        local_drain_regression_test.go:38: transport stopped before session cleanup = true, custom = true
---- FAIL: TestLocalReportWaitsForConcurrentBackgroundFinalizer (0.01s)
-    local_drain_regression_test.go:81: local report returned before finalization: <nil>
-FAIL
-FAIL	github.com/cavos-io/rtp-agent/interface/worker	1.105s
-FAIL

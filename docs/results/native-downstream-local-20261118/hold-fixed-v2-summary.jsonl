@@ -1,3 +1,0 @@
-{"event":"sample","frames_a":500,"frames_b":500,"goroutines":244,"heap_alloc":20907440,"markers_a":498,"markers_b":498}
-{"active_jobs":0,"completed_jobs":2,"elapsed_ms":2084.017958,"event":"drained","frames_during_grace":101}
-{"completed_jobs":2,"event":"runtime_disposed","goroutines":77}

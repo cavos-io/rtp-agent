@@ -11,6 +11,6 @@
 // Construction does not select a transport globally or load the native library.
 //
 // New retains the existing helper-process transport. Neither constructor changes
-// the worker's default transport. See docs/features/native-public-api.md for
-// deployment, downstream migration and compatibility limits.
+// the worker's default transport. See examples/starter/packaging/INPROCESS.md
+// for build, library installation and rollback instructions.
 package nativeroom

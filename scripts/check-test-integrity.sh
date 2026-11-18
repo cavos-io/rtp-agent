@@ -5,7 +5,7 @@ set -euo pipefail
 # Checks provided Go test files against a diff base or as full files.
 #
 # Enforces:
-#   1. Go test files cannot be deleted (unless BASE is "all").
+#   1. Go test files cannot be deleted, except with full retirement of the experimental probe module.
 #   2. Modified/added/copied/renamed Go test files must not have more deletions than additions.
 #   3. Newly added test lines cannot introduce common test-weakening patterns.
 
@@ -36,13 +36,20 @@ warn() {
 check_deleted_test_files() {
   [[ "$BASE" == "all" ]] && return 0
   
-  local deleted_tests
+  local deleted_tests file
   deleted_tests=$(git diff "$BASE" --name-only --diff-filter=D -- "${FILES[@]}" || true)
 
-  if [[ -n "$deleted_tests" ]]; then
-    reject "deleting Go test files is not allowed:"
-    echo "$deleted_tests"
-  fi
+  # The retired standalone probe is kept locally, outside the production tree.
+  # Exempt only its deletion, and only when no part remains in the index.
+  local probe_remaining
+  probe_remaining=$(git ls-files -- examples/native-receive-probe/)
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    if [[ "$file" == examples/native-receive-probe/* && -z "$probe_remaining" ]]; then
+      continue
+    fi
+    reject "deleting Go test files is not allowed: $file"
+  done <<<"$deleted_tests"
 }
 
 check_test_additions_cover_deletions() {

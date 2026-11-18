@@ -6,7 +6,7 @@ Build using the existing Go/CGO toolchain and agent system dependencies:
 go build -tags nativeinprocess -o agent-starter-go ./examples/starter
 ```
 
-No Python packaging, probe setup, protoc, native SDK checkout, or native binary is needed to compile. Pinned generated Go FFI bindings are included under `interface/worker/livekit/ffipb`. The runtime and public transport are in the root module under `interface/worker/livekit/nativeinprocess` and `interface/worker/livekit/nativeroom`. No probe-module replacement is required. See [downstream API usage](../../../docs/features/native-public-api.md). Do not copy only the starter folder when building.
+No Python packaging, probe setup, protoc, native SDK checkout, or native binary is needed to compile. Pinned generated Go FFI bindings are included under `interface/worker/livekit/ffipb`. The runtime and public transport are in the root module under `interface/worker/livekit/nativeinprocess` and `interface/worker/livekit/nativeroom`. No probe-module replacement is required. See the public [`nativeroom` package documentation](../../../interface/worker/livekit/nativeroom/doc.go) for startup and shutdown ownership. Do not copy only the starter folder when building.
 
 Existing Opus/PortAudio development/runtime dependencies still apply to the starter. ONNX, Silero model and provider configuration are unchanged. CGO is required. This does not introduce a new receive playout policy or select native by default.
 
@@ -25,7 +25,7 @@ printf '%s\n' '41ad8dfc42f2cf0e959231947556d961e49f9d402511a96ee3c230463139d735 
 cd ..
 ```
 
-The pinned Rust source revision is `5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb`. Do not substitute another version just because its filename matches. Linux uses the matching `.so` and architecture-specific upstream artifact; this change's runtime verification is macOS arm64 only.
+The pinned Rust source revision is `5a656c4bc4bc5c4f7fad17ab69044db3b487dfeb`. Do not substitute another version just because its filename matches. Linux uses the matching `.so` and architecture-specific upstream artifact; see the Linux packaging instructions below.
 
 ## Run
 
@@ -41,28 +41,15 @@ export LIVEKIT_LIB_PATH="$PWD/livekit-ffi-0.12.80/liblivekit_ffi.dylib"
 
 The helper executable is not used in this mode. `LIVEKIT_LIB_PATH` must be an absolute path. Model paths remain relative to your working directory where applicable. Set `LIVEKIT_AGENT_NAME=agent-starter-go` for the existing load-test command.
 
-## Helper fallback and default transport
+## Default transport and rollback
 
-The helper can also be built with Go without probe setup:
+To return to Pion, drain the worker and restart with all three experimental flags
+set to `0`. A plain `go build -o agent-starter-go ./examples/starter` retains Pion
+as the default and does not compile in-process support.
 
-```sh
-(cd examples/native-receive-probe && go build -o ../../native-room-helper .)
-```
-
-The existing helper includes probe publisher code and needs Opus/opusfile build dependencies. Select it after draining and restarting:
-
-```sh
-export RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS=0
-export RTP_AGENT_EXPERIMENTAL_NATIVE_ROOM=1
-export RTP_AGENT_NATIVE_HELPER="$PWD/native-room-helper"
-./agent-starter-go start
-```
-
-To return to default Pion, set all three experimental flags to `0`. A plain `go build -o agent-starter-go ./examples/starter` also retains the default transport and helper options, with no compiled in-process support.
-
-## Historical evidence
-
-Python packaging has been removed from the active workflow. Previous scripts, reports and failed attempts are preserved under `examples/native-receive-probe/results/simple-go-build-20261116/superseded-packaging/`; original experiment results and bundles remain unchanged. `INPROCESS_RESULTS.json` describes the earlier portable-bundle experiment, not this normal-build workflow. This remains experimental opt-in, not default promotion or clean-machine deployment certification.
+The legacy helper protocol remains available for callers that supply their own
+compatible helper executable. The experimental probe executable and its build
+workflow are retained locally and are not distributed with this branch.
 
 ## Linux packaging (opt-in)
 
@@ -90,5 +77,5 @@ docker buildx build --platform linux/arm64 --progress plain \
 These checks load the real library but do not join a room. They do not replace
 Linux media, concurrent-call, recording, or downstream image acceptance. The
 Docker engine must be running. Linux arm64 and emulated amd64 runtime/image
-checks passed; see [validation evidence](../../../docs/results/native-linux-validation-20261118/README.md).
-Live Linux media acceptance remains separate.
+checks passed; detailed validation evidence is retained locally.
+Full downstream application acceptance remains separate.

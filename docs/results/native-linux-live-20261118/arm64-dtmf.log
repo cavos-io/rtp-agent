@@ -1,5 +1,0 @@
-=== RUN   TestStarterInProcessNativeDTMF
-=== RUN   TestStarterInProcessNativeDTMF/end-call
---- PASS: TestStarterInProcessNativeDTMF (8.20s)
-    --- PASS: TestStarterInProcessNativeDTMF/end-call (8.20s)
-PASS

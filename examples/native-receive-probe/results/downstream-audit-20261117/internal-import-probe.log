@@ -1,2 +1,0 @@
-package downstream-import-probe
-	main.go:2:8: use of internal package github.com/cavos-io/rtp-agent/examples/internal/nativeroom not allowed

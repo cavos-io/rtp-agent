@@ -1,2 +1,0 @@
-go: finding module for package github.com/cavos-io/rtp-agent/interface/worker/nativeroom
-main.go:5:2: codehost.WorkDir: can't find or create lock file: open /Users/el7cosmos/Library/Caches/go/pkg/cache/vcs/ebefd2c8716ff2b9dcf6053053c6e48a01d0de6ee24e16aa4bf473b1330f4973.lock: operation not permitted

@@ -1,3 +1,0 @@
-    local_native_evidence_test.go:187: PASS: native agent identity, ready, two correlated chat turns, duplicate replay without regeneration
---- PASS: TestLocalNativeEvidenceDelivery (2.34s)
-PASS

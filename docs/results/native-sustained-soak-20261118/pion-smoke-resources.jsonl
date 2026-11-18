@@ -1,6 +1,0 @@
-{"phase":"active--1","seconds":6.178267125,"rss_kib":70320,"heap_bytes":11774008,"goroutines":212}
-{"phase":"clean--1","seconds":8.201685166,"rss_kib":70752,"heap_bytes":8492768,"goroutines":2}
-{"phase":"active-0","seconds":16.4609055,"rss_kib":73424,"heap_bytes":13496432,"goroutines":212}
-{"phase":"clean-0","seconds":19.243344375,"rss_kib":73520,"heap_bytes":9426560,"goroutines":2}
-{"phase":"active-1","seconds":27.473047041,"rss_kib":74256,"heap_bytes":16311256,"goroutines":212}
-{"phase":"clean-1","seconds":29.497646666,"rss_kib":74272,"heap_bytes":8727168,"goroutines":2}

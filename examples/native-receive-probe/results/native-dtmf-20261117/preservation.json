@@ -1,9 +1,0 @@
-{
-  "verified": 3485,
-  "mismatches": [],
-  "manifests": [
-    "examples/native-receive-probe/results/simple-go-build-20261116/prior-results-sha256.json",
-    "examples/starter/NATIVE_CAPTIONS_RESULTS.json",
-    "examples/starter/NATIVE_CLIENT_STATE_RESULTS.json"
-  ]
-}
