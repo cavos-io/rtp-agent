@@ -252,6 +252,7 @@ type JobContext struct {
 	entrypointDoneOnce     sync.Once
 	terminated             atomic.Bool
 	finishOnce             sync.Once
+	finishDone             chan struct{}
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*ParticipantInfo
 	participantTasks       map[ParticipantTaskKey]uint64
@@ -1179,7 +1180,9 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 				rio.BeginShutdown()
 			}
 		}
-		transportUsable := livekitJobContextRoomReadyForRoomIOStart(c.Room)
+		// Custom transports do not connect c.Room. Keep their media/control
+		// available to session pre-close callbacks (including hold teardown).
+		transportUsable := c.customRoomTransport.Load() || livekitJobContextRoomReadyForRoomIOStart(c.Room)
 		drain := func(ctx context.Context) {
 			if !transportUsable {
 				stopPublishing()

@@ -55,3 +55,41 @@ func TestCloseDuringStartupReapsHelper(t *testing.T) {
 		t.Fatal("helper not reaped")
 	}
 }
+
+func TestJobShutdownKeepsNativeRoomOpenForSessionCleanup(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "helper")
+	script := "#!/bin/sh\nread config\ncat <<'WIRE'\n" + readyMessages + "WIRE\nread command\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := worker.NewJobContext(&lk.Job{Id: "native-cleanup-order", Room: &lk.Room{Name: "test"}}, "", "", "")
+	defer os.RemoveAll(job.SessionDirectory())
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	room := New(job, session, Config{Binary: binary, Token: "test-token", Participant: "caller", TrackSID: "track"}, "", "")
+	if err := job.StartSession(context.Background(), session, worker.StartSessionOptions{Transport: room}); err != nil {
+		t.Fatal(err)
+	}
+	checked := make(chan bool, 1)
+	// Application cleanup is registered after StartSession, as downstream hold is.
+	session.AddPreCloseCallback(func() { room.mu.Lock(); checked <- room.closed; room.mu.Unlock() })
+	job.Shutdown("test")
+	select {
+	case closed := <-checked:
+		if closed {
+			t.Fatal("native room closed before application session cleanup")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session cleanup did not run")
+	}
+	room.mu.Lock()
+	closed, child := room.closed, room.child
+	room.mu.Unlock()
+	if !closed {
+		t.Fatal("job shutdown left transport open")
+	}
+	select {
+	case <-child.done:
+	case <-time.After(time.Second):
+		t.Fatal("job shutdown did not reap transport")
+	}
+}

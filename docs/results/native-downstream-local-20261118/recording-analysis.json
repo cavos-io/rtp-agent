@@ -1,0 +1,50 @@
+[
+  {
+    "run": "hold-connected",
+    "room": "0",
+    "seconds": 11.96,
+    "windows_checked": 10,
+    "min_own_marker_amplitude": 6114.551493640473,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "hold-connected",
+    "room": "1",
+    "seconds": 11.92,
+    "windows_checked": 10,
+    "min_own_marker_amplitude": 3055.901214434762,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "soak",
+    "room": "0",
+    "seconds": 122.02,
+    "windows_checked": 121,
+    "min_own_marker_amplitude": 9630.283914185742,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "soak",
+    "room": "1",
+    "seconds": 121.96,
+    "windows_checked": 120,
+    "min_own_marker_amplitude": 2457.701676457331,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "forced",
+    "room": "0",
+    "seconds": 14.94,
+    "windows_checked": 13,
+    "min_own_marker_amplitude": 4428.830209670318,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "forced",
+    "room": "1",
+    "seconds": 14.9,
+    "windows_checked": 13,
+    "min_own_marker_amplitude": 4831.009526731342,
+    "alien_dominant_windows": 0
+  }
+]

@@ -1,0 +1,14 @@
+{"event":"sample","frames_a":501,"frames_b":501,"goroutines":238,"heap_alloc":14792584,"markers_a":498,"markers_b":499}
+{"event":"sample","frames_a":1001,"frames_b":1001,"goroutines":238,"heap_alloc":21856576,"markers_a":998,"markers_b":999}
+{"event":"sample","frames_a":1501,"frames_b":1501,"goroutines":238,"heap_alloc":16630080,"markers_a":1498,"markers_b":1499}
+{"event":"sample","frames_a":2001,"frames_b":2001,"goroutines":238,"heap_alloc":14806344,"markers_a":1998,"markers_b":1999}
+{"event":"sample","frames_a":2501,"frames_b":2501,"goroutines":238,"heap_alloc":19612760,"markers_a":2498,"markers_b":2499}
+{"event":"sample","frames_a":3001,"frames_b":3001,"goroutines":238,"heap_alloc":16664816,"markers_a":2998,"markers_b":2999}
+{"event":"sample","frames_a":3501,"frames_b":3501,"goroutines":239,"heap_alloc":14860928,"markers_a":3498,"markers_b":3499}
+{"event":"sample","frames_a":4001,"frames_b":4001,"goroutines":239,"heap_alloc":19558456,"markers_a":3998,"markers_b":3999}
+{"event":"sample","frames_a":4501,"frames_b":4501,"goroutines":235,"heap_alloc":16548328,"markers_a":4498,"markers_b":4499}
+{"event":"sample","frames_a":5001,"frames_b":5001,"goroutines":235,"heap_alloc":12621992,"markers_a":4998,"markers_b":4999}
+{"event":"sample","frames_a":5501,"frames_b":5501,"goroutines":235,"heap_alloc":23416376,"markers_a":5498,"markers_b":5499}
+{"event":"sample","frames_a":6001,"frames_b":6001,"goroutines":235,"heap_alloc":17140352,"markers_a":5998,"markers_b":5999}
+{"active_jobs":0,"completed_jobs":2,"elapsed_ms":2127.727125,"event":"drained","frames_during_grace":104}
+{"completed_jobs":2,"event":"runtime_disposed","goroutines":107}

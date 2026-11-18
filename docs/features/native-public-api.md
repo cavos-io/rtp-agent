@@ -167,6 +167,16 @@ pause/interruption, and recovery after a two-second signaling outage. Focused
 hold/lifecycle/CLI race tests passed three repetitions. These narrow passes do not
 close the downstream active-call SIGTERM or sustained concurrency gates below.
 
+[Downstream-component checks](../results/native-downstream-local-20261118/README.md)
+then passed a two-minute/two-call synthetic-audio run and actual SIGTERM with
+natural call completion during drain, including decoded recording markers.
+Initial hold and forced-drain runs found teardown ordering and report serialization
+races. After fixes, both cases pass under the race detector: hold clears before
+transport closure; forced drain completes in about five seconds with finalized
+reports and decodable recordings. Full worker race testing still exposes separate
+races reproduced on unchanged HEAD. The fixture bypasses full app.Run
+dispatch/providers/storage and is not a long soak.
+
 ### Remaining gates
 
 - [ ] **Finish web behavior coverage.** Run native microphone calls with captions
@@ -197,7 +207,9 @@ close the downstream active-call SIGTERM or sustained concurrency gates below.
   all sessions close. Also test network disconnect/reconnect, microphone
   republishing and remote participant departure: recovery or clean failure must
   preserve isolation, outcomes and bounded shutdown. Idle SIGTERM is already
-  covered and need not be repeated as a substitute.
+  covered and need not be repeated as a substitute. Local downstream-component
+  active hold and five-second forced drain now pass; full application/provider
+  teardown and recovery remain open.
 - [ ] **Run concurrent-call and repeated-call soak.** Use distinct audio/chat
   markers across simultaneous sessions; check no cross-call audio, captions,
   events or recordings, no callback overflow, stable PCM delivery, and no growing

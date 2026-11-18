@@ -1,0 +1,7 @@
+{"level":"info","ts":1794965024.438852,"logger":"worker","caller":"nativeroom/call_control.go:42","msg":"native.hold.published","participant":"caller","track_name":"hold-audio","sample_rate":24000}
+{"level":"info","ts":1794965024.460176,"logger":"worker","caller":"nativeroom/call_control.go:81","msg":"native.hold.pcm_delivered","participant":"caller","frames":1,"pcm_seconds":0.02,"frame_peak_abs":3090}
+{"level":"info","ts":1794965034.439751,"logger":"worker","caller":"nativeroom/call_control.go:81","msg":"native.hold.pcm_delivered","participant":"caller","frames":500,"pcm_seconds":10,"frame_peak_abs":3093}
+{"level":"info","ts":1794965036.454282,"logger":"worker","caller":"nativeroom/room.go:198","msg":"experimental native in-process cleanup","cleanup":{"mode":"inprocess","native_cleanup_ms":0,"pid":83885,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":3.505709,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}}
+{"level":"info","ts":1794965036.4586098,"logger":"worker","caller":"nativeroom/room.go:198","msg":"experimental native in-process cleanup","cleanup":{"mode":"inprocess","native_cleanup_ms":0,"pid":83885,"reaped":false,"exit_code":0,"kill_attempted":false,"cleanup_ms":3.672041,"shutdown_seen":true,"disconnect_callback":true,"handles_released":true,"runtime_disposed":false,"callback_overflow":false}}
+    local_native_acceptance_test.go:130: native room closed
+--- FAIL: TestLocalNativeActiveDrainAcceptance (12.75s)

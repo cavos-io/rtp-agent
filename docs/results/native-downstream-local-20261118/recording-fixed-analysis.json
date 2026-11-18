@@ -1,0 +1,34 @@
+[
+  {
+    "run": "hold-fixed-v2",
+    "room": "0",
+    "seconds": 11.94,
+    "windows_checked": 10,
+    "min_own_marker_amplitude": 9188.926234468925,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "hold-fixed-v2",
+    "room": "1",
+    "seconds": 12.0,
+    "windows_checked": 10,
+    "min_own_marker_amplitude": 3187.530948470545,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "forced-fixed",
+    "room": "0",
+    "seconds": 14.94,
+    "windows_checked": 13,
+    "min_own_marker_amplitude": 2260.974745330977,
+    "alien_dominant_windows": 0
+  },
+  {
+    "run": "forced-fixed",
+    "room": "1",
+    "seconds": 14.94,
+    "windows_checked": 13,
+    "min_own_marker_amplitude": 5482.040971144615,
+    "alien_dominant_windows": 0
+  }
+]

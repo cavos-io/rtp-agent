@@ -175,7 +175,8 @@ func (r *Room) Start(ctx context.Context) error {
 	r.Session.EnsureAssistant().SetPublishAudio(r.playback.Publish)
 	r.Session.SetAudioPlaybackController(r.playback)
 	r.Session.SetAudioOutputController(r.playback)
-	r.Session.AddPreCloseCallback(func() { r.Close() })
+	// Job shutdown owns transport closure after session pre-close callbacks.
+	// Closing here would invalidate hold controls used by later callbacks.
 	if err := r.Job.AddShutdownCallback(func() { r.Close() }); err != nil {
 		r.Close()
 		return err

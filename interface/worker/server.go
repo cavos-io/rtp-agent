@@ -1993,7 +1993,16 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	}
 	s.finishJob(jobCtx)
 	if reportPath := livekitServerLocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
-		return saveSessionReport(reportPath, jobCtx.Report)
+		// finishJob can release its foreground wait before teardown settles.
+		// Never serialize a report still owned by background finalization.
+		timer := time.NewTimer(localEntrypointCloseWait)
+		defer timer.Stop()
+		select {
+		case <-jobCtx.finishDone:
+			return saveSessionReport(reportPath, jobCtx.Report)
+		case <-timer.C:
+			return fmt.Errorf("local session report not saved: job finalization did not settle within %s", localEntrypointCloseWait)
+		}
 	}
 	return nil
 }
@@ -2101,6 +2110,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	}
 	finalized := false
 	jobCtx.finishOnce.Do(func() {
+		jobCtx.finishDone = make(chan struct{})
 		finalized = true
 	})
 	if !finalized {
@@ -2110,7 +2120,10 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	s.trackFinishingJob(jobCtx)
 
 	foregroundDone := make(chan struct{})
-	go s.finishJobLifecycle(jobCtx, plan.JobID, foregroundDone)
+	go func() {
+		defer close(jobCtx.finishDone)
+		s.finishJobLifecycle(jobCtx, plan.JobID, foregroundDone)
+	}()
 
 	<-foregroundDone
 
