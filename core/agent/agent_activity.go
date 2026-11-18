@@ -2669,8 +2669,15 @@ func (a *AgentActivity) holdSTTEventWhileAgentSpeaking(ev *stt.SpeechEvent) bool
 		return false
 	}
 	switch ev.Type {
-	case stt.SpeechEventStartOfSpeech, stt.SpeechEventEndOfSpeech:
+	case stt.SpeechEventStartOfSpeech:
 		if a.turnDetectionMode() != TurnDetectionModeSTT {
+			return false
+		}
+	case stt.SpeechEventEndOfSpeech:
+		// Completion must stay behind held finals, including when VAD owns
+		// endpointing and this marker acknowledges STT finalization.
+		if a.turnDetectionMode() != TurnDetectionModeSTT &&
+			!(a.adaptiveInterruptionActive() && a.vadBasedTurnDetection()) {
 			return false
 		}
 	case "", stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript, stt.SpeechEventFinalTranscript:
