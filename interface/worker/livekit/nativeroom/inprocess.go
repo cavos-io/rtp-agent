@@ -73,7 +73,14 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 		return nil, e
 	}
 	run, cancel := context.WithCancelCause(ctx)
-	s, e := rt.ConnectMicrophoneCall(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput, cfg.recordAux != nil)
+	timeout := time.Duration(0)
+	if !cfg.captionOptions.DisablePreConnectAudio {
+		timeout = cfg.captionOptions.PreConnectAudioTimeout
+		if timeout <= 0 {
+			timeout = 3 * time.Second
+		}
+	}
+	s, e := rt.ConnectMicrophoneCallWithPreConnect(run, cfg.URL, cfg.Token, cfg.Participant, cfg.TrackSID, !cfg.captionOptions.DisableTextInput, cfg.recordAux != nil, timeout)
 	if e != nil {
 		cancel(e)
 		return nil, e
@@ -144,6 +151,42 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 
 	go func() {
 		defer close(consumed)
+		if timeout > 0 {
+			record := func(aux native.RecordingFrame) {
+				if cfg.recordAux != nil {
+					watchdog := time.AfterFunc(2*time.Second, func() { cancel(errors.New("in-process pre-connect recording consumer stalled")) })
+					defer watchdog.Stop()
+					cfg.recordAux(aux.TrackSID, nativePCMFrame(aux.Frame.PCM))
+				}
+			}
+			// Auxiliary tracks can arrive before the selected microphone.
+		waiting:
+			for {
+				select {
+				case <-run.Done():
+					return
+				case <-s.Done():
+					return
+				case <-s.InputSubscribed():
+					break waiting
+				case aux, ok := <-s.RecordingFrames():
+					if !ok {
+						return
+					}
+					record(aux)
+				}
+			}
+			replayErr := replayPreConnect(run, s.Frames(), s.PreConnectAudio(), timeout, s.RecordingFrames(), record, func(ctx context.Context, f *model.AudioFrame) {
+				watchdog := time.AfterFunc(2*time.Second, func() { cancel(errors.New("in-process pre-connect consumer stalled")) })
+				defer watchdog.Stop()
+				consume(ctx, f)
+			})
+			s.StopPreConnectAudio()
+			if replayErr != nil {
+				cancel(replayErr)
+				return
+			}
+		}
 		for {
 			select {
 			case <-run.Done():

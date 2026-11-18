@@ -176,6 +176,11 @@ func preConnectByteStreamAttributes(reader *lksdk.ByteStreamReader) (attrs map[s
 }
 
 func readPreConnectOpusFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
+	return readPreConnectOpusFramesLimited(reader, sampleRate, channels, 0)
+}
+
+func readPreConnectOpusFramesLimited(reader io.Reader, sampleRate int, channels int, maxSamples int) ([]*model.AudioFrame, error) {
+	total := 0
 	opusDec, err := newOpusDecoder(sampleRate, channels)
 	if err != nil {
 		return nil, err
@@ -190,6 +195,10 @@ func readPreConnectOpusFrames(reader io.Reader, sampleRate int, channels int) ([
 			decoded, decErr := opusDec.Decode(chunk[:n])
 			if decErr != nil {
 				return nil, decErr
+			}
+			total += len(decoded) / (channels * 2)
+			if maxSamples > 0 && total > maxSamples {
+				return nil, fmt.Errorf("pre-connect audio exceeds duration limit")
 			}
 			frames = append(frames, &model.AudioFrame{
 				Data:              decoded,

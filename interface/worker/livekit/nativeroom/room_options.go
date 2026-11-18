@@ -18,9 +18,6 @@ func (r *Room) ConfigureRoomOptions(opts wl.RoomOptions) error {
 	if r.closed || r.cancel != nil {
 		return errors.New("native room options must be configured before startup")
 	}
-	if !opts.DisablePreConnectAudio {
-		return errors.New("in-process native requires DisablePreConnectAudio=true; pre-connect audio is unsupported")
-	}
 	if opts.AudioTrackName != "" {
 		return errors.New("in-process native does not support RoomOptions.AudioTrackName")
 	}
@@ -39,8 +36,8 @@ func (r *Room) ConfigureRoomOptions(opts wl.RoomOptions) error {
 	if opts.AudioSubscriptionTimeout != 0 {
 		return errors.New("in-process native does not support RoomOptions.AudioSubscriptionTimeout")
 	}
-	if opts.PreConnectAudioTimeout != 0 {
-		return errors.New("in-process native does not support RoomOptions.PreConnectAudioTimeout")
+	if opts.PreConnectAudioTimeout < 0 {
+		return errors.New("RoomOptions.PreConnectAudioTimeout must not be negative")
 	}
 	if opts.DisableAudioInput {
 		return errors.New("in-process native does not support RoomOptions.DisableAudioInput")
@@ -69,6 +66,6 @@ func (r *Room) ConfigureRoomOptions(opts wl.RoomOptions) error {
 	if opts.ParticipantIdentity != "" {
 		r.Config.Participant = opts.ParticipantIdentity
 	}
-	r.Config.captionOptions = wl.RoomOptions{RecordRemoteParticipants: opts.RecordRemoteParticipants, DisableTextInput: opts.DisableTextInput, TextInputCallback: opts.TextInputCallback, DisableTranscriptionOutput: opts.DisableTranscriptionOutput, TranscriptionNextOutput: opts.TranscriptionNextOutput}
+	r.Config.captionOptions = wl.RoomOptions{DisablePreConnectAudio: opts.DisablePreConnectAudio, PreConnectAudioTimeout: opts.PreConnectAudioTimeout, RecordRemoteParticipants: opts.RecordRemoteParticipants, DisableTextInput: opts.DisableTextInput, TextInputCallback: opts.TextInputCallback, DisableTranscriptionOutput: opts.DisableTranscriptionOutput, TranscriptionNextOutput: opts.TranscriptionNextOutput}
 	return nil
 }

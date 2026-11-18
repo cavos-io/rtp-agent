@@ -2,7 +2,7 @@
 //
 // Build with nativeinprocess to use NewInProcess. Pass the returned transport to
 // worker.StartSessionOptions.Transport before connecting the job's Pion room.
-// The caller must explicitly disable unsupported pre-connect audio in RoomOptions.
+// Pre-connect audio is enabled by default; RoomOptions controls its timeout and opt-out.
 // Native owns receive playout, reconnect, and both media directions.
 //
 // One FFI runtime is shared by all native sessions in the process. Close session

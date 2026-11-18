@@ -17,7 +17,7 @@ func TestPublicNativeTransportConfiguration(t *testing.T) {
 	if err := room.ConfigureRoomOptions(worker.RoomOptions{DisablePreConnectAudio: true, ParticipantIdentity: "other"}); err == nil {
 		t.Fatal("conflicting participant accepted")
 	}
-	if err := room.ConfigureRoomOptions(worker.RoomOptions{}); err == nil {
-		t.Fatal("unsupported pre-connect accepted")
+	if err := room.ConfigureRoomOptions(worker.RoomOptions{}); err != nil {
+		t.Fatal("default pre-connect rejected", err)
 	}
 }

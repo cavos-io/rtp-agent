@@ -14,6 +14,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, r.release(ev)) }()
+	if ev.GetByteStreamReaderEvent() != nil {
+		return r.preConnectEvent(ev.GetByteStreamReaderEvent())
+	}
 	if ev.GetTextStreamReaderEvent() != nil {
 		return r.chatEvent(ev.GetTextStreamReaderEvent())
 	}
@@ -159,6 +162,9 @@ func (r *Runtime) dispatch(raw callbackEvent) (err error) {
 		}
 		if err := r.observeRecordingLifecycle(s, event); err != nil {
 			return err
+		}
+		if audio := event.GetByteStreamOpened(); audio != nil {
+			return r.openPreConnect(s, audio)
 		}
 		if chat := event.GetTextStreamOpened(); chat != nil {
 			return r.openChat(s, chat)

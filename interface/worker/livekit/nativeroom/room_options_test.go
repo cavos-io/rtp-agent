@@ -16,8 +16,8 @@ import (
 
 func TestNativeRoomOptionsValidationAndSelection(t *testing.T) {
 	r := NewInProcess(nil, nil, Config{Participant: "caller"}, "", "")
-	if e := r.ConfigureRoomOptions(wl.RoomOptions{}); e == nil {
-		t.Fatal("enabled pre-connect audio accepted")
+	if e := r.ConfigureRoomOptions(wl.RoomOptions{}); e != nil {
+		t.Fatal("enabled pre-connect audio rejected", e)
 	}
 	if e := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: true, ParticipantIdentity: "other"}); e == nil {
 		t.Fatal("conflicting selector accepted")
@@ -76,7 +76,7 @@ func TestNativeRejectsUnsupportedRoomOptionsBeforeMutation(t *testing.T) {
 		"AudioInputFrameSizeMS":    {AudioInputFrameSizeMS: 50},
 		"AudioOutputSampleRate":    {AudioOutputSampleRate: 48000},
 		"AudioSubscriptionTimeout": {AudioSubscriptionTimeout: time.Second},
-		"PreConnectAudioTimeout":   {PreConnectAudioTimeout: time.Second},
+		"PreConnectAudioTimeout":   {PreConnectAudioTimeout: -time.Second},
 		"DisableAudioInput":        {DisableAudioInput: true},
 		"DisableAudioOutput":       {DisableAudioOutput: true},
 		"TranscriptionJSONFormat":  {TranscriptionJSONFormat: true},
@@ -121,3 +121,15 @@ func (*unsupportedTestProcessor) Process(context.Context, *audio.AudioFrame) ([]
 }
 func (*unsupportedTestProcessor) Reset()       {}
 func (*unsupportedTestProcessor) Close() error { return nil }
+
+func TestNativePreConnectOptionsPreserved(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		r := NewInProcess(nil, nil, Config{}, "", "")
+		if err := r.ConfigureRoomOptions(wl.RoomOptions{DisablePreConnectAudio: disabled, PreConnectAudioTimeout: time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		if r.Config.captionOptions.DisablePreConnectAudio != disabled || r.Config.captionOptions.PreConnectAudioTimeout != time.Second {
+			t.Fatal("pre-connect options lost")
+		}
+	}
+}

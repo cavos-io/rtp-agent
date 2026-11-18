@@ -31,6 +31,12 @@ type Frame struct {
 	PCM []int16
 }
 type Session struct {
+	preConnectStopped                     atomic.Bool
+	preConnectEnabled                     bool
+	preConnectComplete                    bool
+	preConnectTimeout                     time.Duration
+	preConnectReader                      *preConnectReader
+	preConnectAudio                       chan PreConnectAudio
 	participants                          map[string]bool // protected by mu
 	departures                            chan string
 	departuresEnabled                     bool
@@ -86,7 +92,7 @@ type Session struct {
 
 func newSession(ctx context.Context, capacity int) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{participants: make(map[string]bool), departures: make(chan string, 32), recordings: make(chan RecordingFrame, 100), recordingTracks: make(map[string]recordingTrack), recordingParticipants: make(map[string]*pb.ParticipantInfo), recordingPublications: make(map[string]recordingPublication), chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
+	return &Session{preConnectAudio: make(chan PreConnectAudio, 1), participants: make(map[string]bool), departures: make(chan string, 32), recordings: make(chan RecordingFrame, 100), recordingTracks: make(map[string]recordingTrack), recordingParticipants: make(map[string]*pb.ParticipantInfo), recordingPublications: make(map[string]recordingPublication), chats: make(chan Chat, 8), chatReaders: make(map[uint64]*chatReader), microphones: make(map[string]bool), outputSubscribed: make(chan struct{}), ctx: ctx, cancel: cancel, dtmf: make(chan DTMF, 32), stateErrors: make(chan error, 1), frames: make(chan Frame, capacity), ready: make(chan struct{}), subscribed: make(chan struct{}), done: make(chan struct{})}
 }
 func (s *Session) Frames() <-chan Frame  { return s.frames }
 func (s *Session) Done() <-chan struct{} { return s.done }
@@ -127,6 +133,8 @@ func (s *Session) finish(e error) {
 	s.control = nil
 	close(s.departures)
 	close(s.recordings)
+	s.stopPreConnect()
+	close(s.preConnectAudio)
 	close(s.chats)
 	close(s.dtmf)
 	close(s.frames)
@@ -282,7 +290,7 @@ func (r *Runtime) Connect(ctx context.Context, url, token string) (*Session, err
 func (r *Runtime) ConnectSelected(ctx context.Context, url, token, participant, sid string) (*Session, error) {
 	return r.connectSelected(ctx, url, token, participant, sid, false, false, false, false)
 }
-func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat, record, departures bool) (*Session, error) {
+func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, sid string, microphone, chat, record, departures bool, preConnect ...time.Duration) (*Session, error) {
 	if url == "" || token == "" {
 		return nil, errors.New("URL and token required")
 	}
@@ -290,6 +298,10 @@ func (r *Runtime) connectSelected(ctx context.Context, url, token, participant, 
 	s.rt = r
 	s.microphone = microphone
 	s.chatEnabled = chat
+	if len(preConnect) > 0 && preConnect[0] > 0 {
+		s.preConnectEnabled = true
+		s.preConnectTimeout = preConnect[0]
+	}
 	s.recordRemote = record
 	s.departuresEnabled = departures
 	s.inputSID.Store(sid)
@@ -365,6 +377,7 @@ func (r *Runtime) release(ev proto.Message) error {
 }
 func (r *Runtime) finish(s *Session, e error) {
 	r.closeChatReaders(s)
+	s.stopPreConnect()
 	s.setError(r.closeRecordingTracks(s))
 	if s.stateTimer != nil {
 		s.stateTimer.Stop()
@@ -387,6 +400,7 @@ func (r *Runtime) failSession(s *Session, e error) error {
 	s.setError(e)
 	s.cancel()
 	r.closeChatReaders(s)
+	s.stopPreConnect()
 	if s.connecting || s.closing {
 		return nil
 	}
@@ -472,7 +486,7 @@ func (r *Runtime) handle(c command) error {
 	}
 	s.connecting = true
 	id := r.id(s, "connect", nil)
-	_, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(c.url), Token: proto.String(c.token), Options: nativeRoomOptions(s.chatEnabled), RequestAsyncId: proto.Uint64(id)}}})
+	_, e := r.b.request(&pb.FfiRequest{Message: &pb.FfiRequest_Connect{Connect: &pb.ConnectRequest{Url: proto.String(c.url), Token: proto.String(c.token), Options: nativeSessionRoomOptions(s.chatEnabled, s.preConnectEnabled), RequestAsyncId: proto.Uint64(id)}}})
 	if e != nil {
 		delete(r.pending, id)
 		s.connecting = false
@@ -509,6 +523,9 @@ func (r *Runtime) run() {
 	for {
 		var err error
 		for s := range r.sessions {
+			if reader := s.preConnectReader; reader != nil && (s.preConnectStopped.Load() || !time.Now().Before(reader.deadline)) {
+				s.stopPreConnect()
+			}
 			for _, reader := range s.chatReaders {
 				if !time.Now().Before(reader.deadline) {
 					if e := r.failSession(s, errors.New("native chat stream timed out")); e != nil {

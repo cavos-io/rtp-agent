@@ -108,3 +108,11 @@ func nativeRoomOptions(chat bool) *pb.RoomOptions {
 	}
 	return opts
 }
+
+func nativeSessionRoomOptions(chat, preConnect bool) *pb.RoomOptions {
+	opts := nativeRoomOptions(chat)
+	if preConnect {
+		opts.DataStream = &pb.RoomDataStreamOptions{MaxPayloadByteLength: proto.Uint64(maxPreConnectBytes)}
+	}
+	return opts
+}
