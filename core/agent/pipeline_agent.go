@@ -192,6 +192,14 @@ func (va *PipelineAgent) SetPublishAudio(publish func(ctx context.Context, frame
 	va.PublishAudio = publish
 }
 
+// GetPublishAudio returns a synchronized snapshot of the output callback.
+// Call it instead of reading PublishAudio while transport setup/teardown runs.
+func (va *PipelineAgent) GetPublishAudio() func(context.Context, *model.AudioFrame) error {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	return va.PublishAudio
+}
+
 // SetAudioInputHook registers a hook that intercepts incoming audio before VAD
 // and STT. Passing nil clears the hook.
 func (va *PipelineAgent) SetAudioInputHook(hook AudioInputHook) {
@@ -2451,8 +2459,8 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		transcriptSync.PushAudio(frame)
 		playbackTiming.arm()
-		if va.PublishAudio != nil {
-			if err := va.PublishAudio(ctx, frame); err != nil {
+		if publish := va.GetPublishAudio(); publish != nil {
+			if err := publish(ctx, frame); err != nil {
 				transcriptSync.Close()
 				<-transcriptionDone
 				if errors.Is(err, context.Canceled) {

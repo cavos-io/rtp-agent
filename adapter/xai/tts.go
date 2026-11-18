@@ -115,8 +115,10 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 		return nil, err
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
 	return &xaiTTSWebsocketChunkedStream{
-		ctx:           ctx,
+		cancel:        cancel,
+		ctx:           streamCtx,
 		streamURL:     buildXaiTTSStreamURL(t),
 		headers:       buildXaiTTSHeaders(t),
 		text:          text,
@@ -258,6 +260,9 @@ func writeXaiTTSTokenizedText(write func(map[string]any) error, text string, lan
 }
 
 type xaiTTSWebsocketChunkedStream struct {
+	mu            sync.Mutex
+	nextMu        sync.Mutex
+	cancel        context.CancelFunc
 	ctx           context.Context
 	streamURL     string
 	headers       http.Header
@@ -269,19 +274,29 @@ type xaiTTSWebsocketChunkedStream struct {
 }
 
 func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	// WebSocket allows one reader; Close must remain free to interrupt that reader.
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+	conn, err := s.ensureConnected()
+	if err != nil {
+		return nil, err
+	}
 	for {
-		if s.closed {
-			return nil, io.EOF
-		}
-		if err := s.ensureConnected(); err != nil {
-			return nil, err
-		}
-		if s.conn == nil {
-			return nil, io.EOF
-		}
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed {
+				return nil, io.EOF
+			}
 			return nil, xaiTTSUnexpectedCloseError(err)
+		}
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if closed {
+			return nil, io.EOF
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -291,9 +306,7 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if done {
-			_ = s.conn.Close()
-			s.conn = nil
-			s.closed = true
+			_ = s.Close()
 			return xaiTTSFinalAudioDone(), nil
 		}
 		if audio != nil {
@@ -302,34 +315,57 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
-func (s *xaiTTSWebsocketChunkedStream) ensureConnected() error {
+// Called with nextMu held. Do not hold mu during network I/O: Close needs it
+// to cancel a pending dial or close a connection with a blocked write/read.
+func (s *xaiTTSWebsocketChunkedStream) ensureConnected() (*websocket.Conn, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, io.EOF
+	}
 	if s.started {
-		return nil
+		conn := s.conn
+		s.mu.Unlock()
+		return conn, nil
 	}
 	s.started = true
+	s.mu.Unlock()
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, s.headers)
 	if err != nil {
-		s.closed = true
-		return inference.NewAPIConnectionError("failed to connect to xAI")
+		_ = s.Close()
+		return nil, inference.NewAPIConnectionError("failed to connect to xAI")
 	}
-	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
-		return writeXaiTTSMessage(conn, message)
-	}, s.text, s.tokenLanguage); err != nil {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		_ = conn.Close()
-		s.closed = true
-		return err
+		return nil, io.EOF
 	}
 	s.conn = conn
-	return nil
+	s.mu.Unlock()
+	if err := writeXaiTTSTokenizedText(func(message map[string]any) error { return writeXaiTTSMessage(conn, message) }, s.text, s.tokenLanguage); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (s *xaiTTSWebsocketChunkedStream) Close() error {
-	s.closed = true
-	if s.conn == nil {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
+	s.closed = true
 	conn := s.conn
 	s.conn = nil
+	s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if conn == nil {
+		return nil
+	}
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return conn.Close()
 }

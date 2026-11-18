@@ -235,6 +235,7 @@ type JobContext struct {
 	observabilityOnce      sync.Once
 	observabilityErr       error
 	serverTracerProvider   *sdktrace.TracerProvider
+	sessionTransport       SessionTransportProvider
 	customTraceMetadata    []attribute.KeyValue
 	traceMu                sync.Mutex
 	shutdownTraceCtx       context.Context
@@ -586,7 +587,7 @@ var jobContextRoomConnector RoomConnector
 
 type StartSessionOptions struct {
 	// Transport replaces room/media ownership when explicitly supplied. Nil keeps
-	// the standard LiveKit/Pion path. The transport owns its connection and I/O.
+	// the worker-configured transport, or LiveKit/Pion if none is configured. The transport owns its connection and I/O.
 	// Optional ConfigureRoomOptions(RoomOptions) error runs before ownership; it
 	// must validate/configure only, without acquiring resources.
 	Transport      SessionRoomIO
@@ -763,6 +764,9 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	return nil
 }
 
+// HasSessionTransportProvider reports worker-managed room/media ownership.
+func (c *JobContext) HasSessionTransportProvider() bool { return c != nil && c.sessionTransport != nil }
+
 func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSession, options ...StartSessionOptions) error {
 	if c == nil {
 		return fmt.Errorf("job context is nil")
@@ -774,6 +778,16 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		ctx = context.Background()
 	}
 	opts := normalizeStartSessionOptions(options...)
+	if opts.Transport == nil && c.sessionTransport != nil {
+		transport, err := c.sessionTransport.NewSession(c, session, opts)
+		if err != nil {
+			return err
+		}
+		if transport == nil {
+			return fmt.Errorf("session transport provider returned nil transport")
+		}
+		opts.Transport = transport
+	}
 	sessionCtx := opts.SessionContext
 	if sessionCtx == nil {
 		sessionCtx = ctx

@@ -1825,3 +1825,76 @@ func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) 
 		t.Fatalf("%s = %q, want %q in query %s", key, got, want, query.Encode())
 	}
 }
+
+func TestSarvamSTTConcurrentCloseAndReaderCleanup(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverConns := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		serverConns <- conn
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+	for _, ownerClose := range []bool{false, true} {
+		for range 20 {
+			provider := NewSarvamSTT("key", WithSarvamSTTStreamingURL("ws"+strings.TrimPrefix(server.URL, "http")))
+			stream, err := provider.Stream(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := stream.(*sarvamSTTRecognizeStream)
+			remote := <-serverConns
+			start := make(chan struct{})
+			remoteDone := make(chan struct{})
+			go func() { defer close(remoteDone); <-start; _ = remote.Close() }()
+			closed := make(chan error, 1)
+			go func() {
+				<-start
+				if ownerClose {
+					closed <- provider.Close()
+				} else {
+					closed <- stream.Close()
+				}
+			}()
+			close(start)
+			// Remote and local shutdown can independently race to unregister.
+			select {
+			case _, ok := <-s.events:
+				if ok {
+					t.Fatal("unexpected speech event")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("reader did not finish")
+			}
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Close did not finish")
+			}
+			<-remoteDone
+			provider.mu.Lock()
+			remaining := len(provider.streams)
+			provider.mu.Unlock()
+			if remaining != 0 {
+				t.Fatalf("provider retained %d closed streams", remaining)
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after Close = %v, %v", event, err)
+			}
+			if err := provider.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

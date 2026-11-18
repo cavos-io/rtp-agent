@@ -23,11 +23,25 @@ var processOwner struct {
 	runtime *native.Runtime
 	path    string
 	closed  bool
+	manual  bool
+	leases  int
 }
 
 func getProcessRuntime(path string) (*native.Runtime, error) {
 	processOwner.Lock()
 	defer processOwner.Unlock()
+	if processOwner.leases != 0 {
+		return nil, errors.New("cannot mix manual and managed native runtime ownership")
+	}
+	rt, err := processRuntimeLocked(path)
+	if err == nil {
+		processOwner.manual = true
+	}
+	return rt, err
+}
+
+// Caller holds processOwner.Mutex through initialization and lease acquisition.
+func processRuntimeLocked(path string) (*native.Runtime, error) {
 	if processOwner.closed {
 		return nil, errors.New("native process runtime closed")
 	}
@@ -51,8 +65,14 @@ func getProcessRuntime(path string) (*native.Runtime, error) {
 // must never dispose a runtime shared with another session.
 func CloseInProcessRuntime(ctx context.Context) error {
 	processOwner.Lock()
-	processOwner.closed = true
+	if processOwner.leases != 0 {
+		processOwner.Unlock()
+		return errors.New("native runtime has managed worker owners")
+	}
 	rt := processOwner.runtime
+	if rt != nil {
+		processOwner.closed = true
+	}
 	processOwner.Unlock()
 	if rt == nil {
 		return nil
@@ -72,6 +92,10 @@ func launchInProcess(ctx context.Context, cfg Config, consume func(context.Conte
 	if e != nil {
 		return nil, e
 	}
+	return launchWithRuntime(ctx, cfg, consume, rt)
+}
+
+func launchWithRuntime(ctx context.Context, cfg Config, consume func(context.Context, *model.AudioFrame), rt *native.Runtime) (*client, error) {
 	run, cancel := context.WithCancelCause(ctx)
 	timeout := time.Duration(0)
 	if !cfg.captionOptions.DisablePreConnectAudio {

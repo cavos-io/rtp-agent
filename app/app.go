@@ -1015,7 +1015,8 @@ type EvaluationSummary struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		WorkerOptions: worker.WorkerOptions{
-			Transport: worker.NormalizeWorkerTransport(os.Getenv("RTP_AGENT_TRANSPORT")),
+			SessionTransportFactory: sessionTransportFactoryFromEnv(),
+			Transport:               worker.NormalizeWorkerTransport(os.Getenv("RTP_AGENT_TRANSPORT")),
 		},
 		Agora: workeragora.Options{
 			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
@@ -2349,6 +2350,26 @@ func (a *App) runSessionWithContext(ctx *worker.JobContext, sessionCtx context.C
 			}
 		}
 		return nil
+	}
+	if ctx.HasSessionTransportProvider() {
+		if err := ctx.StartSession(sessionCtx, a.Session, worker.StartSessionOptions{RoomOptions: a.RoomOptions}); err != nil {
+			return err
+		}
+		publisher, ok := ctx.PrimaryRoomIO().(betatools.DtmfPublisher)
+		if !ok && (len(a.Config.AppTools) > 0 || a.Config.IVRDetection) {
+			return fmt.Errorf("configured session transport does not support DTMF tools")
+		}
+		if len(a.Config.AppTools) > 0 || a.Config.IVRDetection {
+			toolAgent := &agent.Agent{Tools: append([]llm.Tool(nil), a.Agent.Tools...)}
+			if err := configureRoomTools(a.Config, toolAgent, publisher); err != nil {
+				return err
+			}
+			if err := a.Agent.UpdateTools(sessionCtx, toolAgent.Tools); err != nil {
+				return err
+			}
+		}
+		_, err := ctx.MakeSessionReport(a.Session)
+		return err
 	}
 	if ctx != nil {
 		roomOptions := a.RoomOptions
