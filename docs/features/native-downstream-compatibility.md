@@ -4,7 +4,7 @@ Reviewed 2026-11-17. RTP Agent checkpoint: `7d531c011` (remote participant recor
 
 ## Public API update
 
-The subsequent [public API migration](native-public-api.md) resolves the examples/internal import restriction: use `interface/worker/livekit/nativeroom`. The runtime is now in the root module, so omit the `native-receive-probe` replacement in the historical audit commands below. The audit's rejected-import evidence remains preserved. The other downstream integration blockers still apply; no native downstream dispatch is claimed.
+The subsequent [public API migration](native-public-api.md) resolves the examples/internal import restriction: use `interface/worker/livekit/nativeroom`. The runtime is now in the root module, so omit the `native-receive-probe` replacement in the historical audit commands below. The audit's rejected-import evidence remains preserved. The remaining sections preserve the audit-time state. Subsequent local integration, Linux image checks and STG native calls supersede that readiness verdict; see the [current promotion checklist](native-public-api.md#default-promotion-validation-checklist).
 
 ## Readiness verdict (at audit time)
 

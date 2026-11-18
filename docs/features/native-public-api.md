@@ -6,7 +6,7 @@ The experimental transport is now importable by ordinary downstream modules:
 import "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 ```
 
-Build with `-tags nativeinprocess` and CGO on the validated macOS arm64 host. The public constructor and shutdown API retain their existing signatures. Moving ownership does not make native the default or make all downstream workflows compatible.
+Build with `-tags nativeinprocess` and CGO. macOS arm64 STG calls and Linux arm64/emulated amd64 image checks are recorded below. The public constructor and shutdown API retain their existing signatures. Moving ownership does not make native the default or make all downstream workflows compatible.
 
 ## Session startup
 
@@ -27,7 +27,7 @@ err := job.StartSession(ctx, session, worker.StartSessionOptions{
 })
 ```
 
-This is integration guidance, not an existing downstream selector. `RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS` is interpreted by the examples, not automatically by JobContext. `applicationRoomOptions`, caller identity and library selection are supplied by your composition code.
+The examples and the current local agent-worker-golang integration interpret `RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS`; JobContext does not interpret it automatically. `applicationRoomOptions`, caller identity and library selection are supplied by your composition code.
 
 Do not call `job.Connect` first. Custom transport requires an unconnected Pion job room and joins using the assigned primary token. A selected microphone is required; multiple initial microphone candidates require explicit participant selection. `Config.URL`, `Token`, and `TrackSID` overrides exist for fixtures; ordinary workers should use assigned job connection information and discovery.
 
@@ -66,9 +66,9 @@ go build -mod=mod -modfile="$TEST_MOD_DIR/go.mod" -tags nativeinprocess \
   -o "$TEST_MOD_DIR/agent-worker" ./cmd
 ```
 
-**No `native-receive-probe` requirement/replacement is needed now.** The runtime moved into the root module. Downstream must still add its explicit native transport branch; the build tag alone does not change runtime selection.
+**No `native-receive-probe` requirement/replacement is needed now.** The runtime moved into the root module. The local downstream checkout has an explicit native branch; its integration remains uncommitted. The build tag alone does not change runtime selection.
 
-Keep the pinned FFI 0.12.80 library and platform checksum instructions from the [build guide](../../examples/starter/packaging/INPROCESS.md). Existing Opus/PortAudio, model and provider dependencies still apply. No Python packaging or probe setup is needed. Linux runtime support remains unvalidated by this migration.
+Keep the pinned FFI 0.12.80 library and platform checksum instructions from the [build guide](../../examples/starter/packaging/INPROCESS.md). Existing Opus/PortAudio, model and provider dependencies still apply. No Python packaging or probe setup is needed. Linux runtime/image validation is recorded below; live Linux media acceptance remains open.
 
 ## Import migration and fallback
 
@@ -83,7 +83,7 @@ Keep the pinned FFI 0.12.80 library and platform checksum instructions from the 
 
 The external-module import restriction is resolved. A separate-module program builds with only the root-checkout replacement, constructs a SessionRoomIO-compatible native transport and calls shutdown without loading FFI. A public-package test validates configuration without opening native resources. Existing native, helper and starter regressions are moved with the implementation and run under the race detector.
 
-This is an ownership/API migration, not new cloud or native-library runtime validation. The downstream blockers in the [audit](native-downstream-compatibility.md) still apply: reliable `agent.events`, room lifecycle/hangup APIs, pre-connect policy, initial SIP connection ordering, hold/transfer/supervisor integration, and worker shutdown wiring. Record-only mute retention was fixed previously. Do not promote native to the default based on successful imports alone.
+The [original audit](native-downstream-compatibility.md) describes the pre-integration checkout. Its implementation blockers have since been addressed in the local native integration; implementation and unit-test coverage do not close the live acceptance gates below. Record-only mute retention was fixed previously. Do not promote native based on successful imports alone.
 
 Run `scripts/test-native-public-api.sh` to repeat the separate-module import/configuration/shutdown check without loading a native library.
 
@@ -131,3 +131,84 @@ delivered 1,470 frames / 29.4 seconds of PCM, then cleared successfully at
 hearing hold audio and intentionally did not answer the transferred call.
 This covers audible browser hold and the unanswered-transfer path; it does not
 establish an answered handoff for this run.
+
+## Default-promotion validation checklist
+
+Updated 2026-11-18 against upstream `f893bd639`, the local uncommitted
+agent-worker-golang integration, reviewed STG calls and tester observations.
+**Native is not yet ready for an unrestricted default switch. Pion stays default
+and remains the rollback transport.** This checklist supersedes the original
+compatibility audit's outstanding-work list, not its historical evidence.
+
+### Covered evidence
+
+| Status | Scenario | Evidence and limits |
+| --- | --- | --- |
+| Passed | Linux packaging and idle lifecycle | [Linux results](../results/native-linux-validation-20261118/README.md): arm64 and emulated amd64 FFI initialization/disposal, runtime race suite, downstream image build, nonroot library loading, dependencies/assets, selector behavior and idle SIGTERM exit 0. No live Linux media was exercised. |
+| Passed | Answered outbound SIP with native media | `1117978`: native room initialized; 30.82s input PCM; successful 33s call; agent `end_call` and proper closing persisted. Native handles released without callback overflow. Trace `a41247524918b2add270961fd1935cae`. |
+| Passed | Rejected outbound invitation | `1117977`: expected rejection confirmed by tester; SIP 480, failed/0s outcome before native media started. Trace `c97f2dcb681941f1b522494ef287d180`. This validates rejection handling, not native media. |
+| Passed, observed | Browser microphone and live captions | Native browser calls reached conversation/transfer; tester confirmed visible live captions. Captions-disabled and explicit text-chat acceptance are separate open cases. |
+| Passed for observed media; lifecycle follow-ups remain | Answered warm transfer | `1117979`: native caller transport, route to developer, supervisor briefing, record-only mode and transfer row 115 `DONE`; recording reference 84274. Trace `7b9192a97ca0a2961c9c67b60d660a90`. Tester confirmed two-way human audio both live and in the recording. Explicit agent-silence and hangup-propagation checks remain. |
+| Passed | Audible browser hold and unanswered-transfer recovery | `1117981`: tester heard hold and intentionally did not answer the transferred call; publication acknowledged, 1,470 frames / 29.4s PCM delivered, clear succeeded, transfer-unavailable message played. No answered handoff was exercised in this run. |
+| Partial | Recording and transcript persistence | `1117978` has audio reference 84270, summary and six persisted conversation rows; `1117979` has pre/post recording finalization evidence. Tester confirmed both human parties audible in the `1117979` recording. Ordinary-call playback and detailed pre/post continuity/duration checks remain. |
+| Passed | Focused implementation checks | Native runtime/room/CLI race suites, default-build packages, architecture and commit hooks passed. Unsupported RoomOptions fail explicitly; embedded CLI returns after cleanup. These are not active-call drain or soak results. |
+
+Calls `1117947`–`1117952` ran without the native flag and do not count toward
+native acceptance. Transcript cleanup warnings are excluded from this checklist
+at the tester's request. Per-session `runtime_disposed=false` is expected for the
+process-owned runtime and is not a leak finding by itself.
+
+### Remaining gates
+
+- [ ] **Finish web behavior coverage.** Run native microphone calls with captions
+  enabled and disabled; verify disabled captions stay absent, text chat reaches
+  the intended turn, and real speech interruption stops output without duplicate
+  replies. Check reliable `agent.events` delivery and turn/message correlation in
+  the downstream automated tester. Existing visible captions do not prove this
+  separate data path.
+- [ ] **Finish answered transfer and recording acceptance.** Two-way live and recorded human audio is confirmed for
+  `1117979`, with a persisted DONE outcome. Verify agent silence in record-only
+  mode and hangup propagation. Play an ordinary-call recording and inspect
+  transferred pre/post ordering and duration for gaps or unexpected truncation. Repeat cold
+  and hot transfer only if those modes are included in the intended default
+  profile; `1117979` covers the warm control flow only. Secondary supervisor
+  sessions remain Pion by design; do not require their migration for this gate.
+- [ ] **Validate incoming SIP on a reachable worker.** Local inbound testing is
+  currently unavailable. Use an environment that can receive the inbound route;
+  verify answer, conversation, hangup and recording. This remains required for
+  an unrestricted default that includes incoming calls.
+- [ ] **Run live media on the deployment Linux architecture.** Use the final
+  downstream image with native explicitly enabled against STG. Exercise web/SIP,
+  hold/transfer and recording there. macOS calls plus Linux library smoke are not
+  Linux media validation. If deployment is amd64, run on native amd64 hardware;
+  the current amd64 image evidence comes from emulation.
+- [ ] **Exercise active-call shutdown and recovery.** SIGTERM/drain during speech
+  and hold/transfer must complete or terminate according to the configured drain
+  policy, finalize recordings, release session handles and dispose FFI only after
+  all sessions close. Also test network disconnect/reconnect, microphone
+  republishing and remote participant departure: recovery or clean failure must
+  preserve isolation, outcomes and bounded shutdown. Idle SIGTERM is already
+  covered and need not be repeated as a substitute.
+- [ ] **Run concurrent-call and repeated-call soak.** Use distinct audio/chat
+  markers across simultaneous sessions; check no cross-call audio, captions,
+  events or recordings, no callback overflow, stable PCM delivery, and no growing
+  handle/goroutine/memory accumulation after repeated teardown. Record workload,
+  duration and resource trends against Pion; define acceptable limits before
+  calling the result a pass.
+- [ ] **Confirm the supported default profile.** Inventory effective downstream
+  options and accept the native fixed audio profile and explicitly disabled
+  pre-connect audio. Unsupported configurations must remain on Pion or gain
+  support before inclusion; rejecting them at runtime alone is not sufficient
+  for a broad default. Agree which web, SIP and transfer modes the switch covers.
+- [ ] **Release and validate the deployable artifact and rollback.** Review and
+  commit downstream integration separately when authorized; release/pin the
+  upstream revision containing this progress, then build without the temporary
+  sibling replacement. Repeat relevant acceptance on that exact artifact. Verify
+  drain/restart with explicit Pion selection and document the selector used for
+  rollback after the default changes. Rollback is not an in-call transport swap.
+
+For each new run, record call ID, transport-selection/initialization evidence,
+trace ID where available, image/revision/architecture, expected outcome and
+observed result. Mark an item passed only within the tested scope. Once these
+gates pass for the agreed profile, make the default change as a separate reviewed
+change with Pion retained and a bounded initial rollout.

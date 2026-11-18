@@ -67,10 +67,13 @@ checks. No source fix was necessary during this validation.
 
 ## Remaining promotion gates
 
-- Real native downstream web/SIP/transfer/recording/agent.events acceptance.
-- Active-call drain, concurrent media soak, reconnect behavior and failure recovery.
-- Native amd64 hardware validation if required by the deployment acceptance policy.
-- Release/pin the validated upstream revision, then validate the release build
-  without the temporary sibling-source context.
+This report records the Linux checks at the time they ran. Subsequent STG calls
+have covered answered/rejected outbound calls, browser captions, warm-transfer
+control flow and audible hold with unanswered-transfer recovery. They ran from
+the local macOS worker and do not establish live Linux media acceptance.
+
+Use the [current default-promotion checklist](../../features/native-public-api.md#default-promotion-validation-checklist)
+for the remaining web/chat/events, incoming SIP, transfer/recording playback,
+Linux media, active-call drain/recovery, soak, supported-profile and release gates.
 
 These results do not authorize a default switch or deployment.
