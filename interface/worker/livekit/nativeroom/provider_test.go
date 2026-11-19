@@ -41,3 +41,18 @@ func TestProviderValidatesBeforeLoadingRuntime(t *testing.T) {
 		t.Fatal("unused provider disposed process runtime")
 	}
 }
+
+func TestManualRuntimeCloseRejectsManagedOwners(t *testing.T) {
+	processOwner.Lock()
+	previous := processOwner.leases
+	processOwner.leases++
+	processOwner.Unlock()
+	t.Cleanup(func() {
+		processOwner.Lock()
+		processOwner.leases = previous
+		processOwner.Unlock()
+	})
+	if err := CloseInProcessRuntime(context.Background()); err == nil {
+		t.Fatal("manual close accepted while managed owners hold the runtime")
+	}
+}
