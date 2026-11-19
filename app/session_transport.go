@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
@@ -14,7 +13,7 @@ import (
 func sessionTransportFactoryFromEnv() func(worker.WorkerOptions) (worker.SessionTransportProvider, error) {
 	selection := os.Getenv("RTP_AGENT_LIVEKIT_TRANSPORT")
 	legacy := os.Getenv("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS")
-	library, participant := os.Getenv("LIVEKIT_LIB_PATH"), os.Getenv("RTP_AGENT_NATIVE_PARTICIPANT")
+	participant := os.Getenv("RTP_AGENT_NATIVE_PARTICIPANT")
 	var configErr error
 	if legacy != "" && legacy != "0" && legacy != "1" {
 		configErr = errors.New("RTP_AGENT_EXPERIMENTAL_NATIVE_INPROCESS must be 0 or 1")
@@ -33,6 +32,7 @@ func sessionTransportFactoryFromEnv() func(worker.WorkerOptions) (worker.Session
 	if configErr == nil && (selection == "" || selection == "pion") {
 		return nil
 	}
+	library, libraryErr := nativeroom.NativeLibraryPath()
 	return func(opts worker.WorkerOptions) (worker.SessionTransportProvider, error) {
 		if configErr != nil {
 			return nil, configErr
@@ -43,16 +43,13 @@ func sessionTransportFactoryFromEnv() func(worker.WorkerOptions) (worker.Session
 		if opts.Transport != worker.WorkerTransportLiveKit {
 			return nil, errors.New("native session transport requires LiveKit worker transport")
 		}
-		if library == "" {
-			return nil, errors.New("LIVEKIT_LIB_PATH is required for native transport")
+		if libraryErr != nil {
+			return nil, libraryErr
 		}
-		path, err := filepath.Abs(library)
-		if err != nil {
-			return nil, err
-		}
+		path := library
 		info, err := os.Stat(path)
 		if err != nil {
-			return nil, fmt.Errorf("native library: %w", err)
+			return nil, fmt.Errorf("native library (run download-files or set LIVEKIT_LIB_PATH): %w", err)
 		}
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("native library must name a regular file")
