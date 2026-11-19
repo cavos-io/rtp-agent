@@ -17,6 +17,7 @@ type fakeChannelClient struct {
 	audioHandler            AudioHandler
 	pcmFrame                PCMFrame
 	joinCtx                 context.Context
+	joinStarted             chan struct{}
 	publishCtx              context.Context
 	joinErr                 error
 	joinHook                func(EventHandler)
@@ -39,6 +40,9 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 	f.joinOptions = opts
 	f.handler = handler
 	f.audioHandler = audioHandler
+	if f.joinStarted != nil {
+		close(f.joinStarted)
+	}
 	if f.joinHook != nil {
 		f.joinHook(handler)
 	}
@@ -865,7 +869,7 @@ func TestTransportCloseBeforeJoinDoesNotLeaveClient(t *testing.T) {
 }
 
 func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
-	client := &fakeChannelClient{blockJoin: true}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -873,17 +877,10 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -900,7 +897,7 @@ func TestTransportCloseCancelsInProgressJoin(t *testing.T) {
 }
 
 func TestTransportLeaveCancelsInProgressJoin(t *testing.T) {
-	client := &fakeChannelClient{blockJoin: true}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -908,17 +905,10 @@ func TestTransportLeaveCancelsInProgressJoin(t *testing.T) {
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Leave(context.Background()); err != nil {
 		t.Fatalf("Leave() during Join error = %v, want nil", err)
@@ -938,7 +928,7 @@ func TestTransportLeaveCancelsInProgressJoin(t *testing.T) {
 }
 
 func TestTransportDropsClientEventsAfterLeaveCancelsInProgressJoin(t *testing.T) {
-	client := &fakeChannelClient{blockJoin: true}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -946,17 +936,10 @@ func TestTransportDropsClientEventsAfterLeaveCancelsInProgressJoin(t *testing.T)
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Leave(context.Background()); err != nil {
 		t.Fatalf("Leave() during Join error = %v, want nil", err)
@@ -980,7 +963,7 @@ func TestTransportDropsClientEventsAfterLeaveCancelsInProgressJoin(t *testing.T)
 }
 
 func TestTransportLeaveCleansUpLateJoinSuccess(t *testing.T) {
-	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true, joinAfterCancelSucceeds: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -988,17 +971,10 @@ func TestTransportLeaveCleansUpLateJoinSuccess(t *testing.T) {
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Leave(context.Background()); err != nil {
 		t.Fatalf("Leave() during Join error = %v, want nil", err)
@@ -1021,7 +997,7 @@ func TestTransportLeaveCleansUpLateJoinSuccess(t *testing.T) {
 }
 
 func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
-	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true, joinAfterCancelSucceeds: true}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -1029,17 +1005,10 @@ func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1063,7 +1032,7 @@ func TestTransportJoinReportsClosedWhenCloseWinsJoinRace(t *testing.T) {
 
 func TestTransportJoinReportsCleanupErrorWhenCloseWinsJoinRace(t *testing.T) {
 	leaveErr := errors.New("leave failed")
-	client := &fakeChannelClient{blockJoin: true, joinAfterCancelSucceeds: true, leaveErr: leaveErr}
+	client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true, joinAfterCancelSucceeds: true, leaveErr: leaveErr}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
 	joinDone := make(chan error, 1)
 
@@ -1071,17 +1040,10 @@ func TestTransportJoinReportsCleanupErrorWhenCloseWinsJoinRace(t *testing.T) {
 		joinDone <- tr.Join(context.Background())
 	}()
 
-	deadline := time.After(time.Second)
-	for {
-		if client.joinCtx != nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for Join to reach channel client")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-client.joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Join to reach channel client")
 	}
 	if err := tr.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1247,5 +1209,49 @@ func TestTransportPublishPCMRejectsTwentyMillisecondFrames(t *testing.T) {
 	}
 	if client.publishCount != 0 {
 		t.Fatalf("publish count = %d, want 0", client.publishCount)
+	}
+}
+
+func TestTransportConcurrentCloseAndLeaveDuringJoin(t *testing.T) {
+	// Exercise both cancellation owners against the same in-flight join. The
+	// channel publishes the fake's handlers before either cancellation starts.
+	for i := 0; i < 20; i++ {
+		client := &fakeChannelClient{joinStarted: make(chan struct{}), blockJoin: true}
+		tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+		joined := make(chan error, 1)
+		go func() { joined <- tr.Join(context.Background()) }()
+		select {
+		case <-client.joinStarted:
+		case <-time.After(time.Second):
+			t.Fatal("join did not reach client")
+		}
+		closed := make(chan error, 1)
+		left := make(chan error, 1)
+		go func() { closed <- tr.Close(context.Background()) }()
+		go func() { left <- tr.Leave(context.Background()) }()
+		for _, result := range []<-chan error{closed, left} {
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatalf("cancel join: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cancellation did not return")
+			}
+		}
+		select {
+		case err := <-joined:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Join = %v, want canceled", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("join leaked after concurrent cancellation")
+		}
+		if client.leaveCount != 0 {
+			t.Fatalf("Leave called %d times for a client that never joined", client.leaveCount)
+		}
+		if _, ok := <-tr.Events(); ok {
+			t.Fatal("transport events still open after Close")
+		}
 	}
 }

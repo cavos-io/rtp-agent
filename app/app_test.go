@@ -1646,7 +1646,7 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for publishAudio == nil {
-		publishAudio = pipeline.PublishAudio
+		publishAudio = pipeline.GetPublishAudio()
 		if publishAudio != nil {
 			break
 		}
@@ -5745,14 +5745,14 @@ func TestConfigureProvidersPassesReferenceVADToSpeechmaticsSTT(t *testing.T) {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
 	deadline := time.After(time.Second)
-	for len(vadStream.pushed) == 0 {
+	for len(vadStream.pushedFrames()) == 0 {
 		select {
 		case <-deadline:
 			t.Fatal("VAD received no frames after RecognitionStarted, want Speechmatics STT to use app VAD for external endpointing")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	got := vadStream.pushed[0]
+	got := vadStream.pushedFrames()[0]
 	if got == frame {
 		t.Fatal("VAD received caller frame, want Speechmatics-normalized frame")
 	}
@@ -16989,6 +16989,7 @@ func (f *eventfulAppVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type eventfulAppVADStream struct {
+	mu     sync.Mutex
 	events chan *vad.VADEvent
 	pushed []*model.AudioFrame
 	once   sync.Once
@@ -16999,8 +17000,15 @@ func newEventfulAppVADStream() *eventfulAppVADStream {
 }
 
 func (f *eventfulAppVADStream) PushFrame(frame *model.AudioFrame) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.pushed = append(f.pushed, frame)
 	return nil
+}
+func (f *eventfulAppVADStream) pushedFrames() []*model.AudioFrame {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*model.AudioFrame(nil), f.pushed...)
 }
 func (f *eventfulAppVADStream) Flush() error { return nil }
 func (f *eventfulAppVADStream) EndInput() error {

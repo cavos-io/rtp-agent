@@ -400,8 +400,8 @@ func TestRecorderIOPlacesConsecutiveFramesOnMediaTimeline(t *testing.T) {
 	}
 	recorder.inputNextTime = now.Add(time.Second)
 	recorder.RecordInput(frame)
-	if got := recorder.inFrames[3].receivedAt; !got.Equal(now) {
-		t.Fatalf("frame after runaway media cursor starts at %v, want wall time %v", got, now)
+	if got := recorder.inFrames[3].receivedAt; !got.Equal(now.Add(time.Second)) {
+		t.Fatalf("buffered frame starts at %v, want media cursor %v", got, now.Add(time.Second))
 	}
 	if err := recorder.Stop(); err != nil {
 		t.Fatalf("Stop() error = %v", err)
@@ -543,5 +543,53 @@ func TestRecorderIOFlushMixesAuxOntoOutputChannel(t *testing.T) {
 	}
 	if right != 480*16 {
 		t.Fatalf("aux audio on output channel sum = %d, want %d", right, 480*16)
+	}
+}
+
+func TestRecorderIOPreservesBurstAndFollowingGap(t *testing.T) {
+	for _, channel := range []string{"input", "output", "aux"} {
+		t.Run(channel, func(t *testing.T) {
+			r := NewRecorderIO(nil)
+			now := time.Unix(100, 0)
+			r.now = func() time.Time { return now }
+			writer := &capturingRecordingWriter{}
+			r.started, r.writer = true, writer
+			record := r.RecordInput
+			side := 0
+			if channel == "output" {
+				record, side = r.RecordOutput, 1
+			}
+			if channel == "aux" {
+				record, side = func(f *model.AudioFrame) { r.RecordAux("track", f) }, 1
+			}
+			for marker := 1; marker <= 41; marker++ {
+				if marker == 41 {
+					now = now.Add(2 * time.Second)
+				}
+				data := make([]byte, 960*2)
+				for i := 0; i < 960; i++ {
+					data[i*2] = byte(marker)
+				}
+				record(&model.AudioFrame{Data: data, SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 960})
+			}
+			r.flush(48000, now.Add(20*time.Millisecond))
+			if len(writer.pcm) != 96960*2 {
+				t.Fatalf("samples = %d, want %d", len(writer.pcm), 96960*2)
+			}
+			// Check frame interiors; timestamp-to-sample conversion can round
+			// a boundary by one sample.
+			for i := 480; i < 96960; i += 960 {
+				want := int16(0)
+				if i < 38400 {
+					want = int16(i/960 + 1)
+				}
+				if i >= 96000 {
+					want = 41
+				}
+				if got := writer.pcm[i*2+side]; got != want {
+					t.Fatalf("sample %d = %d, want %d (burst order and elapsed gap)", i, got, want)
+				}
+			}
+		})
 	}
 }

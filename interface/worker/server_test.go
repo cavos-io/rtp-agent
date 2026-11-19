@@ -2258,7 +2258,7 @@ func TestReloadedJobWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
 
 func TestReloadedJobSuppressesDisconnectedStatusError(t *testing.T) {
 	oldLogger := logutil.Logger
-	recorder := &roomIORecordingLogger{}
+	recorder := &roomIORecordingLogger{debugMessages: make(chan string, 16)}
 	logutil.SetLogger(recorder)
 	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
 
@@ -2294,6 +2294,10 @@ func TestReloadedJobSuppressesDisconnectedStatusError(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
+
+	// Removal from activeJobs precedes final status logging. Wait for that
+	// operation before inspecting logs or restoring the process logger.
+	waitForWorkerDebugMessage(t, recorder.debugMessages, "skipping reloaded job status after worker websocket disconnect")
 
 	if got := countWarnMessage(recorder.errorMessages, "failed to update reloaded job status"); got != 0 {
 		t.Fatalf("disconnected worker websocket status errors = %d, want 0", got)
@@ -2998,6 +3002,7 @@ func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
 	})
 	sentCh := make(chan *livekit.WorkerMessage, 2)
 	requestStarted := make(chan struct{})
+	requestDone := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
 		sentCh <- msg
@@ -3005,6 +3010,7 @@ func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
 	}
 	server.requestFnc = func(req *JobRequest) error {
 		if req.ID() == "job_reserving_one" {
+			defer close(requestDone)
 			close(requestStarted)
 			<-releaseRequest
 			return req.Accept(JobAcceptArguments{})
@@ -3047,6 +3053,13 @@ func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first request did not finish")
 	}
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("first request callback did not finish")
+	}
+	server.Close(context.Background())
+
 }
 
 func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
@@ -3054,11 +3067,13 @@ func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
 		LoadFunc: func(*AgentServer) float64 { return 0 },
 	})
 	requestStarted := make(chan struct{})
+	requestDone := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
 		return nil
 	}
 	server.requestFnc = func(req *JobRequest) error {
+		defer close(requestDone)
 		close(requestStarted)
 		<-releaseRequest
 		return req.Accept(JobAcceptArguments{})
@@ -3085,6 +3100,13 @@ func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
 	}
 
 	close(releaseRequest)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("request callback did not complete after release")
+	}
+	// Do not leak acceptance timers into later tests that replace globals.
+	server.Close(context.Background())
 }
 
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
@@ -3441,7 +3463,7 @@ func TestAssignmentReportsSuccessWhenJobContextShutsDown(t *testing.T) {
 
 func TestAssignmentSuppressesDisconnectedFinalStatusError(t *testing.T) {
 	oldLogger := logutil.Logger
-	recorder := &roomIORecordingLogger{}
+	recorder := &roomIORecordingLogger{debugMessages: make(chan string, 16)}
 	logutil.SetLogger(recorder)
 	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
 
@@ -3476,6 +3498,10 @@ func TestAssignmentSuppressesDisconnectedFinalStatusError(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
+
+	// Removal from activeJobs precedes final status logging. Wait for that
+	// operation before inspecting logs or restoring the process logger.
+	waitForWorkerDebugMessage(t, recorder.debugMessages, "skipping job status update after worker websocket disconnect")
 
 	if countWarnMessage(recorder.errorMessages, "failed to update job status") != 0 {
 		t.Fatalf("error messages = %#v, want no disconnected final status error", recorder.errorMessages)
@@ -3791,6 +3817,9 @@ func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_FAILED)
 
+	// Failure status is sent before finalization; wait for teardown separately.
+	waitForNoInflightJobs(t, server)
+
 	server.mu.Lock()
 	_, exists := server.activeJobs[job.Id]
 	server.mu.Unlock()
@@ -3816,6 +3845,9 @@ func TestAssignmentReportsFailureWhenEntrypointPanics(t *testing.T) {
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_panic_status", livekit.JobStatus_JS_RUNNING)
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_panic_status", livekit.JobStatus_JS_FAILED)
+
+	// Failure status is sent before finalization; wait for teardown separately.
+	waitForNoInflightJobs(t, server)
 
 	server.mu.Lock()
 	_, exists := server.activeJobs[job.Id]
@@ -4073,6 +4105,7 @@ func TestValidateRunPreconditionsAcceptsAgoraTransportConfig(t *testing.T) {
 }
 
 func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4101,6 +4134,7 @@ func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4125,6 +4159,7 @@ func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportWithNormalizedContext(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4145,6 +4180,7 @@ func TestRunDelegatesAgoraTransportWithNormalizedContext(t *testing.T) {
 }
 
 func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	t.Setenv("LIVEKIT_URL", "wss://existing.livekit.example")
 	t.Setenv("LIVEKIT_API_KEY", "existing-key")
 	t.Setenv("LIVEKIT_API_SECRET", "existing-secret")
@@ -4179,6 +4215,7 @@ func TestRunDelegatesAgoraTransportWithoutLiveKitEnvExport(t *testing.T) {
 }
 
 func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
 	})
@@ -4339,6 +4376,7 @@ func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	t.Setenv("LIVEKIT_URL", "wss://old.example")
 	t.Setenv("LIVEKIT_API_KEY", "old-key")
@@ -4392,6 +4430,7 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 }
 
 func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerPrometheusListener(t, 43884)
 	oldDial := workerDialContext
 	oldSleep := workerRetrySleep
@@ -4431,6 +4470,7 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 }
 
 func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	oldSleep := workerRetrySleep
 	oldDial := workerDialContext
@@ -4549,6 +4589,7 @@ func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
 }
 
 func TestRunResetsRetryAfterSuccessfulWorkerConnection(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	stubWorkerHTTPListener(t)
 	oldSleep := workerRetrySleep
 	oldDial := workerDialContext
@@ -4710,6 +4751,7 @@ func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {
 }
 
 func TestRunRejectsAlreadyStartedServer(t *testing.T) {
+	preserveWorkerRunEnvironment(t)
 	server := NewAgentServer(WorkerOptions{
 		WSRL:      "wss://run.example",
 		APIKey:    "run-key",
@@ -6623,4 +6665,29 @@ func (e *localJobExecutorStub) Close(ctx context.Context) error {
 		return e.close(ctx)
 	}
 	return nil
+}
+
+func waitForWorkerDebugMessage(t *testing.T, messages <-chan string, want string) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case msg := <-messages:
+			if msg == want {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("worker did not finish logging %q", want)
+		}
+	}
+}
+
+// Run exports credentials for subprocesses. Tests must restore even initially
+// absent variables so repeated package runs cannot inherit synthetic credentials.
+func preserveWorkerRunEnvironment(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"} {
+		t.Setenv(key, os.Getenv(key))
+	}
 }

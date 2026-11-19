@@ -2362,6 +2362,42 @@ func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	}
 }
 
+//go:noinline
+func playbackFinishedClosure(ch chan<- PlaybackFinishedEvent) func(PlaybackFinishedEvent) {
+	return func(ev PlaybackFinishedEvent) { ch <- ev }
+}
+
+func TestRoomIOOffPlaybackFinishedUsesCallbackIdentity(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	first, second := make(chan PlaybackFinishedEvent, 1), make(chan PlaybackFinishedEvent, 1)
+	firstCallback, secondCallback := playbackFinishedClosure(first), playbackFinishedClosure(second)
+	rio.OnPlaybackFinished(firstCallback)
+	rio.OnPlaybackFinished(secondCallback)
+	// An unregistered closure sharing code must not remove either listener.
+	rio.OffPlaybackFinished(playbackFinishedClosure(make(chan PlaybackFinishedEvent, 1)))
+	rio.OffPlaybackFinished(secondCallback)
+	rio.OffPlaybackFinished(secondCallback) // Removing twice must leave the first intact.
+	if err := rio.PublishAudio(context.Background(), &model.AudioFrame{
+		Data: make([]byte, 960*2), SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rio.Flush()
+	select {
+	case ev := <-first:
+		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("unexpected playback event: %#v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first playback_finished handler did not receive event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed handler received event: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOPlaybackFinishedHandlerPanicDoesNotBlockOtherHandlers(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	kept := make(chan PlaybackFinishedEvent, 1)
@@ -4735,7 +4771,7 @@ func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
+	rio.handleChatTextInput(context.Background(), "hello from chat", nil, "caller")
 
 	if !called {
 		t.Fatal("text input callback was not called")
@@ -4766,7 +4802,7 @@ func TestRoomIOHandleChatTextInputRecoversCallbackPanic(t *testing.T) {
 		}
 	}()
 
-	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
+	rio.handleChatTextInput(context.Background(), "hello from chat", nil, "caller")
 }
 
 func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
@@ -4783,7 +4819,7 @@ func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "other-user")
+	rio.handleChatTextInput(context.Background(), "ignored", nil, "other-user")
 
 	if called {
 		t.Fatal("text input callback was called for unlinked participant")
@@ -4802,7 +4838,7 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "missing-user")
+	rio.handleChatTextInput(context.Background(), "ignored", nil, "missing-user")
 
 	if called {
 		t.Fatal("text input callback was called for unknown participant")
@@ -4821,7 +4857,7 @@ func TestRoomIOHandleChatTextInputIgnoresClosedRoomIO(t *testing.T) {
 		closed: true,
 	}
 
-	rio.handleChatTextInput(context.Background(), "late text", lksdk.TextStreamInfo{}, "caller")
+	rio.handleChatTextInput(context.Background(), "late text", nil, "caller")
 
 	if called {
 		t.Fatal("text input callback was called after RoomIO closed")
@@ -4842,10 +4878,10 @@ func TestRoomIOSetParticipantSwitchesTextInputFilter(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", nil, "caller-b")
 	rio.SetParticipant("caller-b")
-	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
-	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-a")
+	rio.handleChatTextInput(context.Background(), "accepted", nil, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", nil, "caller-a")
 
 	want := []string{"caller-b"}
 	if !reflect.DeepEqual(calls, want) {
@@ -4915,7 +4951,7 @@ func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
 	}
 
 	rio.UnsetParticipant()
-	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+	rio.handleChatTextInput(context.Background(), "accepted", nil, "caller-b")
 
 	want := []string{"caller-b"}
 	if !reflect.DeepEqual(calls, want) {
@@ -5994,6 +6030,9 @@ func (f *fakeRoomIORealtimeSession) CommitAudio() error { return nil }
 func (f *fakeRoomIORealtimeSession) ClearAudio() error { return nil }
 
 type gatedTextStream struct {
+	// Match SDK serialization of wire delivery and the close trailer.
+	wireMu          sync.Mutex
+	writes          atomic.Int32
 	closed          atomic.Bool
 	wroteAfterClose atomic.Bool
 
@@ -6014,11 +6053,20 @@ func newGatedTextStream() *gatedTextStream {
 }
 
 func (w *gatedTextStream) Write(string) {
+	w.wireMu.Lock()
+	if w.closed.Load() {
+		w.wroteAfterClose.Store(true)
+		w.wireMu.Unlock()
+		return
+	}
+	w.wireMu.Unlock()
 	w.enterOnce.Do(func() { close(w.writeEntered) })
 	select {
 	case <-w.cancel:
 		return
 	case <-w.release:
+		w.wireMu.Lock()
+		defer w.wireMu.Unlock()
 		select {
 		case <-w.cancel:
 			return
@@ -6027,10 +6075,13 @@ func (w *gatedTextStream) Write(string) {
 		if w.closed.Load() {
 			w.wroteAfterClose.Store(true)
 		}
+		w.writes.Add(1)
 	}
 }
 
 func (w *gatedTextStream) Close() {
+	w.wireMu.Lock()
+	defer w.wireMu.Unlock()
 	w.closeOnce.Do(func() {
 		w.closed.Store(true)
 		close(w.cancel)
@@ -6245,6 +6296,57 @@ func TestRoomIOAgentTranscriptionWriteNeverLandsOnClosedStream(t *testing.T) {
 			"(publishAgentTranscriptionStream let closeAgentTextStream tear the writer " +
 			"down underneath an in-flight write)")
 	}
+}
+
+// Exercise both orderings explicitly, in addition to the concurrent race above.
+func TestRoomIOGuardedTextWriterCloseOrdering(t *testing.T) {
+	t.Run("write before close is delivered", func(t *testing.T) {
+		inner := newGatedTextStream()
+		writer := &roomIOGuardedTextWriter{inner: inner}
+		inner.releaseWrite()
+		writer.Write("before")
+		writer.Close()
+		writer.Write("after")
+		if got := inner.writes.Load(); got != 1 {
+			t.Fatalf("delivered writes = %d, want 1", got)
+		}
+		if inner.wroteAfterClose.Load() {
+			t.Fatal("guard admitted a write after close")
+		}
+	})
+	t.Run("close cancels admitted write", func(t *testing.T) {
+		inner := newGatedTextStream()
+		writer := &roomIOGuardedTextWriter{inner: inner}
+		done := make(chan struct{})
+		go func() { writer.Write("pending"); close(done) }()
+		select {
+		case <-inner.writeEntered:
+		case <-time.After(time.Second):
+			inner.releaseWrite()
+			t.Fatal("write did not enter")
+		}
+		closed := make(chan struct{})
+		go func() { writer.Close(); close(closed) }()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			inner.releaseWrite()
+			t.Fatal("close did not cancel admitted write")
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("write did not finish")
+		}
+		inner.releaseWrite()
+		writer.Write("after")
+		if got := inner.writes.Load(); got != 0 {
+			t.Fatalf("delivered writes = %d, want 0", got)
+		}
+		if inner.wroteAfterClose.Load() {
+			t.Fatal("guard admitted a write after close")
+		}
+	})
 }
 
 func TestRoomIOShouldRecordAuxTrack(t *testing.T) {

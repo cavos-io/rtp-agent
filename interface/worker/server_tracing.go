@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -54,7 +55,7 @@ func (s *AgentServer) Close(ctx context.Context) error {
 	wait:
 		for {
 			s.mu.Lock()
-			remaining := len(s.activeJobs) + len(s.finishingJobs)
+			remaining := len(s.activeJobs) + len(s.finishingJobs) + s.entrypoints
 			s.mu.Unlock()
 			if remaining == 0 {
 				break
@@ -66,6 +67,28 @@ func (s *AgentServer) Close(ctx context.Context) error {
 			case <-ticker.C:
 			}
 		}
+		if s.sessionTransport != nil {
+			if s.closeErr == nil {
+				s.closeErr = s.closeSessionTransport()
+			} else {
+				// A caller deadline must not dispose FFI beneath unfinished jobs.
+				go func() {
+					ticker := time.NewTicker(10 * time.Millisecond)
+					defer ticker.Stop()
+					for range ticker.C {
+						s.mu.Lock()
+						remaining := len(s.activeJobs) + len(s.finishingJobs) + s.entrypoints
+						s.mu.Unlock()
+						if remaining == 0 {
+							if err := s.closeSessionTransport(); err != nil {
+								logger.Logger.Errorw("worker session transport cleanup failed", err)
+							}
+							return
+						}
+					}
+				}()
+			}
+		}
 		if s.tracerProvider != nil {
 			exportCtx, cancel := context.WithTimeout(context.Background(), observabilityFinalizeTimeout)
 			defer cancel()
@@ -73,4 +96,10 @@ func (s *AgentServer) Close(ctx context.Context) error {
 		}
 	})
 	return s.closeErr
+}
+
+func (s *AgentServer) closeSessionTransport() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.sessionTransport.Close(ctx)
 }

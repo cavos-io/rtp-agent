@@ -4,6 +4,7 @@
 .tmp/
 resources/models/*
 !resources/models/.gitkeep
+/resources/lib/livekit/
 refs/
 
 # cache

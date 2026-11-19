@@ -8065,3 +8065,47 @@ func TestAgentSessionRestartKeepsAudioTurnDetectorOpen(t *testing.T) {
 		t.Fatal("session stop closed the application-owned AudioTurnDetector")
 	}
 }
+
+// Keep one factory call site so compiler inlining cannot give each closure a
+// different code address and accidentally hide an identity comparison defect.
+//
+//go:noinline
+func sessionIdentityCallback(ch chan<- Event) func(Event) {
+	return func(ev Event) { ch <- ev }
+}
+
+func TestAgentSessionOffDistinguishesClosureValues(t *testing.T) {
+	for _, once := range []bool{false, true} {
+		t.Run(fmt.Sprintf("once=%v", once), func(t *testing.T) {
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			received := make(chan Event, 4)
+			first := sessionIdentityCallback(received)
+			second := sessionIdentityCallback(received)
+			unregistered := sessionIdentityCallback(received)
+			register := session.On
+			if once {
+				register = session.Once
+			}
+			removeFirst := register("error", first)
+			register("error", second)
+			session.Off("error", unregistered)
+			session.mu.Lock()
+			count := len(session.eventListeners["error"])
+			session.mu.Unlock()
+			if count != 2 {
+				t.Fatalf("unregistered closure removed listener: %d remain", count)
+			}
+			alias := second
+			session.Off("error", alias)
+			session.EmitError(ErrorEvent{Error: errors.New("test"), Source: "llm"})
+			if len(received) != 1 {
+				t.Fatalf("got %d callbacks, want one", len(received))
+			}
+			removeFirst()
+			session.EmitError(ErrorEvent{Error: errors.New("test"), Source: "llm"})
+			if len(received) != 1 {
+				t.Fatal("unsubscribe/Once failed")
+			}
+		})
+	}
+}

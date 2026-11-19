@@ -1137,3 +1137,28 @@ func (f *fakeMoveParticipantAPI) MoveParticipant(_ context.Context, req *lkproto
 	}
 	return &lkprotocol.MoveParticipantResponse{}, nil
 }
+
+func TestStorePendingAcceptImmediateTimeoutPublishesTimer(t *testing.T) {
+	// A zero timeout can fire before time.AfterFunc returns. The callback must
+	// still receive the timer installed for this acceptance, never nil or stale.
+	for i := 0; i < 1000; i++ {
+		pending := map[string]workerlivekit.JobAcceptArguments{}
+		timers := map[string]*time.Timer{}
+		fired := make(chan *time.Timer, 1)
+		workerlivekit.StorePendingAccept(workerlivekit.PendingAcceptStoreOptions{
+			Pending: pending, Timers: timers, JobID: "immediate", Timeout: 0,
+			OnTimeout: func(_ string, timer *time.Timer) { fired <- timer },
+		})
+		select {
+		case timer := <-fired:
+			if timer == nil || timer != timers["immediate"] {
+				t.Fatal("timeout received an unpublished or wrong timer")
+			}
+			if !workerlivekit.ExpirePendingAccept(pending, timers, "immediate", timer) {
+				t.Fatal("timeout failed to expire its acceptance")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("immediate timeout did not fire")
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ type fakeJobExecutor struct {
 	closeCtx    context.Context
 	closeStart  chan struct{}
 	closeBlock  chan struct{}
-	closeCalls  int
+	closeCalls  atomic.Int64
 	launches    int
 }
 
@@ -58,7 +59,7 @@ func (e *fakeJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobI
 
 func (e *fakeJobExecutor) Close(ctx context.Context) error {
 	e.closeCtx = ctx
-	e.closeCalls++
+	e.closeCalls.Add(1)
 	if e.closeStart != nil {
 		close(e.closeStart)
 	}
@@ -268,8 +269,8 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	if err := pool.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if executor.closeCalls != 1 {
-		t.Fatalf("closeCalls = %d, want 1", executor.closeCalls)
+	if executor.closeCalls.Load() != 1 {
+		t.Fatalf("closeCalls = %d, want 1", executor.closeCalls.Load())
 	}
 	deadline, ok := executor.closeCtx.Deadline()
 	if !ok {
@@ -1200,12 +1201,12 @@ func waitForFakeExecutorCloseCalls(t *testing.T, executor *fakeJobExecutor, want
 	defer ticker.Stop()
 
 	for {
-		if executor.closeCalls == want {
+		if executor.closeCalls.Load() == int64(want) {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("%s closeCalls = %d, want %d", executor.ID(), executor.closeCalls, want)
+			t.Fatalf("%s closeCalls = %d, want %d", executor.ID(), executor.closeCalls.Load(), want)
 		case <-ticker.C:
 		}
 	}

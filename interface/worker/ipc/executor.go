@@ -169,6 +169,7 @@ type ProcessJobExecutor struct {
 	job        Job
 	runningJob *RunningJobInfo
 	done       chan struct{}
+	launchDone chan struct{}
 
 	lastPong   time.Time
 	pingWriter io.Writer
@@ -272,6 +273,8 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	e.job = info.Job
 	e.runningJob = &info
 	e.done = make(chan struct{})
+	e.launchDone = make(chan struct{})
+	defer close(e.launchDone)
 	e.lastPong = time.Now()
 	e.shutdownAck = make(chan struct{})
 	e.shutdownAcked = false
@@ -302,13 +305,29 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	cmd.Stderr = os.Stderr
 
 	e.mu.Lock()
+	// Publish Cmd only after Start has initialized Process. Close and ping read
+	// it under this same lock; Wait does not mutate Process.
+	if e.closed {
+		e.clearFailedLaunchLocked()
+		e.mu.Unlock()
+		return fmt.Errorf("process closed during launch")
+	}
+	if err := cmd.Start(); err != nil {
+		e.clearFailedLaunchLocked()
+		e.mu.Unlock()
+		return err
+	}
 	e.cmd = cmd
 	e.mu.Unlock()
 
-	go e.pingTask(ctx)
+	pingCtx, cancelPing := context.WithCancel(ctx)
+	pingDone := make(chan struct{})
+	go func() { defer close(pingDone); e.pingTask(pingCtx) }()
 
 	go func() {
-		err := cmd.Run()
+		err := cmd.Wait()
+		cancelPing()
+		<-pingDone
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		defer close(e.done)
@@ -407,6 +426,16 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	e.mu.Lock()
 	e.closed = true
+	launchDone := e.launchDone
+	e.mu.Unlock()
+	if launchDone != nil {
+		select {
+		case <-launchDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	e.mu.Lock()
 	cmd := e.cmd
 	done := e.done
 	started := e.started

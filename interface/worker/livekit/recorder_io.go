@@ -264,10 +264,11 @@ func audioFrameDuration(frame *model.AudioFrame) time.Duration {
 
 func nextRecordedFrameTime(now, expected time.Time) time.Time {
 	if expected.IsZero() ||
-		now.After(expected.Add(recordedAudioContinuityTolerance)) ||
-		expected.After(now.Add(recordedAudioContinuityTolerance)) {
+		now.After(expected.Add(recordedAudioContinuityTolerance)) {
 		return now
 	}
+	// Buffered audio can arrive faster than real time. Never move its media
+	// cursor backward: overlapping timestamps overwrite already recorded audio.
 	return expected
 }
 
