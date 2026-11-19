@@ -1,5 +1,5 @@
 //go:build nativeinprocess
 
-package main
+package nativeroom_test
 
 const inProcessAvailable = true

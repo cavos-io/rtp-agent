@@ -15,3 +15,7 @@ awk '
   in_ci && /- name: targeted tests/ { found = 1 }
   END { exit found }
 ' "$ROOT/lefthook.yaml"
+
+# Candidate discovery and the integrity guard must share the PR merge base.
+# A tip-to-tip file list can omit deletions also made independently upstream.
+grep -Fq 'files: git diff "$(git merge-base origin/main HEAD)" --name-only --diff-filter=ACMRD' "$ROOT/lefthook.yaml"

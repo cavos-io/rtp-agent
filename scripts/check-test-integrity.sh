@@ -5,7 +5,7 @@ set -euo pipefail
 # Checks provided Go test files against a diff base or as full files.
 #
 # Enforces:
-#   1. Go test files cannot be deleted, except with full retirement of the experimental probe module.
+#   1. Go test files cannot be deleted, except verified consolidation or full experimental probe retirement.
 #   2. Modified/added/copied/renamed Go test files must not have more deletions than additions.
 #   3. Newly added test lines cannot introduce common test-weakening patterns.
 
@@ -22,6 +22,16 @@ if (( ${#FILES[@]} == 0 )); then
   exit 0
 fi
 
+# Revision checks measure changes introduced by this branch, including local
+# edits. Comparing directly with an advancing upstream tip incorrectly treats
+# upstream-only test additions as deletions. Keep staged/all modes unchanged.
+if [[ "$BASE" != "all" && "$BASE" != "--cached" ]]; then
+  BASE=$(git merge-base "$BASE" HEAD) || {
+    echo "Cannot resolve test-integrity merge base." >&2
+    exit 1
+  }
+fi
+
 failed=0
 
 reject() {
@@ -31,6 +41,18 @@ reject() {
 
 warn() {
   echo "Warning: $*"
+}
+
+# Proof is computed from the same snapshot as git diff (index for --cached).
+# Fail closed: helper failure cannot grant a consolidation exception.
+verified_consolidations=""
+if [[ "$BASE" != "all" ]]; then
+  guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  verified_consolidations=$(go run "$guard_dir/testintegrity/main.go" "$BASE" "${FILES[@]}") || exit 1
+fi
+
+is_verified_consolidation() {
+  grep -Fxq -- "$1" <<<"$verified_consolidations"
 }
 
 check_deleted_test_files() {
@@ -48,6 +70,7 @@ check_deleted_test_files() {
     if [[ "$file" == examples/native-receive-probe/* && -z "$probe_remaining" ]]; then
       continue
     fi
+    if is_verified_consolidation "$file"; then continue; fi
     reject "deleting Go test files is not allowed: $file"
   done <<<"$deleted_tests"
 }
@@ -69,7 +92,7 @@ check_test_additions_cover_deletions() {
     additions=$(awk '{sum += $1} END {print sum+0}' <<<"$stats")
     deletions=$(awk '{sum += $2} END {print sum+0}' <<<"$stats")
 
-    if (( additions < deletions )); then
+    if (( additions < deletions )) && ! is_verified_consolidation "$file"; then
       reject "$file must not have more deletions than additions"
       echo "  additions: $additions"
       echo "  deletions:  $deletions"

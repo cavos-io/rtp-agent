@@ -1,6 +1,6 @@
 //go:build nativeroomintegration
 
-package main
+package nativeroom_test
 
 import (
 	"context"
@@ -8,8 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/livekit/protocol/auth"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,12 +27,14 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
+	tools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
+	"github.com/livekit/protocol/auth"
 	lkproto "github.com/livekit/protocol/livekit"
 	protologger "github.com/livekit/protocol/logger"
 	lk "github.com/livekit/server-sdk-go/v2"
@@ -691,5 +697,506 @@ func TestNativePrimarySequentialSessions(t *testing.T) {
 		if !ok {
 			t.Fatal("session failed; results preserved")
 		}
+	}
+}
+
+func prepareLifecycleInput(t *testing.T, scenario string, caller *lk.Room, pub *lk.LocalTrackPublication, dir string) func() {
+	if !strings.HasPrefix(scenario, "lifecycle-") {
+		return func() {}
+	}
+	screen, e := lk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = caller.LocalParticipant.PublishTrack(screen, &lk.TrackPublicationOptions{Name: "screen", Source: lkproto.TrackSource_SCREEN_SHARE_AUDIO}); e != nil {
+		t.Fatal(e)
+	}
+	if scenario == "lifecycle-muted" {
+		pub.SetMuted(true)
+	}
+	enc, e := opus.NewEncoder(48000, 1, opus.AppVoIP)
+	if e != nil {
+		t.Fatal(e)
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	var sent int
+	var publishErr error
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		pcm := make([]int16, 960)
+		buf := make([]byte, 4000)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+			for j := range pcm {
+				pcm[j] = int16(10000 * math.Sin(2*math.Pi*1760*float64(i*960+j)/48000))
+			}
+			n, e := enc.Encode(pcm, buf)
+			if e != nil {
+				publishErr = e
+				return
+			}
+			if e = screen.WriteRTP(&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: uint16(i), Timestamp: uint32(i * 960)}, Payload: append([]byte(nil), buf[:n]...)}, nil); e != nil {
+				publishErr = e
+				return
+			}
+			sent++
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		if publishErr != nil || sent < 25 {
+			t.Errorf("screen publisher sent=%d err=%v", sent, publishErr)
+		}
+		b, _ := json.Marshal(map[string]any{"packets_sent": sent, "tone_hz": 1760})
+		if e := os.WriteFile(filepath.Join(dir, "screen-publisher.json"), b, 0600); e != nil {
+			t.Error(e)
+		}
+	}
+}
+func exerciseLifecycle(t *testing.T, ctx context.Context, scenario string, caller *lk.Room, session *agent.AgentSession, track *lk.LocalTrack, pub *lk.LocalTrackPublication, dir string) (*lk.LocalTrack, *lk.LocalTrackPublication) {
+	if !strings.HasPrefix(scenario, "lifecycle-") {
+		return track, pub
+	}
+	evidence := map[string]any{"scenario": scenario, "original_track": pub.SID(), "screen_audio_published": true}
+	switch scenario {
+	case "lifecycle-delayed":
+		sent := make(chan error, 1)
+		start := time.Now()
+		go func() {
+			sent <- session.EnsureAssistant().(*agent.PipelineAgent).PublishAudio(ctx, primaryTone(480, 990))
+		}()
+		select {
+		case e := <-sent:
+			t.Fatal("capture completed before subscription", e)
+		case <-time.After(300 * time.Millisecond):
+		}
+		found := false
+		for _, p := range caller.GetRemoteParticipants() {
+			if p.Identity() == "primary-agent" {
+				for _, pub := range p.TrackPublications() {
+					if e := pub.(*lk.RemoteTrackPublication).SetSubscribed(true); e != nil {
+						t.Fatal(e)
+					}
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no output publication")
+		}
+		select {
+		case e := <-sent:
+			if e != nil {
+				t.Fatal(e)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("capture did not resume")
+		}
+		session.AudioPlaybackController().ClearBuffer()
+		evidence["capture_wait_ms"] = float64(time.Since(start)) / float64(time.Millisecond)
+	case "lifecycle-muted":
+		// Reaching this point proves startup did not require an unmuted publication.
+		pub.SetMuted(false)
+		time.Sleep(100 * time.Millisecond)
+		pub.SetMuted(true)
+		time.Sleep(100 * time.Millisecond)
+		pub.SetMuted(false)
+		evidence["muted_startup_and_unmute"] = true
+	case "lifecycle-device":
+		old := pub.SID()
+		if e := caller.LocalParticipant.UnpublishTrack(old); e != nil {
+			t.Fatal(e)
+		}
+		time.Sleep(200 * time.Millisecond)
+		var e error
+		track, e = lk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
+		if e != nil {
+			t.Fatal(e)
+		}
+		pub, e = caller.LocalParticipant.PublishTrack(track, &lk.TrackPublicationOptions{Name: "replacement", Source: lkproto.TrackSource_MICROPHONE})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if old == pub.SID() {
+			t.Fatal("replacement SID unchanged")
+		}
+		evidence["replacement_track"] = pub.SID()
+	}
+	b, e := json.MarshalIndent(evidence, "", "  ")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(dir, "lifecycle.json"), b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	return track, pub
+}
+
+type nativeCaptionObservation struct {
+	Text, Identity, Track, Segment string
+	Final                          bool
+}
+type nativeCaptionCheck struct {
+	t       *testing.T
+	enabled bool
+	packets chan nativeCaptionObservation
+	streams chan nativeCaptionObservation
+}
+
+func newNativeCaptionCheck(t *testing.T, cb *lk.RoomCallback) *nativeCaptionCheck {
+	c := &nativeCaptionCheck{t: t, enabled: os.Getenv("NATIVE_TEST_CAPTIONS") == "1", packets: make(chan nativeCaptionObservation, 32), streams: make(chan nativeCaptionObservation, 32)}
+	if c.enabled {
+		cb.OnTranscriptionReceived = func(segments []*lk.TranscriptionSegment, p lk.Participant, track lk.TrackPublication) {
+			for _, s := range segments {
+				v := nativeCaptionObservation{Text: s.Text, Segment: s.ID, Final: s.Final}
+				if p != nil {
+					v.Identity = p.Identity()
+				}
+				if track != nil {
+					v.Track = track.SID()
+				}
+				select {
+				case c.packets <- v:
+				default:
+				}
+			}
+		}
+	}
+	return c
+}
+func (c *nativeCaptionCheck) attach(room *lk.Room) {
+	if !c.enabled {
+		return
+	}
+	if e := room.RegisterTextStreamHandler(wl.RoomIOTranscriptionTopic, func(reader *lk.TextStreamReader, identity string) {
+		go func() {
+			v := nativeCaptionObservation{Text: reader.ReadAll(), Final: reader.Info.Attributes[wl.RoomIOTranscriptionFinalAttribute] == "true", Identity: identity, Track: reader.Info.Attributes[wl.RoomIOTranscriptionTrackIDAttribute], Segment: reader.Info.Attributes[wl.RoomIOTranscriptionSegmentIDAttribute]}
+			select {
+			case c.streams <- v:
+			default:
+			}
+		}()
+	}); e != nil {
+		c.t.Fatal(e)
+	}
+}
+func (c *nativeCaptionCheck) verify(ctx context.Context, s *agent.AgentSession, callerTrack, dir string) {
+	if !c.enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var observations []nativeCaptionObservation
+	packet := func(text, who string, final bool) nativeCaptionObservation {
+		select {
+		case p := <-c.packets:
+			if p.Text != text || p.Identity != who || p.Final != final || p.Track == "" || p.Segment == "" {
+				c.t.Fatalf("caption packet: %+v", p)
+			}
+			observations = append(observations, p)
+			return p
+		case <-ctx.Done():
+			c.t.Fatal("caption packet timeout", ctx.Err())
+			return nativeCaptionObservation{}
+		}
+	}
+	s.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "caller interim", Language: "en"})
+	a := packet("caller interim", "caller-test", false)
+	s.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "caller final", Language: "en", IsFinal: true})
+	b := packet("caller final", "caller-test", true)
+	if a.Segment != b.Segment || b.Track != callerTrack {
+		c.t.Fatal("caller segment/track changed")
+	}
+	s.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "agent ", Language: "en"})
+	a = packet("agent ", "primary-agent", false)
+	s.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "caption", Language: "en"})
+	b = packet("agent caption", "primary-agent", false)
+	if a.Segment != b.Segment {
+		c.t.Fatal("agent segment changed")
+	}
+	s.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "agent caption", Language: "en", IsFinal: true})
+	b = packet("agent caption", "primary-agent", true)
+	expected := map[string]bool{"caller interim": false, "caller final": false, "agent caption": false}
+	for i := 0; i < 3; i++ {
+		select {
+		case v := <-c.streams:
+			if _, ok := expected[v.Text]; !ok || expected[v.Text] || v.Identity != "primary-agent" || v.Track == "" || v.Segment == "" {
+				c.t.Fatalf("caption stream: %+v", v)
+			}
+			expected[v.Text] = true
+			observations = append(observations, v)
+		case <-ctx.Done():
+			c.t.Fatal("caption stream timeout", ctx.Err())
+		}
+	}
+	data, e := json.MarshalIndent(observations, "", "  ")
+	if e != nil {
+		c.t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(dir, "captions.json"), data, 0600); e != nil {
+		c.t.Fatal(e)
+	}
+}
+
+type dtmfObservation struct {
+	Digit, Sender string
+	Code          uint32
+}
+type nativeDTMFCheck struct {
+	t       *testing.T
+	enabled bool
+	events  chan dtmfObservation
+}
+
+func newNativeDTMFCheck(t *testing.T, cb *lk.RoomCallback) *nativeDTMFCheck {
+	c := &nativeDTMFCheck{t: t, enabled: os.Getenv("NATIVE_TEST_DTMF") == "1", events: make(chan dtmfObservation, 32)}
+	if c.enabled {
+		cb.OnDataPacket = func(packet lk.DataPacket, p lk.DataReceiveParams) {
+			if d, ok := packet.(*lkproto.SipDTMF); ok {
+				select {
+				case c.events <- dtmfObservation{d.Digit, p.SenderIdentity, d.Code}:
+				default:
+				}
+			}
+		}
+	}
+	return c
+}
+func (c *nativeDTMFCheck) verify(ctx context.Context, s *agent.AgentSession, room any, caller *lk.Room, dir string) {
+	if !c.enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	incoming, off := s.SubscribeSipDTMFEvents()
+	defer off()
+	var seen []dtmfObservation
+	for _, d := range []dtmfObservation{{"1", "caller-test", 1}, {"1", "caller-test", 1}, {"#", "caller-test", 11}} {
+		if e := caller.LocalParticipant.PublishDataPacket(&lkproto.SipDTMF{Code: d.Code, Digit: d.Digit}, lk.WithDataPublishReliable(true)); e != nil {
+			c.t.Fatal(e)
+		}
+		select {
+		case v := <-incoming:
+			if v.Digit != d.Digit || v.Code != d.Code || v.SenderIdentity != d.Sender {
+				c.t.Fatal("incoming mismatch", v)
+			}
+			seen = append(seen, d)
+		case <-ctx.Done():
+			c.t.Fatal("incoming DTMF timeout")
+		}
+	}
+	p, ok := room.(tools.DtmfPublisher)
+	if !ok {
+		c.t.Fatal("missing DTMF tool contract")
+	}
+	output, e := tools.NewSendDTMFTool(p).Execute(ctx, `{"events":["2","2","*"]}`)
+	if e != nil || output != "Successfully sent DTMF events: 2, 2, *" {
+		c.t.Fatal(output, e)
+	}
+	for _, d := range []dtmfObservation{{"2", "primary-agent", 2}, {"2", "primary-agent", 2}, {"*", "primary-agent", 10}} {
+		select {
+		case v := <-c.events:
+			if v != d {
+				c.t.Fatal("outgoing mismatch", v)
+			}
+			seen = append(seen, v)
+		case <-ctx.Done():
+			c.t.Fatal("outgoing DTMF timeout")
+		}
+	}
+	b, _ := json.MarshalIndent(seen, "", "  ")
+	if e = os.WriteFile(filepath.Join(dir, "dtmf.json"), b, 0600); e != nil {
+		c.t.Fatal(e)
+	}
+}
+func (c *nativeDTMFCheck) endCall(ctx context.Context, room any) {
+	shutter, ok := room.(tools.Shutter)
+	if !ok {
+		c.t.Fatal("missing call control")
+	}
+	if _, e := tools.NewEndCallTool(shutter, tools.EndCallToolOptions{}).Execute(ctx, `{}`); e != nil {
+		c.t.Fatal(e)
+	}
+}
+
+// The proxy carries only the native participant's signaling. RTP remains direct.
+// Closing an upgraded upstream body drops that WebSocket without touching host
+// networking or the caller. A new 101 response is evidence of signal reconnection;
+// the shared harness independently checks input, output content and cleanup.
+func TestNativePrimarySignalReconnect(t *testing.T) {
+	runNativeSignalReconnect(t, 0, false)
+}
+func TestNativePrimarySignalOutage(t *testing.T) {
+	runNativeSignalReconnect(t, 2*time.Second, false)
+}
+func TestNativePrimarySignalOutageRecovery(t *testing.T) {
+	runNativeSignalReconnect(t, 2*time.Second, true)
+}
+func runNativeSignalReconnect(t *testing.T, outage time.Duration, recovery bool) {
+	protologger.InitFromConfig(&protologger.Config{Level: "info", JSON: true}, "reconnect-comparison")
+	logutil.SetLogger(protologger.GetLogger())
+	target, err := url.Parse(strings.Replace(os.Getenv("NATIVE_TEST_URL"), "ws://", "http://", 1))
+	if err != nil || target.Host == "" {
+		t.Fatal("local NATIVE_TEST_URL required")
+	}
+	if target.Hostname() != "127.0.0.1" && target.Hostname() != "localhost" {
+		t.Fatal("fault injection requires local server")
+	}
+	connections := make(chan io.ReadCloser, 8)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(r *http.Response) error {
+		if r.StatusCode == http.StatusSwitchingProtocols {
+			select {
+			case connections <- r.Body:
+			default:
+				return fmt.Errorf("unexpected signal connection burst")
+			}
+		}
+		return nil
+	}
+	var blocked atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Path only: query strings contain access tokens.
+		t.Logf("signal request path=%s blocked=%v", r.URL.Path, blocked.Load())
+		if blocked.Load() {
+			http.Error(w, "controlled local signaling outage", http.StatusServiceUnavailable)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	t.Setenv("NATIVE_ROOM_DURATION", "10s")
+	runNativePrimaryWithSignalFault(t, []string{"native-signal-reconnect"}, strings.Replace(server.URL, "http://", "ws://", 1), func(ctx context.Context) error {
+		var original io.ReadCloser
+		select {
+		case original = <-connections:
+		case <-ctx.Done():
+			return fmt.Errorf("initial websocket absent: %w", ctx.Err())
+		}
+		blocked.Store(outage > 0)
+		defer blocked.Store(false)
+		if err := original.Close(); err != nil {
+			return err
+		}
+		if outage > 0 {
+			timer := time.NewTimer(outage)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				blocked.Store(false)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		select {
+		case <-connections:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("replacement websocket absent: %w", ctx.Err())
+		}
+	}, recovery)
+}
+
+func TestNativePrimaryPublisherSignalReconnect(t *testing.T) {
+	t.Setenv("NATIVE_ROOM_DURATION", "10s")
+	runNativePrimary(t, []string{"publisher-signal-reconnect"})
+}
+
+// Current contract is termination on the selected track's unsubscribe. A new SID
+// must not silently attach to the old agent session. This is not seamless recovery.
+func TestNativePrimaryTrackReplacementEndsSession(t *testing.T) {
+	runNativePrimary(t, []string{"track-republish"})
+}
+
+type stateObservation struct{ Kind, State, Identity string }
+type nativeStateCheck struct {
+	t       *testing.T
+	enabled bool
+	events  chan stateObservation
+}
+
+func newNativeStateCheck(t *testing.T, cb *lk.RoomCallback) *nativeStateCheck {
+	c := &nativeStateCheck{t: t, enabled: os.Getenv("NATIVE_TEST_STATE") == "1", events: make(chan stateObservation, 128)}
+	if !c.enabled {
+		return c
+	}
+	cb.OnAttributesChanged = func(changed map[string]string, p lk.Participant) {
+		if value, ok := changed["lk.agent.state"]; ok {
+			select {
+			case c.events <- stateObservation{"attribute", value, p.Identity()}:
+			default:
+			}
+		}
+	}
+	cb.OnDataPacket = func(packet lk.DataPacket, params lk.DataReceiveParams) {
+		p, ok := packet.(*lk.UserDataPacket)
+		if !ok || params.Topic != "lk-agent-state" {
+			return
+		}
+		var v struct{ Type, State string }
+		if json.Unmarshal(p.Payload, &v) != nil {
+			return
+		}
+		select {
+		case c.events <- stateObservation{v.Type, v.State, params.SenderIdentity}:
+		default:
+		}
+	}
+	return c
+}
+func (c *nativeStateCheck) verify(ctx context.Context, s *agent.AgentSession, dir string) {
+	if !c.enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var seen []stateObservation
+	wait := func(a, u string) {
+		c.t.Helper()
+		wanted := map[string]bool{"attribute": false, "agent_state_changed": false, "user_state_changed": false}
+		for {
+			select {
+			case v := <-c.events:
+				seen = append(seen, v)
+				if v.Identity != "primary-agent" {
+					c.t.Fatal("wrong sender", v)
+				}
+				value := a
+				if v.Kind == "user_state_changed" {
+					value = u
+				}
+				if v.State == value {
+					wanted[v.Kind] = true
+				}
+				if wanted["attribute"] && wanted["agent_state_changed"] && wanted["user_state_changed"] {
+					return
+				}
+			case <-ctx.Done():
+				c.t.Fatal("state timeout", a, u, seen)
+			}
+		}
+	}
+	wait("listening", "listening")
+	s.UpdateUserState(agent.UserStateSpeaking)
+	s.UpdateAgentState(agent.AgentStateThinking)
+	wait("thinking", "speaking")
+	s.UpdateUserState(agent.UserStateListening)
+	s.UpdateAgentState(agent.AgentStateSpeaking)
+	wait("speaking", "listening")
+	s.UpdateAgentState(agent.AgentStateListening)
+	wait("listening", "listening")
+	b, e := json.MarshalIndent(seen, "", "  ")
+	if e != nil {
+		c.t.Fatal(e)
+	}
+	if e = os.WriteFile(filepath.Join(dir, "client-state.json"), b, 0600); e != nil {
+		c.t.Fatal(e)
 	}
 }

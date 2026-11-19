@@ -6030,6 +6030,9 @@ func (f *fakeRoomIORealtimeSession) CommitAudio() error { return nil }
 func (f *fakeRoomIORealtimeSession) ClearAudio() error { return nil }
 
 type gatedTextStream struct {
+	// Match SDK serialization of wire delivery and the close trailer.
+	wireMu          sync.Mutex
+	writes          atomic.Int32
 	closed          atomic.Bool
 	wroteAfterClose atomic.Bool
 
@@ -6050,11 +6053,20 @@ func newGatedTextStream() *gatedTextStream {
 }
 
 func (w *gatedTextStream) Write(string) {
+	w.wireMu.Lock()
+	if w.closed.Load() {
+		w.wroteAfterClose.Store(true)
+		w.wireMu.Unlock()
+		return
+	}
+	w.wireMu.Unlock()
 	w.enterOnce.Do(func() { close(w.writeEntered) })
 	select {
 	case <-w.cancel:
 		return
 	case <-w.release:
+		w.wireMu.Lock()
+		defer w.wireMu.Unlock()
 		select {
 		case <-w.cancel:
 			return
@@ -6063,10 +6075,13 @@ func (w *gatedTextStream) Write(string) {
 		if w.closed.Load() {
 			w.wroteAfterClose.Store(true)
 		}
+		w.writes.Add(1)
 	}
 }
 
 func (w *gatedTextStream) Close() {
+	w.wireMu.Lock()
+	defer w.wireMu.Unlock()
 	w.closeOnce.Do(func() {
 		w.closed.Store(true)
 		close(w.cancel)
@@ -6281,6 +6296,57 @@ func TestRoomIOAgentTranscriptionWriteNeverLandsOnClosedStream(t *testing.T) {
 			"(publishAgentTranscriptionStream let closeAgentTextStream tear the writer " +
 			"down underneath an in-flight write)")
 	}
+}
+
+// Exercise both orderings explicitly, in addition to the concurrent race above.
+func TestRoomIOGuardedTextWriterCloseOrdering(t *testing.T) {
+	t.Run("write before close is delivered", func(t *testing.T) {
+		inner := newGatedTextStream()
+		writer := &roomIOGuardedTextWriter{inner: inner}
+		inner.releaseWrite()
+		writer.Write("before")
+		writer.Close()
+		writer.Write("after")
+		if got := inner.writes.Load(); got != 1 {
+			t.Fatalf("delivered writes = %d, want 1", got)
+		}
+		if inner.wroteAfterClose.Load() {
+			t.Fatal("guard admitted a write after close")
+		}
+	})
+	t.Run("close cancels admitted write", func(t *testing.T) {
+		inner := newGatedTextStream()
+		writer := &roomIOGuardedTextWriter{inner: inner}
+		done := make(chan struct{})
+		go func() { writer.Write("pending"); close(done) }()
+		select {
+		case <-inner.writeEntered:
+		case <-time.After(time.Second):
+			inner.releaseWrite()
+			t.Fatal("write did not enter")
+		}
+		closed := make(chan struct{})
+		go func() { writer.Close(); close(closed) }()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			inner.releaseWrite()
+			t.Fatal("close did not cancel admitted write")
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("write did not finish")
+		}
+		inner.releaseWrite()
+		writer.Write("after")
+		if got := inner.writes.Load(); got != 0 {
+			t.Fatalf("delivered writes = %d, want 0", got)
+		}
+		if inner.wroteAfterClose.Load() {
+			t.Fatal("guard admitted a write after close")
+		}
+	})
 }
 
 func TestRoomIOShouldRecordAuxTrack(t *testing.T) {

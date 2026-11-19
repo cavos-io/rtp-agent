@@ -1,6 +1,6 @@
-//go:build integration
+//go:build nativeroomintegration || nativereceiveintegration
 
-package main
+package nativeroom_test
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	model "github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/examples/starter/internal/nativereceive"
+
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeroom"
@@ -65,10 +65,10 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 	done := make(chan struct{})
 	var receiveErr error
 	var samples atomic.Uint64
-	stats := new(nativereceive.Stats)
+	stats := new(Stats)
 	go func() {
 		defer close(done)
-		receiveErr = nativereceive.Run(receiveCtx, nativereceive.Options{Stats: stats, Binary: config.binary, Library: config.library, URL: job.AvatarStartInfo().LiveKitURL, Token: token, Participant: participant.Identity(), TrackSID: publication.SID()}, ready, func(c context.Context, frame *model.AudioFrame) {
+		receiveErr = Run(receiveCtx, Options{Stats: stats, Binary: config.binary, Library: config.library, URL: job.AvatarStartInfo().LiveKitURL, Token: token, Participant: participant.Identity(), TrackSID: publication.SID()}, ready, func(c context.Context, frame *model.AudioFrame) {
 			if c.Err() != nil {
 				return
 			}
@@ -117,7 +117,7 @@ func startStarterSession(ctx context.Context, job *worker.JobContext, session *a
 	go func() {
 		<-done
 		if receiveCtx.Err() == nil {
-			if errors.Is(receiveErr, nativereceive.ErrSourceEnded) {
+			if errors.Is(receiveErr, ErrSourceEnded) {
 				logger.Logger.Infow("experimental native receive source ended", "reason", receiveErr.Error(), "ipc", stats.Snapshot())
 				job.Shutdown("native receive source ended")
 				return

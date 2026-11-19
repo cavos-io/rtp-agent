@@ -1,6 +1,6 @@
 //go:build nativereceiveintegration
 
-package main
+package nativeroom_test
 
 import (
 	"context"

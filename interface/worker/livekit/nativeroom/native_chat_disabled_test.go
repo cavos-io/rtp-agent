@@ -1,6 +1,6 @@
 //go:build !nativeinprocess && nativeroomintegration
 
-package main
+package nativeroom_test
 
 import (
 	"context"
