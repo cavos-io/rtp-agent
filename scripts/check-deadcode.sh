@@ -19,11 +19,17 @@ tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/check-deadcode.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
 
 staticcheck_out="$tmpdir/staticcheck.out"
+staticcheck_err="$tmpdir/staticcheck.err"
 status=0
 # Staticcheck merges symbol use across builds for U1000, while retaining other
 # diagnostics from either build. Do not disable U1000 for native packages.
 printf 'default: \nnative: -tags=nativeinprocess\n' |
-  go tool staticcheck -matrix ./... >"$staticcheck_out" 2>&1 || status=$?
+  go tool staticcheck -matrix ./... >"$staticcheck_out" 2>"$staticcheck_err" || status=$?
+# A cold Go cache emits dependency-download progress on stderr. Keep it visible,
+# but exclude only that exact progress format from diagnostic validation. Preserve
+# all other stderr, stdout and exit-status checks, including download failures.
+cat "$staticcheck_err" >&2
+sed -E '/^go: downloading [^[:space:]]+ v[0-9][^[:space:]]*$/d' "$staticcheck_err" >>"$staticcheck_out"
 if (( status > 1 )) || { (( status != 0 )) && [[ ! -s "$staticcheck_out" ]]; } ||
   grep -Ev '(^$|\([A-Z]+[0-9]+\)$)' "$staticcheck_out" >/dev/null; then
   echo "Staticcheck did not complete successfully:" >&2

@@ -16,7 +16,20 @@ fi
 if [[ "$2" == staticcheck ]]; then
   [[ "$*" == *-matrix* ]] || { echo 'fixture/shared.go:1:1: field nativeUse is unused (U1000)'; exit 1; }
   cat > "$TEST_WORK/matrix"
+  if [[ "$TEST_CASE" == download-* ]]; then
+    printf '%s\n' 'go: downloading honnef.co/go/tools v0.7.0' 'go: downloading golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678' >&2
+  fi
   case "$TEST_CASE" in
+    download-clean) exit 0 ;;
+    download-unrelated) echo 'other/file.go:2:1: bad assignment (SA4006)'; exit 1 ;;
+    download-finding) echo 'fixture/shared.go:2:1: bad assignment (SA4006)'; exit 1 ;;
+    download-stderr-finding) echo 'fixture/shared.go:2:1: bad assignment (SA4006)' >&2; exit 1 ;;
+    download-compile) echo '-: cannot import cmp (compile)'; exit 1 ;;
+    download-empty-failure) exit 1 ;;
+    download-crash) exit 2 ;;
+    download-error) echo 'go: downloading example.com/module: connection refused' >&2; exit 1 ;;
+    download-unexpected) echo 'unexpected analyzer output' >&2; exit 0 ;;
+    download-stdout) echo 'go: downloading honnef.co/go/tools v0.7.0'; exit 0 ;;
     static-failure) echo '-: cannot import cmp (compile)'; exit 1 ;;
     static-empty-failure) exit 1 ;;
     static-finding) echo 'fixture/shared.go:2:1: bad assignment [native] (SA4006)'; exit 1 ;;
@@ -50,6 +63,17 @@ run_case() {
 run_case variants 0
 run_case callback 0
 run_case unrelated 0
+run_case download-clean 0
+grep -Fq 'go: downloading honnef.co/go/tools v0.7.0' "$work/output"
+run_case download-unrelated 0
+for c in download-finding download-stderr-finding; do
+  run_case "$c" 1
+  grep -Fq '[staticcheck] fixture/shared.go:2:1: bad assignment (SA4006)' "$work/output"
+done
+for c in download-compile download-empty-failure download-crash download-error download-unexpected download-stdout; do
+  run_case "$c" 1
+  grep -Fq 'Staticcheck did not complete successfully:' "$work/output"
+done
 for c in static-failure static-empty-failure static-finding dead-failure dead-shared dead-native dead-default callback-other; do run_case "$c" 1; done
 run_case variants 0
 grep -q '^native: -tags=nativeinprocess$' "$work/matrix"
