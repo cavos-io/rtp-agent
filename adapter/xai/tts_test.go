@@ -927,3 +927,93 @@ func readXaiTTSRequestURL(t *testing.T, requestURLs <-chan string, handlerErr <-
 	}
 	return ""
 }
+
+func TestXaiChunkedCloseCancelsPendingDial(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	old := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return nil, context.Canceled
+		}
+	}}
+	defer func() { websocket.DefaultDialer = old }()
+	stream, err := NewXaiTTS("key", "", WithXaiTTSWebsocketURL("ws://xai.test/tts")).Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := stream.Next(); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("dial did not begin")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("closed dial succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel pending dial")
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close = %v, %v", audio, err)
+	}
+}
+
+func TestXaiChunkedCloseInterruptsRead(t *testing.T) {
+	ready := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	old := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			var msg map[string]any
+			if err := conn.ReadJSON(&msg); err != nil {
+				handlerErr <- err
+				return
+			}
+			if msg["type"] == "text.done" {
+				break
+			}
+		}
+		close(ready)
+		_, _, _ = conn.ReadMessage()
+	}, handlerErr)
+	defer func() { websocket.DefaultDialer = old }()
+	stream, err := NewXaiTTS("key", "", WithXaiTTSWebsocketURL("ws://xai.test/tts")).Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	done := make(chan error, 1)
+	go func() { _, err := stream.Next(); done <- err }()
+	select {
+	case <-ready:
+	case err := <-handlerErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive text")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not interrupt reader")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

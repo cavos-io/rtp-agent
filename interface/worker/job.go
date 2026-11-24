@@ -235,6 +235,7 @@ type JobContext struct {
 	observabilityOnce      sync.Once
 	observabilityErr       error
 	serverTracerProvider   *sdktrace.TracerProvider
+	sessionTransport       SessionTransportProvider
 	customTraceMetadata    []attribute.KeyValue
 	traceMu                sync.Mutex
 	shutdownTraceCtx       context.Context
@@ -252,6 +253,7 @@ type JobContext struct {
 	entrypointDoneOnce     sync.Once
 	terminated             atomic.Bool
 	finishOnce             sync.Once
+	finishDone             chan struct{}
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*ParticipantInfo
 	participantTasks       map[ParticipantTaskKey]uint64
@@ -262,6 +264,7 @@ type JobContext struct {
 	roomOnce               sync.Once
 	preparedRoom           *SDKRoom
 	roomConnected          atomic.Bool
+	customRoomTransport    atomic.Bool
 
 	api       *JobAPI
 	apiKey    string
@@ -583,6 +586,11 @@ var jobContextNewRoom = livekitNewJobContextRoom
 var jobContextRoomConnector RoomConnector
 
 type StartSessionOptions struct {
+	// Transport replaces room/media ownership when explicitly supplied. Nil keeps
+	// the worker-configured transport, or LiveKit/Pion if none is configured. The transport owns its connection and I/O.
+	// Optional ConfigureRoomOptions(RoomOptions) error runs before ownership; it
+	// must validate/configure only, without acquiring resources.
+	Transport      SessionRoomIO
 	RoomOptions    RoomOptions
 	ConnectOptions []ConnectOptions
 	RoomCallback   *RoomCallback
@@ -704,6 +712,9 @@ func (c *JobContext) Connect(ctx context.Context, cb *RoomCallback, options ...C
 }
 
 func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, options ...ConnectOptions) error {
+	if c != nil && c.customRoomTransport.Load() {
+		return fmt.Errorf("room connection is owned by the custom session transport")
+	}
 	if !c.roomNeedsConnect() {
 		return nil
 	}
@@ -753,6 +764,9 @@ func (c *JobContext) ConnectPreparedRoom(ctx context.Context, room *SDKRoom, opt
 	return nil
 }
 
+// HasSessionTransportProvider reports worker-managed room/media ownership.
+func (c *JobContext) HasSessionTransportProvider() bool { return c != nil && c.sessionTransport != nil }
+
 func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSession, options ...StartSessionOptions) error {
 	if c == nil {
 		return fmt.Errorf("job context is nil")
@@ -764,6 +778,16 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 		ctx = context.Background()
 	}
 	opts := normalizeStartSessionOptions(options...)
+	if opts.Transport == nil && c.sessionTransport != nil {
+		transport, err := c.sessionTransport.NewSession(c, session, opts)
+		if err != nil {
+			return err
+		}
+		if transport == nil {
+			return fmt.Errorf("session transport provider returned nil transport")
+		}
+		opts.Transport = transport
+	}
 	sessionCtx := opts.SessionContext
 	if sessionCtx == nil {
 		sessionCtx = ctx
@@ -786,6 +810,37 @@ func (c *JobContext) StartSession(ctx context.Context, session *agent.AgentSessi
 			operationCtx = c.observability.Context(operationCtx)
 		}
 		ctx := trace.ContextWithSpan(operationCtx, trace.SpanFromContext(startupCtx))
+		if transport := opts.Transport; transport != nil {
+			if c.roomConnected.Load() {
+				return fmt.Errorf("custom session transport requires an unconnected job room")
+			}
+			// Opt-in transports can validate/apply room options before owning media or
+			// starting recording. Existing transports without this hook are unchanged.
+			if configurable, ok := transport.(interface{ ConfigureRoomOptions(RoomOptions) error }); ok {
+				if err := configurable.ConfigureRoomOptions(opts.RoomOptions); err != nil {
+					return fmt.Errorf("configure custom room transport: %w", err)
+				}
+			}
+			session.Room = nil
+			c.customRoomTransport.Store(true)
+			c.SetPrimaryRoomIO(transport)
+			if c.Report != nil && c.Report.RecordingOptions.Audio && c.SessionDirectory() != "" {
+				if err := transport.StartRecorder(filepath.Join(c.SessionDirectory(), RecordingFileName), 48000); err != nil {
+					_ = transport.Close()
+					return err
+				}
+			}
+			session.AddPreCloseCallback(func() {
+				if err := transport.StopRecorder(); err != nil {
+					logger.Logger.Errorw("failed to finalize session recording", err)
+				}
+			})
+			if err := transport.Start(ctx); err != nil {
+				_ = transport.Close()
+				return err
+			}
+			return nil
+		}
 		roomOptions := opts.RoomOptions
 		if roomOptions.DeleteRoom == nil {
 			roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
@@ -1139,7 +1194,9 @@ func (c *JobContext) startShutdown(reason string) <-chan struct{} {
 				rio.BeginShutdown()
 			}
 		}
-		transportUsable := livekitJobContextRoomReadyForRoomIOStart(c.Room)
+		// Custom transports do not connect c.Room. Keep their media/control
+		// available to session pre-close callbacks (including hold teardown).
+		transportUsable := c.customRoomTransport.Load() || livekitJobContextRoomReadyForRoomIOStart(c.Room)
 		drain := func(ctx context.Context) {
 			if !transportUsable {
 				stopPublishing()

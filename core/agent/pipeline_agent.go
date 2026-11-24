@@ -192,6 +192,14 @@ func (va *PipelineAgent) SetPublishAudio(publish func(ctx context.Context, frame
 	va.PublishAudio = publish
 }
 
+// GetPublishAudio returns a synchronized snapshot of the output callback.
+// Call it instead of reading PublishAudio while transport setup/teardown runs.
+func (va *PipelineAgent) GetPublishAudio() func(context.Context, *model.AudioFrame) error {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	return va.PublishAudio
+}
+
 // SetAudioInputHook registers a hook that intercepts incoming audio before VAD
 // and STT. Passing nil clears the hook.
 func (va *PipelineAgent) SetAudioInputHook(hook AudioInputHook) {
@@ -2247,8 +2255,13 @@ func (va *PipelineAgent) emitLLMError(session *AgentSession, err error) {
 	})
 }
 
+// ErrAudioOutputEnded marks verified normal transport departure while output is
+// pending. It is not a provider failure. Unexpected transport failures must not
+// use this sentinel.
+var ErrAudioOutputEnded = errors.New("audio output ended normally")
+
 func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
-	if session == nil || err == nil {
+	if session == nil || err == nil || errors.Is(err, ErrAudioOutputEnded) {
 		return
 	}
 	label := "tts"
@@ -2260,6 +2273,9 @@ func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
 }
 
 func (va *PipelineAgent) logTTSError(message string, err error) {
+	if errors.Is(err, ErrAudioOutputEnded) {
+		return
+	}
 	va.logProviderErrorAsWarning(message, err, va.tts, tts.Provider(va.tts), "tts_inference")
 }
 
@@ -2443,8 +2459,8 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		}
 		transcriptSync.PushAudio(frame)
 		playbackTiming.arm()
-		if va.PublishAudio != nil {
-			if err := va.PublishAudio(ctx, frame); err != nil {
+		if publish := va.GetPublishAudio(); publish != nil {
+			if err := publish(ctx, frame); err != nil {
 				transcriptSync.Close()
 				<-transcriptionDone
 				if errors.Is(err, context.Canceled) {
@@ -2514,8 +2530,9 @@ func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
 	if !enabled {
 		return false
 	}
-	capabilities := va.tts.Capabilities()
-	return capabilities.AlignedTranscript || !capabilities.Streaming
+	// Batch synthesis alone does not imply provider-aligned text. Keep providers
+	// without alignment on the streaming adapter and text transcription path.
+	return va.tts.Capabilities().AlignedTranscript
 }
 
 func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {

@@ -635,6 +635,7 @@ func TestProcessJobExecutorCloseRespectsContextWhenKillBlocks(t *testing.T) {
 		executor.mu.Unlock()
 		if cmd != nil && cmd.Process != nil {
 			_ = oldKill(cmd.Process)
+			<-executor.done
 		}
 	}()
 
@@ -717,7 +718,9 @@ func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go executor.pingTask(ctx)
+	pingDone := make(chan struct{})
+	go func() { defer close(pingDone); executor.pingTask(ctx) }()
+	defer func() { cancel(); <-pingDone }()
 
 	deadline := time.After(time.Second)
 	ticker := time.NewTicker(time.Millisecond)
@@ -756,7 +759,7 @@ func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
 		processTimeMS = oldTimeMS
 	}()
 
-	var output bytes.Buffer
+	var output synchronizedPingBuffer
 	executor := NewProcessJobExecutor("exec-ping-write")
 	executor.mu.Lock()
 	executor.status = JobStatusRunning
@@ -767,7 +770,9 @@ func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go executor.pingTask(ctx)
+	pingDone := make(chan struct{})
+	go func() { defer close(pingDone); executor.pingTask(ctx) }()
+	defer func() { cancel(); <-pingDone }()
 
 	deadline := time.After(time.Second)
 	for output.Len() == 0 {
@@ -779,8 +784,9 @@ func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
 		}
 	}
 	cancel()
+	<-pingDone
 
-	msg, err := ReadMessage(&output)
+	msg, err := ReadMessage(bytes.NewReader(output.snapshot()))
 	if err != nil {
 		t.Fatalf("ReadMessage ping: %v", err)
 	}
@@ -834,7 +840,9 @@ func TestProcessJobExecutorPingTimeoutKillsProcessWhenPongMissing(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go executor.pingTask(ctx)
+	pingDone := make(chan struct{})
+	go func() { defer close(pingDone); executor.pingTask(ctx) }()
+	defer func() { cancel(); <-pingDone }()
 
 	select {
 	case <-killed:
@@ -882,7 +890,8 @@ func TestProcessJobExecutorPingDoesNotHoldLockWhileKilling(t *testing.T) {
 		processSignal = oldProcessSignal
 		processKill = oldKill
 	}()
-	defer close(releaseKill)
+	release := sync.OnceFunc(func() { close(releaseKill) })
+	defer release()
 
 	executor := NewProcessJobExecutor("exec-ping-lock")
 	executor.mu.Lock()
@@ -892,7 +901,9 @@ func TestProcessJobExecutorPingDoesNotHoldLockWhileKilling(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go executor.pingTask(ctx)
+	pingDone := make(chan struct{})
+	go func() { defer close(pingDone); executor.pingTask(ctx) }()
+	defer func() { release(); cancel(); <-pingDone }()
 
 	select {
 	case <-killStarted:
@@ -940,6 +951,13 @@ func TestProcessJobExecutorPingFailureIsNotOverwrittenByCleanExit(t *testing.T) 
 	executor := NewProcessJobExecutor("exec-ping-clean-exit")
 	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-ping-clean-exit"}); err != nil {
 		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for executor.Status() != JobStatusFailed && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if executor.Status() != JobStatusFailed {
+		t.Fatal("ping did not mark process failed before exit")
 	}
 	if err := executor.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -991,4 +1009,74 @@ func envMap(env []string) map[string]string {
 		}
 	}
 	return values
+}
+
+type synchronizedPingBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (b *synchronizedPingBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+func (b *synchronizedPingBuffer) Len() int { b.mu.Lock(); defer b.mu.Unlock(); return b.data.Len() }
+func (b *synchronizedPingBuffer) snapshot() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.data.Bytes()...)
+}
+
+func TestProcessExecutorFailedStartCanClose(t *testing.T) {
+	oldCommand := processCommandContext
+	processCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/nonexistent-rtp-agent-test-executable")
+	}
+	defer func() { processCommandContext = oldCommand }()
+	executor := NewProcessJobExecutor("failed-start")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "failed"}); err == nil {
+		t.Fatal("launch accepted failed process start")
+	}
+	if executor.Started() || executor.Status() != JobStatusFailed {
+		t.Fatal("failed start left running state")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := executor.Close(ctx); err != nil {
+		t.Fatalf("close failed start: %v", err)
+	}
+}
+
+func TestProcessExecutorCloseDuringLaunchPreparation(t *testing.T) {
+	oldExecutable := processExecutable
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	processExecutable = func() (string, error) { close(entered); <-release; return os.Executable() }
+	defer func() { processExecutable = oldExecutable }()
+	defer unblock()
+	executor := NewProcessJobExecutor("closing-launch")
+	launched := make(chan error, 1)
+	go func() { launched <- executor.LaunchJob(context.Background(), &livekit.Job{Id: "closing"}) }()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := executor.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close during blocked launch = %v", err)
+	}
+	unblock()
+	select {
+	case err := <-launched:
+		if err == nil {
+			t.Fatal("closed executor started a child")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("launch did not return")
+	}
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if executor.cmd != nil {
+		t.Fatal("closed launch published a command")
+	}
 }

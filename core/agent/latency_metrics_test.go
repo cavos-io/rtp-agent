@@ -190,6 +190,11 @@ func TestLatencySTTModeKeepsWordEndTimestamp(t *testing.T) {
 
 type latencyChunkedTTS struct{ fakeGenerationChunkedTTS }
 
+func (*latencyChunkedTTS) Capabilities() tts.TTSCapabilities {
+	// Exercise the batch path that preserves provider-aligned transcripts.
+	return tts.TTSCapabilities{AlignedTranscript: true}
+}
+
 func (*latencyChunkedTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
 	return &latencyChunkedStream{}, nil
 }

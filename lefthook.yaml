@@ -32,7 +32,7 @@ ci:
   parallel: true
   jobs:
     - name: test integrity
-      files: git diff origin/main --name-only --diff-filter=ACMRD -- '*_test.go'
+      files: git diff "$(git merge-base origin/main HEAD)" --name-only --diff-filter=ACMRD -- '*_test.go'
       run: scripts/check-test-integrity.sh origin/main {files}
 
     - name: architecture

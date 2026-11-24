@@ -30,7 +30,16 @@ func newRecordingWriter(outputPath string, sampleRate int) (recordingWriter, err
 		_ = writer.Close()
 		return nil, fmt.Errorf("failed to create opus encoder: %w", err)
 	}
-	return &oggRecordingWriter{writer: writer, encoder: encoder, sampleRate: sampleRate}, nil
+	w := &oggRecordingWriter{writer: writer, encoder: encoder, sampleRate: sampleRate}
+	// Pion's Ogg header advertises 3840 samples of pre-skip at 48kHz (80ms).
+	// Supply that pre-roll before caller audio so decoding skips silence rather
+	// than the first 80ms of the recording. Keep it outside WritePCM's returned
+	// sample count: RecorderIO tracks only caller audio on its media timeline.
+	if _, err := w.WritePCM(make([]int16, sampleRate*80/1000*2)); err != nil {
+		_ = writer.Close()
+		return nil, fmt.Errorf("write ogg pre-roll: %w", err)
+	}
+	return w, nil
 }
 
 func (w *oggRecordingWriter) WritePCM(stereo []int16) (int, error) {

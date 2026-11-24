@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -253,6 +254,14 @@ type closeableSessionAssistant interface {
 	Close() error
 }
 
+// Session teardown owns the join; callbacks can request a non-joining close.
+func closeSessionAssistant(closer closeableSessionAssistant) error {
+	if joining, ok := closer.(interface{ CloseAndWait() error }); ok {
+		return joining.CloseAndWait()
+	}
+	return closer.Close()
+}
+
 type sessionToolsetCloser interface {
 	Close() error
 }
@@ -324,6 +333,7 @@ type AgentSession struct {
 	closing                 bool
 	runCtx                  context.Context
 	runCancel               context.CancelFunc
+	usageLoopDone           chan struct{}
 	sessionSpan             trace.Span
 	startupTraceCtx         context.Context
 	closingTraceCtx         context.Context
@@ -418,7 +428,7 @@ type AgentSession struct {
 type agentEventListener struct {
 	id              uint64
 	callback        func(Event)
-	callbackPointer uintptr
+	callbackPointer unsafe.Pointer
 	once            bool
 }
 
@@ -736,7 +746,7 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
 		id:              id,
 		callback:        callback,
-		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		callbackPointer: agentEventCallbackIdentity(callback),
 	})
 	s.mu.Unlock()
 	return func() {
@@ -753,11 +763,21 @@ func (s *AgentSession) AddPreCloseCallback(callback func()) {
 	s.mu.Unlock()
 }
 
+// agentEventCallbackIdentity distinguishes function values sharing code but
+// carrying different closure environments. reflect.Value.Pointer only exposes
+// their code address. This compatibility path for Off relies on gc's function
+// value representation; keep callbacks alive in the listener and retain the
+// identity as a GC-visible pointer. On/Once's returned unsubscribe function
+// uses a registration ID and does not depend on runtime representation.
+func agentEventCallbackIdentity(callback func(Event)) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&callback))
+}
+
 func (s *AgentSession) Off(eventType string, callback func(Event)) {
 	if s == nil || eventType == "" || callback == nil {
 		return
 	}
-	s.removeEventListenerByCallback(eventType, reflect.ValueOf(callback).Pointer())
+	s.removeEventListenerByCallback(eventType, agentEventCallbackIdentity(callback))
 }
 
 func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
@@ -773,7 +793,7 @@ func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
 	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
 		id:              id,
 		callback:        callback,
-		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		callbackPointer: agentEventCallbackIdentity(callback),
 		once:            true,
 	})
 	s.mu.Unlock()
@@ -803,8 +823,8 @@ func (s *AgentSession) removeEventListener(eventType string, id uint64) {
 	}
 }
 
-func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer uintptr) {
-	if s == nil || eventType == "" || callbackPointer == 0 {
+func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer unsafe.Pointer) {
+	if s == nil || eventType == "" || callbackPointer == nil {
 		return
 	}
 	s.mu.Lock()
@@ -867,9 +887,56 @@ func (s *AgentSession) recordEvent(ev Event) {
 	eventType := ev.GetType()
 	listeners := s.collectEventListenersLocked(eventType)
 	listeners = append(listeners, s.collectEventListenersLocked(allAgentEventsType)...)
+	assistant := s.Assistant
 	s.mu.Unlock()
+	if len(listeners) == 0 {
+		return
+	}
+	if ma, ok := assistant.(*MultimodalAgent); ok {
+		if ctx := ma.callbackContext(); ctx != nil {
+			s.dispatchMultimodalListeners(ctx, eventType, listeners, ev)
+			return
+		}
+	}
 	for _, listener := range listeners {
 		callAgentSessionListener(s.Logger(), eventType, listener, ev)
+	}
+}
+
+// Normally delivery is synchronous and ordered. Cancellation releases the
+// producer so a listener calling Stop or CloseSoon can join the receive loop.
+// Copy the event value: after cancellation the listener may still write its
+// fields while the producer finishes processing the original event. Referenced
+// objects (chat items, speech handles, etc.) retain their existing ownership.
+func (s *AgentSession) dispatchMultimodalListeners(ctx context.Context, eventType string, listeners []func(Event), ev Event) {
+	if ctx.Err() != nil {
+		return
+	}
+	original := reflect.ValueOf(ev)
+	delivery := ev
+	var copied reflect.Value
+	if original.Kind() == reflect.Pointer && !original.IsNil() && original.Elem().Kind() == reflect.Struct {
+		copied = reflect.New(original.Elem().Type())
+		copied.Elem().Set(original.Elem())
+		delivery = copied.Interface().(Event)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, listener := range listeners {
+			if ctx.Err() != nil {
+				return
+			}
+			callAgentSessionListener(s.Logger(), eventType, listener, delivery)
+		}
+	}()
+	select {
+	case <-done:
+		// Preserve synchronous edits such as CancelToolReply on normal completion.
+		if ctx.Err() == nil && copied.IsValid() {
+			original.Elem().Set(copied.Elem())
+		}
+	case <-ctx.Done():
 	}
 }
 
@@ -2700,7 +2767,14 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	}
 
 	if hasMetricsCollector {
-		go s.reportUsageLoop(runCtx)
+		done := make(chan struct{})
+		s.mu.Lock()
+		s.usageLoopDone = done
+		s.mu.Unlock()
+		go func() {
+			defer close(done)
+			s.reportUsageLoop(runCtx)
+		}()
 	}
 
 	s.releaseLifecycle()
@@ -3438,7 +3512,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 			s.Logger().Errorw("failed to start replacement assistant", err)
 			s.EmitError(ErrorEvent{Error: err, Source: replacementAssistant})
 		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
-			if err := closer.Close(); err != nil {
+			if err := closeSessionAssistant(closer); err != nil {
 				s.Logger().Errorw("failed to close replaced assistant", err)
 				s.EmitError(ErrorEvent{Error: err, Source: previousAssistant})
 			}
@@ -3569,6 +3643,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	}
 	s.signalTeardown()
 
+	usageLoopDone := s.usageLoopDone
+	s.usageLoopDone = nil
 	activity := s.activity
 	ivrActivity := s.ivrActivity
 	assistant := s.Assistant
@@ -3648,7 +3724,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
 				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
 				SkipRealtimeAudio: true,
-			}); err != nil && !(cancel != nil && errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil) {
+			}); err != nil && !expectedStoppedSessionCommit(err) && !(cancel != nil && errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil) {
 				stopErr = err
 			}
 			if cancel != nil {
@@ -3667,7 +3743,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		drainSpan.End()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
-		if err := closer.Close(); err != nil && stopErr == nil {
+		if err := closeSessionAssistant(closer); err != nil && stopErr == nil {
 			stopErr = err
 		}
 	}
@@ -3685,6 +3761,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		}
 	}
 	_ = closeSessionToolsets(sessionTools)
+	// Cancellation does not join the writer: it can still finish a selected
+	// ticker case. Wait outside s.mu before reading history during final flush.
+	if usageLoopDone != nil {
+		<-usageLoopDone
+	}
 	s.flushOTelTurnMetrics(telemetryCtx)
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
@@ -3712,6 +3793,32 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.mu.Unlock()
 	}
 	return stopErr
+}
+
+// The final-turn hook still runs during shutdown, but generating a reply after
+// activity detachment is no longer possible. Only classify that lifecycle error;
+// joined errors must contain no genuine failure. Other shutdown stages retain
+// their original errors, including ErrAgentSessionNotRunning from a closer.
+func expectedStoppedSessionCommit(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !expectedStoppedSessionCommit(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return expectedStoppedSessionCommit(wrapped.Unwrap())
+	}
+	return errors.Is(err, ErrAgentSessionNotRunning)
 }
 
 func (s *AgentSession) preCloseCallbacksForCycleLocked() []func() {

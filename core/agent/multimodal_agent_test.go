@@ -639,19 +639,13 @@ func TestMultimodalAgentGenerateReplyChatContextSyncCancelSuppressesError(t *tes
 		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
 	}
 
-	deadline := time.After(time.Second)
-	for rtSession.chatContextUpdates <= initialUpdates {
-		select {
-		case <-deadline:
-			t.Fatalf("UpdateChatContext calls = %d, want more than startup count %d", rtSession.chatContextUpdates, initialUpdates)
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
 	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
 	defer waitCancel()
 	if err := handle.Wait(waitCtx); err != nil {
 		t.Fatalf("speech handle did not finish after canceled realtime chat context sync: %v", err)
+	}
+	if rtSession.chatContextUpdates <= initialUpdates {
+		t.Fatal("chat context sync was not attempted")
 	}
 	select {
 	case ev := <-errorEvents:
@@ -781,7 +775,7 @@ func TestMultimodalAgentGenerateReplyUsesSessionToolsWhenPerResponseUnsupported(
 	if err := session.Start(ctx); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 		Tools: []string{"lookup"},
 	})
 	if err != nil {
@@ -793,6 +787,11 @@ func TestMultimodalAgentGenerateReplyUsesSessionToolsWhenPerResponseUnsupported(
 	case opts = <-rtSession.generateCh:
 	case <-time.After(time.Second):
 		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatal(err)
 	}
 	if len(opts.Tools) != 0 {
 		t.Fatalf("GenerateReply Tools = %#v, want none when per-response tools are unsupported", toolNames(opts.Tools))
@@ -2369,6 +2368,7 @@ func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
 	}
 	session.Assistant = ma
 
+	speechEvents := session.SpeechCreatedEvents()
 	ma.handleRealtimeEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
@@ -2397,6 +2397,16 @@ func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
 		}
 		if !chatContextContainsItem(session.ChatCtx, output) {
 			t.Fatalf("session ChatCtx items = %#v, want emitted realtime output", session.ChatCtx.Items)
+		}
+		select {
+		case speech := <-speechEvents:
+			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := speech.SpeechHandle.Wait(waitCtx); err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("speech was not created")
 		}
 		if rtSession.updated != chatCtx {
 			t.Fatalf("updated chat context = %#v, want realtime generation chat context", rtSession.updated)
@@ -2849,6 +2859,7 @@ func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.
 	functionCh := make(chan *llm.FunctionCall)
 	close(functionCh)
 	speech := NewSpeechHandle(true, DefaultInputDetails())
+	waitStarted := playback.waitStarted
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -2859,7 +2870,7 @@ func TestMultimodalAgentPartialRealtimeMessageDoesNotSyncChatContext(t *testing.
 	}()
 
 	select {
-	case <-playback.waitStarted:
+	case <-waitStarted:
 	case <-time.After(time.Second):
 		t.Fatal("consumeRealtimeGeneration did not wait for realtime playout")
 	}

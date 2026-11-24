@@ -375,6 +375,7 @@ func (s *SarvamSTT) registerStream(stream *sarvamSTTRecognizeStream) bool {
 		s.streams = make(map[*sarvamSTTRecognizeStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	// Assigned before the reader starts; immutable for the stream lifetime.
 	stream.provider = s
 	return true
 }
@@ -386,9 +387,6 @@ func (s *SarvamSTT) unregisterStream(stream *sarvamSTTRecognizeStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
-	if stream.provider == s {
-		stream.provider = nil
-	}
 }
 
 func buildSarvamSTTWebsocketURL(s *SarvamSTT, language string) *url.URL {
@@ -787,7 +785,6 @@ func (s *sarvamSTTRecognizeStream) Close() error {
 	}
 	s.closed = true
 	provider := s.provider
-	s.provider = nil
 	conn := s.conn
 	s.cancel()
 	if conn != nil {

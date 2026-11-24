@@ -18,10 +18,6 @@ type sttErrorHandlerSubscription struct {
 	handler STTErrorHandler
 }
 
-type errorCollectorSTT interface {
-	OnError(STTErrorHandler) func()
-}
-
 func (e *ErrorEmitter) OnError(handler STTErrorHandler) func() {
 	if handler == nil {
 		return func() {}

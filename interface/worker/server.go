@@ -132,21 +132,22 @@ type WorkerInfo struct {
 }
 
 type WorkerOptions struct {
-	AgentName       string
-	AgentNameIsEnv  bool
-	WorkerType      WorkerType
-	Transport       WorkerTransport
-	JobExecutorType JobExecutorType
-	MaxRetry        int
-	MaxRetrySet     bool
-	Version         string
-	Host            string
-	Port            int
-	PortSet         bool
-	WSURL           string
-	LoadFunc        func(*AgentServer) float64
-	HealthCheck     func(*AgentServer) error
-	SetupFunc       func(*JobProcess) error
+	SessionTransportFactory func(WorkerOptions) (SessionTransportProvider, error)
+	AgentName               string
+	AgentNameIsEnv          bool
+	WorkerType              WorkerType
+	Transport               WorkerTransport
+	JobExecutorType         JobExecutorType
+	MaxRetry                int
+	MaxRetrySet             bool
+	Version                 string
+	Host                    string
+	Port                    int
+	PortSet                 bool
+	WSURL                   string
+	LoadFunc                func(*AgentServer) float64
+	HealthCheck             func(*AgentServer) error
+	SetupFunc               func(*JobProcess) error
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                               string
 	APIKey                             string
@@ -181,12 +182,15 @@ type WorkerOptions struct {
 }
 
 type AgentServer struct {
-	tracerProvider   *sdktrace.TracerProvider
-	closed           bool
-	executionStarted bool
-	closeOnce        sync.Once
-	closeErr         error
-	Options          WorkerOptions
+	sessionTransport    SessionTransportProvider
+	sessionTransportErr error
+	entrypoints         int
+	tracerProvider      *sdktrace.TracerProvider
+	closed              bool
+	executionStarted    bool
+	closeOnce           sync.Once
+	closeErr            error
+	Options             WorkerOptions
 
 	entrypointFnc func(*JobContext) error
 	requestFnc    func(*JobRequest) error
@@ -218,7 +222,16 @@ type AgentServer struct {
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
 	opts = resolveWorkerOptions(opts)
+	var provider SessionTransportProvider
+	var providerErr error
+	if opts.SessionTransportFactory != nil {
+		provider, providerErr = opts.SessionTransportFactory(opts)
+		if provider == nil && providerErr == nil {
+			providerErr = fmt.Errorf("session transport factory returned nil provider")
+		}
+	}
 	return &AgentServer{
+		sessionTransport: provider, sessionTransportErr: providerErr,
 		Options:        opts,
 		activeJobs:     make(map[string]*JobContext),
 		finishingJobs:  make(map[string]*JobContext),
@@ -1137,6 +1150,9 @@ func (s *AgentServer) RTCSession(
 	request func(*JobRequest) error,
 	sessionEnd func(*JobContext) error,
 ) error {
+	if s.sessionTransportErr != nil {
+		return s.sessionTransportErr
+	}
 	if s.entrypointFnc != nil {
 		return workerReferenceError(duplicateRTCSessionMessage)
 	}
@@ -1308,6 +1324,9 @@ func (s *AgentServer) availableForJobWithLoad(load float64) bool {
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
+	if s.sessionTransportErr != nil {
+		return s.sessionTransportErr
+	}
 	s.Options = resolveWorkerOptions(s.Options)
 	if s.Options.WorkerToken != "" {
 		s.Options.LoadFunc = defaultWorkerLoadFunc
@@ -1337,6 +1356,9 @@ func (s *AgentServer) validateRunPreconditions() error {
 }
 
 func (s *AgentServer) validateUnregisteredRunPreconditions() error {
+	if s.sessionTransportErr != nil {
+		return s.sessionTransportErr
+	}
 	s.Options = resolveWorkerOptions(s.Options)
 	if !validWorkerLogLevel(s.Options.LogLevel) {
 		return invalidWorkerLogLevelError(s.Options.LogLevel)
@@ -1789,6 +1811,8 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 	timeline := s.dispatchTimelines[jobID]
 	timeline.AcceptedAt = time.Now()
 	s.dispatchTimelines[jobID] = timeline
+	// Retain the logger for this acceptance; its timer can outlive the caller.
+	acceptLogger := logger.Logger
 	livekitStoreServerPendingAccept(PendingAcceptStoreOptions{
 		Pending: s.pendingAccepts,
 		Timers:  s.pendingTimers,
@@ -1803,7 +1827,7 @@ func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) 
 			}
 			s.mu.Unlock()
 			if expired {
-				logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+				acceptLogger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
 			}
 		},
 	})
@@ -1993,7 +2017,16 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	}
 	s.finishJob(jobCtx)
 	if reportPath := livekitServerLocalJobSessionReportPath(options, jobCtx.SessionDirectory()); reportPath != "" {
-		return saveSessionReport(reportPath, jobCtx.Report)
+		// finishJob can release its foreground wait before teardown settles.
+		// Never serialize a report still owned by background finalization.
+		timer := time.NewTimer(localEntrypointCloseWait)
+		defer timer.Stop()
+		select {
+		case <-jobCtx.finishDone:
+			return saveSessionReport(reportPath, jobCtx.Report)
+		case <-timer.C:
+			return fmt.Errorf("local session report not saved: job finalization did not settle within %s", localEntrypointCloseWait)
+		}
 	}
 	return nil
 }
@@ -2057,6 +2090,13 @@ func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) (resultErr error) {
 		s.mu.Unlock()
 		return fmt.Errorf("worker is closed")
 	}
+	if s.sessionTransportErr != nil {
+		s.mu.Unlock()
+		return s.sessionTransportErr
+	}
+	s.entrypoints++
+	defer func() { s.mu.Lock(); s.entrypoints--; s.mu.Unlock() }()
+	jobCtx.sessionTransport = s.sessionTransport
 	s.executionStarted = true
 	jobCtx.serverTracerProvider = s.tracerProvider
 	s.mu.Unlock()
@@ -2101,6 +2141,7 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	}
 	finalized := false
 	jobCtx.finishOnce.Do(func() {
+		jobCtx.finishDone = make(chan struct{})
 		finalized = true
 	})
 	if !finalized {
@@ -2110,7 +2151,10 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) bool {
 	s.trackFinishingJob(jobCtx)
 
 	foregroundDone := make(chan struct{})
-	go s.finishJobLifecycle(jobCtx, plan.JobID, foregroundDone)
+	go func() {
+		defer close(jobCtx.finishDone)
+		s.finishJobLifecycle(jobCtx, plan.JobID, foregroundDone)
+	}()
 
 	<-foregroundDone
 

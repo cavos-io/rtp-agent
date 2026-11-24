@@ -1,0 +1,16 @@
+// Package nativeroom provides experimental opt-in LiveKit session transports.
+//
+// Build with nativeinprocess to use NewInProcess. Pass the returned transport to
+// worker.StartSessionOptions.Transport before connecting the job's Pion room.
+// Pre-connect audio is enabled by default; RoomOptions controls its timeout and opt-out.
+// Native owns receive playout, reconnect, and both media directions.
+//
+// One FFI runtime is shared by all native sessions in the process. Close session
+// transports first, then call CloseInProcessRuntime once during worker shutdown.
+// Runtime disposal is terminal; the native library cannot be swapped or reopened.
+// Construction does not select a transport globally or load the native library.
+//
+// New retains the existing helper-process transport. Neither constructor changes
+// the worker's default transport. See examples/starter/packaging/INPROCESS.md
+// for build, library installation and rollback instructions.
+package nativeroom

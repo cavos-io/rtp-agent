@@ -117,7 +117,10 @@ func TestSynthesizeWithStreamDoesNotRecordInternalSpan(t *testing.T) {
 		metricsCh <- metrics
 	})
 
-	chunked, err := SynthesizeWithStream(context.Background(), ttsProvider, "")
+	ctx, parent := telemetry.Tracer.Start(context.Background(), "caller")
+	parent.SetAttributes(attribute.String("caller.key", "caller-value"))
+	defer parent.End()
+	chunked, err := SynthesizeWithStream(ctx, ttsProvider, "")
 	if err != nil {
 		t.Fatalf("SynthesizeWithStream() error = %v, want nil", err)
 	}
@@ -129,6 +132,14 @@ func TestSynthesizeWithStreamDoesNotRecordInternalSpan(t *testing.T) {
 	spans := recorder.Ended()
 	if len(spans) != 0 {
 		t.Fatalf("ended spans = %#v, want no internal TTS span", spans)
+	}
+	parent.End()
+	spans = recorder.Ended()
+	if len(spans) != 1 || spans[0].Name() != "caller" {
+		t.Fatalf("ended spans = %#v, want only caller span", spans)
+	}
+	if attrs := spanAttributes(spans[0].Attributes()); !reflect.DeepEqual(attrs, map[string]string{"caller.key": "caller-value"}) {
+		t.Fatalf("caller attributes = %#v, want unchanged caller attributes", attrs)
 	}
 	select {
 	case metrics := <-metricsCh:

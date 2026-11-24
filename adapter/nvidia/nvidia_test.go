@@ -1025,15 +1025,20 @@ func TestNvidiaRealtimePushAudioSkipsOddBytePCMFramesLikeReference(t *testing.T)
 }
 
 func TestNvidiaRealtimePushAudioQueuesReferenceOpusMessage(t *testing.T) {
-	realtimeModel := NewNvidiaRealtimeModel()
+	// Inspect encoding/queueing without a real connection failure resetting the
+	// queue concurrently. The following handshake test covers transport delivery.
+	realtimeModel := NewNvidiaRealtimeModel(func(m *RealtimeModel) { m.preconnect = false })
 	session, err := realtimeModel.Session()
 	if err != nil {
 		t.Fatalf("Session() error = %v", err)
 	}
+	t.Cleanup(func() { _ = session.Close() })
 	concrete, ok := session.(*nvidiaRealtimeSession)
 	if !ok {
 		t.Fatalf("session type = %T, want *nvidiaRealtimeSession", session)
 	}
+	// Represent an already-started transport so PushAudio cannot launch a dial.
+	concrete.transportStarted = true
 
 	pcm := makeNvidiaRealtimePCMInputFrame()
 	frame := &model.AudioFrame{

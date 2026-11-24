@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,5 +52,32 @@ func TestCLIClosesSharedTracing(t *testing.T) {
 				t.Fatalf("provider not closed: %q %v: %s", data, err, output)
 			}
 		})
+	}
+}
+
+func TestEmbeddedCLIReturnsFailureAfterServerCleanup(t *testing.T) {
+	old := os.Args
+	os.Args = []string{"worker", "eval"}
+	defer func() { os.Args = old }()
+	marker := filepath.Join(t.TempDir(), "closed")
+	server := worker.NewAgentServer(worker.WorkerOptions{})
+	if err := server.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(&exitTraceProcessor{path: marker}))); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("evaluation failure")
+	callerCleanup := false
+	var got error
+	func() {
+		defer func() { callerCleanup = true }()
+		got = RunAppWithOptionsError(server, WithEvalRunner(func(context.Context) (string, error) { return "", failure }))
+	}()
+	if !errors.Is(got, failure) {
+		t.Fatalf("command error lost: %v", got)
+	}
+	if !callerCleanup {
+		t.Fatal("caller cleanup bypassed")
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "closed" {
+		t.Fatalf("server not closed before returning: %q %v", data, err)
 	}
 }
