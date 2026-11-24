@@ -364,3 +364,135 @@ func TestMultimodalListenerCloseDuringLifecycleJoin(t *testing.T) {
 		t.Fatalf("provider closed %d times", rt.closes.Load())
 	}
 }
+
+func TestMultimodalTranscriptListenerCanStopSession(t *testing.T) {
+	for _, action := range []string{"stop", "close-soon"} {
+		t.Run(action, func(t *testing.T) {
+			rt := &lifecycleRealtimeSession{fakeRealtimeSession: fakeRealtimeSession{eventCh: make(chan llm.RealtimeEvent, 2)}}
+			ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			session.Assistant = ma
+			done := make(chan error, 1)
+			session.On("user_input_transcribed", func(Event) {
+				if action == "stop" {
+					done <- session.Stop(context.Background())
+				} else {
+					session.CloseSoon(CloseReasonUserInitiated)
+					done <- nil
+				}
+			})
+			if err := session.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			rt.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted, InputTranscription: &llm.InputTranscriptionCompleted{ItemID: "callback", Transcript: "hello", IsFinal: true}}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("session shutdown deadlocked in transcription listener")
+			}
+			ma.mu.Lock()
+			run := ma.runState
+			ma.mu.Unlock()
+			if run != nil {
+				t.Fatal("shutdown returned before receive loop joined")
+			}
+			if rt.closes.Load() != 1 {
+				t.Fatalf("provider closed %d times", rt.closes.Load())
+			}
+		})
+	}
+}
+
+func TestMultimodalSessionListenerOrderingAndMutation(t *testing.T) {
+	rt := &lifecycleRealtimeSession{}
+	ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer session.Stop(context.Background())
+	var order []int
+	session.On("function_tools_executed", func(ev Event) {
+		order = append(order, 1)
+		ev.(*FunctionToolsExecutedEvent).CancelToolReply()
+	})
+	session.On("function_tools_executed", func(ev Event) {
+		if ev.(*FunctionToolsExecutedEvent).ReplyRequired {
+			t.Error("second listener missed first listener mutation")
+		}
+		order = append(order, 2)
+		ev.(*FunctionToolsExecutedEvent).CancelAgentHandoff()
+	})
+	ev := session.EmitFunctionToolsExecuted(FunctionToolsExecutedEvent{ReplyRequired: true, HandoffRequired: true})
+	if ev.ReplyRequired || ev.HandoffRequired {
+		t.Fatal("listener decisions were lost")
+	}
+	if len(order) != 2 || order[0] != 1 || order[1] != 2 {
+		t.Fatalf("listener order = %v", order)
+	}
+}
+
+func TestMultimodalSessionExternalStopDuringCallback(t *testing.T) {
+	rt := &lifecycleRealtimeSession{
+		fakeRealtimeSession: fakeRealtimeSession{eventCh: make(chan llm.RealtimeEvent, 1)},
+		closeEntered:        make(chan struct{}), closeRelease: make(chan struct{}),
+	}
+	ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	entered, release, callbackDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	var laterCalls atomic.Int32
+	session.On("user_input_transcribed", func(ev Event) {
+		close(entered)
+		<-release
+		err := session.Stop(context.Background())
+		// Producer completion must not share mutable top-level event fields with a
+		// callback that outlives cancellation.
+		ev.(*UserInputTranscribedEvent).Transcript = "listener finished"
+		callbackDone <- err
+	})
+	session.On("user_input_transcribed", func(Event) { laterCalls.Add(1) })
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rt.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted, InputTranscription: &llm.InputTranscriptionCompleted{ItemID: "external", Transcript: "hello", IsFinal: true}}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("listener did not run")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- session.Stop(context.Background()) }()
+	select {
+	case <-rt.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("provider close did not start")
+	}
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop returned before provider close: %v", err)
+	default:
+	}
+	close(release)
+	close(rt.closeRelease)
+	for _, done := range []<-chan error{stopped, callbackDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent shutdown deadlocked")
+		}
+	}
+	if laterCalls.Load() != 0 {
+		t.Fatal("delivered pending listener after cancellation")
+	}
+	if rt.closes.Load() != 1 {
+		t.Fatalf("provider closed %d times", rt.closes.Load())
+	}
+}

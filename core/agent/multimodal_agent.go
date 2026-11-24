@@ -22,6 +22,7 @@ import (
 // A run owns exactly one provider session, including concurrent close callers.
 type multimodalRun struct {
 	session   llm.RealtimeSession
+	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
 	closeOnce sync.Once
@@ -104,8 +105,7 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 }
 
 // Close stops the provider without joining the receive loop. It is safe from
-// synchronous event listeners. Lifecycle owners use CloseAndWait to join;
-// listeners closing an AgentSession must schedule its teardown outside the callback.
+// synchronous event listeners. Lifecycle owners use CloseAndWait to join.
 func (ma *MultimodalAgent) Close() error {
 	_, err := ma.stopRun(true)
 	return err
@@ -157,7 +157,7 @@ func (ma *MultimodalAgent) stopRun(requested bool) (*multimodalRun, error) {
 
 func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeSession, epoch uint64) error {
 	runCtx, cancel := context.WithCancel(ctx)
-	run := &multimodalRun{session: rtSession, cancel: cancel, done: make(chan struct{})}
+	run := &multimodalRun{session: rtSession, ctx: runCtx, cancel: cancel, done: make(chan struct{})}
 	ma.mu.Lock()
 	if ma.closeEpoch != epoch {
 		ma.mu.Unlock()
@@ -175,6 +175,16 @@ func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeS
 			_ = run.close()
 		}
 	}()
+	return nil
+}
+
+// callbackContext ties listener delivery to the receive loop's lifetime.
+func (ma *MultimodalAgent) callbackContext() context.Context {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	if ma.runState != nil {
+		return ma.runState.ctx
+	}
 	return nil
 }
 
@@ -631,6 +641,9 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 	eventCh := rtSession.EventCh()
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return

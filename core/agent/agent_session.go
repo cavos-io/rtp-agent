@@ -887,9 +887,56 @@ func (s *AgentSession) recordEvent(ev Event) {
 	eventType := ev.GetType()
 	listeners := s.collectEventListenersLocked(eventType)
 	listeners = append(listeners, s.collectEventListenersLocked(allAgentEventsType)...)
+	assistant := s.Assistant
 	s.mu.Unlock()
+	if len(listeners) == 0 {
+		return
+	}
+	if ma, ok := assistant.(*MultimodalAgent); ok {
+		if ctx := ma.callbackContext(); ctx != nil {
+			s.dispatchMultimodalListeners(ctx, eventType, listeners, ev)
+			return
+		}
+	}
 	for _, listener := range listeners {
 		callAgentSessionListener(s.Logger(), eventType, listener, ev)
+	}
+}
+
+// Normally delivery is synchronous and ordered. Cancellation releases the
+// producer so a listener calling Stop or CloseSoon can join the receive loop.
+// Copy the event value: after cancellation the listener may still write its
+// fields while the producer finishes processing the original event. Referenced
+// objects (chat items, speech handles, etc.) retain their existing ownership.
+func (s *AgentSession) dispatchMultimodalListeners(ctx context.Context, eventType string, listeners []func(Event), ev Event) {
+	if ctx.Err() != nil {
+		return
+	}
+	original := reflect.ValueOf(ev)
+	delivery := ev
+	var copied reflect.Value
+	if original.Kind() == reflect.Pointer && !original.IsNil() && original.Elem().Kind() == reflect.Struct {
+		copied = reflect.New(original.Elem().Type())
+		copied.Elem().Set(original.Elem())
+		delivery = copied.Interface().(Event)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, listener := range listeners {
+			if ctx.Err() != nil {
+				return
+			}
+			callAgentSessionListener(s.Logger(), eventType, listener, delivery)
+		}
+	}()
+	select {
+	case <-done:
+		// Preserve synchronous edits such as CancelToolReply on normal completion.
+		if ctx.Err() == nil && copied.IsValid() {
+			original.Elem().Set(copied.Elem())
+		}
+	case <-ctx.Done():
 	}
 }
 
