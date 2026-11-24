@@ -256,3 +256,165 @@ func TestInterruptedReplyStoresOnlyPublishedText(t *testing.T) {
 		})
 	}
 }
+
+// scriptedLLM answers every turn with the same text, like the PRD reply path (LLM -> TTS).
+type scriptedLLM struct {
+	llm.MetricsEmitter
+	llm.ErrorEmitter
+	reply string
+}
+
+func (l *scriptedLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return &scriptedLLMStream{chunks: strings.SplitAfter(l.reply, " ")}, nil
+}
+
+type scriptedLLMStream struct {
+	chunks []string
+	next   int
+}
+
+func (s *scriptedLLMStream) Next() (*llm.ChatChunk, error) {
+	if s.next >= len(s.chunks) {
+		return nil, io.EOF
+	}
+	chunk := &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: s.chunks[s.next]}}
+	s.next++
+	return chunk, nil
+}
+func (s *scriptedLLMStream) Close() error { return nil }
+
+func assistantText(handle *agent.SpeechHandle) string {
+	for _, item := range handle.ChatItems() {
+		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleAssistant {
+			return msg.TextContent()
+		}
+	}
+	return ""
+}
+
+func (e *markerEncoder) playedAll(after time.Time) time.Duration {
+	var d time.Duration
+	for _, f := range e.snapshot() {
+		if f.at.After(after) {
+			d += 20 * time.Millisecond
+		}
+	}
+	return d
+}
+
+func newLLMReplyHarness(t *testing.T, chunk, total time.Duration, reply string) *interruptHarness {
+	t.Helper()
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.LLM = &scriptedLLM{reply: reply}
+	session.TTS = &markedTTS{frameDur: chunk, total: total}
+	enc := &markerEncoder{}
+	rio := &RoomIO{AgentSession: session, audioTrack: newRoomIOTestAudioTrack(t), encoder: enc}
+	session.SetAudioOutputController(rio)
+	session.SetAudioPlaybackController(roomIOPlaybackController{rio: rio})
+	session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start error = %v", err)
+	}
+	t.Cleanup(func() { session.Shutdown() })
+	return &interruptHarness{session: session, rio: rio, enc: enc}
+}
+
+func (h *interruptHarness) waitPlayedAll(t *testing.T, atLeast time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(atLeast + 5*time.Second)
+	for h.enc.playedAll(time.Time{}) < atLeast {
+		if time.Now().After(deadline) {
+			t.Fatalf("published %v, want at least %v", h.enc.playedAll(time.Time{}), atLeast)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// reproReplyDur is roughly how long reproReply takes to speak (~50 syllables).
+const reproReplyDur = 12 * time.Second
+
+const reproReply = "A satu kata kata kata kata kata kata kata. B dua kata kata kata kata kata kata kata. C tiga kata kata kata kata kata kata kata."
+
+func TestLLMReplyInterruptStopsAudioAndStoresHeardText(t *testing.T) {
+	cases := map[string]struct{ chunk, playFor time.Duration }{
+		"20ms frames, cut early": {20 * time.Millisecond, 3 * time.Second},
+		"2s chunks, cut late":    {2 * time.Second, 7 * time.Second},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			chunk := tc.chunk
+			h := newLLMReplyHarness(t, chunk, reproReplyDur, reproReply)
+			handle, err := h.session.GenerateReply(context.Background(), "halo")
+			if err != nil {
+				t.Fatalf("GenerateReply error = %v", err)
+			}
+			h.waitPlayedAll(t, tc.playFor)
+			interruptedAt := time.Now()
+			if err := h.session.Interrupt(false); err != nil {
+				t.Fatalf("Interrupt error = %v", err)
+			}
+			waitHandle(t, handle)
+			time.Sleep(400 * time.Millisecond)
+
+			if late := h.enc.playedAll(interruptedAt.Add(roomIOOutputMaxLead)); late > 0 {
+				t.Fatalf("published %v more than %v after the interrupt", late, roomIOOutputMaxLead)
+			}
+			stored, played := assistantText(handle), h.enc.playedAll(time.Time{})
+			t.Logf("played %v, stored %q", played, stored)
+			// Stored text must track the share of the reply that was heard, give or take a quarter.
+			heard := float64(played) / float64(reproReplyDur)
+			share := float64(len(stored)) / float64(len(reproReply))
+			if stored == "" || share > heard+0.25 || share < heard-0.25 {
+				t.Fatalf("stored %.0f%% of the text after publishing %.0f%% of the audio", share*100, heard*100)
+			}
+		})
+	}
+}
+
+func TestLLMReplyPausedWhileThinkingStoresOnlyHeardText(t *testing.T) {
+	h := newLLMReplyHarness(t, 20*time.Millisecond, reproReplyDur, reproReply)
+	h.rio.PauseAudioOutput()
+	handle, err := h.session.GenerateReply(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	time.Sleep(2 * time.Second) // reply is ready but parked behind the pause
+	if got := h.enc.playedAll(time.Time{}); got != 0 {
+		t.Fatalf("published %v while paused", got)
+	}
+	h.rio.ResumeAudioOutput()
+	h.waitPlayedAll(t, 300*time.Millisecond)
+	if err := h.session.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	waitHandle(t, handle)
+
+	stored, played := assistantText(handle), h.enc.playedAll(time.Time{})
+	t.Logf("played %v, stored %q", played, stored)
+	// ~0.5 s was heard: about two syllables' worth, never the 2 s spent parked.
+	if words := len(strings.Fields(stored)); words > 3 {
+		t.Fatalf("stored %d words (%q) after publishing %v", words, stored, played)
+	}
+}
+
+func TestLLMReplyAfterInterruptedReplyIsPublished(t *testing.T) {
+	h := newLLMReplyHarness(t, 2*time.Second, 2*time.Second, "A satu kata kata.")
+	first, err := h.session.GenerateReply(context.Background(), "halo")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	h.waitPlayedAll(t, 500*time.Millisecond)
+	if err := h.session.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	second, err := h.session.GenerateReply(context.Background(), "lagi")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	waitHandle(t, first)
+	before := h.enc.playedAll(time.Time{})
+	waitHandle(t, second)
+	if got := h.enc.playedAll(time.Time{}) - before; got < 2*time.Second-40*time.Millisecond {
+		t.Fatalf("second reply published %v of 2s", got)
+	}
+}
