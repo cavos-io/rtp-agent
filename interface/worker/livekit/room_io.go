@@ -2885,7 +2885,18 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	}
 
 	if encoder != nil {
-		for _, encodeFrame := range encodeFrames {
+		for i, encodeFrame := range encodeFrames {
+			if i > 0 {
+				// Provider chunks span seconds: a pause or clear must stop this chunk,
+				// not wait for the next PublishAudio call.
+				drop, err := rio.waitForAudioOutputResume(ctx)
+				if err != nil {
+					return err
+				}
+				if drop {
+					return nil
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

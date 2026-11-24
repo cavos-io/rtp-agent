@@ -23,6 +23,7 @@ type TranscriptSynchronizer struct {
 	mu             sync.Mutex
 	textBuffer     string
 	playedAudioDur time.Duration
+	audioStartedAt time.Time
 	yieldedTextDur time.Duration
 	speakingRate   float64 // syllables per second
 
@@ -193,6 +194,9 @@ func (s *TranscriptSynchronizer) run() {
 				dur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*1000.0) * time.Millisecond
 				s.mu.Lock()
 				if !s.interrupted {
+					if s.audioStartedAt.IsZero() {
+						s.audioStartedAt = time.Now()
+					}
 					s.playedAudioDur += dur
 				}
 				s.mu.Unlock()
@@ -206,7 +210,15 @@ func (s *TranscriptSynchronizer) run() {
 			}
 
 			// How much audio time has passed that hasn't been covered by text yet?
-			timeDebt := s.playedAudioDur - s.yieldedTextDur
+			// Audio is pushed a whole provider chunk at a time, ahead of playout, so cap it by
+			// the real-time clock: text must not run ahead of what the caller has heard.
+			// ponytail: wall clock, not transport position; an output pause lets text lead by
+			// the pause length. Feed playback position in if that drift ever matters.
+			heard := s.playedAudioDur
+			if elapsed := time.Since(s.audioStartedAt); elapsed < heard {
+				heard = elapsed
+			}
+			timeDebt := heard - s.yieldedTextDur
 			if timeDebt <= 0 {
 				s.mu.Unlock()
 				continue
