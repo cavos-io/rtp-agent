@@ -6,14 +6,14 @@ import (
 	"context"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	lk "github.com/livekit/server-sdk-go/v2"
-	"google.golang.org/protobuf/proto"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
 
 // Use real SDK metadata: its embedded base type is not publicly constructible.
-func TestDefaultChatProtobufMetadata(t *testing.T) {
+func TestDefaultChatSDKMetadata(t *testing.T) {
 	url := os.Getenv("NATIVE_TEST_URL")
 	if url == "" {
 		t.Fatal("NATIVE_TEST_URL is required for this integration test")
@@ -38,10 +38,11 @@ func TestDefaultChatProtobufMetadata(t *testing.T) {
 	info := sender.LocalParticipant.SendText("hello metadata", lk.StreamTextOptions{Topic: RoomIOChatTopic, Attributes: map[string]string{"source": "default"}})
 	select {
 	case ev := <-events:
-		if _, err := proto.Marshal(ev.Info); err != nil {
-			t.Fatal("invalid protobuf metadata", err)
+		var sdkInfo lk.TextStreamInfo = ev.Info
+		if !reflect.DeepEqual(sdkInfo, *info) || ev.NativeInfo != nil {
+			t.Fatalf("SDK metadata changed: %#v", ev)
 		}
-		if ev.Text != "hello metadata" || ev.ParticipantIdentity != "caller" || ev.Info.GetStreamId() != info.Id || ev.Info.GetTimestamp() != info.Timestamp || ev.Info.GetMimeType() != info.MimeType || ev.Info.GetTopic() != info.Topic || ev.Info.GetTotalLength() != *info.Size || ev.Info.GetAttributes()["source"] != "default" {
+		if ev.Text != "hello metadata" || ev.ParticipantIdentity != "caller" || ev.Info.Id != info.Id || ev.Info.Timestamp != info.Timestamp || ev.Info.MimeType != info.MimeType || ev.Info.Topic != info.Topic || *ev.Info.Size != *info.Size || ev.Info.Attributes["source"] != "default" {
 			t.Fatalf("metadata mismatch: %+v", ev)
 		}
 	case <-time.After(10 * time.Second):

@@ -169,8 +169,11 @@ func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 }
 
 type TextInputEvent struct {
-	Text                string
-	Info                *pb.TextStreamInfo
+	Text string
+	// Info preserves the SDK metadata contract for Pion text streams.
+	Info lksdk.TextStreamInfo
+	// NativeInfo is populated by native transport; Info is zero in that case.
+	NativeInfo          *pb.TextStreamInfo
 	ParticipantIdentity string
 }
 
@@ -1571,11 +1574,11 @@ func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantI
 		return
 	}
 	go func() {
-		rio.handleChatTextInput(context.Background(), reader.ReadAll(), textStreamInfoProto(reader.Info), participantIdentity)
+		rio.handleChatTextInput(context.Background(), reader.ReadAll(), reader.Info, participantIdentity)
 	}()
 }
 
-func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info *pb.TextStreamInfo, participantIdentity string) {
+func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}

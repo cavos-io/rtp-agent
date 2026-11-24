@@ -6,8 +6,8 @@ import (
 	"context"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
-	"github.com/cavos-io/rtp-agent/library/logger"
 	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 // One consumer per session preserves completion order without blocking the FFI
@@ -45,7 +45,7 @@ func deliverTextInput(ctx context.Context, session *agent.AgentSession, callback
 			logger.Logger.Warnw("failed to handle native chat text stream", nil, "panic", v)
 		}
 	}()
-	err := wl.HandleTextInput(ctx, session, callback, wl.TextInputEvent{Text: ev.Text, Info: ev.Info, ParticipantIdentity: ev.Sender})
+	err := wl.HandleTextInput(ctx, session, callback, wl.TextInputEvent{Text: ev.Text, NativeInfo: ev.Info, ParticipantIdentity: ev.Sender})
 	if err != nil && ctx.Err() == nil {
 		logger.Logger.Warnw("failed to handle native chat text stream", err)
 	}

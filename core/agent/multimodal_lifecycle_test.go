@@ -37,12 +37,68 @@ func (s *lifecycleRealtimeSession) Close() error {
 
 type lifecycleRealtimeModel struct {
 	fakeRealtimeModel
-	rt llm.RealtimeSession
+	rt             llm.RealtimeSession
+	sessionEntered chan struct{}
+	sessionRelease chan struct{}
 }
 
-func (m *lifecycleRealtimeModel) Session() (llm.RealtimeSession, error) { return m.rt, nil }
+func (m *lifecycleRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if m.sessionEntered != nil {
+		close(m.sessionEntered)
+		<-m.sessionRelease
+	}
+	return m.rt, nil
+}
 
-func TestMultimodalCloseJoinsReceiveLoop(t *testing.T) {
+func TestMultimodalCloseCancelsPendingStartup(t *testing.T) {
+	for _, replacing := range []bool{false, true} {
+		name := "start"
+		if replacing {
+			name = "replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			rt := &lifecycleRealtimeSession{}
+			m := &lifecycleRealtimeModel{rt: rt, sessionEntered: make(chan struct{}), sessionRelease: make(chan struct{})}
+			ma := NewMultimodalAgent(m, nil)
+			session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+			if replacing {
+				ma = NewMultimodalAgent(&lifecycleRealtimeModel{rt: &lifecycleRealtimeSession{}}, nil)
+				if err := ma.Start(context.Background(), session); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done := make(chan error, 1)
+			go func() {
+				if replacing {
+					done <- ma.UpdateRealtimeModel(context.Background(), m)
+				} else {
+					done <- ma.Start(context.Background(), session)
+				}
+			}()
+			<-m.sessionEntered
+			if err := ma.Close(); err != nil {
+				t.Fatal(err)
+			}
+			close(m.sessionRelease)
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("startup error = %v, want canceled", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("startup did not finish")
+			}
+			if rt.closes.Load() != 1 {
+				t.Fatalf("unused provider closed %d times", rt.closes.Load())
+			}
+			if ma.rtSession != nil || ma.runState != nil {
+				t.Fatal("closed startup published a new run")
+			}
+		})
+	}
+}
+
+func TestMultimodalCloseAndWaitJoinsReceiveLoop(t *testing.T) {
 	rt := &lifecycleRealtimeSession{entered: make(chan struct{}), release: make(chan struct{}), closeEntered: make(chan struct{}), closeRelease: make(chan struct{})}
 	close(rt.closeRelease)
 	ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
@@ -51,7 +107,7 @@ func TestMultimodalCloseJoinsReceiveLoop(t *testing.T) {
 	}
 	<-rt.entered
 	done := make(chan error, 1)
-	go func() { done <- ma.Close() }()
+	go func() { done <- closeSessionAssistant(ma) }()
 	<-rt.closeEntered
 	select {
 	case err := <-done:
@@ -210,6 +266,99 @@ func TestMultimodalFatalEventCanStopSession(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("fatal event deadlocked closing its own receive loop")
+	}
+	if rt.closes.Load() != 1 {
+		t.Fatalf("provider closed %d times", rt.closes.Load())
+	}
+}
+
+func TestMultimodalStateListenerCanCloseReceiveLoop(t *testing.T) {
+	rt := &lifecycleRealtimeSession{fakeRealtimeSession: fakeRealtimeSession{eventCh: make(chan llm.RealtimeEvent, 1)}}
+	ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	closed := make(chan error, 1)
+	release := make(chan struct{})
+	session.On("user_state_changed", func(Event) {
+		closed <- ma.Close()
+		<-release
+	})
+	if err := ma.Start(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	rt.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close deadlocks when called from a receive-loop state listener")
+	}
+	if rt.closes.Load() != 1 {
+		t.Fatalf("provider closed %d times, want exactly once", rt.closes.Load())
+	}
+	joined := make(chan error, 1)
+	go func() { joined <- ma.CloseAndWait() }()
+	select {
+	case err := <-joined:
+		close(release)
+		t.Fatalf("callback Close lost the run before its owner joined: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-joined:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle join did not finish after callback returned")
+	}
+}
+
+func TestMultimodalListenerCloseDuringLifecycleJoin(t *testing.T) {
+	rt := &lifecycleRealtimeSession{
+		fakeRealtimeSession: fakeRealtimeSession{eventCh: make(chan llm.RealtimeEvent, 1)},
+		closeEntered:        make(chan struct{}), closeRelease: make(chan struct{}),
+	}
+	close(rt.closeRelease)
+	ma := NewMultimodalAgent(&lifecycleRealtimeModel{rt: rt}, nil)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	callbackDone := make(chan error, 1)
+	session.On("user_state_changed", func(Event) {
+		close(entered)
+		<-release
+		callbackDone <- ma.Close()
+	})
+	if err := ma.Start(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	rt.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("listener did not run")
+	}
+	joined := make(chan error, 1)
+	go func() { joined <- ma.CloseAndWait() }()
+	<-rt.closeEntered
+	select {
+	case err := <-joined:
+		close(release)
+		t.Fatalf("join returned while listener was active: %v", err)
+	default:
+	}
+	close(release)
+	for _, done := range []<-chan error{callbackDone, joined} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("callback close and lifecycle join deadlocked")
+		}
 	}
 	if rt.closes.Load() != 1 {
 		t.Fatalf("provider closed %d times", rt.closes.Load())

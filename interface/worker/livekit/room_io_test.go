@@ -4756,6 +4756,23 @@ func TestRoomIOHandleAgentSessionCloseSkipsRoomDeleteWhenDisabled(t *testing.T) 
 	}
 }
 
+func TestTextInputEventRetainsSDKInfoAPI(t *testing.T) {
+	info := lksdk.TextStreamInfo{}
+	ev := TextInputEvent{Text: "hello", Info: info, ParticipantIdentity: "caller"}
+	called := false
+	err := HandleTextInput(context.Background(), &agent.AgentSession{}, func(_ context.Context, _ *agent.AgentSession, got TextInputEvent) error {
+		var sdkInfo lksdk.TextStreamInfo = got.Info
+		called = true
+		if !reflect.DeepEqual(sdkInfo, info) || got.Text != ev.Text || got.ParticipantIdentity != ev.ParticipantIdentity {
+			t.Fatalf("callback event = %#v, want %#v", got, ev)
+		}
+		return nil
+	}, ev)
+	if err != nil || !called {
+		t.Fatalf("callback called = %v, error = %v", called, err)
+	}
+}
+
 func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 	session := &agent.AgentSession{}
 	var gotSession *agent.AgentSession
@@ -4771,7 +4788,7 @@ func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "hello from chat", nil, "caller")
+	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
 
 	if !called {
 		t.Fatal("text input callback was not called")
@@ -4802,7 +4819,7 @@ func TestRoomIOHandleChatTextInputRecoversCallbackPanic(t *testing.T) {
 		}
 	}()
 
-	rio.handleChatTextInput(context.Background(), "hello from chat", nil, "caller")
+	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
 }
 
 func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
@@ -4819,7 +4836,7 @@ func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", nil, "other-user")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "other-user")
 
 	if called {
 		t.Fatal("text input callback was called for unlinked participant")
@@ -4838,7 +4855,7 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", nil, "missing-user")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "missing-user")
 
 	if called {
 		t.Fatal("text input callback was called for unknown participant")
@@ -4857,7 +4874,7 @@ func TestRoomIOHandleChatTextInputIgnoresClosedRoomIO(t *testing.T) {
 		closed: true,
 	}
 
-	rio.handleChatTextInput(context.Background(), "late text", nil, "caller")
+	rio.handleChatTextInput(context.Background(), "late text", lksdk.TextStreamInfo{}, "caller")
 
 	if called {
 		t.Fatal("text input callback was called after RoomIO closed")
@@ -4878,10 +4895,10 @@ func TestRoomIOSetParticipantSwitchesTextInputFilter(t *testing.T) {
 		},
 	}
 
-	rio.handleChatTextInput(context.Background(), "ignored", nil, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-b")
 	rio.SetParticipant("caller-b")
-	rio.handleChatTextInput(context.Background(), "accepted", nil, "caller-b")
-	rio.handleChatTextInput(context.Background(), "ignored", nil, "caller-a")
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-a")
 
 	want := []string{"caller-b"}
 	if !reflect.DeepEqual(calls, want) {
@@ -4951,7 +4968,7 @@ func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
 	}
 
 	rio.UnsetParticipant()
-	rio.handleChatTextInput(context.Background(), "accepted", nil, "caller-b")
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
 
 	want := []string{"caller-b"}
 	if !reflect.DeepEqual(calls, want) {

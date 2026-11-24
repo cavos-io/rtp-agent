@@ -254,6 +254,14 @@ type closeableSessionAssistant interface {
 	Close() error
 }
 
+// Session teardown owns the join; callbacks can request a non-joining close.
+func closeSessionAssistant(closer closeableSessionAssistant) error {
+	if joining, ok := closer.(interface{ CloseAndWait() error }); ok {
+		return joining.CloseAndWait()
+	}
+	return closer.Close()
+}
+
 type sessionToolsetCloser interface {
 	Close() error
 }
@@ -3457,7 +3465,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 			s.Logger().Errorw("failed to start replacement assistant", err)
 			s.EmitError(ErrorEvent{Error: err, Source: replacementAssistant})
 		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
-			if err := closer.Close(); err != nil {
+			if err := closeSessionAssistant(closer); err != nil {
 				s.Logger().Errorw("failed to close replaced assistant", err)
 				s.EmitError(ErrorEvent{Error: err, Source: previousAssistant})
 			}
@@ -3688,7 +3696,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		drainSpan.End()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
-		if err := closer.Close(); err != nil && stopErr == nil {
+		if err := closeSessionAssistant(closer); err != nil && stopErr == nil {
 			stopErr = err
 		}
 	}

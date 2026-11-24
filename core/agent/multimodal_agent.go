@@ -44,9 +44,10 @@ type MultimodalAgent struct {
 	rtSession llm.RealtimeSession
 	audioInCh chan *model.AudioFrame
 
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu         sync.Mutex
+	closeEpoch uint64 // prevents an in-flight startup from publishing after Close
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	realtimeSpans             map[string]trace.Span
 	traceClosed               bool
@@ -86,32 +87,33 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	ma.session = s
 	ma.traceClosed = false
 	ma.ctx = ctx
+	epoch := ma.closeEpoch
 	ma.mu.Unlock()
 
 	rtSession, err := ma.model.Session()
 	if err != nil {
 		return err
 	}
-	ma.mu.Lock()
-	ma.rtSession = rtSession
-	ma.mu.Unlock()
-
 	if err := ma.initializeRealtimeSession(rtSession); err != nil {
 		ma.session.Logger().Errorw("failed to initialize realtime session", err)
 		_ = rtSession.Close()
-		ma.mu.Lock()
-		if ma.rtSession == rtSession {
-			ma.rtSession = nil
-		}
-		ma.mu.Unlock()
 		return err
 	}
 
-	ma.startRun(ctx, rtSession)
-	return nil
+	return ma.startRun(ctx, rtSession, epoch)
 }
 
+// Close stops the provider without joining the receive loop. It is safe from
+// synchronous event listeners. Lifecycle owners use CloseAndWait to join;
+// listeners closing an AgentSession must schedule its teardown outside the callback.
 func (ma *MultimodalAgent) Close() error {
+	_, err := ma.stopRun(true)
+	return err
+}
+
+// CloseAndWait stops and joins the receive loop. Like Python's awaited aclose,
+// it belongs to the owning lifecycle, not a synchronous receive-loop callback.
+func (ma *MultimodalAgent) CloseAndWait() error {
 	ma.lifecycle.Lock()
 	defer ma.lifecycle.Unlock()
 	return ma.closeRun()
@@ -119,10 +121,25 @@ func (ma *MultimodalAgent) Close() error {
 
 // Caller holds lifecycle, never mu while waiting on provider or receive loop.
 func (ma *MultimodalAgent) closeRun() error {
+	run, err := ma.stopRun(false)
+	if run != nil {
+		<-run.done
+		ma.mu.Lock()
+		if ma.runState == run {
+			ma.runState = nil
+		}
+		ma.mu.Unlock()
+	}
+	return err
+}
+
+func (ma *MultimodalAgent) stopRun(requested bool) (*multimodalRun, error) {
 	ma.mu.Lock()
+	if requested {
+		ma.closeEpoch++
+	}
 	run := ma.runState
 	rtSession := ma.rtSession
-	ma.runState = nil
 	ma.rtSession = nil
 	ma.realtimeSpans = nil
 	ma.traceClosed = true
@@ -130,21 +147,25 @@ func (ma *MultimodalAgent) closeRun() error {
 	ma.mu.Unlock()
 	if run != nil {
 		run.cancel()
-		err := run.close()
-		<-run.done
-		return err
+		return run, run.close()
 	}
 	if rtSession != nil {
-		return rtSession.Close()
+		return nil, rtSession.Close()
 	}
-	return nil
+	return nil, nil
 }
 
-func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeSession) {
+func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeSession, epoch uint64) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	run := &multimodalRun{session: rtSession, cancel: cancel, done: make(chan struct{})}
 	ma.mu.Lock()
+	if ma.closeEpoch != epoch {
+		ma.mu.Unlock()
+		cancel()
+		return errors.Join(context.Canceled, rtSession.Close())
+	}
 	ma.runState = run
+	ma.rtSession = rtSession
 	ma.traceClosed = false
 	ma.mu.Unlock()
 	go func() {
@@ -154,6 +175,7 @@ func (ma *MultimodalAgent) startRun(ctx context.Context, rtSession llm.RealtimeS
 			_ = run.close()
 		}
 	}()
+	return nil
 }
 
 func (ma *MultimodalAgent) SetPublishAudio(publish func(ctx context.Context, frame *model.AudioFrame) error) {
@@ -269,6 +291,7 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 	}
 
 	ma.mu.Lock()
+	epoch := ma.closeEpoch
 	if ma.model == model {
 		rtSession := ma.rtSession
 		ma.mu.Unlock()
@@ -323,11 +346,9 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 	}
 	ma.mu.Lock()
 	ma.model = model
-	ma.rtSession = rtSession
 	ma.mu.Unlock()
 
-	ma.startRun(runCtx, rtSession)
-	return nil
+	return ma.startRun(runCtx, rtSession, epoch)
 }
 
 func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSession) error {

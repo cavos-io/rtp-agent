@@ -121,7 +121,7 @@ func verifyNativeChat(t *testing.T, ctx context.Context, caller *lk.Room, receiv
 	sent := caller.LocalParticipant.SendText("hello 世界", lk.StreamTextOptions{Topic: "lk.chat", Attributes: map[string]string{"test": "native-chat"}})
 	select {
 	case ev := <-received:
-		if ev.Text != "hello 世界" || ev.ParticipantIdentity != "caller-test" || ev.Info.GetStreamId() != sent.Id || ev.Info.GetTopic() != "lk.chat" || ev.Info.GetAttributes()["test"] != "native-chat" {
+		if ev.Text != "hello 世界" || ev.ParticipantIdentity != "caller-test" || ev.NativeInfo.GetStreamId() != sent.Id || ev.NativeInfo.GetTopic() != "lk.chat" || ev.NativeInfo.GetAttributes()["test"] != "native-chat" {
 			t.Fatalf("chat mismatch: %+v", ev)
 		}
 		data, err := json.MarshalIndent(ev, "", "  ")

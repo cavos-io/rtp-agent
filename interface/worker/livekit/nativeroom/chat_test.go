@@ -8,8 +8,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	wl "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	pb "github.com/cavos-io/rtp-agent/interface/worker/livekit/ffipb"
-	"google.golang.org/protobuf/proto"
 	native "github.com/cavos-io/rtp-agent/interface/worker/livekit/nativeinprocess"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -25,11 +27,15 @@ func TestChatCallbackDeliveryAndCancellation(t *testing.T) {
 		return ctx.Err()
 	}
 	stop := startTextInput(context.Background(), events, nil, callback)
-	events <- native.Chat{Text: "hello", Sender: "caller", Info: &pb.TextStreamInfo{StreamId: proto.String("id")}}
+	info := &pb.TextStreamInfo{StreamId: proto.String("id"), Timestamp: proto.Int64(123), MimeType: proto.String("text/plain"), Topic: proto.String("lk.chat"), TotalLength: proto.Uint64(5), Attributes: map[string]string{"source": "native"}}
+	events <- native.Chat{Text: "hello", Sender: "caller", Info: info}
 	select {
 	case ev := <-received:
-		if ev.Text != "hello" || ev.ParticipantIdentity != "caller" || ev.Info.GetStreamId() != "id" {
+		if ev.Text != "hello" || ev.ParticipantIdentity != "caller" || ev.NativeInfo.GetStreamId() != "id" {
 			t.Fatal(ev)
+		}
+		if !proto.Equal(ev.NativeInfo, info) || !reflect.DeepEqual(ev.Info, lksdk.TextStreamInfo{}) {
+			t.Fatalf("native metadata lost or SDK Info populated: %#v", ev)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no delivery")
