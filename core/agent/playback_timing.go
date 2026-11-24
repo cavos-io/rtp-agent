@@ -45,6 +45,13 @@ func (t *playbackTiming) arm() {
 	t.mu.Unlock()
 }
 
+// started reports whether the transport confirmed that audio reached the wire.
+func (t *playbackTiming) started() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.notified && !t.startedAt.IsZero()
+}
+
 func (t *playbackTiming) published() time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()
