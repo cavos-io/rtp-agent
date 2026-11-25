@@ -98,7 +98,13 @@ func main() {
 		func(jobContext *worker.JobContext) error {
 			ctx := context.Background()
 
-			session := agent.NewAgentSession(baseAgent, jobContext.Room, agent.AgentSessionOptions{})
+			session := agent.NewAgentSession(baseAgent, jobContext.Room, agent.AgentSessionOptions{
+				InterruptionDetector: livekitAdapter.NewAdaptiveInterruptionDetector(
+					config.LiveKitInferenceAPIKey,
+					config.LiveKitInferenceAPISecret,
+				),
+				InterruptionMode: agent.InterruptionModeAdaptive,
+			})
 			if err := jobContext.StartSession(ctx, session); err != nil {
 				logger.Logger.Errorw("failed to start session", err)
 				return err
