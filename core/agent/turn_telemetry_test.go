@@ -11,10 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -144,78 +144,110 @@ func TestTurnTelemetryRearmResumeAndStaleDetection(t *testing.T) {
 func TestTurnTelemetryStreamingOutcomes(t *testing.T) {
 	for _, name := range []string{"cached", "pending", "incomplete", "missing", "error", "timeout"} {
 		t.Run(name, func(t *testing.T) {
-			r := turnSpanRecorder(t)
-			a, _, stream := setupTurnStream(t)
-			minDelay, maxDelay := .001, .002
-			if err := a.Session.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay, MaxEndpointingDelay: &maxDelay}); err != nil {
-				t.Fatal(err)
-			}
-			if name != "missing" {
-				turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
-				turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
-				call := nextTurnCall(t, stream)
-				_, request, _ := a.Session.turnStream.snapshot(a)
-				switch name {
-				case "error":
-					call.fail <- errors.New("prediction failed")
-				case "timeout":
-				case "pending":
-					go func() {
-						// Wait for the actual detector-consumption span, not a sleep.
-						for {
-							for _, s := range r.Started() {
-								if s.Name() == "eou_detection" {
-									call.reply <- AudioTurnResult{Probability: .9, IsComplete: true}
-									return
-								}
-							}
-							select {
-							case <-call.ctx.Done():
-								return
-							default:
-								runtime.Gosched()
-							}
-						}
-					}()
-				default:
-					call.reply <- AudioTurnResult{Probability: .9, IsComplete: name != "incomplete"}
-					<-request.done
+			synctest.Test(t, func(t *testing.T) {
+				r := turnSpanRecorder(t)
+				a, _, stream := setupTurnStream(t)
+				var call streamTurnCall
+				minDelay, maxDelay := .001, .002
+				if err := a.Session.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay, MaxEndpointingDelay: &maxDelay}); err != nil {
+					t.Fatal(err)
 				}
-				turnVAD(a, vad.VADEventEndOfSpeech, 1.3, 0, .3)
-			}
-			stopped := timeToUnixSeconds(time.Now().Add(-10 * time.Millisecond))
-			a.runEOUDetection(EndOfTurnInfo{SkipReply: true, NewTranscript: "hello", TranscriptConfidence: 1, StoppedSpeakingAt: &stopped, Language: "en"})
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := a.WaitForInactive(ctx); err != nil {
-				t.Fatal(err)
-			}
-			spans := r.Ended()
-			wait, detection, user := spanByName(t, spans, "eou_wait"), spanByName(t, spans, "eou_detection"), spanByName(t, spans, "user_turn")
-			if detection.Parent().SpanID() != wait.SpanContext().SpanID() || wait.Parent().SpanID() != user.SpanContext().SpanID() {
-				t.Fatal("wrong parent tree")
-			}
-			attrs := spanAttributeValues(detection.Attributes())
-			if _, old := attrs["eou.from_cache"]; old {
-				t.Fatal("legacy cache attribute")
-			}
-			if attrs[telemetry.AttrEOUFromCache].AsBool() != (name == "cached" || name == "incomplete") && name != "error" {
-				t.Fatalf("cache attr %v", attrs)
-			}
-			fallback := name == "missing" || name == "error" || name == "timeout"
-			if attrs[telemetry.AttrEOUFallback].AsBool() != fallback {
-				t.Fatalf("fallback attr %v", attrs)
-			}
-			want := .001
-			if name == "incomplete" {
-				want = .002
-			}
-			if attrs[telemetry.AttrEOUDelay].AsFloat64() != want {
-				t.Fatalf("delay attrs %v", attrs)
-			}
-			assertTurnTraceBounds(t, spans)
+				if name != "missing" {
+					turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
+					turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
+					call = nextTurnCall(t, stream)
+					_, request, _ := a.Session.turnStream.snapshot(a)
+					switch name {
+					case "error":
+						call.fail <- errors.New("prediction failed")
+					case "timeout", "pending":
+					default:
+						call.reply <- AudioTurnResult{Probability: .9, IsComplete: name != "incomplete"}
+						<-request.done
+					}
+					turnVAD(a, vad.VADEventEndOfSpeech, 1.3, 0, .3)
+				}
+				stopped := timeToUnixSeconds(time.Now().Add(-10 * time.Millisecond))
+				a.runEOUDetection(EndOfTurnInfo{SkipReply: true, NewTranscript: "hello", TranscriptConfidence: 1, StoppedSpeakingAt: &stopped, Language: "en"})
+				if name == "pending" {
+					// The EOU goroutine must have reached its prediction wait before
+					// inference finishes, rather than racing the cache snapshot.
+					synctest.Wait()
+					call.reply <- AudioTurnResult{Probability: .9, IsComplete: true}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if err := a.WaitForInactive(ctx); err != nil {
+					t.Fatal(err)
+				}
+				spans := r.Ended()
+				wait, detection, user := spanByName(t, spans, "eou_wait"), spanByName(t, spans, "eou_detection"), spanByName(t, spans, "user_turn")
+				if detection.Parent().SpanID() != wait.SpanContext().SpanID() || wait.Parent().SpanID() != user.SpanContext().SpanID() {
+					t.Fatal("wrong parent tree")
+				}
+				attrs := spanAttributeValues(detection.Attributes())
+				if _, old := attrs["eou.from_cache"]; old {
+					t.Fatal("legacy cache attribute")
+				}
+				if attrs[telemetry.AttrEOUFromCache].AsBool() != (name == "cached" || name == "incomplete") && name != "error" {
+					t.Fatalf("cache attr %v", attrs)
+				}
+				fallback := name == "missing" || name == "error" || name == "timeout"
+				if attrs[telemetry.AttrEOUFallback].AsBool() != fallback {
+					t.Fatalf("fallback attr %v", attrs)
+				}
+				if _, present := attrs[telemetry.AttrEOUProbability]; fallback && present {
+					t.Fatal("fallback published a successful prediction")
+				}
+				want := .001
+				if name == "incomplete" || name == "error" || name == "timeout" {
+					want = .002
+				}
+				if attrs[telemetry.AttrEOUDelay].AsFloat64() != want {
+					t.Fatalf("delay attrs %v", attrs)
+				}
+				assertTurnTraceBounds(t, spans)
+			})
 		})
 	}
+}
+
+func TestTurnTelemetryRetainedTimeoutFallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		recorder := turnSpanRecorder(t)
+		a, _, stream := setupTurnStream(t)
+		stream.ignoreCancel = true
+		turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
+		turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
+		call := nextTurnCall(t, stream)
+		_, request, _ := a.Session.turnStream.snapshot(a)
+		if _, ok := a.streamingTurnPrediction(context.Background()); ok {
+			t.Fatal("stalled prediction succeeded")
+		}
+		call.reply <- AudioTurnResult{Probability: .9, IsComplete: true, InferenceMs: 12}
+		<-request.done
+		for range 2 {
+			ctx, span := telemetry.StartSpan(context.Background(), "eou_detection")
+			a.streamingEndpointingDelay(ctx, "en", .3, 2.5)
+			span.End()
+		}
+		spans := recorder.Ended()
+		if len(spans) != 2 {
+			t.Fatalf("got %d detection spans, want 2", len(spans))
+		}
+		for _, span := range spans {
+			attrs := spanAttributeValues(span.Attributes())
+			if !attrs[telemetry.AttrEOUFallback].AsBool() || attrs[telemetry.AttrEOUDelay].AsFloat64() != 2.5 {
+				t.Fatalf("retained timeout attributes: %v", attrs)
+			}
+			if _, present := attrs[telemetry.AttrEOUProbability]; present {
+				t.Fatal("late success published a probability after timeout")
+			}
+			if _, present := attrs[telemetry.AttrEOUInferenceDuration]; present {
+				t.Fatal("late success published inference duration after timeout")
+			}
+		}
+	})
 }
 
 func TestTurnTelemetryLifecycleDrops(t *testing.T) {

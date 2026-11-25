@@ -20,6 +20,9 @@ type turnPrediction struct {
 	result   AudioTurnResult
 	err      error
 	observed bool
+	// Protected by turnDetectorRuntime.mu. Retain the timeout until this
+	// generation is consumed or invalidated, even if inference later succeeds.
+	timedOut bool
 }
 
 // turnDetectorRuntime owns the session stream, its audio clock and request
@@ -227,30 +230,39 @@ func (a *AgentActivity) streamingTurnPrediction(ctx context.Context) (AudioTurnR
 	if stream == nil || request == nil {
 		return AudioTurnResult{}, false
 	}
+	r.mu.Lock()
+	timedOut := request.timedOut
+	r.mu.Unlock()
+	if timedOut {
+		return AudioTurnResult{}, false
+	}
 	timer := time.NewTimer(stream.PredictionTimeout())
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return AudioTurnResult{}, false
 	case <-timer.C:
-		request.cancel()
 		r.mu.Lock()
-		if r.request == request {
-			r.request = nil
+		valid := ctx.Err() == nil && r.owner == a && r.generation == generation && r.stream == stream && r.request == request
+		if valid {
+			request.timedOut = true
+			request.cancel()
 		}
 		r.mu.Unlock()
-		a.Session.Logger().Warnw("turn detector prediction timed out; using endpointing", context.DeadlineExceeded)
+		if valid {
+			a.Session.Logger().Warnw("turn detector prediction timed out; using maximum endpointing delay", context.DeadlineExceeded)
+		}
 		return AudioTurnResult{}, false
 	case <-request.done:
 	}
 	r.mu.Lock()
-	valid := r.owner == a && r.generation == generation && r.stream == stream
+	valid := r.owner == a && r.generation == generation && r.stream == stream && r.request == request && !request.timedOut
 	r.mu.Unlock()
-	if !valid {
+	if ctx.Err() != nil || !valid {
 		return AudioTurnResult{}, false
 	}
 	if request.err != nil {
-		a.Session.Logger().Warnw("turn detector prediction failed; using endpointing", request.err)
+		a.Session.Logger().Warnw("turn detector prediction failed; using maximum endpointing delay", request.err)
 		return AudioTurnResult{}, false
 	}
 	return request.result, true
@@ -324,7 +336,10 @@ func (a *AgentActivity) streamingEndpointingDelay(ctx context.Context, language 
 	span := trace.SpanFromContext(ctx)
 	result, ok := a.streamingTurnPrediction(ctx)
 	delay := minDelay
-	if ok && !result.IsComplete {
+	// An attempted prediction that cannot establish completion gets the same
+	// conservative delay as incomplete speech. No-request fallback above stays
+	// at the minimum. This intentionally differs from Python's timeout policy.
+	if !ok || !result.IsComplete {
 		delay = maxDelay
 	}
 	threshold, _ := stream.UnlikelyThreshold(language)

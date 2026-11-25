@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -180,9 +181,12 @@ func TestStreamingTurnPredictionOutcomes(t *testing.T) {
 	}{
 		{name: "complete", result: AudioTurnResult{Probability: .9, IsComplete: true}, want: .3},
 		{name: "incomplete", result: AudioTurnResult{Probability: .1}, want: 2.5},
-		{name: "error", err: errors.New("inference failed"), want: .3},
-		{name: "timeout", timeout: true, want: .3},
-		{name: "invalid", result: AudioTurnResult{Probability: math.NaN()}, want: .3},
+		{name: "error", err: errors.New("inference failed"), want: 2.5},
+		{name: "timeout", timeout: true, want: 2.5},
+		{name: "invalid", result: AudioTurnResult{Probability: math.NaN(), IsComplete: true}, want: 2.5},
+		{name: "infinite", result: AudioTurnResult{Probability: math.Inf(1), IsComplete: true}, want: 2.5},
+		{name: "negative", result: AudioTurnResult{Probability: -.1, IsComplete: true}, want: 2.5},
+		{name: "above_one", result: AudioTurnResult{Probability: 1.1, IsComplete: true}, want: 2.5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _, s := setupTurnStream(t)
@@ -205,6 +209,207 @@ func TestStreamingTurnPredictionOutcomes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Unlike Python AudioRecognition at ff962a019, Go conservatively waits for the
+// maximum endpointing delay after an attempted prediction fails. A timeout must
+// remain a failed outcome until the current turn is invalidated or consumed.
+func TestStreamingTurnTimeoutRetainsFallback(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		t.Run(fmt.Sprint(late), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				a, _, stream := setupTurnStream(t)
+				stream.ignoreCancel = late
+				turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
+				turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
+				call := nextTurnCall(t, stream)
+				_, request, _ := a.Session.turnStream.snapshot(a)
+				if _, ok := a.streamingTurnPrediction(context.Background()); ok {
+					t.Fatal("stalled prediction succeeded")
+				}
+				select {
+				case <-call.ctx.Done():
+				case <-time.After(time.Second):
+					t.Fatal("timeout did not cancel inference")
+				}
+				before := time.Now()
+				if got := a.streamingEndpointingDelay(context.Background(), "en", .3, 2.5); got != 2.5 {
+					t.Fatalf("retained timeout delay %v, want 2.5", got)
+				}
+				if !time.Now().Equal(before) {
+					t.Fatal("retained timeout waited for inference again")
+				}
+				// A late success must not replace the terminal timeout outcome.
+				if late {
+					call.reply <- AudioTurnResult{Probability: .9, IsComplete: true}
+				}
+				select {
+				case <-request.done:
+				case <-time.After(time.Second):
+					t.Fatal("prediction did not finish")
+				}
+				turnVAD(a, vad.VADEventInferenceDone, 1.3, 0, .3)
+				synctest.Wait()
+				select {
+				case <-stream.calls:
+					t.Fatal("silence retried a timed-out prediction")
+				default:
+				}
+				for range 2 {
+					if got := a.streamingEndpointingDelay(context.Background(), "en", .3, 2.5); got != 2.5 {
+						t.Fatalf("repeated endpointing delay %v, want 2.5", got)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestStreamingTurnTimeoutResetBoundaries(t *testing.T) {
+	for _, action := range []string{"resume", "clear", "commit", "backchannel", "handoff", "close"} {
+		t.Run(action, func(t *testing.T) {
+			a, d, stream := setupTurnStream(t)
+			stream.ignoreCancel = true
+			turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
+			turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
+			old := nextTurnCall(t, stream)
+			_, oldRequest, _ := a.Session.turnStream.snapshot(a)
+			if _, ok := a.streamingTurnPrediction(context.Background()); ok {
+				t.Fatal("stalled prediction succeeded")
+			}
+			turnVAD(a, vad.VADEventEndOfSpeech, 1.3, 0, .3)
+			switch action {
+			case "resume":
+				turnVAD(a, vad.VADEventStartOfSpeech, 1.4, .1, 0)
+			case "clear":
+				a.ClearUserTurn()
+			case "commit":
+				generation, _, _ := a.Session.turnStream.snapshot(a)
+				if !a.Session.turnStream.claim(a, generation, context.Background(), func() {}) {
+					t.Fatal("timeout prevented commit")
+				}
+			case "backchannel":
+				a.Session.turnStream.discardBackchannel(a)
+			case "handoff":
+				next := NewAgentActivity(a.Agent, a.Session)
+				t.Cleanup(next.Stop)
+				a.Session.turnStream.activate(next)
+				a = next
+			case "close":
+				if err := a.Session.turnStream.close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.Session.turnStream.configure(a.ctx, d); err != nil {
+					t.Fatal(err)
+				}
+				a.Session.turnStream.activate(a)
+				stream = d.streams[1]
+			}
+			if got := a.streamingEndpointingDelay(context.Background(), "en", .3, 2.5); got != .3 {
+				t.Fatalf("no-request delay after %s = %v, want .3", action, got)
+			}
+			turnVAD(a, vad.VADEventStartOfSpeech, 2, .1, 0)
+			turnVAD(a, vad.VADEventInferenceDone, 2.2, 0, .2)
+			// The old inference finishes only after a newer request exists.
+			old.reply <- AudioTurnResult{Probability: .1}
+			<-oldRequest.done
+			nextTurnCall(t, stream).reply <- AudioTurnResult{Probability: .9, IsComplete: true}
+			if got := a.streamingEndpointingDelay(context.Background(), "en", .3, 2.5); got != .3 {
+				t.Fatalf("next complete prediction delay %v, want .3", got)
+			}
+		})
+	}
+}
+
+func TestStreamingTurnEOUFallback(t *testing.T) {
+	for _, outcome := range []string{"error", "invalid", "timeout"} {
+		for _, resume := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/resume=%v", outcome, resume), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					d := &fakeStreamDetector{}
+					user := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+					user.TurnDetector = d
+					user.TurnDetection = TurnDetectionModeVAD
+					s := NewAgentSession(user, nil, AgentSessionOptions{MinEndpointingDelay: .3, MaxEndpointingDelay: 2.5})
+					a := NewAgentActivity(user, s)
+					defer a.Stop()
+					if err := s.turnStream.configure(a.ctx, d); err != nil {
+						t.Fatal(err)
+					}
+					defer s.turnStream.close()
+					s.turnStream.activate(a)
+					stream := d.streams[0]
+					stream.ignoreCancel = outcome == "timeout"
+					turnVAD(a, vad.VADEventStartOfSpeech, 1, .1, 0)
+					turnVAD(a, vad.VADEventInferenceDone, 1.2, 0, .2)
+					call := nextTurnCall(t, stream)
+					switch outcome {
+					case "error":
+						call.fail <- errors.New("inference failed")
+					case "invalid":
+						call.reply <- AudioTurnResult{Probability: math.NaN(), IsComplete: true}
+					}
+					turnVAD(a, vad.VADEventEndOfSpeech, 1.3, 0, .3)
+					stopped := timeToUnixSeconds(time.Now())
+					info := EndOfTurnInfo{ReplyAlreadyGenerated: true, NewTranscript: "partial", TranscriptConfidence: 1, Language: "en", StoppedSpeakingAt: &stopped}
+					a.runEOUDetection(info)
+					time.Sleep(300 * time.Millisecond)
+					synctest.Wait()
+					if outcome == "timeout" {
+						// A completed model request cannot replace a retained timeout.
+						call.reply <- AudioTurnResult{Probability: .9, IsComplete: true}
+						synctest.Wait()
+					}
+					select {
+					case <-user.turns:
+						t.Fatal("prediction failure committed at the minimum delay")
+					default:
+					}
+					// A later transcript re-arms EOU with the same speech-end anchor.
+					info.NewTranscript = "updated transcript"
+					a.runEOUDetection(info, "stt")
+					synctest.Wait()
+					select {
+					case <-user.turns:
+						t.Fatal("re-armed EOU lost the failed prediction outcome")
+					default:
+					}
+					if resume {
+						a.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech, Timestamp: stopped + .3, SpeechDuration: .1})
+						synctest.Wait()
+						time.Sleep(3 * time.Second)
+						synctest.Wait()
+						select {
+						case <-user.turns:
+							t.Fatal("resumed speech did not cancel fallback commit")
+						default:
+						}
+						return
+					}
+					// The maximum delay is measured from speech end, not from the
+					// prediction timeout or the latest transcript update.
+					time.Sleep(2199 * time.Millisecond)
+					synctest.Wait()
+					select {
+					case <-user.turns:
+						t.Fatal("committed before the maximum endpointing boundary")
+					default:
+					}
+					// Unix-second floats can round the deadline by nanoseconds.
+					time.Sleep(2 * time.Millisecond)
+					synctest.Wait()
+					select {
+					case message := <-user.turns:
+						if message.TextContent() != "updated transcript" {
+							t.Fatalf("committed %q", message.TextContent())
+						}
+					default:
+						t.Fatal("fallback left the turn waiting beyond the maximum boundary")
+					}
+				})
+			})
+		}
 	}
 }
 func TestStreamingTurnResetDiscardAndHandoff(t *testing.T) {
