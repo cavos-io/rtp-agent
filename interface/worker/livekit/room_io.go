@@ -75,6 +75,16 @@ func (d *opusDecoder) Close() error {
 	return nil
 }
 
+// roomIOOpusDecodeRate returns rate when libopus can decode to it directly,
+// and the 48 kHz RTP clock rate otherwise.
+func roomIOOpusDecodeRate(rate uint32) uint32 {
+	switch rate {
+	case 8000, 12000, 16000, 24000, 48000:
+		return rate
+	}
+	return 48000
+}
+
 type opusEncoder struct {
 	mu      sync.Mutex
 	encoder *opus.Encoder
@@ -368,6 +378,7 @@ type RoomIO struct {
 	audioTrack    *lksdk.LocalTrack
 	audioTrackID  string
 	decoder       AudioDecoder
+	decoderRate   uint32
 	encoder       AudioEncoder
 	audioDisabled bool
 
@@ -478,13 +489,17 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	if opts.AudioInputFrameSizeMS == 0 {
 		opts.AudioInputFrameSizeMS = roomIODefaultInputFrameSizeMS
 	}
-	dec, _ := newOpusDecoder(48000, 1)
+	// Decode straight to the session input rate when Opus supports it, so the
+	// input converter has nothing left to resample.
+	decoderRate := roomIOOpusDecodeRate(opts.AudioInputSampleRate)
+	dec, _ := newOpusDecoder(int(decoderRate), 1)
 	enc, _ := newOpusEncoder(48000, 1)
 
 	rio := &RoomIO{
 		AgentSession: session,
 		Options:      opts,
 		decoder:      dec,
+		decoderRate:  decoderRate,
 		encoder:      enc,
 		Recorder:     NewRecorderIO(session),
 		textInput:    roomIOTextInputCallback(opts),
@@ -2075,14 +2090,18 @@ func (rio *RoomIO) newAudioInputBuffer(generation uint64, clockRate uint32, inpu
 			return
 		}
 		pcm := payload
+		pcmRate := clockRate
 		if rio.decoder != nil {
 			if decoded, err := rio.decoder.Decode(payload); err == nil {
 				pcm = decoded
+				if rio.decoderRate != 0 {
+					pcmRate = rio.decoderRate
+				}
 			}
 		}
 		rio.mu.Unlock()
 
-		frame := converter.Convert(roomIOInputFrameFromPCM(pcm, clockRate, 1))
+		frame := converter.Convert(roomIOInputFrameFromPCM(pcm, pcmRate, 1))
 		if frame != nil && rio.audioInputTrackActive(generation) {
 			rio.forwardRoomInputFrames(context.Background(), inputStream.Push(frame.Data))
 		}
