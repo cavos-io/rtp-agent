@@ -2,6 +2,7 @@ package tokenize
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -375,6 +376,20 @@ func TestHyphenateWordKeepsShortWordsWhole(t *testing.T) {
 		want := []string{word}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("HyphenateWord(%q) = %#v, want %#v", word, got, want)
+		}
+	}
+}
+
+// One streamed reply: the splitter re-runs on the growing buffer per chunk,
+// as BufferedTokenStream does for every pushed text delta.
+func BenchmarkSplitSentencesStreamedReply(b *testing.B) {
+	words := strings.Fields("Baik Pak, tagihan Bapak bulan ini sebesar dua ratus ribu rupiah dan jatuh tempo tanggal lima. Apakah ada yang bisa saya bantu lagi?")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buf := ""
+		for _, w := range words {
+			buf += w + " "
+			SplitSentences(buf, 20, true)
 		}
 	}
 }
