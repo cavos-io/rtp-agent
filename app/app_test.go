@@ -26,6 +26,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -46,6 +48,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cavos"
+	"github.com/cavos-io/rtp-agent/adapter/cavos/spec"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
@@ -16030,14 +16033,223 @@ func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	}
 }
 
-func TestConfigureTurnDetectorRejectsRemovedAudioProviders(t *testing.T) {
-	for _, provider := range []string{"pipecat", "cavos"} {
+func TestConfigureTurnDetectorRejectsUnknownProviders(t *testing.T) {
+	for _, provider := range []string{"unknown", "not-a-provider"} {
 		t.Run(provider, func(t *testing.T) {
 			err := configureTurnDetector(AppConfig{TurnDetectorProvider: provider}, agent.NewAgent("test"))
 			if err == nil || !strings.Contains(err.Error(), "unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER") {
 				t.Fatalf("configureTurnDetector(%q) error = %v, want unsupported provider", provider, err)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresCavosTurnDetector(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	requests := make(chan *spec.SmartTurnRequest, 1)
+	spec.RegisterSmartTurnServiceV1Server(server, &appSmartTurnServer{requests: requests})
+	go func() { _ = server.Serve(lis) }()
+	t.Cleanup(func() { server.Stop(); _ = lis.Close() })
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "cavos")
+	t.Setenv("RTP_AGENT_SMART_TURN_GRPC_ADDR", lis.Addr().String())
+	rtpApp, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	t.Cleanup(func() { _ = rtpApp.Close(context.Background()) })
+	detector, ok := rtpApp.Agent.TurnDetector.(*cavos.SmartTurn)
+	if !ok || detector.Capabilities().Input != agent.TurnDetectorInputAudio {
+		t.Fatalf("TurnDetector = %T, want Cavos streaming detector", rtpApp.Agent.TurnDetector)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := detector.Stream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.PushAudio(&model.AudioFrame{Data: make([]byte, 320), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 160}, 0); err != nil {
+		t.Fatal(err)
+	}
+	result, err := stream.Predict(ctx)
+	if err != nil || !result.IsComplete {
+		t.Fatalf("Predict = %+v, %v", result, err)
+	}
+	select {
+	case req := <-requests:
+		if req.MelBins != 80 || req.TimeSteps != 800 {
+			t.Fatalf("request shape = %dx%d", req.MelBins, req.TimeSteps)
+		}
+	default:
+		t.Fatal("configured gRPC address did not receive prediction")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rtpApp.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := detector.Stream(ctx); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after App.Close = %v, want closed detector", err)
+	}
+}
+
+type appSmartTurnServer struct {
+	spec.UnimplementedSmartTurnServiceV1Server
+	requests chan *spec.SmartTurnRequest
+}
+
+func (s *appSmartTurnServer) Predict(_ context.Context, req *spec.SmartTurnRequest) (*spec.SmartTurnResponse, error) {
+	s.requests <- req
+	return &spec.SmartTurnResponse{Probability: .9, IsComplete: true}, nil
+}
+
+type appOwnedTurnDetector struct {
+	*pipecat.SmartTurn
+	mu         sync.Mutex
+	events     []string
+	closeCalls int
+	closeErr   error
+}
+
+func (d *appOwnedTurnDetector) record(event string) {
+	d.mu.Lock()
+	d.events = append(d.events, event)
+	d.mu.Unlock()
+}
+
+func (d *appOwnedTurnDetector) Stream(ctx context.Context) (agent.TurnDetectorStream, error) {
+	stream, err := d.SmartTurn.Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.record("open")
+	return &appOwnedTurnStream{TurnDetectorStream: stream, detector: d}, nil
+}
+
+func (d *appOwnedTurnDetector) Close() error {
+	err := d.SmartTurn.Close()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closeCalls++
+	d.events = append(d.events, "model.close")
+	return errors.Join(err, d.closeErr)
+}
+
+type appOwnedTurnStream struct {
+	agent.TurnDetectorStream
+	detector *appOwnedTurnDetector
+}
+
+func (s *appOwnedTurnStream) Close() error {
+	err := s.TurnDetectorStream.Close()
+	s.detector.record("stream.close")
+	return err
+}
+
+func useAppPipecatDetector(t *testing.T, detector *appOwnedTurnDetector) {
+	t.Helper()
+	previous := appNewPipecatSmartTurn
+	appNewPipecatSmartTurn = func() (agent.StreamingTurnDetector, error) { return detector, nil }
+	t.Cleanup(func() { appNewPipecatSmartTurn = previous })
+}
+
+func TestAppOwnsTurnDetectorAcrossSessionRestartAndReplacement(t *testing.T) {
+	detectorErr := errors.New("detector close failed")
+	detector := &appOwnedTurnDetector{SmartTurn: pipecat.NewSmartTurn(), closeErr: detectorErr}
+	useAppPipecatDetector(t, detector)
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "pipecat")
+	rtpApp, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rtpApp.Close(context.Background()) })
+	if rtpApp.Agent.TurnDetector != detector || detector.Capabilities().Input != agent.TurnDetectorInputAudio {
+		t.Fatalf("TurnDetector = %T, want configured streaming detector", rtpApp.Agent.TurnDetector)
+	}
+	rtpApp.Agent.VAD, rtpApp.Session.VAD = &fakeAppVAD{}, &fakeAppVAD{}
+	rtpApp.Session.Assistant = agent.NewPipelineAgent(&fakeAppVAD{}, nil, nil, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rtpApp.Session.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rtpApp.Session.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if detector.closeCalls != 0 {
+		t.Fatal("session stop closed the application-owned detector")
+	}
+	if err := rtpApp.Session.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replacement := &appOwnedTurnDetector{SmartTurn: pipecat.NewSmartTurn()}
+	t.Cleanup(func() { _ = replacement.SmartTurn.Close() })
+	rtpApp.Agent.TurnDetector = replacement
+	closeCtx, cancelClose := context.WithCancel(ctx)
+	cancelClose()
+	firstErr := rtpApp.Close(closeCtx)
+	if !errors.Is(firstErr, detectorErr) || rtpApp.Close(ctx) != firstErr {
+		t.Fatalf("Close error = %v, want stable detector error", firstErr)
+	}
+	if detector.closeCalls != 1 || replacement.closeCalls != 0 {
+		t.Fatalf("close calls: original=%d replacement=%d", detector.closeCalls, replacement.closeCalls)
+	}
+	want := []string{"open", "stream.close", "open", "stream.close", "model.close"}
+	if !reflect.DeepEqual(detector.events, want) {
+		t.Fatalf("detector lifecycle = %v, want %v", detector.events, want)
+	}
+}
+
+func TestNewAppClosesTurnDetectorOnConstructionFailure(t *testing.T) {
+	for _, phase := range []string{"avatar", "telemetry"} {
+		t.Run(phase, func(t *testing.T) {
+			detector := &appOwnedTurnDetector{SmartTurn: pipecat.NewSmartTurn()}
+			useAppPipecatDetector(t, detector)
+			cfg := AppConfig{TurnDetectorProvider: "pipecat"}
+			if phase == "avatar" {
+				cfg.AvatarProvider = "unsupported-avatar"
+			} else {
+				previous := appInitLoggerProvider
+				appInitLoggerProvider = func(context.Context, string, map[string]string) error { return errors.New("telemetry init failed") }
+				t.Cleanup(func() { appInitLoggerProvider = previous })
+				cfg.TelemetryLogsEndpoint = "unused"
+			}
+			if _, err := NewApp(cfg); err == nil {
+				t.Fatal("NewApp should fail")
+			}
+			if detector.closeCalls != 1 {
+				t.Fatalf("detector close calls = %d, want 1", detector.closeCalls)
+			}
+		})
+	}
+}
+
+func TestAppTurnDetectorClosePreservesTelemetryError(t *testing.T) {
+	detectorErr, telemetryErr := errors.New("detector close"), errors.New("telemetry close")
+	detector := &appOwnedTurnDetector{SmartTurn: pipecat.NewSmartTurn(), closeErr: detectorErr}
+	useAppPipecatDetector(t, detector)
+	oldInit, oldShutdown := appInitLoggerProvider, appShutdownLoggerProvider
+	appInitLoggerProvider = func(context.Context, string, map[string]string) error { return nil }
+	appShutdownLoggerProvider = func(context.Context) error { return telemetryErr }
+	t.Cleanup(func() { appInitLoggerProvider, appShutdownLoggerProvider = oldInit, oldShutdown })
+	rtpApp, err := NewApp(AppConfig{TurnDetectorProvider: "pipecat", TelemetryLogsEndpoint: "unused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rtpApp.Close(context.Background()); !errors.Is(err, detectorErr) || !errors.Is(err, telemetryErr) {
+		t.Fatalf("Close = %v, want detector and telemetry errors", err)
+	}
+}
+
+func TestPipecatTurnDetectorReportsMissingModel(t *testing.T) {
+	chdirAppTest(t, t.TempDir())
+	_, err := NewApp(AppConfig{TurnDetectorProvider: "pipecat"})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("NewApp = %v, want missing ONNX model", err)
 	}
 }
 

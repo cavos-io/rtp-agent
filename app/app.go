@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -538,6 +539,9 @@ var (
 	appInitLoggerProvider     = telemetry.InitLoggerProvider
 	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
 	appNewMCPServerHTTP       = llm.NewMCPServerHTTP
+	appNewPipecatSmartTurn    = func() (agent.StreamingTurnDetector, error) {
+		return pipecat.NewLocalSmartTurn()
+	}
 )
 
 const (
@@ -998,6 +1002,8 @@ type App struct {
 	telemetryLogs   bool
 	closeOnce       sync.Once
 	closeErr        error
+
+	ownedTurnDetector io.Closer
 }
 
 type EvaluationSummary struct {
@@ -1406,6 +1412,14 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err := configureTurnDetector(cfg, baseAgent); err != nil {
 		return nil, err
 	}
+	// Retain ownership independently of later agent replacement. Until App is
+	// constructed, every error path must release the detector here.
+	turnDetector, _ := baseAgent.TurnDetector.(io.Closer)
+	defer func() {
+		if turnDetector != nil {
+			_ = turnDetector.Close()
+		}
+	}()
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
 		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
 	}
@@ -1469,13 +1483,16 @@ func NewApp(cfg AppConfig) (*App, error) {
 		MCPServers:      mcpServers,
 		MetricsRegistry: metricsRegistry,
 		Config:          cfg,
+
+		ownedTurnDetector: turnDetector,
 	}
+	turnDetector = nil // App.Close now owns cleanup, including later setup errors.
 	if opts.Transport == worker.WorkerTransportAgora {
 		server.SetTransportRunFunc(app.runAgora)
 	}
 	if cfg.TelemetryLogsEndpoint != "" {
 		if err := appInitLoggerProvider(context.Background(), cfg.TelemetryLogsEndpoint, cfg.TelemetryLogsHeaders); err != nil {
-			app.closeMCPServers()
+			_ = app.Close(context.Background())
 			return nil, err
 		}
 		app.telemetryLogs = true
@@ -1827,14 +1844,26 @@ func (a *App) Close(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	a.closeOnce.Do(func() {
+		var sessionErr, detectorErr error
+		if a.ownedTurnDetector != nil {
+			if a.Session != nil {
+				// Join session streams even when the caller's run context has
+				// ended; the shared model must outlive their in-flight work.
+				sessionErr = a.Session.Stop(context.WithoutCancel(ctx))
+			}
+			detectorErr = a.ownedTurnDetector.Close()
+		}
 		a.closeMCPServers()
 		var telemetryErr error
 		if a.telemetryLogs {
 			a.telemetryLogs = false
 			telemetryErr = appShutdownLoggerProvider(ctx)
 		}
-		a.closeErr = telemetryErr
+		a.closeErr = errors.Join(sessionErr, detectorErr, telemetryErr)
 	})
 	return a.closeErr
 }
@@ -2666,6 +2695,24 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 			return fmt.Errorf("RTP_AGENT_TURN_DETECTOR_PROVIDER=llm requires RTP_AGENT_LLM_PROVIDER")
 		}
 		a.TurnDetector = agent.NewLLMTurnDetector(a.LLM)
+		return nil
+	case providerPipecat:
+		detector, err := appNewPipecatSmartTurn()
+		if err != nil {
+			return err
+		}
+		a.TurnDetector = detector
+		return nil
+	case providerCavos:
+		var opts []cavos.SmartTurnOption
+		if addr := os.Getenv("RTP_AGENT_SMART_TURN_GRPC_ADDR"); addr != "" {
+			opts = append(opts, cavos.WithSmartTurnAddr(addr))
+		}
+		detector, err := cavos.NewSmartTurn(opts...)
+		if err != nil {
+			return err
+		}
+		a.TurnDetector = detector
 		return nil
 	case providerLiveKit:
 		if remoteEOTURL := os.Getenv("LIVEKIT_REMOTE_EOT_URL"); remoteEOTURL != "" {
