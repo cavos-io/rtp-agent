@@ -6710,6 +6710,26 @@ func TestPipelineAgentInterruptedReplyUsesPublishedTranscript(t *testing.T) {
 	}
 }
 
+// Audio played but no caption word was emitted yet: nothing intelligible was heard, so the
+// full generated text must not be stored as if spoken.
+func TestPipelineAgentInterruptedReplyStoresNothingWithoutPublishedCaption(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.SetAudioPlaybackController(&fakePipelinePlaybackController{
+		result: AudioPlaybackResult{PlaybackPosition: 300 * time.Millisecond, Interrupted: true},
+	})
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{}, llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil", err)
+	}
+
+	forwarded := agent.forwardedAssistantTextAfterInterruption(context.Background(), session, speech, "full generated answer", &TTSGenerationData{})
+
+	if forwarded != "" {
+		t.Fatalf("forwarded text = %q, want empty when no caption was published", forwarded)
+	}
+}
+
 // The transport's own synchronized transcript still wins when it has one.
 func TestPipelineAgentInterruptedReplyPrefersSynchronizedOverPublished(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})

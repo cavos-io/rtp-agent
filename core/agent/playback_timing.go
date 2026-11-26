@@ -52,6 +52,13 @@ func (t *playbackTiming) started() bool {
 	return t.notified && !t.startedAt.IsZero()
 }
 
+// startedTime is the transport-reported playout start, or zero before the first write.
+func (t *playbackTiming) startedTime() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.startedAt
+}
+
 func (t *playbackTiming) published() time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()

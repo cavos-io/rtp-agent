@@ -2424,6 +2424,10 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
 	ttsGen.playbackTiming = playbackTiming
 	ttsGen.stopPlaybackTiming = unsubscribePlayback
+	if playbackTiming.notified {
+		// Audio parked behind an output pause has not been heard yet.
+		transcriptSync.SetPlayoutClock(playbackTiming.startedTime)
+	}
 	for {
 		var frame *model.AudioFrame
 		select {

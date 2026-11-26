@@ -87,7 +87,9 @@ type publishedFrame struct {
 	at     time.Time
 }
 
-// markerEncoder records which reply each 20 ms frame written to the track belongs to.
+// markerEncoder records which reply each 20 ms frame handed to the transport belongs to.
+// It counts encoded frames: what the worker publishes, not what a receiver plays. A frame
+// encoded just before a cancellation may not reach the track (at most one per interrupt).
 type markerEncoder struct {
 	mu     sync.Mutex
 	frames []publishedFrame
@@ -107,8 +109,8 @@ func (e *markerEncoder) snapshot() []publishedFrame {
 	return append([]publishedFrame(nil), e.frames...)
 }
 
-// played is the audio duration of marker published in (after, +inf).
-func (e *markerEncoder) played(marker byte, after time.Time) time.Duration {
+// encoded is the audio duration of marker encoded in (after, +inf).
+func (e *markerEncoder) encoded(marker byte, after time.Time) time.Duration {
 	var d time.Duration
 	for _, f := range e.snapshot() {
 		if f.marker == marker && f.at.After(after) {
@@ -149,12 +151,12 @@ func (h *interruptHarness) say(t *testing.T, text string) *agent.SpeechHandle {
 	return handle
 }
 
-func (h *interruptHarness) waitPlayed(t *testing.T, marker byte, atLeast time.Duration) {
+func (h *interruptHarness) waitEncoded(t *testing.T, marker byte, atLeast time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
-	for h.enc.played(marker, time.Time{}) < atLeast {
+	for h.enc.encoded(marker, time.Time{}) < atLeast {
 		if time.Now().After(deadline) {
-			t.Fatalf("reply %q published %v, want at least %v", marker, h.enc.played(marker, time.Time{}), atLeast)
+			t.Fatalf("reply %q published %v, want at least %v encoded", marker, h.enc.encoded(marker, time.Time{}), atLeast)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -175,7 +177,7 @@ const reproProviderChunk = 4 * time.Second
 func TestInterruptStopsPublishedAudioWithinLeadBudget(t *testing.T) {
 	h := newInterruptHarness(t, reproProviderChunk, reproProviderChunk, agent.AgentSessionOptions{})
 	handle := h.say(t, "A long reply")
-	h.waitPlayed(t, 'A', 300*time.Millisecond)
+	h.waitEncoded(t, 'A', 300*time.Millisecond)
 
 	interruptedAt := time.Now()
 	if err := h.session.Interrupt(false); err != nil {
@@ -184,7 +186,7 @@ func TestInterruptStopsPublishedAudioWithinLeadBudget(t *testing.T) {
 	waitHandle(t, handle)
 	time.Sleep(400 * time.Millisecond)
 
-	if late := h.enc.played('A', interruptedAt.Add(roomIOOutputMaxLead)); late > 0 {
+	if late := h.enc.encoded('A', interruptedAt.Add(roomIOOutputMaxLead)); late > 0 {
 		t.Fatalf("published %v of the interrupted reply more than %v after the interrupt", late, roomIOOutputMaxLead)
 	}
 }
@@ -192,7 +194,7 @@ func TestInterruptStopsPublishedAudioWithinLeadBudget(t *testing.T) {
 func TestPauseStopsPublishedAudioWithinLeadBudget(t *testing.T) {
 	h := newInterruptHarness(t, reproProviderChunk, reproProviderChunk, agent.AgentSessionOptions{})
 	h.say(t, "A long reply")
-	h.waitPlayed(t, 'A', 300*time.Millisecond)
+	h.waitEncoded(t, 'A', 300*time.Millisecond)
 
 	pausedAt := time.Now()
 	h.rio.PauseAudioOutput()
@@ -203,7 +205,7 @@ func TestPauseStopsPublishedAudioWithinLeadBudget(t *testing.T) {
 		h.rio.ResumeAudioOutput()
 	}()
 
-	if late := h.enc.played('A', pausedAt.Add(roomIOOutputMaxLead)); late > 0 {
+	if late := h.enc.encoded('A', pausedAt.Add(roomIOOutputMaxLead)); late > 0 {
 		t.Fatalf("published %v of the paused reply more than %v after the pause", late, roomIOOutputMaxLead)
 	}
 }
@@ -212,7 +214,7 @@ func TestReplyAfterInterruptIsPublishedInFull(t *testing.T) {
 	const replyDur = 600 * time.Millisecond
 	h := newInterruptHarness(t, 200*time.Millisecond, replyDur, agent.AgentSessionOptions{})
 	first := h.say(t, "A first reply")
-	h.waitPlayed(t, 'A', 100*time.Millisecond)
+	h.waitEncoded(t, 'A', 100*time.Millisecond)
 	if err := h.session.Interrupt(false); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
@@ -220,19 +222,19 @@ func TestReplyAfterInterruptIsPublishedInFull(t *testing.T) {
 	waitHandle(t, first)
 	waitHandle(t, second)
 
-	if got := h.enc.played('B', time.Time{}); got != replyDur {
+	if got := h.enc.encoded('B', time.Time{}); got != replyDur {
 		t.Fatalf("second reply published %v of audio, want all %v", got, replyDur)
 	}
 }
 
 // storedAfterInterrupt speaks a 4 s reply delivered in chunk-sized frames, interrupts it once
 // playFor of audio is out, and returns the committed assistant text ("" when none).
-func storedAfterInterrupt(t *testing.T, chunk, playFor time.Duration) (stored, full string, played time.Duration) {
+func storedAfterInterrupt(t *testing.T, chunk, playFor time.Duration) (stored, full string, encoded time.Duration) {
 	t.Helper()
 	h := newInterruptHarness(t, chunk, 4*time.Second, agent.AgentSessionOptions{})
 	full = "A " + strings.Repeat("kata ", 40)
 	handle := h.say(t, full)
-	h.waitPlayed(t, 'A', playFor)
+	h.waitEncoded(t, 'A', playFor)
 	if err := h.session.Interrupt(false); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
@@ -242,30 +244,37 @@ func storedAfterInterrupt(t *testing.T, chunk, playFor time.Duration) (stored, f
 			stored = msg.TextContent()
 		}
 	}
-	return stored, full, h.enc.played('A', time.Time{})
+	return stored, full, h.enc.encoded('A', time.Time{})
 }
 
 func TestInterruptedReplyStoresOnlyPublishedText(t *testing.T) {
 	for name, chunk := range map[string]time.Duration{"20ms frames": 20 * time.Millisecond, "1s chunks": time.Second, "single 4s chunk": 4 * time.Second} {
 		t.Run(name, func(t *testing.T) {
-			stored, full, played := storedAfterInterrupt(t, chunk, time.Second)
+			stored, full, encoded := storedAfterInterrupt(t, chunk, time.Second)
 			// ~1.2 s of a 4 s reply reached the track: the stored text must be a matching prefix.
-			if stored == "" || len(stored) > len(full)/2 {
-				t.Fatalf("stored %d of %d chars after publishing %v of 4s", len(stored), len(full), played)
+			if stored == "" || !strings.HasPrefix(full, stored) || len(stored) > len(full)/2 {
+				t.Fatalf("stored %q (%d of %d chars) after encoding %v of 4s", stored, len(stored), len(full), encoded)
 			}
 		})
 	}
 }
 
-// scriptedLLM answers every turn with the same text, like the PRD reply path (LLM -> TTS).
+// scriptedLLM answers turn n with replies[n] (the last one repeats), like the PRD reply path
+// (LLM -> TTS). Each reply's first byte is its audio marker.
 type scriptedLLM struct {
 	llm.MetricsEmitter
 	llm.ErrorEmitter
-	reply string
+	mu      sync.Mutex
+	replies []string
+	calls   int
 }
 
 func (l *scriptedLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
-	return &scriptedLLMStream{chunks: strings.SplitAfter(l.reply, " ")}, nil
+	l.mu.Lock()
+	reply := l.replies[min(l.calls, len(l.replies)-1)]
+	l.calls++
+	l.mu.Unlock()
+	return &scriptedLLMStream{chunks: strings.SplitAfter(reply, " ")}, nil
 }
 
 type scriptedLLMStream struct {
@@ -292,7 +301,7 @@ func assistantText(handle *agent.SpeechHandle) string {
 	return ""
 }
 
-func (e *markerEncoder) playedAll(after time.Time) time.Duration {
+func (e *markerEncoder) encodedAll(after time.Time) time.Duration {
 	var d time.Duration
 	for _, f := range e.snapshot() {
 		if f.at.After(after) {
@@ -302,10 +311,10 @@ func (e *markerEncoder) playedAll(after time.Time) time.Duration {
 	return d
 }
 
-func newLLMReplyHarness(t *testing.T, chunk, total time.Duration, reply string) *interruptHarness {
+func newLLMReplyHarness(t *testing.T, chunk, total time.Duration, replies ...string) *interruptHarness {
 	t.Helper()
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
-	session.LLM = &scriptedLLM{reply: reply}
+	session.LLM = &scriptedLLM{replies: replies}
 	session.TTS = &markedTTS{frameDur: chunk, total: total}
 	enc := &markerEncoder{}
 	rio := &RoomIO{AgentSession: session, audioTrack: newRoomIOTestAudioTrack(t), encoder: enc}
@@ -319,12 +328,12 @@ func newLLMReplyHarness(t *testing.T, chunk, total time.Duration, reply string) 
 	return &interruptHarness{session: session, rio: rio, enc: enc}
 }
 
-func (h *interruptHarness) waitPlayedAll(t *testing.T, atLeast time.Duration) {
+func (h *interruptHarness) waitEncodedAll(t *testing.T, atLeast time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(atLeast + 5*time.Second)
-	for h.enc.playedAll(time.Time{}) < atLeast {
+	for h.enc.encodedAll(time.Time{}) < atLeast {
 		if time.Now().After(deadline) {
-			t.Fatalf("published %v, want at least %v", h.enc.playedAll(time.Time{}), atLeast)
+			t.Fatalf("encoded %v, want at least %v", h.enc.encodedAll(time.Time{}), atLeast)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -348,7 +357,7 @@ func TestLLMReplyInterruptStopsAudioAndStoresHeardText(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GenerateReply error = %v", err)
 			}
-			h.waitPlayedAll(t, tc.playFor)
+			h.waitEncodedAll(t, tc.playFor)
 			interruptedAt := time.Now()
 			if err := h.session.Interrupt(false); err != nil {
 				t.Fatalf("Interrupt error = %v", err)
@@ -356,54 +365,64 @@ func TestLLMReplyInterruptStopsAudioAndStoresHeardText(t *testing.T) {
 			waitHandle(t, handle)
 			time.Sleep(400 * time.Millisecond)
 
-			if late := h.enc.playedAll(interruptedAt.Add(roomIOOutputMaxLead)); late > 0 {
+			if late := h.enc.encodedAll(interruptedAt.Add(roomIOOutputMaxLead)); late > 0 {
 				t.Fatalf("published %v more than %v after the interrupt", late, roomIOOutputMaxLead)
 			}
-			stored, played := assistantText(handle), h.enc.playedAll(time.Time{})
-			t.Logf("played %v, stored %q", played, stored)
-			// Stored text must track the share of the reply that was heard, give or take a quarter.
-			heard := float64(played) / float64(reproReplyDur)
+			stored, encoded := assistantText(handle), h.enc.encodedAll(time.Time{})
+			t.Logf("encoded %v, stored %q", encoded, stored)
+			if stored == "" || !strings.HasPrefix(reproReply, stored) {
+				t.Fatalf("stored %q, want a non-empty prefix of the reply", stored)
+			}
+			// The caption pace is an estimate (syllable rate), so allow a quarter either way.
+			heard := float64(encoded) / float64(reproReplyDur)
 			share := float64(len(stored)) / float64(len(reproReply))
-			if stored == "" || share > heard+0.25 || share < heard-0.25 {
-				t.Fatalf("stored %.0f%% of the text after publishing %.0f%% of the audio", share*100, heard*100)
+			if share > heard+0.25 || share < heard-0.25 {
+				t.Fatalf("stored %.0f%% of the text after encoding %.0f%% of the audio", share*100, heard*100)
 			}
 		})
 	}
 }
 
 func TestLLMReplyPausedWhileThinkingStoresOnlyHeardText(t *testing.T) {
-	h := newLLMReplyHarness(t, 20*time.Millisecond, reproReplyDur, reproReply)
-	h.rio.PauseAudioOutput()
-	handle, err := h.session.GenerateReply(context.Background(), "halo")
-	if err != nil {
-		t.Fatalf("GenerateReply error = %v", err)
-	}
-	time.Sleep(2 * time.Second) // reply is ready but parked behind the pause
-	if got := h.enc.playedAll(time.Time{}); got != 0 {
-		t.Fatalf("published %v while paused", got)
-	}
-	h.rio.ResumeAudioOutput()
-	h.waitPlayedAll(t, 300*time.Millisecond)
-	if err := h.session.Interrupt(false); err != nil {
-		t.Fatalf("Interrupt error = %v", err)
-	}
-	waitHandle(t, handle)
+	for name, chunk := range map[string]time.Duration{"20ms frames": 20 * time.Millisecond, "4s chunk": 4 * time.Second} {
+		t.Run(name, func(t *testing.T) {
+			h := newLLMReplyHarness(t, chunk, reproReplyDur, reproReply)
+			h.rio.PauseAudioOutput()
+			handle, err := h.session.GenerateReply(context.Background(), "halo")
+			if err != nil {
+				t.Fatalf("GenerateReply error = %v", err)
+			}
+			time.Sleep(2 * time.Second) // reply is ready but parked behind the pause
+			if got := h.enc.encodedAll(time.Time{}); got != 0 {
+				t.Fatalf("encoded %v while paused", got)
+			}
+			h.rio.ResumeAudioOutput()
+			h.waitEncodedAll(t, 300*time.Millisecond)
+			if err := h.session.Interrupt(false); err != nil {
+				t.Fatalf("Interrupt error = %v", err)
+			}
+			waitHandle(t, handle)
 
-	stored, played := assistantText(handle), h.enc.playedAll(time.Time{})
-	t.Logf("played %v, stored %q", played, stored)
-	// ~0.5 s was heard: about two syllables' worth, never the 2 s spent parked.
-	if words := len(strings.Fields(stored)); words > 3 {
-		t.Fatalf("stored %d words (%q) after publishing %v", words, stored, played)
+			stored, encoded := assistantText(handle), h.enc.encodedAll(time.Time{})
+			t.Logf("encoded %v, stored %q", encoded, stored)
+			if !strings.HasPrefix(reproReply, stored) {
+				t.Fatalf("stored %q, want a prefix of the reply", stored)
+			}
+			// ~0.5 s was heard: about two syllables' worth, never the 2 s spent parked.
+			if words := len(strings.Fields(stored)); words > 3 {
+				t.Fatalf("stored %d words (%q) after encoding %v", words, stored, encoded)
+			}
+		})
 	}
 }
 
 func TestLLMReplyAfterInterruptedReplyIsPublished(t *testing.T) {
-	h := newLLMReplyHarness(t, 2*time.Second, 2*time.Second, "A satu kata kata.")
+	h := newLLMReplyHarness(t, 2*time.Second, 2*time.Second, "A satu kata kata.", "B dua kata kata.")
 	first, err := h.session.GenerateReply(context.Background(), "halo")
 	if err != nil {
 		t.Fatalf("GenerateReply error = %v", err)
 	}
-	h.waitPlayedAll(t, 500*time.Millisecond)
+	h.waitEncoded(t, 'A', 500*time.Millisecond)
 	if err := h.session.Interrupt(false); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
@@ -412,9 +431,8 @@ func TestLLMReplyAfterInterruptedReplyIsPublished(t *testing.T) {
 		t.Fatalf("GenerateReply error = %v", err)
 	}
 	waitHandle(t, first)
-	before := h.enc.playedAll(time.Time{})
 	waitHandle(t, second)
-	if got := h.enc.playedAll(time.Time{}) - before; got < 2*time.Second-40*time.Millisecond {
-		t.Fatalf("second reply published %v of 2s", got)
+	if got := h.enc.encoded('B', time.Time{}); got != 2*time.Second {
+		t.Fatalf("second reply encoded %v of 2s", got)
 	}
 }
