@@ -12,69 +12,106 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// pauseTrackingOutput timestamps every output pause, whoever issues it, so the caption
-// clock can leave paused time out of what the caller heard.
+// pauseTrackingOutput records every output pause, whoever issues it, so the caption clock
+// can leave paused time out of what the caller heard.
 type pauseTrackingOutput struct {
 	AudioOutputController
-	mu       sync.Mutex
-	pausedAt time.Time
-	paused   time.Duration
+	mu    sync.Mutex
+	spans []pauseSpan // ponytail: never pruned; a call holds a few dozen pauses at most
 }
+
+type pauseSpan struct{ start, end time.Time } // zero end: still paused
 
 func (p *pauseTrackingOutput) PauseAudioOutput() {
 	p.mu.Lock()
-	if p.pausedAt.IsZero() {
-		p.pausedAt = time.Now()
-	}
+	now := time.Now()
+	// Restart an open span: it may be one the transport already ended on its own, and this
+	// request must stay recognisable as new.
+	p.closeOpenLocked(now)
+	p.spans = append(p.spans, pauseSpan{start: now})
 	p.mu.Unlock()
 	p.AudioOutputController.PauseAudioOutput()
 }
 
 func (p *pauseTrackingOutput) ResumeAudioOutput() {
 	p.mu.Lock()
-	if !p.pausedAt.IsZero() {
-		p.paused += time.Since(p.pausedAt)
-		p.pausedAt = time.Time{}
-	}
+	p.closeOpenLocked(time.Now())
 	p.mu.Unlock()
 	p.AudioOutputController.ResumeAudioOutput()
 }
 
-func (p *pauseTrackingOutput) pausedTotal() time.Duration {
-	if p == nil {
-		return 0
+func (p *pauseTrackingOutput) closeOpenLocked(at time.Time) {
+	if n := len(p.spans); n > 0 && p.spans[n-1].end.IsZero() {
+		if at.Before(p.spans[n-1].start) {
+			at = p.spans[n-1].start
+		}
+		p.spans[n-1].end = at
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.pausedAt.IsZero() {
-		return p.paused
-	}
-	return p.paused + time.Since(p.pausedAt)
 }
 
-// playing is called when a frame was just written, so output is not paused: it closes a
-// pause the transport ended on its own (some unpause on clear) and returns the total.
-// ponytail: a pause racing the very first frame of a reply is closed too and goes uncounted.
-func (p *pauseTrackingOutput) playing() time.Duration {
+// count is the number of pauses recorded so far; arm() keeps it to tell earlier pauses apart.
+func (p *pauseTrackingOutput) count() int {
 	if p == nil {
 		return 0
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.pausedAt.IsZero() {
-		p.paused += time.Since(p.pausedAt)
-		p.pausedAt = time.Time{}
+	return len(p.spans)
+}
+
+// playing is called once a reply's first frame is out, with the transport's start time. A
+// pause recorded before the reply was armed cannot still hold, since the reply's audio is on
+// the wire: the transport ended it on its own (some unpause on clear), so it ends by the
+// start time at the latest. A pause recorded after arming is a real barge-in and keeps counting.
+func (p *pauseTrackingOutput) playing(armedSpans int, at time.Time) {
+	if p == nil {
+		return
 	}
-	return p.paused
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range min(armedSpans, len(p.spans)) {
+		span := &p.spans[i]
+		if span.end.IsZero() || span.end.After(at) {
+			span.end = at
+			if at.Before(span.start) {
+				span.end = span.start
+			}
+		}
+	}
+}
+
+// pausedSince is the paused time between from and now.
+func (p *pauseTrackingOutput) pausedSince(from time.Time) time.Duration {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	var total time.Duration
+	for _, span := range p.spans {
+		end := span.end
+		if end.IsZero() {
+			end = now
+		}
+		start := span.start
+		if start.Before(from) {
+			start = from
+		}
+		if overlap := end.Sub(start); overlap > 0 {
+			total += overlap
+		}
+	}
+	return total
 }
 
 type playbackTiming struct {
-	mu            sync.Mutex
-	notified      bool
-	armed         bool
-	startedAt     time.Time
-	pauses        *pauseTrackingOutput
-	pausedAtStart time.Duration
+	mu         sync.Mutex
+	notified   bool
+	armed      bool
+	armedSpans int // pauses recorded before this reply was armed
+	startedAt  time.Time
+	pauses     *pauseTrackingOutput
 }
 
 func observePlaybackTiming(session *AgentSession) (*playbackTiming, func()) {
@@ -88,7 +125,7 @@ func observePlaybackTiming(session *AgentSession) (*playbackTiming, func()) {
 				defer timing.mu.Unlock()
 				if timing.armed && timing.startedAt.IsZero() && !at.IsZero() {
 					timing.startedAt = at
-					timing.pausedAtStart = timing.pauses.playing()
+					timing.pauses.playing(timing.armedSpans, at)
 				}
 			})
 			if unsubscribe != nil {
@@ -101,6 +138,9 @@ func observePlaybackTiming(session *AgentSession) (*playbackTiming, func()) {
 
 func (t *playbackTiming) arm() {
 	t.mu.Lock()
+	if !t.armed {
+		t.armedSpans = t.pauses.count()
+	}
 	t.armed = true
 	t.mu.Unlock()
 }
@@ -120,7 +160,7 @@ func (t *playbackTiming) playedFor() time.Duration {
 	if t.startedAt.IsZero() {
 		return 0
 	}
-	return time.Since(t.startedAt) - (t.pauses.pausedTotal() - t.pausedAtStart)
+	return max(time.Since(t.startedAt)-t.pauses.pausedSince(t.startedAt), 0)
 }
 
 func (t *playbackTiming) published() time.Time {
