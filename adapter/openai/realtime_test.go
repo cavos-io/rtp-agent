@@ -3110,34 +3110,80 @@ func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *
 	}
 }
 
+func TestRealtimeTestDialerWaitsForHandlerCleanup(t *testing.T) {
+	handlerDone := make(chan struct{})
+	t.Run("connection", func(t *testing.T) {
+		dial := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			defer close(handlerDone)
+			_, _, _ = conn.ReadMessage()
+			// Simulate handler cleanup that outlives the client's connection.
+			timer := time.NewTimer(20 * time.Millisecond)
+			defer timer.Stop()
+			<-timer.C
+		})
+		conn, _, err := dial("ws://openai.test/v1/realtime", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+	})
+	select {
+	case <-handlerDone:
+	default:
+		t.Fatal("WebSocket handler outlived its owning test cleanup")
+	}
+}
+
 func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) openAIRealtimeWebsocketDialer {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
 	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		clientConn, serverConn := net.Pipe()
 		listener := newOpenAISingleConnListener(serverConn)
+		handlerDone := make(chan struct{})
+		handlerStarted := make(chan struct{})
+		serveDone := make(chan struct{})
+		serverErrCh := make(chan error, 2)
 		server := &http.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(handlerStarted)
+				defer close(handlerDone)
 				conn, err := upgrader.Upgrade(w, r, nil)
 				if err != nil {
-					t.Errorf("Upgrade error = %v", err)
+					// Return handshake failures through Dial, including canceled reconnects.
+					serverErrCh <- err
 					return
 				}
 				defer conn.Close()
 				handler(conn, r)
 			}),
 		}
-		serverErrCh := make(chan error, 1)
 		go func() {
+			defer close(serveDone)
 			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 				serverErrCh <- err
 			}
 		}()
 		t.Cleanup(func() {
-			_ = server.Close()
 			_ = listener.Close()
 			_ = clientConn.Close()
 			_ = serverConn.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil {
+				t.Errorf("WebSocket test server shutdown: %v", err)
+			}
+			<-serveDone
+			// Shutdown joins failed handshakes, but excludes hijacked WebSockets.
+			select {
+			case <-handlerStarted:
+				select {
+				case <-handlerDone:
+				case <-ctx.Done():
+					t.Error("WebSocket handler did not finish during cleanup")
+				}
+			default:
+			}
 		})
 
 		dialer := websocket.Dialer{

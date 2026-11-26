@@ -28,7 +28,7 @@ func (w *failingRecordingWriter) Close() error                  { return w.close
 func TestRecorderIOFlushRejectsInvalidSampleRate(t *testing.T) {
 	for _, rate := range []int{-1, 0, 1 << 32} {
 		recorder := NewRecorderIO(nil)
-		recorder.flush(rate, time.Now())
+		recorder.flush(rate, time.Now(), true)
 		if !errors.Is(recorder.recordingError(), errInvalidRecordingSampleRate) {
 			t.Fatalf("flush(%d) error = %v", rate, recorder.recordingError())
 		}
@@ -528,7 +528,7 @@ func TestRecorderIOFlushMixesAuxOntoOutputChannel(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 480,
 	})
-	recorder.flush(48000, now.Add(10*time.Millisecond))
+	recorder.flush(48000, now.Add(10*time.Millisecond), true)
 
 	if len(writer.pcm) == 0 {
 		t.Fatal("no samples written")
@@ -572,7 +572,7 @@ func TestRecorderIOPreservesBurstAndFollowingGap(t *testing.T) {
 				}
 				record(&model.AudioFrame{Data: data, SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 960})
 			}
-			r.flush(48000, now.Add(20*time.Millisecond))
+			r.flush(48000, now.Add(20*time.Millisecond), true)
 			if len(writer.pcm) != 96960*2 {
 				t.Fatalf("samples = %d, want %d", len(writer.pcm), 96960*2)
 			}
@@ -591,5 +591,84 @@ func TestRecorderIOPreservesBurstAndFollowingGap(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Delayed input still reaches STT; the recorder must preserve the same samples.
+func TestRecorderIOPreservesDelayedFramesAcrossFlush(t *testing.T) {
+	for _, channel := range []string{"input", "output", "aux"} {
+		t.Run(channel, func(t *testing.T) {
+			origin := time.Unix(100, 0)
+			now := origin
+			recorder := NewRecorderIO(nil)
+			writer := &capturingRecordingWriter{}
+			recorder.started, recorder.writer = true, writer
+			recorder.now = func() time.Time { return now }
+			pcm := make([]byte, 480*2)
+			for i := 0; i < 480; i++ {
+				pcm[i*2] = 16
+			}
+			frame := &model.AudioFrame{Data: pcm, SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 480}
+			record := func() {
+				switch channel {
+				case "input":
+					recorder.RecordInput(frame)
+				case "output":
+					recorder.RecordOutput(frame)
+				case "aux":
+					recorder.RecordAux("remote", frame)
+				}
+			}
+			for i := 0; i < 240; i++ {
+				now = origin.Add(time.Duration(i) * 10 * time.Millisecond)
+				record()
+			}
+			recorder.flush(48000, origin.Add(2500*time.Millisecond), false)
+			// 110ms late, within the accepted 500ms continuity window.
+			for i := 0; i < 20; i++ {
+				now = origin.Add(2510*time.Millisecond + time.Duration(i)*10*time.Millisecond)
+				record()
+			}
+			recorder.flush(48000, origin.Add(2800*time.Millisecond), true)
+			index := 0
+			if channel != "input" {
+				index = 1
+			}
+			var sum int64
+			for i := index; i < len(writer.pcm); i += 2 {
+				sum += int64(writer.pcm[i])
+			}
+			if sum != 1996800 {
+				t.Fatalf("recorded PCM sum = %d, want 1996800 (all 124800 samples)", sum)
+			}
+		})
+	}
+}
+
+func TestRecorderIOPeriodicFlushRetainsFutureOutputAndDrainsTail(t *testing.T) {
+	origin := time.Unix(100, 0)
+	recorder := NewRecorderIO(nil)
+	writer := &capturingRecordingWriter{}
+	recorder.started, recorder.writer = true, writer
+	recorder.now = func() time.Time { return origin }
+	pcm := make([]byte, 48000*2)
+	for i := 0; i < 48000; i++ {
+		pcm[i*2] = 16
+	}
+	recorder.RecordOutput(&model.AudioFrame{Data: pcm, SampleRate: 48000, NumChannels: 1, SamplesPerChannel: 48000})
+	recorder.flush(48000, origin.Add(750*time.Millisecond), false)
+	if len(writer.pcm) != 24000 {
+		t.Fatalf("periodic flush wrote %d stereo samples, want 24000", len(writer.pcm))
+	}
+	recorder.flush(48000, origin.Add(2*time.Second), true)
+	var sum int64
+	for i := 1; i < len(writer.pcm); i += 2 {
+		sum += int64(writer.pcm[i])
+	}
+	if sum != 768000 {
+		t.Fatalf("drained PCM sum = %d, want 768000 (one full second)", sum)
+	}
+	if len(recorder.outFrames) != 0 {
+		t.Fatal("final flush retained output frames")
 	}
 }
