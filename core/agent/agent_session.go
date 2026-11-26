@@ -622,6 +622,11 @@ func (s *AgentSession) SetAudioOutputController(controller AudioOutputController
 	if s == nil {
 		return
 	}
+	if controller != nil {
+		if _, wrapped := controller.(*pauseTrackingOutput); !wrapped {
+			controller = &pauseTrackingOutput{AudioOutputController: controller}
+		}
+	}
 	s.mu.Lock()
 	s.audioOutputController = controller
 	s.mu.Unlock()

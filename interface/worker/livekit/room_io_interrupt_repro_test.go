@@ -416,6 +416,38 @@ func TestLLMReplyPausedWhileThinkingStoresOnlyHeardText(t *testing.T) {
 	}
 }
 
+// A false-interruption pause lands mid-playout; the time it holds must not count as heard.
+func TestLLMReplyPausedMidPlayoutStoresOnlyHeardText(t *testing.T) {
+	for name, chunk := range map[string]time.Duration{"20ms frames": 20 * time.Millisecond, "4s chunk": 4 * time.Second} {
+		t.Run(name, func(t *testing.T) {
+			h := newLLMReplyHarness(t, chunk, reproReplyDur, reproReply)
+			handle, err := h.session.GenerateReply(context.Background(), "halo")
+			if err != nil {
+				t.Fatalf("GenerateReply error = %v", err)
+			}
+			h.waitEncodedAll(t, 300*time.Millisecond)
+			output := h.session.AudioOutputController() // the path barge-in handling pauses through
+			output.PauseAudioOutput()
+			time.Sleep(2 * time.Second) // caller hears nothing while the barge-in is judged
+			if err := h.session.Interrupt(true); err != nil {
+				t.Fatalf("Interrupt error = %v", err)
+			}
+			output.ResumeAudioOutput()
+			waitHandle(t, handle)
+
+			stored, encoded := assistantText(handle), h.enc.encodedAll(time.Time{})
+			t.Logf("encoded %v, stored %q", encoded, stored)
+			if !strings.HasPrefix(reproReply, stored) {
+				t.Fatalf("stored %q, want a prefix of the reply", stored)
+			}
+			// ~0.3 s was heard: about two syllables' worth, never the 2 s spent paused.
+			if words := len(strings.Fields(stored)); words > 3 {
+				t.Fatalf("stored %d words (%q) after encoding %v", words, stored, encoded)
+			}
+		})
+	}
+}
+
 func TestLLMReplyAfterInterruptedReplyIsPublished(t *testing.T) {
 	h := newLLMReplyHarness(t, 2*time.Second, 2*time.Second, "A satu kata kata.", "B dua kata kata.")
 	first, err := h.session.GenerateReply(context.Background(), "halo")

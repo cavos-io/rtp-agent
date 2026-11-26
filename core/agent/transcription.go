@@ -24,7 +24,7 @@ type TranscriptSynchronizer struct {
 	textBuffer     string
 	playedAudioDur time.Duration
 	audioStartedAt time.Time
-	playoutStart   func() time.Time // when set, the clock starts at the first real write
+	playedFor      func() time.Duration // when set, the transport's clock: from first write, pauses excluded
 	yieldedTextDur time.Duration
 	speakingRate   float64 // syllables per second
 
@@ -85,12 +85,12 @@ func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
 	}
 }
 
-// SetPlayoutClock starts the caption clock when the transport reports the first written
-// frame, instead of when audio is pushed. Audio parked behind an output pause is then not
-// counted as heard. started returns the zero time until playout has begun.
-func (s *TranscriptSynchronizer) SetPlayoutClock(started func() time.Time) {
+// SetPlayoutClock paces captions by how long audio has really played: from the transport's
+// first written frame, with output pauses left out. Audio parked behind a pause, before or
+// during playout, is then not counted as heard. playedFor returns zero until playout begins.
+func (s *TranscriptSynchronizer) SetPlayoutClock(playedFor func() time.Duration) {
 	s.mu.Lock()
-	s.playoutStart = started
+	s.playedFor = playedFor
 	s.mu.Unlock()
 }
 
@@ -221,18 +221,14 @@ func (s *TranscriptSynchronizer) run() {
 
 			// How much audio time has passed that hasn't been covered by text yet?
 			// Audio is pushed a whole provider chunk at a time, ahead of playout, so cap it by
-			// the real-time clock: text must not run ahead of what the caller has heard.
-			// ponytail: wall clock from the first written frame, not transport position; a pause
-			// after playout began still lets text lead by the pause length. Feed playback
-			// position in if that drift ever matters.
-			startedAt := s.audioStartedAt
-			if s.playoutStart != nil {
-				startedAt = s.playoutStart()
+			// the playout clock: text must not run ahead of what the caller has heard.
+			var played time.Duration
+			if s.playedFor != nil {
+				played = s.playedFor()
+			} else if !s.audioStartedAt.IsZero() {
+				played = time.Since(s.audioStartedAt)
 			}
-			heard := time.Duration(0)
-			if !startedAt.IsZero() {
-				heard = min(s.playedAudioDur, time.Since(startedAt))
-			}
+			heard := min(s.playedAudioDur, played)
 			timeDebt := heard - s.yieldedTextDur
 			if timeDebt <= 0 {
 				s.mu.Unlock()
