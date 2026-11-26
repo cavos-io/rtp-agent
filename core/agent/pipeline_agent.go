@@ -2139,7 +2139,8 @@ func (va *PipelineAgent) forwardedAssistantTextAfterInterruption(ctx context.Con
 	}
 	// No transport-level sync: commit only the caption text that actually reached the caller.
 	// Without this the killed tail is stored as if spoken, and the LLM believes it said it.
-	if ttsGen != nil && ttsGen.PublishedTranscript != "" {
+	// An empty caption means nothing intelligible was heard; never fall back to the full text.
+	if ttsGen != nil {
 		return ttsGen.PublishedTranscript
 	}
 	return generatedText
@@ -2423,11 +2424,16 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 	playbackTiming, unsubscribePlayback := observePlaybackTiming(session)
 	ttsGen.playbackTiming = playbackTiming
 	ttsGen.stopPlaybackTiming = unsubscribePlayback
+	if playbackTiming.notified {
+		// Audio parked behind an output pause has not been heard yet.
+		transcriptSync.SetPlayoutClock(playbackTiming.playedFor)
+	}
 	for {
 		var frame *model.AudioFrame
 		select {
 		case <-ctx.Done():
-			transcriptSync.Close()
+			// Cancelled audio was never heard: drop its text instead of flushing it.
+			transcriptSync.Discard()
 			<-transcriptionDone
 			va.clearAssistantPlayback(session)
 			return ttsGen, ctx.Err()
@@ -2446,7 +2452,8 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 
 		select {
 		case <-ctx.Done():
-			transcriptSync.Close()
+			// Cancelled audio was never heard: drop its text instead of flushing it.
+			transcriptSync.Discard()
 			<-transcriptionDone
 			va.clearAssistantPlayback(session)
 			return ttsGen, ctx.Err()
@@ -2461,11 +2468,17 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 		playbackTiming.arm()
 		if publish := va.GetPublishAudio(); publish != nil {
 			if err := publish(ctx, frame); err != nil {
-				transcriptSync.Close()
-				<-transcriptionDone
 				if errors.Is(err, context.Canceled) {
+					// The cancelled chunk may be partly on the wire; its unheard text is dropped.
+					if playbackTiming.started() {
+						ttsGen.ForwardedAudio = true
+					}
+					transcriptSync.Discard()
+					<-transcriptionDone
 					va.clearAssistantPlayback(session)
 				} else {
+					transcriptSync.Close()
+					<-transcriptionDone
 					va.flushAssistantPlayback(session)
 				}
 				return ttsGen, err

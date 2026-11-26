@@ -23,6 +23,8 @@ type TranscriptSynchronizer struct {
 	mu             sync.Mutex
 	textBuffer     string
 	playedAudioDur time.Duration
+	audioStartedAt time.Time
+	playedFor      func() time.Duration // when set, the transport's clock: from first write, pauses excluded
 	yieldedTextDur time.Duration
 	speakingRate   float64 // syllables per second
 
@@ -81,6 +83,15 @@ func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
 	case s.audioCh <- frame:
 	case <-s.done():
 	}
+}
+
+// SetPlayoutClock paces captions by how long audio has really played: from the transport's
+// first written frame, with output pauses left out. Audio parked behind a pause, before or
+// during playout, is then not counted as heard. playedFor returns zero until playout begins.
+func (s *TranscriptSynchronizer) SetPlayoutClock(playedFor func() time.Duration) {
+	s.mu.Lock()
+	s.playedFor = playedFor
+	s.mu.Unlock()
 }
 
 func (s *TranscriptSynchronizer) EventCh() <-chan string {
@@ -193,6 +204,9 @@ func (s *TranscriptSynchronizer) run() {
 				dur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*1000.0) * time.Millisecond
 				s.mu.Lock()
 				if !s.interrupted {
+					if s.audioStartedAt.IsZero() {
+						s.audioStartedAt = time.Now()
+					}
 					s.playedAudioDur += dur
 				}
 				s.mu.Unlock()
@@ -206,7 +220,16 @@ func (s *TranscriptSynchronizer) run() {
 			}
 
 			// How much audio time has passed that hasn't been covered by text yet?
-			timeDebt := s.playedAudioDur - s.yieldedTextDur
+			// Audio is pushed a whole provider chunk at a time, ahead of playout, so cap it by
+			// the playout clock: text must not run ahead of what the caller has heard.
+			var played time.Duration
+			if s.playedFor != nil {
+				played = s.playedFor()
+			} else if !s.audioStartedAt.IsZero() {
+				played = time.Since(s.audioStartedAt)
+			}
+			heard := min(s.playedAudioDur, played)
+			timeDebt := heard - s.yieldedTextDur
 			if timeDebt <= 0 {
 				s.mu.Unlock()
 				continue
