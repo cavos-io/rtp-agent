@@ -280,19 +280,24 @@ func (r *RecorderIO) recordLoop(sampleRate int, done <-chan struct{}, closeCompl
 	for {
 		select {
 		case <-done:
-			r.flush(sampleRate, r.now())
+			r.flush(sampleRate, r.now(), true)
 			if err := r.writer.Close(); err != nil {
 				r.logger().Errorw("Failed to close recording writer", err)
 				r.setRecordingError(fmt.Errorf("close recording writer: %w", err))
 			}
 			return
 		case <-ticker.C:
-			r.flush(sampleRate, r.now())
+			r.flush(sampleRate, r.now(), false)
 		}
 	}
 }
 
-func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
+func (r *RecorderIO) flush(sampleRate int, endTime time.Time, drain bool) {
+	if !drain {
+		// Keep the same lateness window accepted by nextRecordedFrameTime.
+		// Otherwise a flush commits silence where delayed PCM will be placed.
+		endTime = endTime.Add(-recordedAudioContinuityTolerance)
+	}
 	if sampleRate <= 0 || uint64(sampleRate) > math.MaxUint32 {
 		r.setRecordingError(fmt.Errorf("%w: %d", errInvalidRecordingSampleRate, sampleRate))
 
@@ -306,29 +311,34 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 		r.mu.Unlock()
 		return
 	}
-	inFrames := r.inFrames
-	outFrames := r.outFrames
-	auxFrames := r.auxFrames
+	var inFrames, outFrames, auxFrames []recordedAudioFrame
+	if drain {
+		inFrames, outFrames, auxFrames = r.inFrames, r.outFrames, r.auxFrames
+		r.inFrames, r.outFrames, r.auxFrames = nil, nil, nil
+	} else {
+		inFrames, r.inFrames = recordedFramesUntil(r.inFrames, endTime)
+		outFrames, r.outFrames = recordedFramesUntil(r.outFrames, endTime)
+		auxFrames, r.auxFrames = recordedFramesUntil(r.auxFrames, endTime)
+	}
 	timelineStart := r.timelineStart
 	startSample := r.writtenSamples
-	r.inFrames = nil
-	r.outFrames = nil
-	r.auxFrames = nil
 	r.mu.Unlock()
 
 	if timelineStart == nil {
 		return
 	}
 
-	endSample := int64(endTime.Sub(*timelineStart).Seconds() * float64(sampleRate))
+	endSample := int64(math.Round(endTime.Sub(*timelineStart).Seconds() * float64(sampleRate)))
 	in := normalizeRecordedFrames(r.logger(), inFrames, uint32(sampleRate), *timelineStart)
 	out := normalizeRecordedFrames(r.logger(), outFrames, uint32(sampleRate), *timelineStart)
 
 	aux := normalizeRecordedFrames(r.logger(), auxFrames, uint32(sampleRate), *timelineStart)
-	for _, frames := range [][]normalizedRecordedFrame{in, out, aux} {
-		for _, f := range frames {
-			if frameEnd := f.startSample + int64(len(f.samples)); frameEnd > endSample {
-				endSample = frameEnd
+	if drain {
+		for _, frames := range [][]normalizedRecordedFrame{in, out, aux} {
+			for _, f := range frames {
+				if frameEnd := f.startSample + int64(len(f.samples)); frameEnd > endSample {
+					endSample = frameEnd
+				}
 			}
 		}
 	}
@@ -351,6 +361,22 @@ func (r *RecorderIO) flush(sampleRate int, endTime time.Time) {
 	r.writtenSamples = startSample + int64(writtenSamples)
 	r.timestamp += uint32(writtenSamples)
 	r.mu.Unlock()
+}
+
+// recordedFramesUntil retains future frames and the unflushed tail of a crossing
+// frame. The next flush clips the already-written prefix at its sample boundary.
+func recordedFramesUntil(frames []recordedAudioFrame, end time.Time) ([]recordedAudioFrame, []recordedAudioFrame) {
+	ready := make([]recordedAudioFrame, 0, len(frames))
+	pending := frames[:0]
+	for _, frame := range frames {
+		if frame.receivedAt.Before(end) {
+			ready = append(ready, frame)
+		}
+		if frame.receivedAt.Add(audioFrameDuration(frame.frame)).After(end) {
+			pending = append(pending, frame)
+		}
+	}
+	return ready, pending
 }
 
 func (r *RecorderIO) setRecordingError(err error) {
@@ -402,7 +428,7 @@ func normalizeRecordedFrames(log protoLogger.Logger, frames []recordedAudioFrame
 		}
 
 		normalized = append(normalized, normalizedRecordedFrame{
-			startSample: int64(recorded.receivedAt.Sub(timelineStart).Seconds() * float64(sampleRate)),
+			startSample: int64(math.Round(recorded.receivedAt.Sub(timelineStart).Seconds() * float64(sampleRate))),
 			samples:     samples,
 		})
 	}
