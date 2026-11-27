@@ -56,7 +56,7 @@ These are starting points, not structural equivalence. Select the Go destination
 | --- | --- |
 | `refs/pipecat/src/pipecat/audio`, `turns`, `pipeline`, `processors` | Provider-neutral behavior in `core`, transport behavior in `interface/worker` |
 | `refs/pipecat/src/pipecat/services/*` | Matching `adapter/<provider>` |
-| `refs/smart-turn/*` | `adapter/pipecat` and its provider-neutral integration in `core/agent` |
+| `refs/smart-turn/*` | `adapter/pipecat` |
 | `refs/ten-framework/ai_agents/**/rtm-transport/*` | `interface/worker/agora`, `core/audio`, or `core/agent` according to ownership |
 | `refs/ten-framework/ai_agents/**/ten_packages/extension/*` | Matching provider adapter or transport interface |
 | `refs/ten-vad/*` | `adapter/ten` |
@@ -139,6 +139,12 @@ Provider integrations belong in `adapter/<provider>` and follow the contracts in
 - Do not require real API keys or paid provider calls in default tests.
 - Cite the authoritative provider reference path in parity tests or manifest cases.
 - Add integration tests only when deterministic and safe.
+
+For adaptive interruption providers, use the
+[adapter implementation guide](docs/features/adaptive-interruption-adapters.md).
+It includes the detector contract, lifecycle rules, offline verification checklist,
+and a reusable implementation prompt. The repository skill
+`rtp-agent-adaptive-interruption` routes coding agents to that guide.
 
 ## Test integrity and dead code
 

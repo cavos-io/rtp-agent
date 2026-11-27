@@ -6316,7 +6316,7 @@ func TestAgentSessionStopTreatsCloseTranscriptTimeoutAsGraceful(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.01})
-	session.Assistant = blockingCloseTranscriptFlusher{}
+	session.Assistant = NewPipelineAgent(nil, &fakePipelineSTT{}, nil, nil, nil)
 	session.activity = NewAgentActivity(agent, session)
 	session.started = true
 
@@ -7806,20 +7806,6 @@ func (f *fakeAvatarProvider) Close() error {
 	return f.closeErr
 }
 
-type blockingCloseTranscriptFlusher struct{}
-
-func (blockingCloseTranscriptFlusher) Start(context.Context, *AgentSession) error { return nil }
-
-func (blockingCloseTranscriptFlusher) OnAudioFrame(context.Context, *model.AudioFrame) {}
-
-func (blockingCloseTranscriptFlusher) SetPublishAudio(func(context.Context, *model.AudioFrame) error) {
-}
-
-func (blockingCloseTranscriptFlusher) FlushInputTranscription(ctx context.Context, _ time.Duration) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
 type fakeSessionMCPServer struct {
 	id     string
 	tools  []llm.Tool
@@ -8008,62 +7994,6 @@ func TestEmitAgentOutputTranscribedDeliversAfterRestart(t *testing.T) {
 	}()
 	<-emitDone
 	<-drainDone
-}
-
-type closeTrackingAudioTurnDetector struct {
-	mu         sync.Mutex
-	closeCalls int
-}
-
-func (d *closeTrackingAudioTurnDetector) PredictEndOfTurnAudio(context.Context, []*model.AudioFrame) (AudioTurnResult, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closeCalls > 0 {
-		return AudioTurnResult{}, errors.New("audio turn detector is closed")
-	}
-	return AudioTurnResult{}, nil
-}
-
-func (d *closeTrackingAudioTurnDetector) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.closeCalls++
-	return nil
-}
-
-func (d *closeTrackingAudioTurnDetector) isClosed() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.closeCalls > 0
-}
-
-func TestAgentSessionRestartKeepsAudioTurnDetectorOpen(t *testing.T) {
-	detector := &closeTrackingAudioTurnDetector{}
-	agent := NewAgent("test")
-	agent.TTS = &fakePipelineTTS{}
-	agent.LLM = &fakeGenerationLLM{}
-	agent.STT = &fakePipelineSTT{}
-	agent.VAD = &fakePipelineVAD{}
-	agent.AudioTurnDetector = detector
-
-	s := NewAgentSession(agent, nil, AgentSessionOptions{})
-	s.Assistant = &fakeSessionAssistant{}
-
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := s.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if _, err := detector.PredictEndOfTurnAudio(context.Background(), nil); err != nil {
-		t.Fatalf("PredictEndOfTurnAudio after Stop: %v", err)
-	}
-	if err := s.Start(context.Background()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-	if detector.isClosed() {
-		t.Fatal("session stop closed the application-owned AudioTurnDetector")
-	}
 }
 
 // Keep one factory call site so compiler inlining cannot give each closure a

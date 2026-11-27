@@ -164,7 +164,7 @@ func TestLatencyTTFTIgnoresMetadata(t *testing.T) {
 }
 func TestLatencySTTModeKeepsWordEndTimestamp(t *testing.T) {
 	a := NewAgent("review")
-	a.STT = &fakePipelineSTT{}
+	a.STT = &alignedInterruptionSTT{}
 	a.TurnDetection = TurnDetectionModeSTT
 	session := NewAgentSession(a, nil, AgentSessionOptions{MinEndpointingDelay: 60, MaxEndpointingDelay: 60})
 	activity := NewAgentActivity(a, session)
@@ -281,7 +281,7 @@ func TestLatencyE2EUsesPlaybackStartInsteadOfPublishCompletion(t *testing.T) {
 		audio <- &model.AudioFrame{Data: []byte{0, 0}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}
 		close(audio)
 		data := &TTSGenerationData{AudioCh: audio}
-		_, err := va.playTTSGenerationWithTranscript(context.Background(), session, data, NewTranscriptSynchronizer(0), closedChannel(), nil, nil)
+		_, err := va.playTTSGenerationWithTranscript(context.Background(), session, data, NewTranscriptSynchronizer(0), closedChannel(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

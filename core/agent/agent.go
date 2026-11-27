@@ -23,10 +23,6 @@ const (
 	TurnDetectionModeManual      TurnDetectionMode = "manual"
 )
 
-type TurnDetector interface {
-	PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error)
-}
-
 type turnDetectorThreshold interface {
 	UnlikelyThreshold(language string) (float64, bool)
 }
@@ -57,15 +53,14 @@ type Agent struct {
 	ChatCtx             *llm.ChatContext
 	Tools               []llm.Tool
 
-	TurnDetection     TurnDetectionMode
-	TurnDetector      TurnDetector
-	AudioTurnDetector AudioTurnDetector
-	Avatar            AvatarProvider
-	STT               stt.STT
-	VAD               vad.VAD
-	LLM               llm.LLM
-	RealtimeModel     llm.RealtimeModel
-	TTS               tts.TTS
+	TurnDetection TurnDetectionMode
+	TurnDetector  TurnDetector
+	Avatar        AvatarProvider
+	STT           stt.STT
+	VAD           vad.VAD
+	LLM           llm.LLM
+	RealtimeModel llm.RealtimeModel
+	TTS           tts.TTS
 
 	chatCtxMu *sync.Mutex
 
@@ -197,7 +192,9 @@ func dedupeAgentToolsByID(tools []llm.Tool) ([]llm.Tool, error) {
 	return deduped, nil
 }
 
-func isNilAgentTool(tool llm.Tool) bool {
+func isNilAgentTool(tool llm.Tool) bool { return isNilAgentToolValue(tool) }
+
+func isNilAgentToolValue(tool any) bool {
 	if tool == nil {
 		return true
 	}

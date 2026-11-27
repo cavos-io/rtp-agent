@@ -63,26 +63,31 @@ func TestCaptionForwarderSessionEventsAndClose(t *testing.T) {
 	}
 }
 
-// Reuse the exact default interruption/false-recovery semantics, including
-// cumulative final events which must not repeat the pre-interruption prefix.
-func TestCaptionForwarderInterleavesWithoutRepeatingSpokenPrefix(t *testing.T) {
+// Caller captions leave the agent's segment intact. The native forwarder shares
+// the default RoomIO semantics without the retired caption-weaving option.
+func TestCaptionForwarderPreservesAgentSegmentAcrossCallerCaptions(t *testing.T) {
 	packets := make(chan *lk.Transcription, 16)
-	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{WeaveSuppressedBargeIn: true})
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	f := NewCaptionForwarder(session, CaptionTransport{AgentIdentity: "agent", AgentTrack: "out", CallerIdentity: "caller", CallerTrack: "in", PublishPacket: func(p *lk.Transcription) error { packets <- p; return nil }})
 	defer f.Close(context.Background())
 	f.rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "hello "})
 	first := <-packets
 	f.rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{Transcript: "yes", IsFinal: true})
-	cut, caller := <-packets, <-packets
-	if !cut.Segments[0].Final || cut.Segments[0].Id != first.Segments[0].Id || caller.TrackId != "in" {
+	caller := <-packets
+	if first.Segments[0].Final || caller.TrackId != "in" || !caller.Segments[0].Final || caller.Segments[0].Id == first.Segments[0].Id {
 		t.Fatal("caption ordering")
 	}
 	f.rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "again"})
 	resumed := <-packets
 	f.rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "hello again", IsFinal: true})
 	final := <-packets
-	if resumed.Segments[0].Id == first.Segments[0].Id || resumed.Segments[0].Id != final.Segments[0].Id || final.Segments[0].Text != "again" {
-		t.Fatal("prefix repeated", final)
+	if resumed.Segments[0].Id != first.Segments[0].Id || resumed.Segments[0].Text != "hello again" || resumed.Segments[0].Id != final.Segments[0].Id || final.Segments[0].Text != "hello again" || !final.Segments[0].Final {
+		t.Fatal("agent caption changed across caller input", resumed, final)
+	}
+	select {
+	case p := <-packets:
+		t.Fatal("unexpected caption cut or repeated final", p)
+	default:
 	}
 }
 

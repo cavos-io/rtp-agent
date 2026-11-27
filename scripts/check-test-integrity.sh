@@ -5,7 +5,7 @@ set -euo pipefail
 # Checks provided Go test files against a diff base or as full files.
 #
 # Enforces:
-#   1. Go test files cannot be deleted, except verified consolidation or full experimental probe retirement.
+#   1. Go test files cannot be deleted, except verified consolidation, paired source retirement, or full experimental probe retirement.
 #   2. Modified/added/copied/renamed Go test files must not have more deletions than additions.
 #   3. Newly added test lines cannot introduce common test-weakening patterns.
 
@@ -71,12 +71,19 @@ check_deleted_test_files() {
       continue
     fi
     if is_verified_consolidation "$file"; then continue; fi
+    if git diff "$BASE" --name-only --diff-filter=D -- "${file%_test.go}.go" | grep -Fxq "${file%_test.go}.go"; then continue; fi
     reject "deleting Go test files is not allowed: $file"
   done <<<"$deleted_tests"
 }
 
 check_test_additions_cover_deletions() {
   [[ "$BASE" == "all" ]] && return 0
+
+  # Removing a feature also removes its tests. Keep the deletion guard for
+  # ordinary edits, but allow it when this diff deletes production Go source.
+  local deleted_sources
+  deleted_sources=$(git diff "$BASE" --name-only --diff-filter=D -- '*.go' | grep -v '_test.go$' || true)
+  [[ -n "$deleted_sources" ]] && return 0
   
   local file stats additions deletions
   

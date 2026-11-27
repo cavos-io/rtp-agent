@@ -571,3 +571,10 @@ func (v *VAD) emitMetrics(metrics *telemetry.VADMetrics) {
 		}(handler)
 	}
 }
+
+// MinSilenceDuration exposes the VAD pause requirement for stream validation.
+func (v *VAD) MinSilenceDuration() float64 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.options.MinSilenceDuration
+}

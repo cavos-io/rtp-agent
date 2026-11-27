@@ -601,17 +601,16 @@ func typeName(v any) string {
 }
 
 type TTSGenerationData struct {
-	AudioCh             chan *model.AudioFrame
-	TimedTextCh         chan tts.TimedString
-	TTFB                time.Duration
-	TTFBSet             bool
-	StreamErr           error
-	ForwardedAudio      bool
-	StartedSpeakingAt   float64
-	StoppedSpeakingAt   float64
-	PublishedTranscript string
-	playbackTiming      *playbackTiming
-	stopPlaybackTiming  func()
+	AudioCh            chan *model.AudioFrame
+	TimedTextCh        chan tts.TimedString
+	TTFB               time.Duration
+	TTFBSet            bool
+	StreamErr          error
+	ForwardedAudio     bool
+	StartedSpeakingAt  float64
+	StoppedSpeakingAt  float64
+	playbackTiming     *playbackTiming
+	stopPlaybackTiming func()
 }
 
 type TTSInferenceOptions struct {
