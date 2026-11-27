@@ -98,27 +98,43 @@ func (t *BasicWordTokenizer) FormatWords(words []string) string {
 	return strings.Join(words, " ")
 }
 
-func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenData {
-	alphabets := regexp.MustCompile(`([A-Za-z])`)
-	prefixes := regexp.MustCompile(`(Mr|St|Mrs|Ms|Dr)\.`)
-	suffixes := regexp.MustCompile(`(Inc|Ltd|Jr|Sr|Co)`)
-	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)`)
-	acronyms := regexp.MustCompile(`([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`)
-	websites := regexp.MustCompile(`\.(com|net|org|io|gov|edu|me)`)
-	decimalDigits := regexp.MustCompile(`([0-9])\.([0-9])`)
-	multipleDots := regexp.MustCompile(`\.{2,}`)
+// Sentence-splitting patterns are compiled once: SplitSentences runs on every
+// streamed text chunk, so compiling them per call dominated its cost.
+const (
+	sentenceAlphabets = `([A-Za-z])`
+	sentenceSuffixes  = `(Inc|Ltd|Jr|Sr|Co)`
+	sentenceStarters  = `(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)`
+	sentenceAcronyms  = `([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`
+)
 
+var (
+	sentencePrefixesRE      = regexp.MustCompile(`(Mr|St|Mrs|Ms|Dr)\.`)
+	sentenceWebsitesRE      = regexp.MustCompile(`\.(com|net|org|io|gov|edu|me)`)
+	sentenceDecimalDigitsRE = regexp.MustCompile(`([0-9])\.([0-9])`)
+	sentenceMultipleDotsRE  = regexp.MustCompile(`\.{2,}`)
+	sentenceSpacedInitialRE = regexp.MustCompile(`\s` + sentenceAlphabets + `\. `)
+	sentenceAcronymStartRE  = regexp.MustCompile(sentenceAcronyms + ` ` + sentenceStarters)
+	sentenceThreeInitialsRE = regexp.MustCompile(sentenceAlphabets + `\.` + sentenceAlphabets + `\.` + sentenceAlphabets + `\.`)
+	sentenceTwoInitialsRE   = regexp.MustCompile(sentenceAlphabets + `\.` + sentenceAlphabets + `\.`)
+	sentenceSuffixStartRE   = regexp.MustCompile(` ` + sentenceSuffixes + `\. ` + sentenceStarters)
+	sentenceSuffixRE        = regexp.MustCompile(` ` + sentenceSuffixes + `\.`)
+	sentenceInitialRE       = regexp.MustCompile(` ` + sentenceAlphabets + `\.`)
+	sentenceQuoteEndRE      = regexp.MustCompile(`([.!?。！？])(["”])`)
+	paragraphBreakRE        = regexp.MustCompile(`\n\s*\n`)
+)
+
+func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenData {
 	if retainFormat {
 		text = strings.ReplaceAll(text, "\n", "<nel><stop>")
 	} else {
 		text = strings.ReplaceAll(text, "\n", " ")
 	}
 
-	text = prefixes.ReplaceAllString(text, "${1}<prd>")
-	text = websites.ReplaceAllString(text, "<prd>${1}")
-	text = decimalDigits.ReplaceAllString(text, "${1}<prd>${2}")
+	text = sentencePrefixesRE.ReplaceAllString(text, "${1}<prd>")
+	text = sentenceWebsitesRE.ReplaceAllString(text, "<prd>${1}")
+	text = sentenceDecimalDigitsRE.ReplaceAllString(text, "${1}<prd>${2}")
 
-	text = multipleDots.ReplaceAllStringFunc(text, func(match string) string {
+	text = sentenceMultipleDotsRE.ReplaceAllStringFunc(text, func(match string) string {
 		return strings.Repeat("<prd>", len(match))
 	})
 
@@ -126,15 +142,15 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 		text = strings.ReplaceAll(text, "Ph.D.", "Ph<prd>D<prd>")
 	}
 
-	text = regexp.MustCompile(`\s`+alphabets.String()+`\. `).ReplaceAllString(text, " ${1}<prd> ")
-	text = regexp.MustCompile(acronyms.String()+` `+starters.String()).ReplaceAllString(text, "${1}<stop> ${2}")
-	text = regexp.MustCompile(alphabets.String()+`\.`+alphabets.String()+`\.`+alphabets.String()+`\.`).ReplaceAllString(text, "${1}<prd>${2}<prd>${3}<prd>")
-	text = regexp.MustCompile(alphabets.String()+`\.`+alphabets.String()+`\.`).ReplaceAllString(text, "${1}<prd>${2}<prd>")
-	text = regexp.MustCompile(` `+suffixes.String()+`\. `+starters.String()).ReplaceAllString(text, " ${1}<stop> ${2}")
-	text = regexp.MustCompile(` `+suffixes.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
-	text = regexp.MustCompile(` `+alphabets.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
+	text = sentenceSpacedInitialRE.ReplaceAllString(text, " ${1}<prd> ")
+	text = sentenceAcronymStartRE.ReplaceAllString(text, "${1}<stop> ${2}")
+	text = sentenceThreeInitialsRE.ReplaceAllString(text, "${1}<prd>${2}<prd>${3}<prd>")
+	text = sentenceTwoInitialsRE.ReplaceAllString(text, "${1}<prd>${2}<prd>")
+	text = sentenceSuffixStartRE.ReplaceAllString(text, " ${1}<stop> ${2}")
+	text = sentenceSuffixRE.ReplaceAllString(text, " ${1}<prd>")
+	text = sentenceInitialRE.ReplaceAllString(text, " ${1}<prd>")
 
-	text = regexp.MustCompile(`([.!?。！？])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
+	text = sentenceQuoteEndRE.ReplaceAllString(text, "${1}${2}<stop>")
 	text = addStopAfterSentencePunctuation(text)
 
 	text = strings.ReplaceAll(text, "<prd>", ".")
@@ -322,7 +338,7 @@ func byteOffsetToRuneOffset(text string, offset int) int {
 }
 
 func SplitParagraphs(text string) []TokenData {
-	pattern := regexp.MustCompile(`\n\s*\n`)
+	pattern := paragraphBreakRE
 	indices := pattern.FindAllStringIndex(text, -1)
 
 	var paragraphs []TokenData

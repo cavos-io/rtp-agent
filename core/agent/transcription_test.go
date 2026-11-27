@@ -140,3 +140,15 @@ func TestTranscriptSynchronizerDiscardDropsUnplayedText(t *testing.T) {
 		t.Fatalf("discarded synchronizer emitted %q", text)
 	}
 }
+
+// The transcript synchronizer counts syllables for every buffered word on each
+// 50 ms tick while the agent speaks.
+func BenchmarkCountSyllablesPerSentence(b *testing.B) {
+	words := []string{"Baik", "Pak,", "tagihan", "Bapak", "bulan", "ini", "sebesar", "dua", "ratus", "ribu", "rupiah", "dan", "jatuh", "tempo", "tanggal", "lima."}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, word := range words {
+			countSyllables(word)
+		}
+	}
+}

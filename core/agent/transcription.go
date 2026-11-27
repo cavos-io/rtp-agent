@@ -135,10 +135,15 @@ func (s *TranscriptSynchronizer) Close() {
 	s.cancel()
 }
 
+var (
+	syllableNonLetterRE  = regexp.MustCompile(`[^a-z]`)
+	syllableVowelGroupRE = regexp.MustCompile(`[aeiouy]+`)
+)
+
 func countSyllables(text string) int {
 	// A fast heuristic syllable counter using vowel groups
 	text = strings.ToLower(text)
-	text = regexp.MustCompile(`[^a-z]`).ReplaceAllString(text, "")
+	text = syllableNonLetterRE.ReplaceAllString(text, "")
 
 	if len(text) == 0 {
 		return 0
@@ -151,7 +156,7 @@ func countSyllables(text string) int {
 	text = strings.TrimSuffix(text, "ed")
 	text = strings.TrimSuffix(text, "e")
 
-	vowels := regexp.MustCompile(`[aeiouy]+`)
+	vowels := syllableVowelGroupRE
 	matches := vowels.FindAllStringIndex(text, -1)
 
 	count := len(matches)
